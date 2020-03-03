@@ -531,7 +531,7 @@ class TWCMaster:
     if( not 'chargeLimits' in self.settings ):
       self.settings['chargeLimits'] = dict()
 
-    self.setting['chargeLimits'][ID] = limit
+    self.settings['chargeLimits'][ID] = limit
     self.saveSettings()
 
   def saveSettings(self):
