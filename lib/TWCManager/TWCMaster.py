@@ -69,6 +69,7 @@ class TWCMaster:
   lastTWCResponseMsg  = None
   masterTWCID         = ''
   maxAmpsToDivideAmongSlaves = 0
+  modules             = {}
   mqttstatus          = None
   overrideMasterHeartbeatData = b''
   policyCheckInterval = 30
@@ -138,6 +139,9 @@ class TWCMaster:
       if (policy_engine):
         if (policy_engine.get('policyCheckInterval')):
           self.policyCheckInterval = policy_engine.get('policyCheckInterval')
+
+    # Register ourself as a module, allows lookups via the Module architecture
+    self.registerModule({ "name": "master", "ref": self, "type": "Master" })
 
     # Connect to serial port
     self.ser = serial.Serial(config['config']['rs485adapter'], config['config']['baud'], timeout=0)
@@ -228,6 +232,16 @@ class TWCMaster:
       return self.maxAmpsToDivideAmongSlaves
     else:
       return 0
+
+  def getModuleByName(self, name):
+    module = self.modules.get(name, None)
+    if (module):
+      return module['ref']
+    else:
+      return None
+
+  def getModulesByType(self, type):
+    return None
 
   def getmqttstatus(self):
     return self.mqttstatus
@@ -476,23 +490,28 @@ class TWCMaster:
     if (str(value) == "tm_hour"):
       return ltNow.tm_hour
 
-    # If value refers to a setting, return the setting
-    if(str(value).startswith("settings.")):
-      strstart = 9
-      strend = len(value)
-      return self.settings.get(value[strstart:strend], 0)
-
-    if(str(value).startswith("config.")):
-      strstart = 7
-      strend = len(value)
-      return self.config['config'].get(value[strstart:strend], 0)
-
     # If value refers to a function, execute the function and capture the
     # output
     if (str(value) == "getMaxAmpsToDivideGreenEnergy()"):
       return self.getMaxAmpsToDivideGreenEnergy()
     elif (str(value) == "checkScheduledCharging()"):
       return self.checkScheduledCharging()
+
+    # If value is tiered, split it up
+    if str(value).find(".") != -1:
+      pieces = str(value).split(".")
+
+      # If value refers to a setting, return the setting
+      if pieces[0] == "settings":
+        return self.settings.get(pieces[1], 0)
+      elif pieces[0] == "config":
+        return self.config['config'].get(pieces[1], 0)
+      elif pieces[0] == "modules":
+        module = None
+        if pieces[1] in self.modules:
+          module = self.getModuleByName(pieces[1])
+          if pieces[2] in vars(module):
+            return getattr(module,pieces[2])
 
     # None of the macro conditions matched, return the value as is
     return value
@@ -512,6 +531,25 @@ class TWCMaster:
 
     # Queue the task to be handled by background_tasks_thread.
     self.backgroundTasksQueue.put(task)
+
+  def registerModule(self, module):
+    # This function is used during module instantiation to either reference a
+    # previously loaded module, or to instantiate a module for the first time
+    if (not module['ref'] and not module['modulename']):
+      debugLog(4, "registerModule called for module " + str(module['name']) + " without an existing reference or a module to instantiate.")
+    elif (module['ref']):
+      # If the reference is passed, it means this module has already been
+      # instantiated and we should just refer to the existing instance
+
+      # Check this module has not already been instantiated
+      if (not self.modules.get(module['name'], None)):
+        self.modules[module['name']] = {
+          "ref": module['ref'],
+          "type": module['type']
+        }
+        self.debugLog(4, "Registered module " + module['name'] + " by reference")
+      else:
+        self.debugLog(4, "Avoided re-registration of module " + module['name'] + ", which has already been loaded")
 
   def releaseBackgroundTasksLock(self):
     self.backgroundTasksLock.release()

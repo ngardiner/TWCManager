@@ -20,6 +20,8 @@ class TeslaPowerwall2:
   importW         = 0
   exportW         = 0
   minSOE          = 90
+  operatingMode   = ''
+  reservePercent  = 100
   lastFetch       = 0
   password        = None
   serverIP        = None
@@ -49,8 +51,7 @@ class TeslaPowerwall2:
     self.minSOE            = self.configPowerwall.get('minBatteryLevel', 90)
     if self.status and self.debugLevel < 11:
       # PW uses self-signed certificates; squelch warnings
-      import urllib3
-      urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
+      self.urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
 
   def debugLog(self, minlevel, message):
     if (self.debugLevel >= minlevel):
@@ -86,11 +87,15 @@ class TeslaPowerwall2:
 
         # Time out token after one hour
         self.tokenTimeout = (self.time.time() + (60 * 60))
-        self.debugLog(4, str(rjson['token']))
+        self.debugLog(4, "Powerwall2 API Login returned token " + str(rjson['token']))
 
         # After authentication, start Powerwall
         # If we don't do this, the Powerwall will stop working after login
         self.startPowerwall()
+
+      else:
+
+        self.debugLog(6, "Powerwall2 API token " + str(self.token) + " still valid for " + str(self.tokenTimeout - self.time.time()) + " seconds.")
 
   def getConsumption(self):
 
@@ -156,6 +161,9 @@ class TeslaPowerwall2:
   def getSOE(self):
     return self.getPWJson("/api/system_status/soe")
 
+  def getOperation(self):
+    return self.getPWJson("/api/operation")
+
   def startPowerwall(self):
     # This function will instruct the powerwall to run.
     # This is needed after getting a login token for v1.15 and above
@@ -208,6 +216,14 @@ class TeslaPowerwall2:
 
       if (value):
         self.batteryLevel = float(value['percentage'])
+      else:
+        self.fetchFailed = True
+
+      value = self.getOperation()
+
+      if (value):
+        self.operatingMode = value['mode']
+        self.reservePercent = value['backup_reserve_percent']
       else:
         self.fetchFailed = True
 
