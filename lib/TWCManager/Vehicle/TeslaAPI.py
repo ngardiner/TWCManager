@@ -184,11 +184,6 @@ class CarApi:
                               + " because vehicle.stopTryingToApplyLimit == True")
                     continue
 
-                if(applyLimit == True and vehicle.stopTryingToApplyLimit):
-                    self.debugLog(8, "Don't wake vehicle " + str(vehicle.ID)
-                              + " to set the charge limit - it has already been set")
-                    continue
-
                 if(self.getCarApiRetryRemaining()):
                     # It's been under carApiErrorRetryMins minutes since the car
                     # API generated an error on this vehicle. Don't send it more
