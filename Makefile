@@ -22,7 +22,8 @@ endif
 
 	$(SUDO) cp html/* /var/www/html/
 	$(SUDO) chown -R www-data:www-data /var/www/html
-	$(SUDO) chmod -R 665 /var/www/html
+	$(SUDO) chmod -R 665 /var/www/html/*
+	$(SUDO) chmod 775 /var/www/html
 	$(SUDO) usermod -a -G www-data pi
 
 	# Install TWCManager packages
