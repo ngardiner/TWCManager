@@ -267,7 +267,7 @@ class TWCMaster:
 
     def getGenerationOffset(self):
         # Returns the number of watts to subtract from the solar generation stats
-        # This is consumption + charger load if subtractChargerLoad is enabled
+        # This is consumption minus charger load if subtractChargerLoad is enabled
         # Or simply consumption if subtractChargerLoad is disabled
         generationOffset = self.getConsumption()
         if self.subtractChargerLoad:
@@ -336,7 +336,9 @@ class TWCMaster:
         # Returns the number of amps currently in use by all TWCs
         totalAmps = 0
         for slaveTWC in self.getSlaveTWCs():
-            totalAmps += slaveTWC.reportedAmpsActual
+            totalAmps += sum(slaveTWC.reportedAmpsHistory) / len(
+                slaveTWC.reportedAmpsHistory
+            )
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
                     slaveTWC.TWCID,

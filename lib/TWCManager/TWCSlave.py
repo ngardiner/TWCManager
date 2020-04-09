@@ -1,5 +1,6 @@
 from termcolor import colored
 from ww import f
+from collections import deque
 
 
 class TWCSlave:
@@ -25,6 +26,7 @@ class TWCSlave:
     reportedAmpsMax = 0
     reportedAmpsActual = 0
     reportedState = 0
+    reportedAmpsHistory = deque(maxlen=30)
 
     # reportedAmpsActual frequently changes by small amounts, like 5.14A may
     # frequently change to 5.23A and back.
@@ -443,6 +445,8 @@ class TWCSlave:
         self.reportedAmpsMax = ((heartbeatData[1] << 8) + heartbeatData[2]) / 100
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
+
+        self.reportedAmpsHistory.append(self.reportedAmpsActual)
 
         for module in self.master.getModulesByType("Status"):
             module["ref"].setStatus(
