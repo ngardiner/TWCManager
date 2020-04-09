@@ -336,8 +336,8 @@ class TWCMaster:
         # Returns the number of amps currently in use by all TWCs
         totalAmps = 0
         for slaveTWC in self.getSlaveTWCs():
-            totalAmps += sum(slaveTWC.reportedAmpsHistory) / len(
-                slaveTWC.reportedAmpsHistory
+            totalAmps += sum(slaveTWC.reportedAmpsHistory) / max(
+                len(slaveTWC.reportedAmpsHistory), 1
             )
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
