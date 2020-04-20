@@ -26,7 +26,7 @@ class TWCSlave:
     reportedAmpsMax = 0
     reportedAmpsActual = 0
     reportedState = 0
-    reportedAmpsHistory = deque(maxlen=30)
+    reportedAmpsHistory = deque(maxlen=20)
 
     # reportedAmpsActual frequently changes by small amounts, like 5.14A may
     # frequently change to 5.23A and back.
