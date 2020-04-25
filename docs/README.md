@@ -29,11 +29,11 @@ sudo apt-get install -y git python3 python3-setuptools
 
 TWCManager requires a minimum of python 3.3 to work correctly.
 
-You may need to set python3 as your default python interpreter version on Debian/Ubuntu. The following command will set python 3.5 as your default interpreter. 
+You may need to set python3 as your default python interpreter version on Debian/Ubuntu. The following command will set python 3.7 as your default interpreter. 
 
 ```
 sudo update-alternatives --install /usr/bin/python python /usr/bin/python2.7 1
-sudo update-alternatives --install /usr/bin/python python /usr/bin/python3.5 2
+sudo update-alternatives --install /usr/bin/python python /usr/bin/python3.7 2
 ```
 
 You can check that this command has been successful by running ```python --version``` and checking that the version is python3.
@@ -46,7 +46,7 @@ During this step, the source code and all related files will be cloned from the 
 git clone https://github.com/ngardiner/TWCManager
 cd TWCManager
 git checkout v1.1.7
-make install
+sudo make install
 ```
 
 ### Configure TWCManager
@@ -60,7 +60,7 @@ The following documents provide detail on specific areas of configuration:
 Once the above steps are complete, start the TWCManager script with the following command:
 
 ```
-python3 -m TWCManager
+python -m TWCManager
 ```
 
 ## Monitoring the script operation
