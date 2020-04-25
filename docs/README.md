@@ -45,7 +45,7 @@ During this step, the source code and all related files will be cloned from the 
 ```
 git clone https://github.com/ngardiner/TWCManager
 cd TWCManager
-git checkout v1.1.7
+git checkout v1.2.0
 sudo make install
 ```
 
