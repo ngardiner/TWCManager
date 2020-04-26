@@ -35,3 +35,10 @@ ifeq (,$(wildcard /etc/twcmanager/config.json))
 endif
 	$(SUDO) chown root:pi /etc/twcmanager -R
 	$(SUDO) chmod 775 /etc/twcmanager
+
+	# install systemd unit file
+	# TODO: ensure WorkingDirectory is aligned /home/pi/TWCManager
+	# sudo systemctl enable /home/pi/TWCManager/twcmanager.service
+	# sudo systemctl start twcmanager
+	# journalctl -f
+	$(SUDO) systemctl enable ./twcmanager.service
