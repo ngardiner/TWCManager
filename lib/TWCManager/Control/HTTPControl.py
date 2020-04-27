@@ -521,11 +521,12 @@ class HTTPControlHandler(BaseHTTPRequestHandler):
         page += "<td>" + str(self.server.master.getScheduledAmpsEndHour()) + "</td>"
         page += "</tr>"
 
-        page += "<tr><th>Is a Green Policy?</th>"
-        if (self.server.master.getModuleByName("Policy").policyIsGreen()):
-          page += "<td>Yes</td>";
-        else:
-          page += "<td>No</td>";
+        ## TODO: this need to be fixed 
+        # page += "<tr><th>Is a Green Policy?</th>"
+        # if (self.server.master.getModuleByName("Policy").policyIsGreen()):
+        #   page += "<td>Yes</td>";
+        # else:
+        #   page += "<td>No</td>";
         page += "</tr>"
         page += "</table></td>"
 
