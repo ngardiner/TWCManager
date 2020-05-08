@@ -63,6 +63,21 @@ Once the above steps are complete, start the TWCManager script with the followin
 python3 -m TWCManager
 ```
 
+You can also use TWCManager as a module from within an existing python script using the following statements:
+```
+import TWCManager
+TWCManager.MainThread.start()
+```
+After doing so, you can utilize the TWCManager.master object to interact with the the wall connectors. By default, when run as a module, TWCManager does not print any output and overrides the logLevel in the config file to 0. If you would like to have some non-zero logLevel, use:
+```
+TWCManager.config["config"]["debugLevel"]=11        #or use another logLevel below 11
+```
+to re-override the logLevel. When finished, if you would like to stop TWCManager, use:
+```
+TWCManager.MainThread.stop()
+TWCManager.MainThread.join()
+```
+
 ## Monitoring the script operation
 
 After starting TWCManager, the script will run in the foreground and will regularly update with the current status. An example output is as follows:
