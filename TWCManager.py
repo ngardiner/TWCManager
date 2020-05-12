@@ -51,7 +51,7 @@ modules_available = [
     "Interface.TCP",
     "Policy.Policy",
     "Vehicle.TeslaAPI",
-    "Control.WebIPCControl.WebIPCControl",
+    "Control.WebIPCControl",
     "Control.HTTPControl",
     "Control.MQTTControl",
     "EMS.Fronius",
@@ -342,8 +342,6 @@ for module in modules_available:
     except:
         raise
 
-if 'WebIPCControl' in locals():
-    webipccontrol = WebIPCControl(master)
 
 # Load settings from file
 master.loadSettings()
@@ -519,7 +517,7 @@ class MainClass(threading.Thread):
 
                 # See if there's any message from the web interface.
                 if 'WebIPCControl' in locals():
-                    webipccontrol.processIPC()
+                    master.getModuleByName("WebIPCControl").processIPC()
 
                 # If it has been more than 2 minutes since the last kWh value, queue the command to request it from slaves
                 if config["config"]["fakeMaster"] == 1 and ((time.time() - master.lastkWhMessage) > (60*2)):
