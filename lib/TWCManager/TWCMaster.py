@@ -225,11 +225,7 @@ class TWCMaster:
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
 
     def getNonScheduledAmpsMax(self):
-        nschedamps = int(self.settings.get("nonScheduledAmpsMax", 0))
-        if nschedamps > 0:
-            return nschedamps
-        else:
-            return 0
+        return int(self.settings.get("nonScheduledAmpsMax", 0))
 
     def getScheduledAmpsMax(self):
         schedamps = int(self.settings.get("scheduledAmpsMax", 0))
