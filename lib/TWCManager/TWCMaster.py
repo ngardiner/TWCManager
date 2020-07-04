@@ -140,11 +140,22 @@ class TWCMaster:
 
     def convertAmpsToWatts(self, amps):
         (voltage, phases) = self.getVoltageMeasurement()
-        return phases * voltage * amps
+        return phases * voltage * amps * self.getRealPowerFactor(amps)
 
     def convertWattsToAmps(self, watts):
         (voltage, phases) = self.getVoltageMeasurement()
-        return watts / (phases * voltage)
+        amps = watts / (phases * voltage)
+        return amps / self.getRealPowerFactor(amps)
+
+    def getRealPowerFactor(self, amps):
+        realPowerFactorMinAmps = self.config["config"].get("realPowerFactorMinAmps", 1)
+        realPowerFactorMaxAmps = self.config["config"].get("realPowerFactorMaxAmps", 1)
+        minAmps = self.config["config"]["minAmpsPerTWC"]
+        maxAmps = self.config["config"]["wiringMaxAmpsAllTWCs"]
+        if (minAmps == maxAmps):
+            return 1
+        else:
+            return ((amps-minAmps)/(maxAmps-minAmps)*(realPowerFactorMaxAmps-realPowerFactorMinAmps))+realPowerFactorMinAmps
 
     def countSlaveTWC(self):
         return int(len(self.slaveTWCRoundRobin))
