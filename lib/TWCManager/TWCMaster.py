@@ -382,9 +382,12 @@ class TWCMaster:
         # Fetches and uses consumptionW separately
         generationOffset = self.getGenerationOffset()
         solarW = float(generationW - generationOffset)
+        solarAmps = self.convertWattsToAmps(solarW)
 
         # Offer the smaller of the two, but not less than zero.
-        return max(min(newOffer, self.convertWattsToAmps(solarW)), 0)
+        amps = max(min(newOffer,solarAmps), 0)
+        amps = amps / self.getRealPowerFactor(amps)
+        return amps 
 
     def getNormalChargeLimit(self, ID):
         if "chargeLimits" in self.settings and str(ID) in self.settings["chargeLimits"]:
