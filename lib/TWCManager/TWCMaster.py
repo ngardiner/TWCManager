@@ -140,12 +140,11 @@ class TWCMaster:
 
     def convertAmpsToWatts(self, amps):
         (voltage, phases) = self.getVoltageMeasurement()
-        return phases * voltage * amps * self.getRealPowerFactor(amps)
+        return phases * voltage * amps
 
     def convertWattsToAmps(self, watts):
         (voltage, phases) = self.getVoltageMeasurement()
-        amps = watts / (phases * voltage)
-        return amps / self.getRealPowerFactor(amps)
+        return watts / (phases * voltage)
 
     def getRealPowerFactor(self, amps):
         realPowerFactorMinAmps = self.config["config"].get("realPowerFactorMinAmps", 1)
@@ -310,7 +309,8 @@ class TWCMaster:
     def getChargerLoad(self):
         # Calculate in watts the load that the charger is generating so
         # that we can exclude it from the consumption if necessary
-        return self.convertAmpsToWatts(self.getTotalAmpsInUse())
+        amps = self.getTotalAmpsInUse()
+        return self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
 
     def getConsumption(self):
         consumptionVal = 0
