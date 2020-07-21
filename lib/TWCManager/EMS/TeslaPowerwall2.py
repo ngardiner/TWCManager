@@ -68,6 +68,11 @@ class TeslaPowerwall2:
         return float(value.get("load", dict()).get("instant_power", 0))
 
     @property
+    def excessW(self):
+        excess = self.generatedW - self.consumedW
+        return excess if excess > 0 else 0
+
+    @property
     def importW(self):
         value = self.getPWValues()
         gridW = float(value.get("site", dict()).get("instant_power", 0))
