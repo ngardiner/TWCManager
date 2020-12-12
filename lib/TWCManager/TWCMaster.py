@@ -293,6 +293,10 @@ class TWCMaster:
             slave = next(iter(self.slaveTWCs.values()))
             vehicle = slave.getLastVehicle()
             if vehicle != None:
+                # we update current SOC - but only when charging 
+                if slave.isCharging==1:
+                    vehicle.update_charge()
+
                 amps = self.getScheduledAmpsMax()
                 watts = self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
                 hoursForFullCharge = self.getScheduledAmpsBatterySize() / (watts / 1000)
@@ -309,7 +313,7 @@ class TWCMaster:
                 if vehicle.chargeLimit >= 98:
                     startHour -= 0.5
                 # As soon we start charge, we set start charging another quarter of an hour back - so it won't start and stop charging the whole time 
-                if slave.isCharging==1:
+                if slave.isCharging==1:                    
                     startHour -= 0.25                    
                 if startHour < 0:
                     startHour = startHour + 24
