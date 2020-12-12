@@ -916,7 +916,7 @@ class TWCSlave:
                             "Car stuck when offered spikeAmpsToCancel6ALimit.  Offering 2 less.",
                         )
                         desiredAmpsOffered = self.master.getSpikeAmps() - 2.0
-                    elif now - self.timeLastAmpsOfferedChanged > 5:
+                    elif now - self.timeLastAmpsOfferedChanged > 10:
                         # self.lastAmpsOffered hasn't gotten the car to draw
                         # enough amps for over 5 seconds, so try
                         # spikeAmpsToCancel6ALimit
@@ -944,7 +944,7 @@ class TWCSlave:
                         "Reduce amps: time - self.timeLastAmpsOfferedChanged "
                         + str(int(now - self.timeLastAmpsOfferedChanged)),
                     )
-                    if now - self.timeLastAmpsOfferedChanged < 5:
+                    if now - self.timeLastAmpsOfferedChanged < 10:
                         desiredAmpsOffered = self.lastAmpsOffered
 
         # set_last_amps_offered does some final checks to see if the new
