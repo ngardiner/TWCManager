@@ -828,15 +828,11 @@ class TWCSlave:
                 # spikeAmpsToCancel6ALimit is not enough to cancel the 6A limit.
                 #
                 # I'm not sure how long we have to hold spikeAmpsToCancel6ALimit
-                # but 3 seconds is definitely not enough but 10 seconds seems to
+                # but 3 seconds is definitely not enough but 5 seconds seems to
                 # work. It doesn't seem to matter if the car actually hits
                 # spikeAmpsToCancel6ALimit of power draw. In fact, the car is
                 # slow enough to respond that even with 10s at 21A the most I've
                 # seen it actually draw starting at 6A is 13A.
-                # After month of not working as suggested - I made the observation
-                # that sometimes it does not start with 5 seconds. So I hope 10 
-                # seconds will be better. As the cold weather started here in
-                # switzerland.
                 self.master.debugLog(
                     10,
                     "TWCSlave  ",
@@ -920,7 +916,7 @@ class TWCSlave:
                             "Car stuck when offered spikeAmpsToCancel6ALimit.  Offering 2 less.",
                         )
                         desiredAmpsOffered = self.master.getSpikeAmps() - 2.0
-                    elif now - self.timeLastAmpsOfferedChanged > 10:
+                    elif now - self.timeLastAmpsOfferedChanged > 5:
                         # self.lastAmpsOffered hasn't gotten the car to draw
                         # enough amps for over 5 seconds, so try
                         # spikeAmpsToCancel6ALimit
@@ -939,16 +935,16 @@ class TWCSlave:
                 elif desiredAmpsOffered < self.lastAmpsOffered:
                     # Tesla doesn't mind if we set a lower amp limit than the
                     # one we're currently using, but make sure we don't change
-                    # limits more often than every 10 seconds. This has the side
+                    # limits more often than every 5 seconds. This has the side
                     # effect of holding spikeAmpsToCancel6ALimit set earlier for
-                    # 10 seconds to make sure the car sees it.
+                    # 5 seconds to make sure the car sees it.
                     self.master.debugLog(
                         10,
                         "TWCSlave  ",
                         "Reduce amps: time - self.timeLastAmpsOfferedChanged "
                         + str(int(now - self.timeLastAmpsOfferedChanged)),
                     )
-                    if now - self.timeLastAmpsOfferedChanged < 10:
+                    if now - self.timeLastAmpsOfferedChanged < 5:
                         desiredAmpsOffered = self.lastAmpsOffered
 
         # set_last_amps_offered does some final checks to see if the new
