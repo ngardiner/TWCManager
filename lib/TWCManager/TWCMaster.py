@@ -295,7 +295,7 @@ class TWCMaster:
             if vehicle != None:
                 # we update current SOC - but only when charging 
                 if slave.isCharging==1:
-                    vehicle.update_charge()
+                    self.queue_background_task({"cmd": "checkCharge"})
 
                 amps = self.getScheduledAmpsMax()
                 watts = self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
