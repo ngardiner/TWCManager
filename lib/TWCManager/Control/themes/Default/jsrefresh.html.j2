@@ -20,7 +20,7 @@ $(document).ready(function() {
                 }
 
                 // Change the state of the Charge Now button based on Charge Policy
-                if (json["currentPolicy"] == "Charge Now") {
+                if (json["currentPolicy"] == "Charge Now" || json["currentPolicy"] == "Charge Now with Grid power limit") {
                   document.getElementById("start_chargenow").value = "Update Charge Now";
                   document.getElementById("cancel_chargenow").disabled = false;
                 } else {

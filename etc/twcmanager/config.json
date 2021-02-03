@@ -32,6 +32,32 @@
         # wiringMaxAmpsPerTWC = 50 * 0.8 = 40 and wiringMaxAmpsAllTWCs = 40 + 40 = 80.
         "wiringMaxAmpsPerTWC": 6,
 
+
+        # If you what to limit the power drawn from the Grid you need to set this
+        # maxAmpsAllowedFromGrid and extend the policy you what it to apply, i.e.:
+        # { "name": "Charge Now with Grid power limit",
+        #   "match": [
+        #       "settings.chargeNowAmps",
+        #       "settings.chargeNowTimeEnd",
+        #       "settings.chargeNowTimeEnd",
+        #   ],
+        #   "condition": ["gt", "gt", "gt"],
+        #   "value": [0, 0, "now"],
+        #   "background_task": "checkMaxPowerFromGrid",
+        #   "charge_amps": "settings.chargeNowAmps",
+        #   "charge_limit": "config.chargeNowLimit"},
+
+        # { "name": "Scheduled Charging with Grid power limit",
+        #   "match": [ "checkScheduledCharging()" ],
+        #   "condition": [ "eq" ],
+        #   "value": [ 1 ],
+        #   "background_task": "checkMaxPowerFromGrid",
+        #   "charge_amps": "settings.scheduledAmpsMax",
+        #   "charge_limit": "config.scheduledLimit"},
+
+        "maxAmpsAllowedFromGrid": 15,
+
+
         # https://teslamotorsclub.com/tmc/threads/model-s-gen2-charger-efficiency-testing.78740/#post-1844789
         # says you're using 10.85% more power (91.75/82.77=1.1085) charging at 5A vs 40A,
         # 2.48% more power at 10A vs 40A, and 1.9% more power at 20A vs 40A.  This is
@@ -258,6 +284,25 @@
         #
         # They should primarily be used to abort charging when necessary.
         "emergency":[
+         { "name": "Charge Now with Grid power limit",
+           "match": [
+               "settings.chargeNowAmps",
+               "settings.chargeNowTimeEnd",
+               "settings.chargeNowTimeEnd",
+           ],
+           "condition": ["gt", "gt", "gt"],
+           "value": [0, 0, "now"],
+           "background_task": "checkMaxPowerFromGrid",
+           "charge_amps": "settings.chargeNowAmps",
+           "charge_limit": "config.chargeNowLimit"},
+
+         { "name": "Scheduled Charging with Grid power limit",
+           "match": [ "checkScheduledCharging()" ],
+           "condition": [ "eq" ],
+           "value": [ 1 ],
+           "background_task": "checkMaxPowerFromGrid",
+           "charge_amps": "settings.scheduledAmpsMax",
+           "charge_limit": "config.scheduledLimit"},
         ],
         # Rules in the before section here are evaluated after the Charge Now rule
         "before":[

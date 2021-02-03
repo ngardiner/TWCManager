@@ -1,12 +1,12 @@
 #!/usr/bin/python3
 
-from setuptools import setup, find_namespace_packages
+from setuptools import setup, find_packages
 
 setup(
     name="TWCManager",
     version="1.2.1",
     package_dir={"": "lib"},
-    packages=find_namespace_packages(where="lib"),
+    packages=find_packages(where="lib"),
     # Dependencies
     install_requires=[
         "commentjson>=0.8.3",
