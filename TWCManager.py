@@ -102,7 +102,8 @@ else:
 
 ########################################################################
 # Write the PID in order to let a supervisor restart it in case of crash
-PIDTWCManager=open("/home/pi/TWCManager/TWCManager.pid","w")
+PIDfile=config["config"]["settingsPath"] + "/TWCManager.pid"
+PIDTWCManager=open(PIDfile,"w")
 PIDTWCManager.write(str(os.getpid()))
 PIDTWCManager.close()
 

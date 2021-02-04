@@ -1,5 +1,6 @@
 PROGRAM=/usr/bin/python3.5
-PIDFILE=/home/pi/TWCManager/TWCManager.pid
+PIDFILE=/etc/twcmanager/TWCManager.pid
+TWCMANAGER_PATH=/home/pi/TWCManager
 
 while true
 do
@@ -11,8 +12,11 @@ if [ -f $PIDFILE ]; then
     echo "done."
   else
     echo "PID not found, Starting..."
-    screen -dm -S TWCManager /home/pi/TWCManager/TWCManager.py
+    screen -dm -S TWCManager $TWCMANAGER_PATH/TWCManager.py
   fi
+else
+    echo "PID file not found "; echo $PIDFILE; echo ", Starting..."
+    screen -dm -S TWCManager $TWCMANAGER_PATH/TWCManager.py
 fi
 sleep 30
 done
