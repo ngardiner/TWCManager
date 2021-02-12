@@ -1192,7 +1192,7 @@ class TWCMaster:
             amps = self.config["config"]["wiringMaxAmpsAllTWCs"]
 
 
-        if amps > self.maxAmpsToDivideFromGrid:
+        if not self.getModuleByName("Policy").policyIsGreen() and amps > self.maxAmpsToDivideFromGrid:
             # Never tell the slaves to draw more amps from grid than allowed
             amps = self.maxAmpsToDivideFromGrid
             self.debugLog(
