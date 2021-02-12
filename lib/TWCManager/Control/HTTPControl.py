@@ -148,7 +148,7 @@ def CreateHTTPHandlerClass(master):
                     curday = settings.get(day, {})
                 if (today.get("enabled", None) == "on" and
                    (int(curday.get("start", 0)[:2]) <= int(i)) and
-                   (int(curday.get("end", 0)[:2]) >= int(i))):
+                   (int(curday.get("end", 0)[:2]) > int(i))):
                      page += "<td bgcolor='#CFFAFF'>SC @ " + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A</td>"
                 else:
                     #Todo - need to mark track green + non scheduled chg
