@@ -1191,8 +1191,10 @@ class TWCMaster:
             )
             amps = self.config["config"]["wiringMaxAmpsAllTWCs"]
 
-
-        if not self.getModuleByName("Policy").policyIsGreen() and amps > self.maxAmpsToDivideFromGrid:
+        activePolicy=str(self.getModuleByName("Policy").active_policy)
+        if (activePolicy== "Charge Now with Grid power limit" or \
+            activePolicy== "Scheduled Charging with Grid power limit") and \
+            amps > self.maxAmpsToDivideFromGrid:
             # Never tell the slaves to draw more amps from grid than allowed
             amps = self.maxAmpsToDivideFromGrid
             self.debugLog(
