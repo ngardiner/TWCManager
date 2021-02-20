@@ -504,10 +504,17 @@ def CreateHTTPHandlerClass(master):
             self.do_API_GET()
             return
 
+        if self.url.path == "/teslaAccount/login":
+            # For security, these details should be submitted via a POST request
+            # Send a 405 Method Not Allowed in response.
+            self.send_response(405)
+            page = "This function may only be requested via the POST HTTP method."
+            self.wfile.write(page.encode("utf-8"))
+            return
+
         if (
             self.url.path == "/"
-            or self.url.path == "/apiacct/True"
-            or self.url.path == "/apiacct/False"
+            or self.url.path.startswith("/teslaAccount")
         ):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
@@ -578,14 +585,6 @@ def CreateHTTPHandlerClass(master):
             self.wfile.write(page.encode("utf-8"))
             return
 
-        if self.url.path == "/tesla-login":
-            # For security, these details should be submitted via a POST request
-            # Send a 405 Method Not Allowed in response.
-            self.send_response(405)
-            page = "This function may only be requested via the POST HTTP method."
-            self.wfile.write(page.encode("utf-8"))
-            return
-
         # All other routes missed, return 404
         self.send_response(404)
 
@@ -616,7 +615,7 @@ def CreateHTTPHandlerClass(master):
             self.process_save_settings()
             return
 
-        if self.url.path == "/tesla-login":
+        if self.url.path == "/teslaAccount/login":
             # User has submitted Tesla login.
             # Pass it to the dedicated process_teslalogin function
             self.process_teslalogin()
@@ -780,8 +779,22 @@ def CreateHTTPHandlerClass(master):
 
     def process_save_settings(self):
 
-        # Write settings
+        # This function will write the settings submitted from the settings
+        # page to the settings dict, before triggering a write of the settings
+        # to file
         for key in self.fields:
+
+            # If the key relates to the car API tokens, we need to pass these
+            # to the appropriate module, rather than directly updating the
+            # configuration file (as it would just be overwritten)
+            if (key == "carApiBearerToken" or key == "carApiRefreshToken") and self.getFieldValue(key) != "":
+                carapi = master.getModuleByName("TeslaAPI")
+                if key == "carApiBearerToken":
+                    carapi.setCarApiBearerToken(self.getFieldValue(key))
+                elif key == "carApiRefreshToken":
+                    carapi.setCarApiRefreshToken(self.getFieldValue(key))
+
+            # Write setting to dictionary
             master.settings[key] = self.getFieldValue(key)
 
         # If Non-Scheduled power action is either Do not Charge or
@@ -822,7 +835,7 @@ def CreateHTTPHandlerClass(master):
             # Redirect to an index page with output based on the return state of
             # the function
             self.send_response(302)
-            self.send_header("Location", "/apiacct/" + str(ret))
+            self.send_header("Location", "/teslaAccount/" + str(ret))
             self.end_headers()
             self.wfile.write("".encode("utf-8"))
             return

@@ -100,6 +100,16 @@ else:
     debugLog(1, "Unable to find a configuration file.")
     sys.exit()
 
+
+
+
+########################################################################
+# Write the PID in order to let a supervisor restart it in case of crash
+PIDfile=config["config"]["settingsPath"] + "/TWCManager.pid"
+PIDTWCManager=open(PIDfile,"w")
+PIDTWCManager.write(str(os.getpid()))
+PIDTWCManager.close()
+
 # All TWCs ship with a random two-byte TWCID. We default to using 0x7777 as our
 # fake TWC ID. There is a 1 in 64535 chance that this ID will match each real
 # TWC on the network, in which case you should pick a different random id below.
@@ -242,6 +252,9 @@ def background_tasks_thread(master):
                     requests.post(task["url"], json=body)
             elif task["cmd"] == "saveSettings":
                 master.saveSettings()
+            elif task["cmd"] == "checkMaxPowerFromGrid":
+                check_max_power_from_grid()
+
 
         except:
             master.debugLog(
@@ -288,6 +301,24 @@ def check_green_energy():
         master.setConsumption(module["name"], module["ref"].getConsumption())
         master.setGeneration(module["name"], module["ref"].getGeneration())
     master.setMaxAmpsToDivideAmongSlaves(master.getMaxAmpsToDivideGreenEnergy())
+
+
+def check_max_power_from_grid():
+    global config, hass, master
+
+    # Check solar panel generation using an API exposed by
+    # the HomeAssistant API.
+    #
+    # You may need to customize the sensor entity_id values
+    # to match those used in your environment. This is configured
+    # in the config section at the top of this file.
+    #
+    # Poll all loaded EMS modules for consumption and generation values
+    for module in master.getModulesByType("EMS"):
+        master.setConsumption(module["name"], module["ref"].getConsumption())
+        master.setGeneration(module["name"], module["ref"].getGeneration())
+    master.setMaxAmpsToDivideFromGrid(master.getMaxAmpsToDivideFromGrid())
+
 
 
 def update_statuses():
