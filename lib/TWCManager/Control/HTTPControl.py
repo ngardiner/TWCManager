@@ -661,6 +661,16 @@ def CreateHTTPHandlerClass(master):
         page += "<td>" + self.checkBox("flex"+suffix, 
                 today.get("flex", 0)) + "</td>"
         page += "<td>Flex Charge</td>"
+        if master.getPricingInAdvanceAvailable():
+            page += "<td>" + self.checkBox("cheaper"+suffix,
+                    today.get("cheaper", 0)) + "</td>"
+            page += "<td>Flex Cheaper</td>"
+            if not today.get("flex", 0):
+               page += "<td>" + self.optionList(self.hoursDurationList,
+                 {"name": "actualH"+suffix,
+                  "value": today.get("actualH", 1)}) + "</td>"
+               page += "<td>hours</td>"
+
         page += "</tr>"
         return page
 
@@ -709,11 +719,13 @@ def CreateHTTPHandlerClass(master):
                 master.settings["Schedule"][day] = {}
             master.settings["Schedule"][day]["enabled"] = ""
             master.settings["Schedule"][day]["flex"] = ""
+            master.settings["Schedule"][day]["cheaper"] = ""
+            master.settings["Schedule"][day]["actualH"] = ""
 
         # Detect schedule keys. Rather than saving them in a flat
         # structure, we'll store them multi-dimensionally
         fieldsout = self.fields.copy()
-        ct = re.compile(r'(?P<trigger>enabled|end|flex|start)(?P<day>.*?)ChargeTime')
+        ct = re.compile(r'(?P<trigger>enabled|end|flex|cheaper|actualH|start)(?P<day>.*?)ChargeTime')
         for key in self.fields:
             match = ct.match(key)
             if match:

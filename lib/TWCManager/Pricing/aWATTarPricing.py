@@ -118,4 +118,6 @@ class aWATTarPricing:
                         "Exception during parsing aWATTar pricing",
                     )
 
+    def getPricingInAdvanceAvailable(self):
+        return False
 

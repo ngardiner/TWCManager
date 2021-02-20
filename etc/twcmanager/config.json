@@ -423,7 +423,14 @@
                 "import": 0.20,
                 "export": 0.09
             }
+        },
+        "PVPCes": {
+            # Enable this module if you are a customer under PVPC in Spain
+            # You need to get a personal token from https://api.esios.ree.es/ 
+            "enabled": false,
+            "token": "xxx"
         }
+
     },
     "sources":{
         # This section is where we configure the various sources that we retrieve our generation and consumption

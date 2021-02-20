@@ -74,6 +74,7 @@ modules_available = [
     "Status.MQTTStatus",
     "Pricing.aWATTarPricing",
     "Pricing.StaticPricing",
+    "Pricing.PVPCesPricing",
 ]
 
 # Enable support for Python Visual Studio Debugger

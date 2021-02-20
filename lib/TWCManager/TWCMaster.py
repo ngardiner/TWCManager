@@ -106,8 +106,8 @@ class TWCMaster:
 
         # Check if we're within the hours we must use scheduledAmpsMax instead
         # of nonScheduledAmpsMax
-        blnUseScheduledAmps = 0
         ltNow = time.localtime()
+        blnUseScheduledAmps = 0
         hourNow = ltNow.tm_hour + (ltNow.tm_min / 60)
         timeSettings = self.getScheduledAmpsTimeFlex()
         startHour = timeSettings[0]
@@ -145,6 +145,7 @@ class TWCMaster:
                     and (daysBitmap & (1 << ltNow.tm_wday))
                 ):
                     blnUseScheduledAmps = 1
+
         return blnUseScheduledAmps
 
     def convertAmpsToWatts(self, amps):
@@ -269,6 +270,26 @@ class TWCMaster:
             self.exportPricingValues[module["name"]] = module["ref"].getExportPrice()
             self.importPricingValues[module["name"]] = module["ref"].getImportPrice()
 
+    def getPricingInAdvanceAvailable(self):
+        for module in self.getModulesByType("Pricing"):
+            if module["ref"].getPricingInAdvanceAvailable():
+               return True
+        return False
+
+    def getCheaperDayChargeTime(self,dayName):
+        return self.settings["Schedule"][dayName]["cheaper"]
+
+    def getActualHDayChargeTime(self,dayName):
+        return self.settings["Schedule"][dayName]["actualH"]
+
+    def getCheapestStartHour(self,numHours,ini,end):
+        # We take the latest modul data
+        cheapestStartHour = ini
+        for module in self.getModulesByType("Pricing"):
+             cheapestStartHour = module["ref"].getCheapestStartHour(numHours,ini,end)
+
+        return cheapestStartHour
+
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
 
@@ -289,8 +310,48 @@ class TWCMaster:
         else:
             return 0
 
+    def getActualHscheduledAmps(self):
+        return int(self.settings.get("actualHscheduledAmps", -1))
+
     def getScheduledAmpsStartHour(self):
         return int(self.settings.get("scheduledAmpsStartHour", -1))
+
+
+
+    def getScheduledAmpsCheaperFlex(self, startHour, endHour, daysBitmap):
+        # adjust the charge start time to minimize the cost
+        if not self.getPricingInAdvanceAvailable():
+           return (startHour, endHour, daysBitmap)
+
+        daysNames = [ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ]
+        ltNow = time.localtime()
+        hourNow = ltNow.tm_hour + (ltNow.tm_min / 60)
+        dayName = daysNames[ltNow.tm_wday+1]
+
+        if self.getCheaperDayChargeTime(dayName):
+           self.debugLog(10,"TWCMaster","getCheaperDayChargeTime True")
+           if self.getScheduledAmpsFlexStart():
+              #If flex start is active the actual charge duration will be taken from the flex period established 
+              if startHour < endHour:
+                 numHours = endHour-startHour
+              else:
+                 numHours = 24-startHour+endHour
+           else:
+              #If flex start is not active the actual charge duration s taken from the scheduled flex cheaper hours config 
+              numHours = self.getActualHDayChargeTime(dayName)
+              if numHours:
+                 numHours = numHours/3600
+
+           if numHours:
+              self.debugLog(10,"TWCMaster","numHours: "+str(numHours))
+              cheapestStartHour = self.getCheapestStartHour(numHours,startHour,endHour)
+              self.debugLog(10,"TWCMaster","cheapestStartHour: "+str(cheapestStartHour))
+              startHour = cheapestStartHour
+              endHour = startHour+numHours
+              if endHour >= 24:
+                 endHour = endHour - 24
+         
+        return (startHour, endHour, daysBitmap)
 
     def getScheduledAmpsTimeFlex(self):
         startHour = self.getScheduledAmpsStartHour()
@@ -325,7 +386,10 @@ class TWCMaster:
                 # (if starting usually at 9pm and it calculates to start at 4am - it's already the next day)
                 if startHour < self.getScheduledAmpsDaysBitmap():
                     days = self.rotl(days, 7)
-        return (startHour, self.getScheduledAmpsEndHour(), days)
+
+        timeSettings = self.getScheduledAmpsCheaperFlex(startHour, self.getScheduledAmpsEndHour(), days)
+
+        return timeSettings
 
     def getScheduledAmpsEndHour(self):
         return self.settings.get("scheduledAmpsEndHour", -1)
