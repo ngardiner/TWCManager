@@ -102,3 +102,8 @@ class SQLiteLogging:
             cur.execute(query, (data.get("vehicleVIN", "")))
             cur.close()
         return None
+
+    def greenEnergyQueryAvailable(self):
+        # ToDo
+        return None
+

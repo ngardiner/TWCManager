@@ -54,6 +54,7 @@ class HTTPControl:
 def CreateHTTPHandlerClass(master):
   class HTTPControlHandler(BaseHTTPRequestHandler):
     ampsList = []
+    kwhList = []
     fields = {}
     hoursDurationList = []
     master = None
@@ -72,6 +73,12 @@ def CreateHTTPHandlerClass(master):
             self.ampsList.append([0, "Disabled"])
             for amp in range(5, (master.config["config"].get("wiringMaxAmpsPerTWC", 5)) + 1):
                 self.ampsList.append([amp, str(amp) + "A"])
+
+        # Populate kwhList so that any function which requires a list of supported
+        # TWC kwh can easily access it
+        if not len(self.kwhList):
+            for kwh in range(40, 140):
+                self.kwhList.append([kwh, str(kwh) + "Kwh"])
 
         # Populate list of hours
         if not len(self.hoursDurationList):
@@ -104,6 +111,7 @@ def CreateHTTPHandlerClass(master):
         # render HTML, we can keep using those even inside jinja2
         self.templateEnv.globals.update(addButton=self.addButton)
         self.templateEnv.globals.update(ampsList=self.ampsList)
+        self.templateEnv.globals.update(kwhList=self.kwhList)
         self.templateEnv.globals.update(chargeScheduleDay=self.chargeScheduleDay)
         self.templateEnv.globals.update(doChargeSchedule=self.do_chargeSchedule)
         self.templateEnv.globals.update(hoursDurationList=self.hoursDurationList)
@@ -126,8 +134,18 @@ def CreateHTTPHandlerClass(master):
         return cb
 
     def do_chargeSchedule(self):
+        # For future days we use the name of the day with the suffix "next"
         schedule = [ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ]
         settings = master.settings.get("Schedule", {})
+        pricesI = master.getWeekImportPrice()
+        if not pricesI:
+           pricesI={}
+        ltNow = time.localtime()
+        hourNow = ltNow.tm_hour
+        if ltNow.tm_wday<6:
+           wdayNow = ltNow.tm_wday+1
+        else:
+           wdayNow = 0
 
         page = """
     <table class='table table-sm'>
@@ -139,20 +157,55 @@ def CreateHTTPHandlerClass(master):
         page += """
       </thead>
       <tbody>"""
-        for i in (x for y in (range(6, 24), range(0, 6)) for x in y):
+        for i in (x for y in (range(0, 8), range(8, 24)) for x in y):
             page += "<tr><th scope='row'>%02d</th>" % (i)
-            for day in schedule:
+            for dayTn in range(0,7):
+                day=schedule[dayTn]
+
+                energyOffset = int(master.queryGreenEnergyWhDay(day,i))
+                ampsOffset = round(master.convertWattsToAmps(energyOffset),2)
+                futureColor=""
+                if pricesI.get("next"+day,None) != None:
+                   day = "next"+day
+                   futureColor = ";color:blue"
+                if dayTn == wdayNow and i >= hourNow: 
+                   futureColor = ";color:blue"
+
+                if dayTn>0:
+                   dayYn=schedule[dayTn-1]
+                else:
+                   dayYn=schedule[6]
                 today = settings.get(day, {})
+                yesterday = settings.get(dayYn, {})
                 curday = settings.get("Common", {})
                 if (settings.get("schedulePerDay", 0)):
                     curday = settings.get(day, {})
-                if (today.get("enabled", None) == "on" and
-                   (int(curday.get("start", 0)[:2]) <= int(i)) and
-                   (int(curday.get("end", 0)[:2]) >= int(i))):
-                     page += "<td bgcolor='#CFFAFF'>SC @ " + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A</td>"
-                else:
+                start = int(curday.get("start", "24:00")[:2])
+                end = int(curday.get("end", "24:00")[:2])
+                
+                price=0
+                if pricesI.get(day,None) != None:
+                    price = pricesI[day][str(i)]
+
+                if ((today.get("enabled", None) == "on" and (
+                   (start < end and start <= i and end > i) or (start > end and start <= i)))
+                   or (yesterday.get("enabled", None) == "on" and start > end and i < end)):
+                    if price <= 0 and ampsOffset == 0 :
+                       page += "<td bgcolor='#CFFAFF' style='font-size:10px'>SC@" + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A</td>"
+                    elif ampsOffset == 0 :  
+                       page += "<td bgcolor='#CFFAFF' style='font-size:10px"+futureColor+"'>SC@" + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A "+str(price)+"€ </td>"
+                    else:
+                       page += "<td bgcolor='#CFFAFF' style='font-size:10px"+futureColor+"'>SC@" + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A "+str(price)+"€ "+str(ampsOffset)+"A </td>"
+
+                else :
                     #Todo - need to mark track green + non scheduled chg
-                    page += "<td bgcolor='#FFDDFF'>&nbsp;</td>"
+                    if price <= 0 and ampsOffset == 0 :
+                         page += "<td bgcolor='#FFDDFF' style='font-size:10px'></td>"
+                    elif ampsOffset == 0 :
+                         page += "<td bgcolor='#FFDDFF' style='font-size:10px"+futureColor+"'>"+str(price)+"€ </td>"
+                    else:
+                         page += "<td bgcolor='#FFDDFF' style='font-size:10px"+futureColor+"'>"+str(price)+"€ "+str(ampsOffset)+"A </td>"
+            
             page += "</tr>"
         page += "</tbody>"
         page += "</table>"
@@ -598,7 +651,12 @@ def CreateHTTPHandlerClass(master):
             self.send_header("Content-type", "text/html")
             self.end_headers()
             # Load debug template and render
-            self.template = self.templateEnv.get_template("graphs.html.j2")
+            self.template = self.templateEnv.get_template("nographs.html.j2")
+            for module in master.getModulesByType("Logging"):
+               if module["ref"].greenEnergyQueryAvailable():
+                  self.template = self.templateEnv.get_template("graphs.html.j2")
+                  break
+
             page = self.template.render(self.__dict__)
             self.wfile.write(page.encode("utf-8"))
             return
@@ -690,13 +748,16 @@ def CreateHTTPHandlerClass(master):
         page += "<td>" + self.checkBox("enabled"+suffix, 
                 today.get("enabled", 0)) + "</td>"
         page += "<td>" + str(day) + "</td>"
-        page += "<td>" + self.optionList(self.timeList, 
-          {"name": "start"+suffix,
-           "value": today.get("start", "00:00")}) + "</td>"
-        page += "<td> to </td>"
-        page += "<td>" + self.optionList(self.timeList, 
-          {"name": "end"+suffix,
-           "value": today.get("end", "00:00")}) + "</td>"
+
+        if sched.get("schedulePerDay", 0):
+           page += "<td>" + self.optionList(self.timeList, 
+             {"name": "start"+suffix,
+              "value": today.get("start", "00:00")}) + "</td>"
+           page += "<td> to </td>"
+           page += "<td>" + self.optionList(self.timeList, 
+             {"name": "end"+suffix,
+              "value": today.get("end", "00:00")}) + "</td>"
+
         page += "<td>" + self.checkBox("flex"+suffix, 
                 today.get("flex", 0)) + "</td>"
         page += "<td>Flex Charge</td>"
@@ -729,7 +790,7 @@ def CreateHTTPHandlerClass(master):
 
     def optionList(self, list, opts={}):
         page = "<div class='form-group'>"
-        page += "<select class='form-control' id='%s' name='%s'>" % (
+        page += "<select class='form-control' id='%s' name='%s' style='width: 90px'>" % (
             opts.get("name", ""),
             opts.get("name", ""),
         )
@@ -737,7 +798,7 @@ def CreateHTTPHandlerClass(master):
             sel = ""
             if str(opts.get("value", "-1")) == str(option[0]):
                 sel = "selected"
-            page += "<option value='%s' %s>%s</option>" % (option[0], sel, option[1])
+            page += "<option value='%s' %s>%s </option>" % (option[0], sel, option[1])
         page += "</select>"
         page += "</div>"
         return page
@@ -796,6 +857,9 @@ def CreateHTTPHandlerClass(master):
         master.settings["scheduledAmpsStartHour"] = int(master.settings["Schedule"]["Common"]["start"][:2])
         master.settings["scheduledAmpsEndHour"] = int(master.settings["Schedule"]["Common"]["end"][:2])
         master.settings["scheduledAmpsMax"] = float(master.settings["Schedule"]["Settings"]["scheduledAmpsMax"])
+        master.settings["flexBatterySize"] = float(master.settings["Schedule"]["Settings"]["flexBatterySize"])
+        master.debugLog(10,"HTTP","scheduledAmpsMax: "+str(master.settings["scheduledAmpsMax"])) 
+        master.debugLog(10,"HTTP","flexBatterySize: "+str(master.settings["flexBatterySize"])) 
 
         # Scheduled Days bitmap backward compatibility
         master.settings["scheduledAmpsDaysBitmap"] = (
@@ -960,13 +1024,20 @@ def CreateHTTPHandlerClass(master):
         # This function will query the green_energy SQL table
         result={}
         try:
-           module = self.master.getModuleByName("MySQLLogging")
-           result= module.queryGreenEnergy(
+           available=False
+           for module in master.getModulesByType("Logging"):
+              if module["ref"].greenEnergyQueryAvailable():
+                 result= module["ref"].queryGreenEnergy(
                                {
                                    "dateBegin": init,
                                    "dateEnd": end
                                }
                              )
+                 available = True
+                 break
+           if not available:
+              return
+              
         except Exception as e:
             master.debugLog(1,
                 "HTTPCtrl",
@@ -998,6 +1069,8 @@ def CreateHTTPHandlerClass(master):
             self.wfile.write(json_data.encode("utf-8"))
         except BrokenPipeError:
             master.debugLog(10,"HTTPCtrl","Connection Error: Broken Pipe")
+
+
         return
 
 

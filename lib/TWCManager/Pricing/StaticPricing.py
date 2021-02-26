@@ -73,7 +73,12 @@ class StaticPricing:
         # Return current import price
         return float(self.importPrice)
 
+    def getWeekImportPrice(self):
+        # For future implementation
+        return 0
+
     def getPricingInAdvanceAvailable(self):
         # For future implementation
-        return False
+        return 0
+        return 0
 
