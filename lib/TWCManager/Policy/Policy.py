@@ -295,7 +295,9 @@ class Policy:
         if self.getPolicyByName(self.active_policy):
             return (
                 self.getPolicyByName(self.active_policy).get("background_task", "")
-                == "checkGreenEnergy"
+                == "checkGreenEnergy" or
+                self.getPolicyByName(self.active_policy).get("background_task", "")
+                == "checkMaxPowerFromGrid"
             )
         return 0
 

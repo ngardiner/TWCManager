@@ -130,3 +130,8 @@ class ConsoleLogging:
         # Called when additional information needs to be updated for a
         # charge session. For console output, we ignore this.
         return None
+
+    def greenEnergyQueryAvailable(self):
+        # ToDo
+        return None
+

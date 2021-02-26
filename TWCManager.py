@@ -74,6 +74,7 @@ modules_available = [
     "Status.MQTTStatus",
     "Pricing.aWATTarPricing",
     "Pricing.StaticPricing",
+    "Pricing.PVPCesPricing",
 ]
 
 # Enable support for Python Visual Studio Debugger
@@ -99,6 +100,10 @@ else:
     debugLog(1, "Unable to find a configuration file.")
     sys.exit()
 
+
+
+
+########################################################################
 # All TWCs ship with a random two-byte TWCID. We default to using 0x7777 as our
 # fake TWC ID. There is a 1 in 64535 chance that this ID will match each real
 # TWC on the network, in which case you should pick a different random id below.
@@ -242,6 +247,7 @@ def background_tasks_thread(master):
             elif task["cmd"] == "saveSettings":
                 master.saveSettings()
 
+
         except:
             master.debugLog(
                 1,
@@ -287,7 +293,6 @@ def check_green_energy():
         master.setConsumption(module["name"], module["ref"].getConsumption())
         master.setGeneration(module["name"], module["ref"].getGeneration())
     master.setMaxAmpsToDivideAmongSlaves(master.getMaxAmpsToDivideGreenEnergy())
-
 
 def update_statuses():
 

@@ -54,6 +54,7 @@ class HTTPControl:
 def CreateHTTPHandlerClass(master):
   class HTTPControlHandler(BaseHTTPRequestHandler):
     ampsList = []
+    kwhList = []
     fields = {}
     hoursDurationList = []
     master = None
@@ -72,6 +73,12 @@ def CreateHTTPHandlerClass(master):
             self.ampsList.append([0, "Disabled"])
             for amp in range(5, (master.config["config"].get("wiringMaxAmpsPerTWC", 5)) + 1):
                 self.ampsList.append([amp, str(amp) + "A"])
+
+        # Populate kwhList so that any function which requires a list of supported
+        # TWC kwh can easily access it
+        if not len(self.kwhList):
+            for kwh in range(40, 140):
+                self.kwhList.append([kwh, str(kwh) + "Kwh"])
 
         # Populate list of hours
         if not len(self.hoursDurationList):
@@ -104,6 +111,7 @@ def CreateHTTPHandlerClass(master):
         # render HTML, we can keep using those even inside jinja2
         self.templateEnv.globals.update(addButton=self.addButton)
         self.templateEnv.globals.update(ampsList=self.ampsList)
+        self.templateEnv.globals.update(kwhList=self.kwhList)
         self.templateEnv.globals.update(chargeScheduleDay=self.chargeScheduleDay)
         self.templateEnv.globals.update(doChargeSchedule=self.do_chargeSchedule)
         self.templateEnv.globals.update(hoursDurationList=self.hoursDurationList)
@@ -126,8 +134,18 @@ def CreateHTTPHandlerClass(master):
         return cb
 
     def do_chargeSchedule(self):
+        # For future days we use the name of the day with the suffix "next"
         schedule = [ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ]
         settings = master.settings.get("Schedule", {})
+        pricesI = master.getWeekImportPrice()
+        if not pricesI:
+           pricesI={}
+        ltNow = time.localtime()
+        hourNow = ltNow.tm_hour
+        if ltNow.tm_wday<6:
+           wdayNow = ltNow.tm_wday+1
+        else:
+           wdayNow = 0
 
         page = """
     <table class='table table-sm'>
@@ -139,20 +157,55 @@ def CreateHTTPHandlerClass(master):
         page += """
       </thead>
       <tbody>"""
-        for i in (x for y in (range(6, 24), range(0, 6)) for x in y):
+        for i in (x for y in (range(0, 8), range(8, 24)) for x in y):
             page += "<tr><th scope='row'>%02d</th>" % (i)
-            for day in schedule:
+            for dayTn in range(0,7):
+                day=schedule[dayTn]
+
+                energyOffset = int(master.queryGreenEnergyWhDay(day,i))
+                ampsOffset = round(master.convertWattsToAmps(energyOffset),2)
+                futureColor=""
+                if pricesI.get("next"+day,None) != None:
+                   day = "next"+day
+                   futureColor = ";color:blue"
+                if dayTn == wdayNow and i >= hourNow: 
+                   futureColor = ";color:blue"
+
+                if dayTn>0:
+                   dayYn=schedule[dayTn-1]
+                else:
+                   dayYn=schedule[6]
                 today = settings.get(day, {})
+                yesterday = settings.get(dayYn, {})
                 curday = settings.get("Common", {})
                 if (settings.get("schedulePerDay", 0)):
                     curday = settings.get(day, {})
-                if (today.get("enabled", None) == "on" and
-                   (int(curday.get("start", 0)[:2]) <= int(i)) and
-                   (int(curday.get("end", 0)[:2]) >= int(i))):
-                     page += "<td bgcolor='#CFFAFF'>SC @ " + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A</td>"
-                else:
+                start = int(curday.get("start", "24:00")[:2])
+                end = int(curday.get("end", "24:00")[:2])
+                
+                price=0
+                if pricesI.get(day,None) != None:
+                    price = pricesI[day][str(i)]
+
+                if ((today.get("enabled", None) == "on" and (
+                   (start < end and start <= i and end > i) or (start > end and start <= i)))
+                   or (yesterday.get("enabled", None) == "on" and start > end and i < end)):
+                    if price <= 0 and ampsOffset == 0 :
+                       page += "<td bgcolor='#CFFAFF' style='font-size:10px'>SC@" + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A</td>"
+                    elif ampsOffset == 0 :  
+                       page += "<td bgcolor='#CFFAFF' style='font-size:10px"+futureColor+"'>SC@" + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A "+str(price)+"€ </td>"
+                    else:
+                       page += "<td bgcolor='#CFFAFF' style='font-size:10px"+futureColor+"'>SC@" + str(settings.get("Settings", {}).get("scheduledAmpsMax", 0)) + "A "+str(price)+"€ "+str(ampsOffset)+"A </td>"
+
+                else :
                     #Todo - need to mark track green + non scheduled chg
-                    page += "<td bgcolor='#FFDDFF'>&nbsp;</td>"
+                    if price <= 0 and ampsOffset == 0 :
+                         page += "<td bgcolor='#FFDDFF' style='font-size:10px'></td>"
+                    elif ampsOffset == 0 :
+                         page += "<td bgcolor='#FFDDFF' style='font-size:10px"+futureColor+"'>"+str(price)+"€ </td>"
+                    else:
+                         page += "<td bgcolor='#FFDDFF' style='font-size:10px"+futureColor+"'>"+str(price)+"€ "+str(ampsOffset)+"A </td>"
+            
             page += "</tr>"
         page += "</tbody>"
         page += "</table>"
@@ -504,10 +557,17 @@ def CreateHTTPHandlerClass(master):
             self.do_API_GET()
             return
 
+        if self.url.path == "/teslaAccount/login":
+            # For security, these details should be submitted via a POST request
+            # Send a 405 Method Not Allowed in response.
+            self.send_response(405)
+            page = "This function may only be requested via the POST HTTP method."
+            self.wfile.write(page.encode("utf-8"))
+            return
+
         if (
             self.url.path == "/"
-            or self.url.path == "/apiacct/True"
-            or self.url.path == "/apiacct/False"
+            or self.url.path.startswith("/teslaAccount")
         ):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
@@ -578,13 +638,37 @@ def CreateHTTPHandlerClass(master):
             self.wfile.write(page.encode("utf-8"))
             return
 
-        if self.url.path == "/tesla-login":
-            # For security, these details should be submitted via a POST request
-            # Send a 405 Method Not Allowed in response.
-            self.send_response(405)
-            page = "This function may only be requested via the POST HTTP method."
+        if self.url.path == "/graphs" or self.url.path == "/graphsP":
+            # We query the last 24h by default
+            now = datetime.now().replace(second=0, microsecond=0)
+            initial=now - timedelta(hours=24)
+            end= now
+            # It we came from a POST the dates should be already stored in settings
+            if self.url.path == "/graphs":
+               self.process_save_graphs(initial,end)
+
+            self.send_response(200)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            # Load debug template and render
+            self.template = self.templateEnv.get_template("nographs.html.j2")
+            for module in master.getModulesByType("Logging"):
+               if module["ref"].greenEnergyQueryAvailable():
+                  self.template = self.templateEnv.get_template("graphs.html.j2")
+                  break
+
+            page = self.template.render(self.__dict__)
             self.wfile.write(page.encode("utf-8"))
             return
+
+        if self.url.path == "/graphs/date":
+            inicio=master.settings["Graphs"]["Initial"]
+            fin=master.settings["Graphs"]["End"]
+
+            self.process_graphs(inicio,fin)
+            return
+
+
 
         # All other routes missed, return 404
         self.send_response(404)
@@ -616,11 +700,24 @@ def CreateHTTPHandlerClass(master):
             self.process_save_settings()
             return
 
-        if self.url.path == "/tesla-login":
+        if self.url.path == "/teslaAccount/login":
             # User has submitted Tesla login.
             # Pass it to the dedicated process_teslalogin function
             self.process_teslalogin()
             return
+
+        if self.url.path == "/graphs/dates":
+            # User has submitted dates to graph this period.
+            objIni = datetime.strptime(self.getFieldValue("dateIni"), "%Y-%m-%dT%H:%M")
+            objEnd = datetime.strptime(self.getFieldValue("dateEnd"), "%Y-%m-%dT%H:%M")
+            self.process_save_graphs(objIni,objEnd)
+            self.send_response(302)
+            self.send_header("Location", "/graphsP")
+            self.end_headers()
+
+            self.wfile.write("".encode("utf-8"))
+            return
+
 
         # All other routes missed, return 404
         self.send_response(404)
@@ -651,16 +748,29 @@ def CreateHTTPHandlerClass(master):
         page += "<td>" + self.checkBox("enabled"+suffix, 
                 today.get("enabled", 0)) + "</td>"
         page += "<td>" + str(day) + "</td>"
-        page += "<td>" + self.optionList(self.timeList, 
-          {"name": "start"+suffix,
-           "value": today.get("start", "00:00")}) + "</td>"
-        page += "<td> to </td>"
-        page += "<td>" + self.optionList(self.timeList, 
-          {"name": "end"+suffix,
-           "value": today.get("end", "00:00")}) + "</td>"
+
+        if sched.get("schedulePerDay", 0):
+           page += "<td>" + self.optionList(self.timeList, 
+             {"name": "start"+suffix,
+              "value": today.get("start", "00:00")}) + "</td>"
+           page += "<td> to </td>"
+           page += "<td>" + self.optionList(self.timeList, 
+             {"name": "end"+suffix,
+              "value": today.get("end", "00:00")}) + "</td>"
+
         page += "<td>" + self.checkBox("flex"+suffix, 
                 today.get("flex", 0)) + "</td>"
         page += "<td>Flex Charge</td>"
+        if master.getPricingInAdvanceAvailable():
+            page += "<td>" + self.checkBox("cheaper"+suffix,
+                    today.get("cheaper", 0)) + "</td>"
+            page += "<td>Flex Cheaper</td>"
+            if not today.get("flex", 0):
+               page += "<td>" + self.optionList(self.hoursDurationList,
+                 {"name": "actualH"+suffix,
+                  "value": today.get("actualH", 1)}) + "</td>"
+               page += "<td>hours</td>"
+
         page += "</tr>"
         return page
 
@@ -680,7 +790,7 @@ def CreateHTTPHandlerClass(master):
 
     def optionList(self, list, opts={}):
         page = "<div class='form-group'>"
-        page += "<select class='form-control' id='%s' name='%s'>" % (
+        page += "<select class='form-control' id='%s' name='%s' style='width: 90px'>" % (
             opts.get("name", ""),
             opts.get("name", ""),
         )
@@ -688,7 +798,7 @@ def CreateHTTPHandlerClass(master):
             sel = ""
             if str(opts.get("value", "-1")) == str(option[0]):
                 sel = "selected"
-            page += "<option value='%s' %s>%s</option>" % (option[0], sel, option[1])
+            page += "<option value='%s' %s>%s </option>" % (option[0], sel, option[1])
         page += "</select>"
         page += "</div>"
         return page
@@ -709,11 +819,13 @@ def CreateHTTPHandlerClass(master):
                 master.settings["Schedule"][day] = {}
             master.settings["Schedule"][day]["enabled"] = ""
             master.settings["Schedule"][day]["flex"] = ""
+            master.settings["Schedule"][day]["cheaper"] = ""
+            master.settings["Schedule"][day]["actualH"] = ""
 
         # Detect schedule keys. Rather than saving them in a flat
         # structure, we'll store them multi-dimensionally
         fieldsout = self.fields.copy()
-        ct = re.compile(r'(?P<trigger>enabled|end|flex|start)(?P<day>.*?)ChargeTime')
+        ct = re.compile(r'(?P<trigger>enabled|end|flex|cheaper|actualH|start)(?P<day>.*?)ChargeTime')
         for key in self.fields:
             match = ct.match(key)
             if match:
@@ -745,6 +857,9 @@ def CreateHTTPHandlerClass(master):
         master.settings["scheduledAmpsStartHour"] = int(master.settings["Schedule"]["Common"]["start"][:2])
         master.settings["scheduledAmpsEndHour"] = int(master.settings["Schedule"]["Common"]["end"][:2])
         master.settings["scheduledAmpsMax"] = float(master.settings["Schedule"]["Settings"]["scheduledAmpsMax"])
+        master.settings["flexBatterySize"] = float(master.settings["Schedule"]["Settings"]["flexBatterySize"])
+        master.debugLog(10,"HTTP","scheduledAmpsMax: "+str(master.settings["scheduledAmpsMax"])) 
+        master.debugLog(10,"HTTP","flexBatterySize: "+str(master.settings["flexBatterySize"])) 
 
         # Scheduled Days bitmap backward compatibility
         master.settings["scheduledAmpsDaysBitmap"] = (
@@ -768,8 +883,22 @@ def CreateHTTPHandlerClass(master):
 
     def process_save_settings(self):
 
-        # Write settings
+        # This function will write the settings submitted from the settings
+        # page to the settings dict, before triggering a write of the settings
+        # to file
         for key in self.fields:
+
+            # If the key relates to the car API tokens, we need to pass these
+            # to the appropriate module, rather than directly updating the
+            # configuration file (as it would just be overwritten)
+            if (key == "carApiBearerToken" or key == "carApiRefreshToken") and self.getFieldValue(key) != "":
+                carapi = master.getModuleByName("TeslaAPI")
+                if key == "carApiBearerToken":
+                    carapi.setCarApiBearerToken(self.getFieldValue(key))
+                elif key == "carApiRefreshToken":
+                    carapi.setCarApiRefreshToken(self.getFieldValue(key))
+
+            # Write setting to dictionary
             master.settings[key] = self.getFieldValue(key)
 
         # If Non-Scheduled power action is either Do not Charge or
@@ -810,7 +939,7 @@ def CreateHTTPHandlerClass(master):
             # Redirect to an index page with output based on the return state of
             # the function
             self.send_response(302)
-            self.send_header("Location", "/apiacct/" + str(ret))
+            self.send_header("Location", "/teslaAccount/" + str(ret))
             self.end_headers()
             self.wfile.write("".encode("utf-8"))
             return
@@ -879,6 +1008,71 @@ def CreateHTTPHandlerClass(master):
         page += "<td><div id='total_lifetimekWh'></div></td>"
         page += "</tr></table></td></tr></table>"
         return page
+
+    def process_save_graphs(self,initial,end):
+        # Check that Graphs dict exists within settings.
+        # If not, this would indicate that this is the first time
+        # we have saved it
+        if (master.settings.get("Graphs", None) == None):
+            master.settings["Graphs"] = {}
+        master.settings["Graphs"]["Initial"]=initial
+        master.settings["Graphs"]["End"]=end
+
+        return
+
+    def process_graphs(self,init,end):
+        # This function will query the green_energy SQL table
+        result={}
+        try:
+           available=False
+           for module in master.getModulesByType("Logging"):
+              if module["ref"].greenEnergyQueryAvailable():
+                 result= module["ref"].queryGreenEnergy(
+                               {
+                                   "dateBegin": init,
+                                   "dateEnd": end
+                               }
+                             )
+                 available = True
+                 break
+           if not available:
+              return
+              
+        except Exception as e:
+            master.debugLog(1,
+                "HTTPCtrl",
+                "Excepcion queryGreenEnergy: "
+                + e,
+            )
+
+        data = {}
+        data[0] = {
+                "initial":init.strftime("%Y-%m-%dT%H:%M"),
+                "end":end.strftime("%Y-%m-%dT%H:%M"),
+                }
+        i=1
+        while i<len(result):
+            data[i] = {
+                "time": result[i][0].strftime("%Y-%m-%dT%H:%M:%S"),
+                "genW": str(result[i][1]),
+                "conW": str(result[i][2]),
+                "chgW": str(result[i][3]),
+                }
+            i=i+1
+
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+
+        json_data = json.dumps(data)
+        try:
+            self.wfile.write(json_data.encode("utf-8"))
+        except BrokenPipeError:
+            master.debugLog(10,"HTTPCtrl","Connection Error: Broken Pipe")
+
+
+        return
+
 
     def debugLogAPI(self, message):
         master.debugLog(10, 

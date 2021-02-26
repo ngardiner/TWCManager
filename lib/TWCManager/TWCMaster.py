@@ -1,4 +1,4 @@
-#! /usr/bin/python3
+#! /usr/b
 
 from lib.TWCManager.TWCSlave import TWCSlave
 from datetime import datetime, timedelta
@@ -52,6 +52,7 @@ class TWCMaster:
         "scheduledAmpsDaysBitmap": 0x7F,
         "scheduledAmpsEndHour": -1,
         "scheduledAmpsMax": 0,
+        "flexBatterySize": 100,
         "scheduledAmpsStartHour": -1,
     }
     slaveHeartbeatData = bytearray(
@@ -103,11 +104,10 @@ class TWCMaster:
             self.debugLog(10, "TWCMaster", "Exception in advanceHistorySnap: " + str(e))
 
     def checkScheduledCharging(self):
-
         # Check if we're within the hours we must use scheduledAmpsMax instead
         # of nonScheduledAmpsMax
-        blnUseScheduledAmps = 0
         ltNow = time.localtime()
+        blnUseScheduledAmps = 0
         hourNow = ltNow.tm_hour + (ltNow.tm_min / 60)
         timeSettings = self.getScheduledAmpsTimeFlex()
         startHour = timeSettings[0]
@@ -120,6 +120,7 @@ class TWCMaster:
             and endHour > -1
             and daysBitmap > 0
         ):
+            self.debugLog(10, "TWCMaster", "Schedule Charging Start: "+str(startHour)+" End: "+str(endHour))
             if startHour > endHour:
                 # We have a time like 8am to 7am which we must interpret as the
                 # 23-hour period after 8am or before 7am. Since this case always
@@ -145,6 +146,7 @@ class TWCMaster:
                     and (daysBitmap & (1 << ltNow.tm_wday))
                 ):
                     blnUseScheduledAmps = 1
+
         return blnUseScheduledAmps
 
     def convertAmpsToWatts(self, amps):
@@ -269,6 +271,69 @@ class TWCMaster:
             self.exportPricingValues[module["name"]] = module["ref"].getExportPrice()
             self.importPricingValues[module["name"]] = module["ref"].getImportPrice()
 
+    def getWeekImportPrice(self):
+        for module in self.getModulesByType("Pricing"):
+            if module["ref"].getWeekImportPrice():
+               return module["ref"].getWeekImportPrice()
+        return 0
+
+    def getPricingInAdvanceAvailable(self):
+        for module in self.getModulesByType("Pricing"):
+            if module["ref"].getPricingInAdvanceAvailable():
+               return True
+        return False
+
+    def getScheduleChargingFromYesterday(self,dayName):
+        daysNames = [ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ]
+        ltNow = time.localtime()
+        startHour = self.getScheduledAmpsStartHour()
+        endHour = self.getScheduledAmpsEndHour()
+        if startHour < endHour or ltNow.tm_hour > endHour:
+           return dayName 
+     
+        for i in range(0,6):
+           if daysNames[i] == dayName:
+              if i > 0:
+                 yesterday = daysNames[i-1]
+              else:
+                 yesterday = daysNames[6]
+
+        return yesterday 
+
+    def getCheaperDayChargeTime(self,dayName):
+        daySchedule = self.getScheduleChargingFromYesterday(dayName)
+        return self.settings["Schedule"][daySchedule]["cheaper"]
+
+    def getScheduledFlexStartDay(self,dayName):
+        daySchedule = self.getScheduleChargingFromYesterday(dayName)
+        return self.settings["Schedule"][daySchedule]["flex"]
+
+    def getActualHDayChargeTime(self,dayName):
+        daySchedule = self.getScheduleChargingFromYesterday(dayName)
+        return self.settings["Schedule"][daySchedule]["actualH"]
+
+    def getCheapestStartHour(self,numHours,ini,end):
+        # We take the first modul data
+        cheapestStartHour = ini
+        for module in self.getModulesByType("Pricing"):
+            cheapestStartHour = module["ref"].getCheapestStartHour(numHours,ini,end)
+            if cheapestStartHour != None:
+               break
+            cheapestStartHour= ini
+        return cheapestStartHour
+
+    def queryGreenEnergyWhDay(self, day,hour):
+        # We take the first modul data
+        energyOffset = 0
+        for module in self.getModulesByType("Logging"):
+            if module["ref"].greenEnergyQueryAvailable() != None:
+               energyOffset = module["ref"].queryGreenEnergyWhDay(day,hour)
+               if energyOffset != None:
+                  break
+            energyOffset = 0
+        return energyOffset
+
+
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
 
@@ -289,22 +354,92 @@ class TWCMaster:
         else:
             return 0
 
+    def getFlexBatterySize(self):
+        schedkwh = int(self.settings.get("flexBatterySize", 0))
+        if schedkwh > 0:
+            return schedkwh
+        else:
+            return 0
+
+
+    def getActualHscheduledAmps(self):
+        return int(self.settings.get("actualHscheduledAmps", -1))
+
     def getScheduledAmpsStartHour(self):
         return int(self.settings.get("scheduledAmpsStartHour", -1))
 
+    def getScheduledAmpsStartFlexHour(self):
+        return int(self.settings.get("scheduledAmpsStartFlexHour", -1))
+
+    def getScheduledAmpsCheaperFlex(self, startHour, endHour, daysBitmap):
+        startHourP = self.getScheduledAmpsStartHour()
+        endHourP = self.getScheduledAmpsEndHour()
+
+        # adjust the charge start time to minimize the cost
+        if (
+           not self.getPricingInAdvanceAvailable()
+           or self.getScheduledAmpsMax() < 0
+           or startHour < 0
+           or endHour < 0
+           or daysBitmap <= 0
+           ):
+           return (startHour, endHour, daysBitmap)
+
+        daysNames = [ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ]
+        ltNow = time.localtime()
+        hourNow = ltNow.tm_hour + (ltNow.tm_min / 60)
+        if ltNow.tm_wday <6:
+           dayName = daysNames[ltNow.tm_wday+1]
+        else:
+           dayName = daysNames[0]
+
+        if self.getCheaperDayChargeTime(dayName):
+           if self.getScheduledFlexStartDay(dayName):
+              #If flex start is active the actual charge duration will be taken from the flex period established 
+              if startHour < endHour:
+                 numHours = endHour-startHour
+              else:
+                 numHours = 24-startHour+endHour
+           else:
+              #If flex start is not active the actual charge duration s taken from the scheduled flex cheaper hours config 
+              numHours = self.getActualHDayChargeTime(dayName)
+              if numHours:
+                 numHours = numHours/3600
+
+           if numHours:
+              cheapestStartHour = self.getCheapestStartHour(numHours,startHourP,endHourP)
+              startHour = cheapestStartHour
+              endHour = startHour+numHours
+              if endHour >= 24:
+                 endHour = endHour - 24
+         
+        return (startHour, endHour, daysBitmap)
+
     def getScheduledAmpsTimeFlex(self):
+        daysNames = [ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ]
+        ltNow = time.localtime()
         startHour = self.getScheduledAmpsStartHour()
+        endHour = self.getScheduledAmpsEndHour()
         days = self.getScheduledAmpsDaysBitmap()
+        if ltNow.tm_wday < 6:
+           dayName = daysNames[ltNow.tm_wday+1]
+        else:
+           dayName = daysNames[0]
+        amps = self.getScheduledAmpsMax()
         if (
             startHour >= 0
-            and self.getScheduledAmpsFlexStart()
+            and amps > 0 
+            # The API HTTP does not seam to be implemented and flex is never set
+            #and self.getScheduledAmpsFlexStart()
+            and self.getScheduledFlexStartDay(dayName)
             and self.countSlaveTWC() == 1
+            and days>0
         ):
             # Try to charge at the end of the scheduled time
             slave = next(iter(self.slaveTWCs.values()))
             vehicle = slave.getLastVehicle()
             if vehicle != None:
-                amps = self.getScheduledAmpsMax()
+                amps = self.getRealAmpsAvailable(amps,startHour,endHour)
                 watts = self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
                 hoursForFullCharge = self.getScheduledAmpsBatterySize() / (watts / 1000)
                 realChargeFactor = (vehicle.chargeLimit - vehicle.batteryLevel) / 100
@@ -323,12 +458,22 @@ class TWCMaster:
                     startHour = startHour + 24
                 # if startHour is smaller than the intial startHour, then it should begin beginn charging a day later
                 # (if starting usually at 9pm and it calculates to start at 4am - it's already the next day)
-                if startHour < self.getScheduledAmpsDaysBitmap():
+                if startHour < self.getScheduledAmpsStartHour():
+                    self.debugLog(10,"TWCMaster","cambiamos day bit map")
                     days = self.rotl(days, 7)
-        return (startHour, self.getScheduledAmpsEndHour(), days)
+
+        timeSettings = self.getScheduledAmpsCheaperFlex(startHour,endHour,days)
+
+        self.setScheduledAmpsStartFlexHour(timeSettings[0])
+        self.setScheduledAmpsEndFlexHour(timeSettings[1])
+
+        return timeSettings
 
     def getScheduledAmpsEndHour(self):
         return self.settings.get("scheduledAmpsEndHour", -1)
+
+    def getScheduledAmpsEndFlexHour(self):
+        return self.settings.get("scheduledAmpsEndFlexHour", -1)
 
     def getScheduledAmpsFlexStart(self):
         return int(self.settings.get("scheduledAmpsFlexStart", False))
@@ -379,10 +524,15 @@ class TWCMaster:
             data["isGreenPolicy"] = "Yes"
         else:
             data["isGreenPolicy"] = "No"
-
-        data["scheduledChargingStartHour"] = self.getScheduledAmpsStartHour()
-        data["scheduledChargingFlexStart"] = self.getScheduledAmpsTimeFlex()[0]
-        data["scheduledChargingEndHour"] = self.getScheduledAmpsEndHour()
+        if self.getScheduledAmpsStartHour() == self.getScheduledAmpsStartFlexHour():
+           data["scheduledChargingStartHour"] = self.getScheduledAmpsStartHour()
+        else:
+           data["scheduledChargingStartHour"] = self.getScheduledAmpsStartFlexHour()
+        data["scheduledChargingFlexStart"] = self.getScheduledAmpsFlexStart()
+        if self.getScheduledAmpsEndHour() == self.getScheduledAmpsEndFlexHour():
+           data["scheduledChargingEndHour"] = self.getScheduledAmpsEndHour()
+        else:
+           data["scheduledChargingEndHour"] = self.getScheduledAmpsEndFlexHour()
         scheduledChargingDays = self.getScheduledAmpsDaysBitmap()
         scheduledFlexTime = self.getScheduledAmpsTimeFlex()
 
@@ -1245,6 +1395,12 @@ class TWCMaster:
     def setScheduledAmpsEndHour(self, hour):
         self.settings["scheduledAmpsEndHour"] = hour
 
+    def setScheduledAmpsStartFlexHour(self, hour):
+        self.settings["scheduledAmpsStartFlexHour"] = hour
+
+    def setScheduledAmpsEndFlexHour(self, hour):
+        self.settings["scheduledAmpsEndFlexHour"] = hour
+
     def setScheduledAmpsFlexStart(self, enabled):
         self.settings["scheduledAmpsFlexStart"] = enabled
 
@@ -1370,14 +1526,41 @@ class TWCMaster:
         realPowerFactorMaxAmps = self.config["config"].get("realPowerFactorMaxAmps", 1)
         minAmps = self.config["config"]["minAmpsPerTWC"]
         maxAmps = self.config["config"]["wiringMaxAmpsAllTWCs"]
+
         if minAmps == maxAmps:
             return realPowerFactorMaxAmps
         else:
-            return (
+            return  (
                 (amps - minAmps)
                 / (maxAmps - minAmps)
                 * (realPowerFactorMaxAmps - realPowerFactorMinAmps)
             ) + realPowerFactorMinAmps
+
+
+
+    def getRealAmpsAvailable(self, amps,startHour,endHour):
+
+        daysNames = [ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ]
+        ampsAllowedFromGrid = self.config["config"].get("maxAmpsAllowedFromGrid", 0)
+
+        #In case maxAmpsAllowedFromGrid is configured we need to evaluate how it impacts
+        #if there is historical info it will be use to establish the actual amps available 
+        ampsOtherConsum = 0
+        ampsAvailable = amps
+        if ampsAllowedFromGrid:
+           for module in self.getModulesByType("Logging"): 
+               if module["ref"].greenEnergyQueryAvailable() != None:
+                  energyOtherConsum = module["ref"].queryEnergyNotAvailable(startHour,endHour)
+                  if energyOtherConsum != None:
+                     ampsOtherComsum = self.convertWattsToAmps(energyOtherConsum)
+                     ampsAvailable = ampsAllowedFromGrid - ampsOtherComsum
+                     break
+
+        if ampsAvailable > amps:
+           ampsAvailable = amps 
+
+        return ampsAvailable
+
 
     def rotl(self, num, bits):
         bit = num & (1 << (bits - 1))

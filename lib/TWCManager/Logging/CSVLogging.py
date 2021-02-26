@@ -165,3 +165,8 @@ class CSVLogging:
         # Update the open charging session in memory.
         if data.get("vehicleVIN", None):
             self.openSessions[data["TWCID"]]["vehicleVIN"] = data.get("vehicleVIN", "")
+
+    def greenEnergyQueryAvailable(self):
+        # ToDo
+        return None
+

@@ -118,4 +118,13 @@ class aWATTarPricing:
                         "Exception during parsing aWATTar pricing",
                     )
 
+    def getWeekImportPrice(self):
+    # ToDo
+        return 0
+
+
+    def getPricingInAdvanceAvailable(self):
+    # ToDo
+        return 0
+        return 0
 
