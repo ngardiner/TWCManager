@@ -26,7 +26,9 @@ class TWCMaster:
     consumptionValues = {}
     debugLevel = 0
     debugOutputToFile = False
+    exportPricingValues = {}
     generationValues = {}
+    importPricingValues = {}
     lastkWhMessage = time.time()
     lastkWhPoll = 0
     lastTWCResponseMsg = None
@@ -241,13 +243,16 @@ class TWCMaster:
     def getHourResumeTrackGreenEnergy(self):
         return self.settings.get("hourResumeTrackGreenEnergy", -1)
 
+    def getInterfaceModule(self):
+        return self.getModulesByType("Interface")[0]["ref"]
+
+    def getkWhDelivered(self):
+        return self.settings["kWhDelivered"]
+
     def getMasterTWCID(self):
         # This is called when TWCManager is in Slave mode, to track the
         # master's TWCID
         return self.masterTWCID
-
-    def getkWhDelivered(self):
-        return self.settings["kWhDelivered"]
 
     def getMaxAmpsToDivideAmongSlaves(self):
         if self.maxAmpsToDivideAmongSlaves > 0:
@@ -270,8 +275,10 @@ class TWCMaster:
                 matched.append({"name": module, "ref": modinfo["ref"]})
         return matched
 
-    def getInterfaceModule(self):
-        return self.getModulesByType("Interface")[0]["ref"]
+    def getPricing(self):
+        for module in self.getModulesByType("Pricing"):
+            self.exportPricingValues[module["name"]] = module["ref"].getExportPrice()
+            self.importPricingValues[module["name"]] = module["ref"].getImportPrice()
 
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
@@ -477,6 +484,28 @@ class TWCMaster:
 
         return float(consumptionVal)
 
+    def getExportPrice(self):
+        price = 0
+        multiPrice = ""
+
+        # The policy for how we should deal with multiple export
+        # prices (multiple concurrent modules) is defined in the config
+        # file in config->pricing->policy->multiPrice
+        try:
+            multiPrice = self.config["config"]["pricing"]["policy"]["multiPrice"]
+        except KeyError:
+            multiPrice = "add"
+
+        # Iterate through values and apply multiPrice policy
+        for key in self.exportPricingValues:
+            if multiPrice == "add":
+                price += float(self.exportPricingValues[key])
+            elif multiPrice == "first":
+                if price == 0 and self.exportPricingValues[key] > 0:
+                    price = float(self.exportPricingValues[key])
+
+        return float(price)
+
     def getFakeTWCID(self):
         return self.TWCID
 
@@ -510,6 +539,28 @@ class TWCMaster:
         latlon[0] = self.settings.get("homeLat", 10000)
         latlon[1] = self.settings.get("homeLon", 10000)
         return latlon
+
+    def getImportPrice(self):
+        price = 0
+        multiPrice = ""
+
+        # The policy for how we should deal with multiple import
+        # prices (multiple concurrent modules) is defined in the config
+        # file in config->pricing->policy->multiPrice
+        try:
+            multiPrice = self.config["config"]["pricing"]["policy"]["multiPrice"]
+        except KeyError:
+            multiPrice = "add"
+ 
+        # Iterate through values and apply multiPrice policy
+        for key in self.importPricingValues:
+            if multiPrice == "add": 
+                price += float(self.importPricingValues[key])
+            elif multiPrice == "first":
+                if price == 0 and self.importPricingValues[key] > 0:
+                    price = float(self.importPricingValues[key])
+
+        return float(price)
 
     def getMasterHeartbeatOverride(self):
         return self.overrideMasterHeartbeatData

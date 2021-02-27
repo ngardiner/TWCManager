@@ -229,6 +229,10 @@ class Policy:
             limit = -1
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
 
+        # If at least one pricing module is active, fetch current pricing
+        if len(self.master.getModulesByType("Pricing")) > 0:
+            self.master.queue_background_task({"cmd": "getPricing"})
+
     def fireWebhook(self, hook):
         policy = self.getPolicyByName(self.active_policy)
         if policy:

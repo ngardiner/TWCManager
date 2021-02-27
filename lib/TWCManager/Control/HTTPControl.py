@@ -192,6 +192,17 @@ def CreateHTTPHandlerClass(master):
             )
             self.wfile.write(json_data.encode("utf-8"))
 
+        elif self.url.path == "/api/getPricing":
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+
+            json_data = json.dumps({
+                "export": master.getExportPrice(),
+                "import": master.getImportPrice()
+            })
+            self.wfile.write(json_data.encode("utf-8"))
+            
         elif self.url.path == "/api/getSlaveTWCs":
             data = {}
             totals = {

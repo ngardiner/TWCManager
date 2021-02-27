@@ -394,6 +394,43 @@
             "path": "/etc/twcmanager/twcmanager.sqlite"
         }
     },
+    "pricing":{
+        "policy": {
+            # The multiPrice policy determines what we do when we have multiple
+            # pricing modules enabled. This might happen if your import and export
+            # pricing is tracked by different modules (for example, static export)
+            # and dynamic import). 
+            # The default is to add all prices together. 
+            # Other options are:
+            #  - First: Takes the first non-zero value from the queried modules
+            "multiPrice": "add"
+        },
+        "aWATTar": {
+            # Enable this module if you are a customer of aWATTar in Austria
+            "enabled": false
+        },
+        "PVPCes": {
+            # Enable this module if you are a customer under PVPC in Spain
+            # You need to get a personal token from https://api.esios.ree.es/ 
+            "enabled": false,
+            "token": "xxx"
+        },
+        "Static": {
+            # The static pricing module allows you to specify static pricing, if
+            # your utility or provider do not provide a dynamic API. This still
+            # allows leveraging of pricing-related policy, even without an API.
+
+            "enabled": false,
+
+            # At this point, we only provide flat peak pricing, however future 
+            # revisions should provide better tunability
+            # Pricing should be in units (dollar, euro, etc) per-kWh notation
+            "peak": {
+                "import": 0.20,
+                "export": 0.09
+            }
+        }
+    },
     "sources":{
         # This section is where we configure the various sources that we retrieve our generation and consumption
         # values for our solar system from.

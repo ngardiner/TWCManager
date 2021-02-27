@@ -61,14 +61,21 @@ This can be useful if you would like to track charger activity and use it for gr
 | [MySQL](docs/modules/Logging_MySQL.md)     | Log data to a MySQL Database |
 | [SQLite](docs/modules/Logging_SQLite.md)   | Log data to a SQLite Database |
 
+### Pricing Interfaces
+
+| Platform                    |  Details                |
+| --------------------------- | ----------------------- |
+| [aWATTar](docs/modules/aWATTar_Pricing.md) | aWATTar dynamic pricing API     |
+| [Static](docs/modules/Static_Pricing.md)   | Configure static pricing detail |
+
 ### Status Interfaces
 
 Status interfaces publish TWCManager status information to external systems. Current Status interfaces are:
 
-| Platform         | Status           | Details                 |
-| ---------------- | ---------------- | ----------------------- |
-| [HomeAssistant](docs/modules/Status_HASS.md) | Available v1.0.1 | Provides HASS sensors to monitor TWCManager State |
-| [MQTT](docs/modules/Status_MQTT.md) | Available v1.0.1 | Publishes MQTT topics to monitor TWCManager State |
+| Platform         | Details                 |
+| ---------------- | ----------------------- |
+| [HomeAssistant](docs/modules/Status_HASS.md) | Provides HASS sensors to monitor TWCManager State |
+| [MQTT](docs/modules/Status_MQTT.md) | Publishes MQTT topics to monitor TWCManager State |
 
 ### Vehicle Interfaces
 
