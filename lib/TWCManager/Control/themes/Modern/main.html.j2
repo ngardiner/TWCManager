@@ -283,6 +283,7 @@ wcmanager/settings.json and try saving your settings again.</b>
                 <div class="form-group p-2">
                     <label for="chargeNowDuration" class="text-muted mb-0">Charge duration <span class="text-dark font-weight-bold" id="{{ twcid }}_durationVal">1</span> hours</label>
                     <input type="range" class="custom-range" id="chargeNowDuration" name="chargeNowDuration" min="1" max="24" step="1" value="1" onInput="$('#{{ twcid }}_durationVal').html($(this).val())">
+                    <span class="text-muted mb-0" id="chargeNowTimeEnd"></span>
                 </div>
             </form>
         </div>
@@ -293,6 +294,7 @@ wcmanager/settings.json and try saving your settings again.</b>
                 <div class="form-group p-2">
                     <label for="chargeNowRate" class="text-muted mb-0">Charge with <span class="text-dark font-weight-bold" id="{{ twcid }}_ampsVal">{{ ampsMin[0] }}</span> A</label>
                     <input type="range" class="custom-range" id="chargeNowRate" name="chargeNowRate" min="{{ ampsMin[0]}}" max="{{ ampsMax[0] }}" step="1" value="{{ ampsMin[0] }}" onInput="$('#{{ twcid }}_ampsVal').html($(this).val())">
+                    <span class="text-muted mb-0" id="chargeNowAmps"></span>
                 </div>
             </form>
         </div>
