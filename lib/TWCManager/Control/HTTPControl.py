@@ -252,7 +252,7 @@ def CreateHTTPHandlerClass(master):
                 totals = {
                     "lastAmpsOffered": 0,
                     "lifetimekWh": 0,
-                    "maxAmps": 0,
+                    "reportedAmpsMax": 0,
                     "reportedAmpsActual": 0,
                 }
                 for slaveTWC in master.getSlaveTWCs():
