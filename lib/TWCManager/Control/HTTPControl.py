@@ -287,7 +287,7 @@ def CreateHTTPHandlerClass(master):
                         data[TWCID]["lastAtHome"] = vehicle.atHome
                         data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
 
-                    totals["carsCharging"] += slaveTWC.carsCharging
+                    totals["carsCharging"] += slaveTWC.isCharging
                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
                     totals["reportedAmpsMax"] += slaveTWC.reportedAmpsMax
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
