@@ -452,9 +452,9 @@ class TWCMaster:
             if chargingEndDTM > datetime.now():
                 diff = chargingEndDTM - datetime.now()
                 diffMinutes = int(round(diff.total_seconds() / 60))
-                data["chargeNowTimeEnd"] = "Ending: " + chargingEndDTM.strftime("%Y-%m-%d, %H:%M") + "<br>("+str(diffMinutes)+" Minutes)"
+                data["chargeNowTimeEnd"] = datetime.timestamp(chargingEndDTM)
         if self.settings["chargeNowAmps"] > 0:
-            data["chargeNowAmps"] = "Currently: " + str(self.settings["chargeNowAmps"]) + "A"
+            data["chargeNowAmps"] = self.settings["chargeNowAmps"]
         return data
 
     def getSpikeAmps(self):
