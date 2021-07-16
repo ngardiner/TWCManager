@@ -250,7 +250,6 @@ def CreateHTTPHandlerClass(master):
             elif self.url.path == "/api/getSlaveTWCs":
                 data = {}
                 totals = {
-                    "lastAmpsOffered": 0,
                     "lifetimekWh": 0,
                     "reportedAmpsMax": 0,
                     "reportedAmpsActual": 0,
@@ -259,7 +258,6 @@ def CreateHTTPHandlerClass(master):
                     TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
                     data[TWCID] = {
                         "currentVIN": slaveTWC.currentVIN,
-                        "lastAmpsOffered": round(slaveTWC.lastAmpsOffered, 2),
                         "lastHeartbeat": round(time.time() - slaveTWC.timeLastRx, 2),
                         "carsCharging": slaveTWC.isCharging,
                         "lastVIN": slaveTWC.lastVIN,
@@ -288,13 +286,11 @@ def CreateHTTPHandlerClass(master):
                         data[TWCID]["lastAtHome"] = vehicle.atHome
                         data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
 
-                    totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
                     totals["reportedAmpsMax"] += slaveTWC.reportedAmpsMax
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
 
                 data["total"] = {
-                    "lastAmpsOffered": round(totals["lastAmpsOffered"], 2),
                     "lifetimekWh": totals["lifetimekWh"],
                     "reportedAmpsMax": totals["reportedAmpsMax"],
                     "reportedAmpsActual": totals["reportedAmpsActual"],
