@@ -252,6 +252,7 @@ def CreateHTTPHandlerClass(master):
                 totals = {
                     "carsCharging": 0,
                     "lifetimekWh": 0,
+                    "maxAmps": 0,
                     "reportedAmpsMax": 0,
                     "reportedAmpsActual": 0,
                 }
@@ -263,6 +264,7 @@ def CreateHTTPHandlerClass(master):
                         "carsCharging": slaveTWC.isCharging,
                         "lastVIN": slaveTWC.lastVIN,
                         "lifetimekWh": slaveTWC.lifetimekWh,
+                        "maxAmps": float(slaveTWC.maxAmps),
                         "reportedAmpsMax": float(slaveTWC.reportedAmpsMax),
                         "reportedAmpsActual": float(slaveTWC.reportedAmpsActual),
                         "chargerLoadInW": round(slaveTWC.getCurrentChargerLoad()),
@@ -289,12 +291,14 @@ def CreateHTTPHandlerClass(master):
 
                     totals["carsCharging"] += slaveTWC.isCharging
                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
+                    totals["maxAmps"] = min(totals["maxAmps"], slaveTWC.maxAmps)
                     totals["reportedAmpsMax"] += slaveTWC.reportedAmpsMax
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
 
                 data["total"] = {
                     "carsCharging": totals["carsCharging"],
                     "lifetimekWh": totals["lifetimekWh"],
+                    "maxAmps": totals["maxAmps"],
                     "reportedAmpsMax": totals["reportedAmpsMax"],
                     "reportedAmpsActual": totals["reportedAmpsActual"],
                     "TWCID": "total",
