@@ -251,15 +251,16 @@ def CreateHTTPHandlerClass(master):
                 data = {}
                 totals = {
                     "carsCharging": 0,
+                    "lastAmpsOffered": 0,
                     "lifetimekWh": 0,
                     "maxAmps": 0,
-                    "reportedAmpsMax": 0,
                     "reportedAmpsActual": 0,
                 }
                 for slaveTWC in master.getSlaveTWCs():
                     TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
                     data[TWCID] = {
                         "currentVIN": slaveTWC.currentVIN,
+                        "lastAmpsOffered": round(slaveTWC.lastAmpsOffered, 2),
                         "lastHeartbeat": round(time.time() - slaveTWC.timeLastRx, 2),
                         "carsCharging": slaveTWC.isCharging,
                         "lastVIN": slaveTWC.lastVIN,
@@ -290,16 +291,16 @@ def CreateHTTPHandlerClass(master):
                         data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
 
                     totals["carsCharging"] += slaveTWC.isCharging
+                    totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
                     totals["maxAmps"] = min(totals["maxAmps"], slaveTWC.maxAmps)
-                    totals["reportedAmpsMax"] += slaveTWC.reportedAmpsMax
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
 
                 data["total"] = {
                     "carsCharging": totals["carsCharging"],
+                    "lastAmpsOffered": round(totals["lastAmpsOffered"], 2),
                     "lifetimekWh": totals["lifetimekWh"],
                     "maxAmps": totals["maxAmps"],
-                    "reportedAmpsMax": totals["reportedAmpsMax"],
                     "reportedAmpsActual": totals["reportedAmpsActual"],
                     "TWCID": "total",
                 }
