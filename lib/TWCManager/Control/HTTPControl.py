@@ -253,7 +253,7 @@ def CreateHTTPHandlerClass(master):
                     "carsCharging": 0,
                     "lastAmpsOffered": 0,
                     "lifetimekWh": 0,
-                    "maxAmps": 0,
+                    "maxAmps": 80,
                     "reportedAmpsActual": 0,
                 }
                 for slaveTWC in master.getSlaveTWCs():
@@ -292,7 +292,7 @@ def CreateHTTPHandlerClass(master):
                     totals["carsCharging"] += slaveTWC.isCharging
                     totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
-                    totals["maxAmps"] = min(totals["maxAmps"], slaveTWC.maxAmps)
+                    totals["maxAmps"] = slaveTWC.maxAmps if totals["maxAmps"] == 0 else min(totals["maxAmps"], slaveTWC.maxAmps)
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
 
                 data["total"] = {
