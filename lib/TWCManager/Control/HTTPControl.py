@@ -259,15 +259,15 @@ def CreateHTTPHandlerClass(master):
                 for slaveTWC in master.getSlaveTWCs():
                     TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
                     data[TWCID] = {
+                        "carsCharging": slaveTWC.isCharging,
+                        "chargerLoadInW": round(slaveTWC.getCurrentChargerLoad()),
                         "currentVIN": slaveTWC.currentVIN,
                         "lastAmpsOffered": round(slaveTWC.lastAmpsOffered, 2),
                         "lastHeartbeat": round(time.time() - slaveTWC.timeLastRx, 2),
-                        "carsCharging": slaveTWC.isCharging,
                         "lastVIN": slaveTWC.lastVIN,
                         "lifetimekWh": slaveTWC.lifetimekWh,
                         "maxAmps": float(slaveTWC.maxAmps),
                         "reportedAmpsActual": float(slaveTWC.reportedAmpsActual),
-                        "chargerLoadInW": round(slaveTWC.getCurrentChargerLoad()),
                         "state": slaveTWC.reportedState,
                         "version": slaveTWC.protocolVersion,
                         "voltsPhaseA": slaveTWC.voltsPhaseA,
@@ -284,9 +284,9 @@ def CreateHTTPHandlerClass(master):
                     # Adding some vehicle data
                     vehicle = slaveTWC.getLastVehicle()
                     if vehicle != None:
+                        data[TWCID]["lastAtHome"] = vehicle.atHome
                         data[TWCID]["lastBatterySOC"] = vehicle.batteryLevel
                         data[TWCID]["lastChargeLimit"] = vehicle.chargeLimit
-                        data[TWCID]["lastAtHome"] = vehicle.atHome
                         data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
 
                     totals["carsCharging"] += slaveTWC.isCharging
