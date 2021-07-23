@@ -266,7 +266,6 @@ def CreateHTTPHandlerClass(master):
                         "lastVIN": slaveTWC.lastVIN,
                         "lifetimekWh": slaveTWC.lifetimekWh,
                         "maxAmps": float(slaveTWC.maxAmps),
-                        "reportedAmpsMax": float(slaveTWC.reportedAmpsMax),
                         "reportedAmpsActual": float(slaveTWC.reportedAmpsActual),
                         "chargerLoadInW": round(slaveTWC.getCurrentChargerLoad()),
                         "state": slaveTWC.reportedState,
