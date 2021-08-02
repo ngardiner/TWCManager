@@ -1037,6 +1037,10 @@ class TWCMaster:
             },
         )
 
+        # If vehicle is charging, it's at home no matter what we previously thought.
+        self.getModuleByName("TeslaAPI").vehicleIsDefinitelyHome(slaveTWC.currentVIN)
+
+
     def releaseBackgroundTasksLock(self):
         self.backgroundTasksLock.release()
 

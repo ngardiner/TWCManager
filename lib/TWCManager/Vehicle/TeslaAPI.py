@@ -1149,6 +1149,18 @@ class TeslaAPI:
                 car.update_charge()
         self.lastChargeCheck = time.time()
 
+    def vehicleIsDefinitelyHome(self, vin):
+        for car in self.carApiVehicles:
+            if car.VIN == vin:
+                if not car.atHome:
+                    updated = car.update_location(0)
+                    if updated and not car.atHome:
+                        self.master.setHomeLat(car.lat)
+                        self.master.setHomeLon(car.lon)
+                        self.master.queue_background_task({"cmd": "saveSettings"})
+                        car.atHome = True
+                return
+
     def wakeVehicle(self, vehicle):
         apiResponseDict = None
         vehicle.lastAPIAccessTime = time.time()
