@@ -34,6 +34,7 @@ class TWCMaster:
     lastUpdateCheck = 0
     masterTWCID = ""
     maxAmpsToDivideAmongSlaves = 0
+    maxAmpsToDivideFromGrid = 0
     modules = {}
     nextHistorySnap = 0
     overrideMasterHeartbeatData = b""
@@ -650,6 +651,27 @@ class TWCMaster:
         # Offer the smaller of the two, but not less than zero.
         amps = max(min(newOffer, solarAmps / self.getRealPowerFactor(solarAmps)), 0)
         return round(amps, 2)
+
+    def getMaxAmpsToDivideFromGrid(self):
+        # Calculate our current generation and consumption in watts
+        generationW = float(self.getGeneration())
+        consumptionW = float(self.getConsumption())
+
+        currentOffer = min(
+            self.getTotalAmpsInUse(),
+            self.getMaxAmpsToDivideAmongSlaves(),
+        )
+
+        # Calculate what we should max offer to align with max grid energy
+        maxAmpsAllowedFromGrid = self.config["config"]["maxAmpsAllowedFromGrid"]
+        amps = maxAmpsAllowedFromGrid - consumptionA + currentOffer
+        if consumptionA > maxAmpsAllowedFromGrid:
+            logger.info(f"getMaxAmpsToDivideFromGrid limited power: consumption {consumptionA:.1f}A > {maxAmpsAllowedFromGrid}A")
+        amps = amps / self.getRealPowerFactor(amps)
+        logger.debug("MaxAmpsToDivideFromGrid: +++++++++++++++: " + str(amps))
+
+        return round(amps, 2)
+
 
     def getNormalChargeLimit(self, ID):
         if "chargeLimits" in self.settings and str(ID) in self.settings["chargeLimits"]:
@@ -1315,6 +1337,17 @@ class TWCMaster:
             )
             amps = self.config["config"]["wiringMaxAmpsAllTWCs"]
 
+        activePolicy=str(self.getModuleByName("Policy").active_policy)
+        if (activePolicy == "Charge Now with Grid power limit" or \
+            activePolicy == "Scheduled Charging with Grid power limit") and \
+            amps > self.maxAmpsToDivideFromGrid:
+            # Never tell the slaves to draw more amps from grid than allowed
+            amps = self.maxAmpsToDivideFromGrid
+            logger.info(
+                "maxAmpsToDivideAmongSlaves limited to not draw more power from the grid than allowed: " + str(amps)
+            )
+
+
         self.maxAmpsToDivideAmongSlaves = amps
 
         self.releaseBackgroundTasksLock()
@@ -1322,6 +1355,11 @@ class TWCMaster:
         # Now that we have updated the maxAmpsToDivideAmongSlaves, send update
         # to console / MQTT / etc
         self.queue_background_task({"cmd": "updateStatus"})
+
+    def setMaxAmpsToDivideFromGrid(self, amps):
+        # This is called when check_max_power_from_grid is run
+        # It stablished how much power we allow getting from the grid
+        self.maxAmpsToDivideFromGrid = amps
 
     def setNonScheduledAmpsMax(self, amps):
         self.settings["nonScheduledAmpsMax"] = amps
