@@ -61,6 +61,18 @@
                             $("#cancel_chargenow").addClass("disabled");
                         }
                     }
+                    if (json["chargeNowAmps"] !== "" && json["chargeNowAmps"] > 0) {
+                        $('#chargeNowAmpsText').text("Currently: " + json["chargeNowAmps"] + "A");
+                    } else {
+                        $('#chargeNowAmpsText').text("");
+                    }
+                    if (json["chargeNowTimeEnd"] !== "" && json["chargeNowTimeEnd"] > 0) {
+                        var endDTM = new Date(1000 * json["chargeNowTimeEnd"]);
+                        var endMinutes = Math.floor((endDTM - Date.now())/60000);
+                        $('#chargeNowTimeEndText').html("Ending: " + endDTM.toLocaleString() + "<br>(" + endMinutes + " minutes remaining)");
+                    } else {
+                        $('#chargeNowTimeEndText').text("");
+                    }
                 }
             });
             setTimeout(requestStatus, 3000);

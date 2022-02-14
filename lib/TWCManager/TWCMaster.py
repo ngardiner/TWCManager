@@ -517,6 +517,14 @@ class TWCMaster:
             "flexSunday": (scheduledFlexTime[2] & 64) == 64,
             "flexBatterySize": self.getScheduledAmpsBatterySize(),
         }
+        if self.settings["chargeNowTimeEnd"] > 0:
+            chargingEndDTM = datetime.fromtimestamp(self.settings["chargeNowTimeEnd"])
+            if chargingEndDTM > datetime.now():
+                diff = chargingEndDTM - datetime.now()
+                diffMinutes = int(round(diff.total_seconds() / 60))
+                data["chargeNowTimeEnd"] = datetime.timestamp(chargingEndDTM)
+        if self.settings["chargeNowAmps"] > 0:
+            data["chargeNowAmps"] = self.settings["chargeNowAmps"]
         return data
 
     def getSpikeAmps(self):
