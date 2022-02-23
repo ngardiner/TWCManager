@@ -6,7 +6,7 @@
     // 0 is no output other than errors.
     // 1 is just the most useful info.
     // 10 is all info.
-    $debugLevel = 0;
+    $debugLevel = 10;
     $twcScriptDir = "/etc/twcmanager";
 
     // End configuration parameters

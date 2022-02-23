@@ -4,7 +4,7 @@ import time
 logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 
-class Dummy:
+class RS485Simulator:
 
     enabled = False
     master = None
@@ -86,7 +86,7 @@ class Dummy:
 
     def sendInternal(self, msg):
         # The sendInternal function takes a message that we would like to send
-        # from the dummy module to the TWCManager, adds the required checksum,
+        # from the rs485Simulator module to the TWCManager, adds the required checksum,
         # updates the internal message buffer with the sent message and then
         # allows this to be polled & read by TWCManager on the next loop iteration
 

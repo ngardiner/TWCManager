@@ -42,6 +42,7 @@ class MQTTControl:
         # Unload if this module is disabled or misconfigured
         if (not self.status) or (not self.brokerIP):
             self.master.releaseModule("lib.TWCManager.Control", "MQTTControl")
+            print("[DEBUG] MQTTCONTROL MODULE BROKEN OR DISABLED.")
             return None
 
         if self.status:
@@ -75,6 +76,7 @@ class MQTTControl:
                 logger.log(logging.INFO4, "Module enabled but no brokerIP specified.")
 
     def mqttConnect(self, client, userdata, flags, rc):
+        print("[DEBUG] MQTT CONNECTED!!!")
         logger.log(logging.INFO5, "MQTT Connected.")
         logger.log(logging.INFO5, "Subscribe to " + self.topicPrefix + "/#")
         res = self.__client.subscribe(self.topicPrefix + "/#", qos=0)
@@ -86,14 +88,23 @@ class MQTTControl:
         # [Amps to charge at],[Seconds to charge for]
         # eg. 24,3600
         if message.topic == self.topicPrefix + "/control/chargeNow":
+            print("[DEBUG] MQTT Message called chargeNow")
             payload = str(message.payload.decode("utf-8"))
+            print("[DEBUG] MQTT called chargeNow with payload", payload)
             logger.log(
                 logging.INFO3, "MQTT Message called chargeNow with payload " + payload
             )
             plsplit = payload.split(",", 1)
             if len(plsplit) == 2:
-                self.master.setChargeNowAmps(int(plsplit[0]))
+                print("[DEBUG] REQUESTING TO SET MASTER CHARGE NOW AMPS")
+                
+                #[DEBUG] This if-statement shall be removed once secure connection established.
+                if int(plsplit[0]) > 5 and int(plsplit[0]) <= 16:
+                    print("[DEBUG] TEMPORARY AMPS RANGE SET TO 6A to 16A IN CASE OF NETWORK INTERCEPTION.")
+                    self.master.setChargeNowAmps(int(plsplit[0]))
+                print("[DEBUG] REQUESTING TO SET MASTER CHARGE NOW DURN")
                 self.master.setChargeNowTimeEnd(int(plsplit[1]))
+                print("[DEBUG] SUCCESSEFULLY SET MASTER CHARGE NOW AMPS")
                 self.master.getModuleByName("Policy").applyPolicyImmediately()
                 self.master.queue_background_task({"cmd": "saveSettings"})
             else:
@@ -102,12 +113,15 @@ class MQTTControl:
                 )
 
         if message.topic == self.topicPrefix + "/control/chargeNowEnd":
+            print("[DEBUG] MQTT Message called chargeNowEnd")
             logger.log(logging.INFO3, "MQTT Message called chargeNowEnd")
             self.master.resetChargeNowAmps()
+            print("[DEBUG] SUCCESSFULLY STOPPED CHARGE NOW.")
             self.master.getModuleByName("Policy").applyPolicyImmediately()
             self.master.queue_background_task({"cmd": "saveSettings"})
 
         if message.topic == self.topicPrefix + "/control/stop":
+            print("[DEBUG] MQTT Message called stop")
             logger.log(logging.INFO3, "MQTT Message called Stop")
             self._thread.interrupt_main()
 

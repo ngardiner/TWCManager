@@ -452,6 +452,8 @@ def CreateHTTPHandlerClass(master):
                     self.wfile.write("".encode("utf-8"))
                 rate = int(data.get("chargeNowRate", 0))
                 durn = int(data.get("chargeNowDuration", 0))
+                print("[DEBUG] REQUESTING CHARGE RATE AT", rate)
+                print("[DEBUG] REQUESTING CHARGE DURATION FOR", durn)
 
                 if rate <= 0 or durn <= 0:
                     self.send_response(400)
@@ -459,8 +461,11 @@ def CreateHTTPHandlerClass(master):
                     self.wfile.write("".encode("utf-8"))
 
                 else:
+                    print("[DEBUG] REQUESTING TO SET MASTER CHARGE NOW AMPS")
                     master.setChargeNowAmps(rate)
+                    print("[DEBUG] REQUESTING TO SET MASTER CHARGE NOW DURN")
                     master.setChargeNowTimeEnd(durn)
+                    print("[DEBUG] SUCCESSEFULLY SET MASTER CHARGE NOW AMPS")
                     master.queue_background_task({"cmd": "saveSettings"})
                     master.getModuleByName("Policy").applyPolicyImmediately()
                     self.send_response(204)

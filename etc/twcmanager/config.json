@@ -1,5 +1,4 @@
-{
-    "config": {
+{ "config": {
         # The settings path will store the dynamic settings which are defined via the web
         # interface
         "settingsPath": "/etc/twcmanager",
@@ -170,10 +169,10 @@
         # DEBUG     10       10     all info.
         # DEBUG2     9       11     more than all info.  ;)
 
-        "logLevel": 20,
+        "logLevel": 9,
 
         # Choose whether to display milliseconds after time on each line of debug info.
-        "displayMilliseconds": false,
+        "displayMilliseconds": true,
 
         # Webhooks can be triggered using either GET or POST methods.
         # By default, they receive a POST of the current status; uncomment for GET.
@@ -197,7 +196,7 @@
     # If you enable more than one, only the first enabled interface will be used
     "interface": {
       "Dummy": {
-        "enabled": false,
+        "enabled": true,
 
         # The dummy module is used for testing. It will simulate an actual
         # slave TWC for the purpose of offline testing of TWCManager.
@@ -206,7 +205,7 @@
         "twcID": "AB"
       },
       "RS485": {
-        "enabled": true,
+        "enabled": false,
 
         # TWC's rs485 port runs at 9600 baud which has been verified with an
         # oscilloscope. Don't change this unless something changes in future hardware.
@@ -247,8 +246,8 @@
         "listenPort": 8080
       },
       "MQTT": {
-        "enabled": false,
-        "brokerIP": "192.168.1.2",
+        "enabled": true,
+        "brokerIP": "192.168.0.100",
         "topicPrefix": "TWC",
         "username": "mqttuser",
         "password": "mqttpass"
@@ -646,7 +645,7 @@
             "apiKey": "ABC123"
         },
         "MQTT": {
-            "enabled": false,
+            "enabled": true,
             "brokerIP": "192.168.1.1",
             "topicPrefix": "TWC",
 
