@@ -1158,7 +1158,10 @@ class TeslaAPI:
                         logger.log(
                             logging.INFO2,
                             car.name
-                            + " was connected to a TWC, so is definitely home. "
+                            + " was connected to a TWC, so is definitely home."
+                        )
+                        logger.log(
+                            logging.INFO2,
                             + "Resetting home location to ("
                             + str(car.lat)
                             + ", "
