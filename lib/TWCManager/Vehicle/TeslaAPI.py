@@ -1155,6 +1155,16 @@ class TeslaAPI:
                 if not car.atHome:
                     updated = car.update_location(0)
                     if updated and not car.atHome:
+                        logger.log(
+                            logging.INFO2,
+                            car.name
+                            + " was connected to a TWC, so is definitely home. "
+                            + "Resetting home location to ("
+                            + str(car.lat)
+                            + ", "
+                            + str(car.lon)
+                            + ")",
+                        )
                         self.master.setHomeLat(car.lat)
                         self.master.setHomeLon(car.lon)
                         self.master.queue_background_task({"cmd": "saveSettings"})
