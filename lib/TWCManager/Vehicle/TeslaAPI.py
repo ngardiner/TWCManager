@@ -1170,6 +1170,7 @@ class TeslaAPI:
                         )
                         self.master.setHomeLat(car.lat)
                         self.master.setHomeLon(car.lon)
+                        self.master.queue_background_task({"cmd": "sunrise"})
                         self.master.queue_background_task({"cmd": "saveSettings"})
                         car.atHome = True
                 return
