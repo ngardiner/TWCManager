@@ -453,7 +453,11 @@ def update_statuses():
             logger.debug(
                 f"Offering {maxampsDisplay} instead of {nominalOfferDisplay} to compensate for inexact current draw"
             )
-            conwatts = genwatts - master.convertAmpsToWatts(maxamps)
+            conwatts = genwatts - master.convertAmpsToWatts(maxamps) \
+                + ( chgwatts
+                    if (config["config"]["subtractChargerLoad"] and conwatts >= 0)
+                    else 0
+                )
         generation = f"{master.convertWattsToAmps(genwatts):.2f}A"
         consumption = f"{master.convertWattsToAmps(conwatts):.2f}A"
         utilization = f"{master.convertWattsToAmps(chgwatts):.2f}A"
