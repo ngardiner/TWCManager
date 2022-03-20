@@ -432,20 +432,14 @@ def update_statuses():
                 extra=logExtra,
             )
 
+        # NOTE: conwatts currently can not be < 0, but as this might
+        # change in the future, e.g. for certain EMS scenarios, let's
+        # keep the check below, just in case
         nominalOffer = master.convertWattsToAmps(
-            genwatts
-            + (
-                chgwatts
-                if (config["config"]["subtractChargerLoad"] and conwatts == 0)
+            genwatts - conwatts
+            + ( chgwatts
+                if (config["config"]["subtractChargerLoad"] and conwatts >= 0)
                 else 0
-            )
-            - (
-                conwatts
-                - (
-                    chgwatts
-                    if (config["config"]["subtractChargerLoad"] and conwatts > 0)
-                    else 0
-                )
             )
         )
         if abs(maxamps - nominalOffer) > 0.005:
