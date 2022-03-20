@@ -456,13 +456,19 @@ def update_statuses():
             conwatts = genwatts - master.convertAmpsToWatts(maxamps)
         generation = f"{master.convertWattsToAmps(genwatts):.2f}A"
         consumption = f"{master.convertWattsToAmps(conwatts):.2f}A"
-        logger.info(
-            "Limiting charging to %s - %s = %s.",
-            generation,
-            consumption,
-            maxampsDisplay,
-            extra={"colored": "magenta"},
-        )
+        utilization = f"{master.convertWattsToAmps(chgwatts):.2f}A"
+        if (config["config"]["subtractChargerLoad"]):
+            logger.info(
+                "Limiting charging to %s - (%s - %s) = %s.",
+                generation, consumption, utilization, maxampsDisplay,
+                extra={"colored": "magenta"},
+            )
+        else:
+            logger.info(
+                "Limiting charging to %s - %s = %s.",
+                generation, consumption, maxampsDisplay,
+                extra={"colored": "magenta"},
+            )
 
     else:
         # For all other modes, simply show the Amps to charge at
