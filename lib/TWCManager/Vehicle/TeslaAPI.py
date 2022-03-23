@@ -618,7 +618,7 @@ class TeslaAPI:
                 # When multiple cars are enrolled in the car API, only start/stop
                 # charging cars parked at home.
 
-                if vehicle.update_location() is False:
+                if vehicle.update_location(3600) is False:
                     result = "error"
                     continue
 
@@ -1148,6 +1148,32 @@ class TeslaAPI:
             if car.atHome:
                 car.update_charge()
         self.lastChargeCheck = time.time()
+
+    def vehicleIsDefinitelyHome(self, vin):
+        for car in self.carApiVehicles:
+            if car.VIN == vin:
+                if not car.atHome:
+                    updated = car.update_location(0)
+                    if updated and not car.atHome:
+                        logger.log(
+                            logging.INFO2,
+                            car.name
+                            + " was connected to a TWC, so is definitely home."
+                        )
+                        logger.log(
+                            logging.INFO2,
+                            + "Resetting home location to ("
+                            + str(car.lat)
+                            + ", "
+                            + str(car.lon)
+                            + ")",
+                        )
+                        self.master.setHomeLat(car.lat)
+                        self.master.setHomeLon(car.lon)
+                        self.master.queue_background_task({"cmd": "sunrise"})
+                        self.master.queue_background_task({"cmd": "saveSettings"})
+                        car.atHome = True
+                return
 
     def wakeVehicle(self, vehicle):
         apiResponseDict = None
