@@ -4,10 +4,10 @@ import re
 import time
 
 
-logger = logging.getLogger("\u26FD Slave")
+logger = logging.getLogger("\u26FD TWC")
 
 
-class TWCSlave:
+class Gen2TWC:
 
     config = None
     configConfig = None
@@ -330,7 +330,7 @@ class TWCSlave:
         )
 
     def send_master_heartbeat(self):
-        # Send our fake master's heartbeat to this TWCSlave.
+        # Send our fake master's heartbeat to this TWC.
         #
         # Heartbeat includes 7 bytes (Protocol 1) or 9 bytes (Protocol 2) of data
         # that we store in masterHeartbeatData.

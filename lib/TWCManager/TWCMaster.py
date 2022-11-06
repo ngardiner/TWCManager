@@ -1,6 +1,6 @@
 #! /usr/bin/python3
 
-from TWCManager.EVSEInstance.TWCSlave import TWCSlave
+from lib.TWCManager.EVSEInstance.Gen2TWC import Gen2TWC
 from datetime import datetime, timedelta
 import json
 import logging
@@ -818,7 +818,7 @@ class TWCMaster:
         except KeyError:
             pass
 
-        slaveTWC = TWCSlave(newSlaveID, maxAmps, self.config, self)
+        slaveTWC = Gen2TWC(newSlaveID, maxAmps, self.config, self)
         self.slaveTWCs[newSlaveID] = slaveTWC
         self.addSlaveTWC(slaveTWC)
 
@@ -1406,7 +1406,7 @@ class TWCMaster:
             self.queue_background_task({"cmd": "charge", "charge": True})
 
     def stopCarsCharging(self):
-        # This is called by components (mainly TWCSlave) who want to signal to us to
+        # This is called by components who want to signal to us to
         # call our configured routine for stopping vehicles from charging.
         # The default setting is to use the Tesla API. Some people may not want to do
         # this, as it only works for Tesla vehicles and requires logging in with your
