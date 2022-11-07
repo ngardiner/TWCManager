@@ -1,12 +1,13 @@
 # Gen2 TWC Controller
 # Exposes EVSEInstances for Gen2 TWCs connected over serial
 
+from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC
 import logging
 import time
 import threading
 import re
 import traceback
-
+import random
 
 logger = logging.getLogger("\u26FD Serial")
 
@@ -19,6 +20,29 @@ class Gen2TWCs:
     stopEvent = None
     thread = None
 
+    masterTWCID = ""
+    TWCID = None
+
+    slaveHeartbeatData = bytearray(
+        [0x01, 0x0F, 0xA0, 0x0F, 0xA0, 0x00, 0x00, 0x00, 0x00]
+    )
+
+    knownTWCsByID = {}
+    knownTWCs = []
+    lastkWhMessage = time.time()
+    lastkWhPoll = 0
+
+    overrideMasterHeartbeatData = b""
+
+    # TWCs send a seemingly-random byte after their 2-byte TWC id in a number of
+    # messages. I call this byte their "Sign" for lack of a better term. The byte
+    # never changes unless the TWC is reset or power cycled. We use hard-coded
+    # values for now because I don't know if there are any rules to what values can
+    # be chosen. I picked 77 because it's easy to recognize when looking at logs.
+    # These shouldn't need to be changed.
+    masterSign = bytearray(b"\x77")
+    slaveSign = bytearray(b"\x77")
+
     def __init__(self, master):
         self.__master = master
 
@@ -26,12 +50,14 @@ class Gen2TWCs:
         self.__configConfig = self.__config.get("config", {})
         self.__configTWCs = self.__config.get("controller", {}).get("Gen2TWCs", {})
 
+        self.TWCID = self.__master.TWCID
+
         if "enabled" in self.__configTWCs:
             self.status = self.__configTWCs["enabled"]
         else:
             # Backward-compatible default; assume TWCs enabled if there's
             # a running serial interface
-            self.status = master.getInterfaceModule() is not None
+            self.status = self.getInterfaceModule() is not None
 
         # Unload if this module is disabled or misconfigured
         if not self.status:
@@ -66,16 +92,13 @@ class Gen2TWCs:
 
         fakeMaster = self.__configConfig["fakeMaster"]
 
-
-
-
         logger.info(
-        "TWC Manager starting as fake %s with id %02X%02X and sign %02X"
-        % (
-            ("Master" if fakeMaster else "Slave"),
-            ord(master.getFakeTWCID()[0:1]),
-            ord(master.getFakeTWCID()[1:2]),
-            ord(master.getSlaveSign()),
+            "TWC Manager starting as fake %s with id %02X%02X and sign %02X"
+            % (
+                ("Master" if fakeMaster else "Slave"),
+                ord(self.getFakeTWCID()[0:1]),
+                ord(self.getFakeTWCID()[1:2]),
+                ord(self.getSlaveSign()),
             )
         )
 
@@ -89,7 +112,7 @@ class Gen2TWCs:
                 # message. By only sending our periodic messages when no incoming
                 # message data is available, we reduce the chance that we will start
                 # transmitting a message in the middle of an incoming message, which
-                # would corrupt both messages.                
+                # would corrupt both messages.
 
                 now = time.time()
 
@@ -99,11 +122,11 @@ class Gen2TWCs:
                     # It doesn't seem to matter if we send these once per second or once
                     # per 100ms so I do once per 100ms to get them over with.
                     if numInitMsgsToSend > 5:
-                        master.send_master_linkready1()
+                        self.send_master_linkready1()
                         time.sleep(0.1)  # give slave time to respond
                         numInitMsgsToSend -= 1
                     elif numInitMsgsToSend > 0:
-                        master.send_master_linkready2()
+                        self.send_master_linkready2()
                         time.sleep(0.1)  # give slave time to respond
                         numInitMsgsToSend = numInitMsgsToSend - 1
                     else:
@@ -114,13 +137,18 @@ class Gen2TWCs:
                         # as long as no slave was connected, but since real slaves send
                         # linkready once every 10 seconds till they're connected to a
                         # master, we'll just wait for that.
-                        if time.time() - master.getTimeLastTx() >= 1.0:
+                        if time.time() - self.getTimeLastTx() >= 1.0:
                             # It's been about a second since our last heartbeat.
-                            if master.countSlaveTWC() > 0:
-                                slaveTWC = master.getSlaveTWC(idxSlaveToSendNextHeartbeat)
-                                if time.time() - slaveTWC.timeLastRx > self.__config.get(
-                                    "interfaces", {}
-                                ).get("RS485", {}).get("slaveTimeout", 26):
+                            if self.countTWCs() > 0:
+                                slaveTWC = self.getTWC(
+                                    idxSlaveToSendNextHeartbeat
+                                )
+                                if (
+                                    time.time() - slaveTWC.timeLastRx
+                                    > self.__config.get("interfaces", {})
+                                    .get("RS485", {})
+                                    .get("slaveTimeout", 26)
+                                ):
                                     # A real master stops sending heartbeats to a slave
                                     # that hasn't responded for ~26 seconds. It may
                                     # still send the slave a heartbeat every once in
@@ -137,8 +165,10 @@ class Gen2TWCs:
                                 else:
                                     slaveTWC.send_master_heartbeat()
 
-                                idxSlaveToSendNextHeartbeat = idxSlaveToSendNextHeartbeat + 1
-                                if idxSlaveToSendNextHeartbeat >= master.countSlaveTWC():
+                                idxSlaveToSendNextHeartbeat = (
+                                    idxSlaveToSendNextHeartbeat + 1
+                                )
+                                if idxSlaveToSendNextHeartbeat >= self.countTWCs():
                                     idxSlaveToSendNextHeartbeat = 0
                                 time.sleep(0.1)  # give slave time to respond
                 else:
@@ -152,34 +182,31 @@ class Gen2TWCs:
                     # I've also verified that masters don't care if we stop sending link
                     # ready as long as we send status updates in response to master's
                     # status updates.
-                    if (
-                        fakeMaster != 2
-                        and time.time() - master.getTimeLastTx() >= 10.0
-                    ):
+                    if fakeMaster != 2 and time.time() - self.getTimeLastTx() >= 10.0:
                         logger.info(
                             "Advertise fake slave %02X%02X with sign %02X is "
                             "ready to link once per 10 seconds as long as master "
                             "hasn't sent a heartbeat in the last 10 seconds."
                             % (
-                                ord(master.getFakeTWCID()[0:1]),
-                                ord(master.getFakeTWCID()[1:2]),
+                                ord(self.getFakeTWCID()[0:1]),
+                                ord(self.getFakeTWCID()[1:2]),
                                 ord(master.getSlaveSign()),
                             )
                         )
-                        master.send_slave_linkready()
+                        self.send_slave_linkready()
 
                 # If it has been more than 2 minutes since the last kWh value,
                 # queue the command to request it from slaves
                 if fakeMaster == 1 and (
-                    (time.time() - master.lastkWhMessage) > (60 * 2)
+                    (time.time() - self.lastkWhMessage) > (60 * 2)
                 ):
-                    master.lastkWhMessage = time.time()
+                    self.lastkWhMessage = time.time()
                     master.queue_background_task({"cmd": "getLifetimekWh"})
 
                 # If it has been more than 1 minute since the last VIN query with no
                 # response, and if we haven't queried more than 5 times already for this
                 # slave TWC, repeat the query
-                master.retryVINQuery()
+                self.retryVINQuery()
 
                 ########################################################################
                 # See if there's an incoming message on the input interface.
@@ -188,7 +215,7 @@ class Gen2TWCs:
                 actualDataLen = 0
                 while True:
                     now = time.time()
-                    dataLen = master.getInterfaceModule().getBufferLen()
+                    dataLen = self.getInterfaceModule().getBufferLen()
                     if dataLen == 0:
                         if msgLen == 0:
                             # No message data waiting and we haven't received the
@@ -216,7 +243,7 @@ class Gen2TWCs:
                     else:
                         actualDataLen = dataLen
                         dataLen = 1
-                        data = master.getInterfaceModule().read(dataLen)
+                        data = self.getInterfaceModule().read(dataLen)
 
                     if dataLen != 1:
                         # This should never happen
@@ -229,11 +256,14 @@ class Gen2TWCs:
                         # We expect to find these non-c0 bytes between messages, so
                         # we don't print any warning at standard debug levels.
                         logger.log(
-                            logging.DEBUG2, "Ignoring byte %02X between messages." % (data[0])
+                            logging.DEBUG2,
+                            "Ignoring byte %02X between messages." % (data[0]),
                         )
                         ignoredData += data
                         continue
-                    elif msgLen > 0 and msgLen < 15 and len(data) > 0 and data[0] == 0xC0:
+                    elif (
+                        msgLen > 0 and msgLen < 15 and len(data) > 0 and data[0] == 0xC0
+                    ):
                         # If you see this when the program is first started, it
                         # means we started listening in the middle of the TWC
                         # sending a message so we didn't see the whole message and
@@ -319,7 +349,12 @@ class Gen2TWCs:
 
                     logger.log(
                         logging.INFO9,
-                        "Rx@" + ": (" + self.hex_str(ignoredData) + ") " + self.hex_str(msg) + "",
+                        "Rx@"
+                        + ": ("
+                        + self.hex_str(ignoredData)
+                        + ") "
+                        + self.hex_str(msg)
+                        + "",
                     )
 
                     ignoredData = bytearray()
@@ -357,20 +392,26 @@ class Gen2TWCs:
                         # end of the string (even without the re.MULTILINE option), and
                         # sometimes our strings do end with a newline character that is
                         # actually the CRC byte with a value of 0A or 0D.
-                        msgMatch = re.search(b"^\xfd\xb1(..)\x00\x00.+\Z", msg, re.DOTALL)
+                        msgMatch = re.search(
+                            b"^\xfd\xb1(..)\x00\x00.+\Z", msg, re.DOTALL
+                        )
                         if msgMatch and foundMsgMatch == False:
                             # Handle acknowledgement of Start command
                             foundMsgMatch = True
                             senderID = msgMatch.group(1)
 
-                        msgMatch = re.search(b"^\xfd\xb2(..)\x00\x00.+\Z", msg, re.DOTALL)
+                        msgMatch = re.search(
+                            b"^\xfd\xb2(..)\x00\x00.+\Z", msg, re.DOTALL
+                        )
                         if msgMatch and foundMsgMatch == False:
                             # Handle acknowledgement of Stop command
                             foundMsgMatch = True
                             senderID = msgMatch.group(1)
 
                         msgMatch = re.search(
-                            b"^\xfd\xe2(..)(.)(..)\x00\x00\x00\x00\x00\x00.+\Z", msg, re.DOTALL
+                            b"^\xfd\xe2(..)(.)(..)\x00\x00\x00\x00\x00\x00.+\Z",
+                            msg,
+                            re.DOTALL,
                         )
                         if msgMatch and foundMsgMatch == False:
                             # Handle linkready message from slave.
@@ -387,11 +428,18 @@ class Gen2TWCs:
                             foundMsgMatch = True
                             senderID = msgMatch.group(1)
                             sign = msgMatch.group(2)
-                            maxAmps = ((msgMatch.group(3)[0] << 8) + msgMatch.group(3)[1]) / 100
+                            maxAmps = (
+                                (msgMatch.group(3)[0] << 8) + msgMatch.group(3)[1]
+                            ) / 100
 
                             logger.info(
                                 "%.2f amp slave TWC %02X%02X is ready to link.  Sign: %s"
-                                % (maxAmps, senderID[0], senderID[1], self.hex_str(sign))
+                                % (
+                                    maxAmps,
+                                    senderID[0],
+                                    senderID[1],
+                                    self.hex_str(sign),
+                                )
                             )
 
                             if maxAmps >= 80:
@@ -406,7 +454,7 @@ class Gen2TWCs:
                                 # tested.
                                 master.setSpikeAmps(16)
 
-                            if senderID == master.getFakeTWCID():
+                            if senderID == self.getFakeTWCID():
                                 logger.info(
                                     "Slave TWC %02X%02X reports same TWCID as master.  "
                                     "Slave should resolve by changing its TWCID."
@@ -429,7 +477,7 @@ class Gen2TWCs:
                             # and generally no more than once, so this is a good
                             # opportunity to add the slave to our known pool of slave
                             # devices.
-                            slaveTWC = master.newSlave(senderID, maxAmps)
+                            slaveTWC = self.newTWC(senderID, maxAmps)
 
                             if (
                                 slaveTWC.protocolVersion == 1
@@ -496,7 +544,7 @@ class Gen2TWCs:
                             heartbeatData = msgMatch.group(3)
 
                             try:
-                                slaveTWC = master.getSlaveByID(senderID)
+                                slaveTWC = self.getTWCByID(senderID)
                             except KeyError:
                                 # Normally, a slave only sends us a heartbeat message if
                                 # we send them ours first, so it's not expected we would
@@ -508,11 +556,11 @@ class Gen2TWCs:
                                 )
                                 continue
 
-                            if master.getFakeTWCID() == receiverID:
+                            if self.getFakeTWCID() == receiverID:
                                 slaveTWC.receive_slave_heartbeat(heartbeatData)
                             else:
-                                # I've tried different master.getFakeTWCID() values to verify a
-                                # slave will send our master.getFakeTWCID() back to us as
+                                # I've tried different self.getFakeTWCID() values to verify a
+                                # slave will send our self.getFakeTWCID() back to us as
                                 # receiverID. However, I once saw it send receiverID =
                                 # 0000.
                                 # I'm not sure why it sent 0000 and it only happened
@@ -531,7 +579,9 @@ class Gen2TWCs:
                                 )
                         else:
                             msgMatch = re.search(
-                                b"\A\xfd\xeb(..)(....)(..)(..)(..)(.+?).\Z", msg, re.DOTALL
+                                b"\A\xfd\xeb(..)(....)(..)(..)(..)(.+?).\Z",
+                                msg,
+                                re.DOTALL,
                             )
                         if msgMatch and foundMsgMatch == False:
                             # Handle kWh total and voltage message from slave.
@@ -582,12 +632,16 @@ class Gen2TWCs:
                                     "logtype": "slave_status",
                                     "TWCID": senderID,
                                     "kWh": kWh,
-                                    "voltsPerPhase": [voltsPhaseA, voltsPhaseB, voltsPhaseC],
+                                    "voltsPerPhase": [
+                                        voltsPhaseA,
+                                        voltsPhaseB,
+                                        voltsPhaseC,
+                                    ],
                                 },
                             )
 
                             # Update the timestamp of the last reciept of this message
-                            master.lastkWhMessage = time.time()
+                            self.lastkWhMessage = time.time()
 
                             # Every time we get this message, we re-queue the query
                             master.queue_background_task({"cmd": "getLifetimekWh"})
@@ -623,14 +677,16 @@ class Gen2TWCs:
                                 "Slave TWC %02X%02X reported VIN data: %s."
                                 % (senderID[0], senderID[1], self.hex_str(data)),
                             )
-                            slaveTWC = master.getSlaveByID(senderID)
+                            slaveTWC = self.getTWCByID(senderID)
                             if vinPart == b"\xee":
                                 vinPart = 0
                             if vinPart == b"\xef":
                                 vinPart = 1
                             if vinPart == b"\xf1":
                                 vinPart = 2
-                            slaveTWC.VINData[vinPart] = data.decode("utf-8").rstrip("\x00")
+                            slaveTWC.VINData[vinPart] = data.decode("utf-8").rstrip(
+                                "\x00"
+                            )
                             if vinPart < 2:
                                 vinPart += 1
                                 master.queue_background_task(
@@ -731,10 +787,10 @@ class Gen2TWCs:
                                 % (senderID[0], senderID[1], self.hex_str(sign))
                             )
 
-                            if senderID == master.getFakeTWCID():
+                            if senderID == self.getFakeTWCID():
                                 master.master_id_conflict()
 
-                            # Other than picking a new master.getFakeTWCID() if ours conflicts with
+                            # Other than picking a new self.getFakeTWCID() if ours conflicts with
                             # master, it doesn't seem that a real slave will make any
                             # sort of direct response when sent a master's linkready1 or
                             # linkready2.
@@ -762,7 +818,7 @@ class Gen2TWCs:
                                 % (senderID[0], senderID[1], self.hex_str(sign))
                             )
 
-                            if senderID == master.getFakeTWCID():
+                            if senderID == self.getFakeTWCID():
                                 master.master_id_conflict()
                         else:
                             msgMatch = re.search(
@@ -776,13 +832,13 @@ class Gen2TWCs:
                             heartbeatData = msgMatch.group(3)
                             master.setMasterTWCID(senderID)
                             try:
-                                slaveTWC = master.slaveTWCs[receiverID]
+                                slaveTWC = self.knownTWCsByID[receiverID]
                             except KeyError:
-                                slaveTWC = master.newSlave(receiverID, 80)
+                                slaveTWC = self.newTWC(receiverID, 80)
 
                             slaveTWC.masterHeartbeatData = heartbeatData
 
-                            if receiverID != master.getFakeTWCID():
+                            if receiverID != self.getFakeTWCID():
                                 # This message was intended for another slave.
                                 # Ignore it.
                                 logger.log(
@@ -849,9 +905,13 @@ class Gen2TWCs:
                                     master.slaveHeartbeatData[1] = heartbeatData[1]
                                     master.slaveHeartbeatData[2] = heartbeatData[2]
 
-                                    ampsUsed = (heartbeatData[1] << 8) + heartbeatData[2]
+                                    ampsUsed = (heartbeatData[1] << 8) + heartbeatData[
+                                        2
+                                    ]
                                     ampsUsed -= 80
-                                    master.slaveHeartbeatData[3] = (ampsUsed >> 8) & 0xFF
+                                    master.slaveHeartbeatData[3] = (
+                                        ampsUsed >> 8
+                                    ) & 0xFF
                                     master.slaveHeartbeatData[4] = ampsUsed & 0xFF
                             elif heartbeatData[0] == 0:
                                 if timeTo0Aafter06 > 0 and timeTo0Aafter06 < now:
@@ -874,7 +934,10 @@ class Gen2TWCs:
                                     % (heartbeatData[1], self.hex_str(heartbeatData))
                                 )
                             else:
-                                logger.info("UNKNOWN MHB state %s" % (self.hex_str(heartbeatData)))
+                                logger.info(
+                                    "UNKNOWN MHB state %s"
+                                    % (self.hex_str(heartbeatData))
+                                )
 
                             # Slaves always respond to master's heartbeat by sending
                             # theirs back.
@@ -916,12 +979,19 @@ class Gen2TWCs:
                             foundMsgMatch = True
                             senderID = msgMatch.group(1)
                             sign = msgMatch.group(2)
-                            maxAmps = ((msgMatch.group(3)[0] << 8) + msgMatch.group(3)[1]) / 100
+                            maxAmps = (
+                                (msgMatch.group(3)[0] << 8) + msgMatch.group(3)[1]
+                            ) / 100
                             logger.info(
                                 "%.2f amp slave TWC %02X%02X is ready to link.  Sign: %s"
-                                % (maxAmps, senderID[0], senderID[1], self.hex_str(sign))
+                                % (
+                                    maxAmps,
+                                    senderID[0],
+                                    senderID[1],
+                                    self.hex_str(sign),
+                                )
                             )
-                            if senderID == master.getFakeTWCID():
+                            if senderID == self.getFakeTWCID():
                                 logger.info(
                                     "ERROR: Received slave heartbeat message from "
                                     "slave %02X%02X that has the same TWCID as our fake slave."
@@ -929,7 +999,7 @@ class Gen2TWCs:
                                 )
                                 continue
 
-                            master.newSlave(senderID, maxAmps)
+                            self.newTWC(senderID, maxAmps)
                         else:
                             msgMatch = re.search(
                                 b"\A\xfd\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
@@ -942,7 +1012,7 @@ class Gen2TWCs:
                             receiverID = msgMatch.group(2)
                             heartbeatData = msgMatch.group(3)
 
-                            if senderID == master.getFakeTWCID():
+                            if senderID == self.getFakeTWCID():
                                 logger.info(
                                     "ERROR: Received slave heartbeat message from "
                                     "slave %02X%02X that has the same TWCID as our fake slave."
@@ -951,12 +1021,12 @@ class Gen2TWCs:
                                 continue
 
                             try:
-                                slaveTWC = master.slaveTWCs[senderID]
+                                slaveTWC = self.knownTWCsByID[senderID]
                             except KeyError:
                                 # Slave is unlikely to send another linkready since it's
                                 # already linked with a real Master TWC, so just assume
                                 # it's 80A.
-                                slaveTWC = master.newSlave(senderID, 80)
+                                slaveTWC = self.newTWC(senderID, 80)
 
                             slaveTWC.print_status(heartbeatData)
                         else:
@@ -972,7 +1042,7 @@ class Gen2TWCs:
                             senderID = msgMatch.group(1)
                             receiverID = msgMatch.group(2)
 
-                            if senderID == master.getFakeTWCID():
+                            if senderID == self.getFakeTWCID():
                                 logger.info(
                                     "ERROR: Received voltage request message from "
                                     "TWC %02X%02X that has the same TWCID as our fake slave."
@@ -983,10 +1053,15 @@ class Gen2TWCs:
                             logger.log(
                                 logging.INFO8,
                                 "VRQ from %02X%02X to %02X%02X"
-                                % (senderID[0], senderID[1], receiverID[0], receiverID[1]),
+                                % (
+                                    senderID[0],
+                                    senderID[1],
+                                    receiverID[0],
+                                    receiverID[1],
+                                ),
                             )
 
-                            if receiverID == master.getFakeTWCID():
+                            if receiverID == self.getFakeTWCID():
                                 kWhCounter = int(master.getkWhDelivered())
                                 kWhPacked = bytearray(
                                     [
@@ -999,8 +1074,8 @@ class Gen2TWCs:
                                 logger.info(
                                     "VRS %02X%02X: %dkWh (%s) %dV %dV %dV"
                                     % (
-                                        master.getFakeTWCID()[0],
-                                        master.getFakeTWCID()[1],
+                                        self.getFakeTWCID()[0],
+                                        self.getFakeTWCID()[1],
                                         kWhCounter,
                                         self.hex_str(kWhPacked),
                                         240,
@@ -1008,9 +1083,9 @@ class Gen2TWCs:
                                         0,
                                     )
                                 )
-                                master.getInterfaceModule().send(
+                                self.getInterfaceModule().send(
                                     bytearray(b"\xFD\xEB")
-                                    + master.getFakeTWCID()
+                                    + self.getFakeTWCID()
                                     + kWhPacked
                                     + bytearray(b"\x00\xF0\x00\x00\x00\x00\x00")
                                 )
@@ -1028,7 +1103,10 @@ class Gen2TWCs:
                             senderID = msgMatch.group(1)
                             data = msgMatch.group(2)
                             kWhCounter = (
-                                (data[0] << 24) + (data[1] << 16) + (data[2] << 8) + data[3]
+                                (data[0] << 24)
+                                + (data[1] << 16)
+                                + (data[2] << 8)
+                                + data[3]
                             )
                             voltsPhaseA = (data[4] << 8) + data[5]
                             voltsPhaseB = (data[6] << 8) + data[7]
@@ -1036,10 +1114,14 @@ class Gen2TWCs:
 
                             # Update this detail for the Slave TWC
                             master.updateSlaveLifetime(
-                                senderID, kWhCounter, voltsPhaseA, voltsPhaseB, voltsPhaseC
+                                senderID,
+                                kWhCounter,
+                                voltsPhaseA,
+                                voltsPhaseB,
+                                voltsPhaseC,
                             )
 
-                            if senderID == master.getFakeTWCID():
+                            if senderID == self.getFakeTWCID():
                                 logger.info(
                                     "ERROR: Received voltage response message from "
                                     "TWC %02X%02X that has the same TWCID as our fake slave."
@@ -1060,7 +1142,9 @@ class Gen2TWCs:
                             )
 
                         if foundMsgMatch == False:
-                            logger.info("***UNKNOWN MESSAGE from master: " + self.hex_str(msg))
+                            logger.info(
+                                "***UNKNOWN MESSAGE from master: " + self.hex_str(msg)
+                            )
 
             except Exception as e:
                 # Print info about unhandled exceptions, then continue.  Search for
@@ -1069,10 +1153,9 @@ class Gen2TWCs:
                 logger.info("Unhandled Exception:" + traceback.format_exc())
                 # Sleep 5 seconds so the user might see the error.
                 time.sleep(5)
-        
-        # We've been signalled to stop. Close the input module.
-        master.getInterfaceModule().close()
 
+        # We've been signalled to stop. Close the input module.
+        self.getInterfaceModule().close()
 
     def unescape_msg(self, inmsg: bytearray, msgLen):
         # Given a message received on the RS485 network, remove leading and trailing
@@ -1118,7 +1201,271 @@ class Gen2TWCs:
     def hex_str(self, s: str):
         return " ".join("{:02X}".format(ord(c)) for c in s)
 
-
-    def hex_str(self,  ba: bytearray):
+    def hex_str(self, ba: bytearray):
         return " ".join("{:02X}".format(c) for c in ba)
 
+    def send_master_linkready1(self):
+
+        logger.log(logging.INFO8, "Send master linkready1")
+
+        # When master is powered on or reset, it sends 5 to 7 copies of this
+        # linkready1 message followed by 5 copies of linkready2 (I've never seen
+        # more or less than 5 of linkready2).
+        #
+        # This linkready1 message advertises master's TWCID to other slaves on the
+        # network.
+        # If a slave happens to have the same id as master, it will pick a new
+        # random TWCID. Other than that, slaves don't seem to respond to linkready1.
+
+        # linkready1 and linkready2 are identical except FC E1 is replaced by FB E2
+        # in bytes 2-3. Both messages will cause a slave to pick a new id if the
+        # slave's id conflicts with master.
+        # If a slave stops sending heartbeats for awhile, master may send a series
+        # of linkready1 and linkready2 messages in seemingly random order, which
+        # means they don't indicate any sort of startup state.
+
+        # linkready1 is not sent again after boot/reset unless a slave sends its
+        # linkready message.
+        # At that point, linkready1 message may start sending every 1-5 seconds, or
+        # it may not be sent at all.
+        # Behaviors I've seen:
+        #   Not sent at all as long as slave keeps responding to heartbeat messages
+        #   right from the start.
+        #   If slave stops responding, then re-appears, linkready1 gets sent
+        #   frequently.
+
+        # One other possible purpose of linkready1 and/or linkready2 is to trigger
+        # an error condition if two TWCs on the network transmit those messages.
+        # That means two TWCs have rotary switches setting them to master mode and
+        # they will both flash their red LED 4 times with top green light on if that
+        # happens.
+
+        # Also note that linkready1 starts with FC E1 which is similar to the FC D1
+        # message that masters send out every 4 hours when idle. Oddly, the FC D1
+        # message contains all zeros instead of the master's id, so it seems
+        # pointless.
+
+        # I also don't understand the purpose of having both linkready1 and
+        # linkready2 since only two or more linkready2 will provoke a response from
+        # a slave regardless of whether linkready1 was sent previously. Firmware
+        # trace shows that slaves do something somewhat complex when they receive
+        # linkready1 but I haven't been curious enough to try to understand what
+        # they're doing. Tests show neither linkready1 or 2 are necessary. Slaves
+        # send slave linkready every 10 seconds whether or not they got master
+        # linkready1/2 and if a master sees slave linkready, it will start sending
+        # the slave master heartbeat once per second and the two are then connected.
+        self.getInterfaceModule().send(
+            bytearray(b"\xFC\xE1")
+            + self.TWCID
+            + self.masterSign
+            + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+        )
+
+    def send_master_linkready2(self):
+
+        logger.log(logging.INFO8, "Send master linkready2")
+
+        # This linkready2 message is also sent 5 times when master is booted/reset
+        # and then not sent again if no other TWCs are heard from on the network.
+        # If the master has ever seen a slave on the network, linkready2 is sent at
+        # long intervals.
+        # Slaves always ignore the first linkready2, but respond to the second
+        # linkready2 around 0.2s later by sending five slave linkready messages.
+        #
+        # It may be that this linkready2 message that sends FB E2 and the master
+        # heartbeat that sends fb e0 message are really the same, (same FB byte
+        # which I think is message type) except the E0 version includes the TWC ID
+        # of the slave the message is intended for whereas the E2 version has no
+        # recipient TWC ID.
+        #
+        # Once a master starts sending heartbeat messages to a slave, it
+        # no longer sends the global linkready2 message (or if it does,
+        # they're quite rare so I haven't seen them).
+        self.getInterfaceModule().send(
+            bytearray(b"\xFB\xE2")
+            + self.TWCID
+            + self.masterSign
+            + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+        )
+
+    def send_slave_linkready(self):
+        # In the message below, \x1F\x40 (hex 0x1f40 or 8000 in base 10) refers to
+        # this being a max 80.00Amp charger model.
+        # EU chargers are 32A and send 0x0c80 (3200 in base 10).
+        #
+        # I accidentally changed \x1f\x40 to \x2e\x69 at one point, which makes the
+        # master TWC immediately start blinking its red LED 6 times with top green
+        # LED on. Manual says this means "The networked Wall Connectors have
+        # different maximum current capabilities".
+        msg = (
+            bytearray(b"\xFD\xE2")
+            + self.TWCID
+            + self.slaveSign
+            + bytearray(b"\x1F\x40\x00\x00\x00\x00\x00\x00")
+        )
+        if self.protocolVersion == 2:
+            msg += bytearray(b"\x00\x00")
+
+        self.getInterfaceModule().send(msg)
+
+    def getInterfaceModule(self):
+        return self.__master.getModulesByType("Interface")[0]["ref"]
+
+    def getLifetimekWh(self):
+
+        # This function is called from a Scheduled Task
+        # If it's been at least 1 minute, then query all known Slave TWCs
+        # to determine their lifetime kWh and per-phase voltages
+        now = time.time()
+        if now >= self.lastkWhPoll + 60:
+            for slaveTWC in self.getTWCs():
+                self.getInterfaceModule().send(
+                    bytearray(b"\xFB\xEB")
+                    + self.TWCID
+                    + slaveTWC.TWCID
+                    + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+                )
+            self.lastkWhPoll = now
+
+    def getTWCByID(self, twcid):
+        return self.knownTWCsByID[twcid]
+
+    def getTWCID(self, twc):
+        return self.knownTWCs[twc].TWCID
+
+    def getTWC(self, index):
+        return self.knownTWCs[index]
+
+    def getTWCs(self):
+        # Returns a list of all Slave TWCs
+        return self.knownTWCs
+
+    @property
+    def allEVSEs(self):
+        # Public version of getTWCs()
+        return self.knownTWCs
+
+    def getSlaveSign(self):
+        return self.slaveSign
+
+    def master_id_conflict(self):
+        # We're playing fake slave, and we got a message from a master with our TWCID.
+        # By convention, as a slave we must change our TWCID because a master will not.
+        self.TWCID[0] = random.randint(0, 0xFF)
+        self.TWCID[1] = random.randint(0, 0xFF)
+
+        # Real slaves change their sign during a conflict, so we do too.
+        self.slaveSign[0] = random.randint(0, 0xFF)
+
+        logger.info(
+            "Master's TWCID matches our fake slave's TWCID.  "
+            "Picked new random TWCID %02X%02X with sign %02X"
+            % (self.TWCID[0], self.TWCID[1], self.slaveSign[0])
+        )
+
+    def getMasterTWCID(self):
+        # This is called when TWCManager is in Slave mode, to track the
+        # master's TWCID
+        return self.masterTWCID
+
+    def setMasterTWCID(self, twcid):
+        # This is called when TWCManager is in Slave mode, to track the
+        # master's TWCID
+        self.masterTWCID = twcid
+
+    def getMasterHeartbeatOverride(self):
+        return self.overrideMasterHeartbeatData
+
+    def newTWC(self, newTWCID, maxAmps):
+        try:
+            newTWC = self.knownTWCsByID[newTWCID]
+            # We didn't get KeyError exception, so this TWC is already in
+            # knownTWCs and we can simply return it.
+            return newTWC
+        except KeyError:
+            pass
+
+        newTWC = Gen2TWC(newTWCID, maxAmps, self.__config, self.__master, self)
+        self.knownTWCsByID[newTWCID] = newTWC
+        self.knownTWCs.append(newTWC)
+
+        if self.countTWCs() > 3:
+            logger.info(
+                "WARNING: More than 3 TWCs seen on network. Dropping oldest: "
+                + self.hex_str(self.getTWCID(0))
+                + "."
+            )
+            self.deleteTWC(self.getTWCID(0))
+
+        return newTWC
+
+    def getVehicleVIN(self, slaveID, part):
+        prefixByte = None
+        if int(part) == 0:
+            prefixByte = bytearray(b"\xFB\xEE")
+        if int(part) == 1:
+            prefixByte = bytearray(b"\xFB\xEF")
+        if int(part) == 2:
+            prefixByte = bytearray(b"\xFB\xF1")
+
+        if prefixByte:
+            self.getInterfaceModule().send(
+                prefixByte
+                + self.TWCID
+                + slaveID
+                + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+            )
+
+    def deleteTWC(self, deleteTWCID):
+        for i in range(0, len(self.knownTWCs)):
+            if self.knownTWCs[i].TWCID == deleteTWCID:
+                del self.knownTWCs[i]
+                break
+        try:
+            del self.knownTWCsByID[deleteTWCID]
+        except KeyError:
+            pass
+
+    def countTWCs(self):
+        return int(len(self.knownTWCs))
+
+    def stopCharging(self, subTWC=None):
+        # This function will loop through each of the Slave TWCs, and send them the stop command.
+        # If the subTWC parameter is supplied, we only stop the specified TWC
+        for TWC in self.getTWCs():
+            if (not subTWC) or (subTWC == TWC.TWCID):
+                TWC.stopCharging()
+
+    def startCharging(self):
+        # This function will loop through each of the Slave TWCs, and send them the start command.
+        for TWC in self.getTWCs():
+            TWC.startCharging()
+
+    def retryVINQuery(self):
+        # For each Slave TWC, check if it's been more than 60 seconds since the last
+        # VIN query without a VIN. If so, query again.
+        for slaveTWC in self.getTWCs():
+            if slaveTWC.isCharging == 1:
+                if (
+                    slaveTWC.lastVINQuery > 0
+                    and slaveTWC.vinQueryAttempt < 6
+                    and not slaveTWC.currentVIN
+                ):
+                    if (time.time() - slaveTWC.lastVINQuery) >= 60:
+                        self.queue_background_task(
+                            {
+                                "cmd": "getVehicleVIN",
+                                "slaveTWC": slaveTWC.TWCID,
+                                "vinPart": 0,
+                            }
+                        )
+                        slaveTWC.vinQueryAttempt += 1
+                        slaveTWC.lastVINQuery = time.time()
+            else:
+                slaveTWC.lastVINQuery = 0
+
+    def getTimeLastTx(self):
+        return self.getInterfaceModule().timeLastTx
+
+    def getFakeTWCID(self):
+        return self.TWCID

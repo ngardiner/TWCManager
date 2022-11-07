@@ -135,7 +135,7 @@ class WebIPCControl:
                 )
                 webResponseMsg = ""
                 numPackets = 0
-                slaveTWCRoundRobin = self.master.getSlaveTWCs()
+                slaveTWCRoundRobin = self.master.getAllEVSEs()
                 if webMsg == b"getStatus":
                     needCarApiBearerToken = False
                     if (

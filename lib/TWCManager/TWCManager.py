@@ -255,7 +255,9 @@ def background_tasks_thread(master):
                             master.sendStopCommand(task["subTWC"].TWCID)
 
                 elif task["cmd"] == "getLifetimekWh":
-                    master.getSlaveLifetimekWh()
+                    module = master.getModuleByName("Gen2TWCs")
+                    if module:
+                        module.getLifetimekWh()
                 elif task["cmd"] == "getVehicleVIN":
                     master.getVehicleVIN(task["slaveTWC"], task["vinPart"])
                 elif task["cmd"] == "snapHistoryData":

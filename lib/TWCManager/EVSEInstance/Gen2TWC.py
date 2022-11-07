@@ -65,18 +65,84 @@ class Gen2TWC:
     voltsPhaseA = 0
     voltsPhaseB = 0
     voltsPhaseC = 0
-    isCharging = 0
+    _isCharging = 0
     lastChargingStart = 0
     VINData = ["", "", ""]
     currentVIN = ""
     lastVIN = ""
+    controller = None
 
-    def __init__(self, TWCID, maxAmps, config, master):
+    @property
+    def isReadOnly(self):
+        return False
+
+    @property
+    def isLocal(self):
+        return True
+
+    @property
+    def isCharging(self):
+        if self.reportedAmpsActual >= 1.0:
+            if not self._isCharging:
+                # We have detected that a vehicle has started charging on this Slave TWC
+                # Attempt to request the vehicle's VIN
+                self._isCharging = 1
+                self.lastChargingStart = time.time()
+                self.master.queue_background_task(
+                    {
+                        "cmd": "getVehicleVIN",
+                        "slaveTWC": self.TWCID,
+                        "vinPart": 0,
+                    }
+                )
+
+                # Record our VIN query timestamp
+                self.lastVINQuery = time.time()
+                self.vinQueryAttempt = 1
+
+                # Record start of current charging session
+                self.master.recordVehicleSessionStart(self)
+        else:
+            if self._isCharging:
+                    # A vehicle was previously charging and is no longer charging
+                    # Clear the VIN details for this slave and move the last
+                    # vehicle's VIN to lastVIN
+                    self.VINData = ["", "", ""]
+                    if self.currentVIN:
+                        self.lastVIN = self.currentVIN
+                    self.currentVIN = ""
+                    self.master.updateVINStatus()
+
+                    # Stop querying for Vehicle VIN
+                    self.lastVINQuery = 0
+                    self.vinQueryAttempt = 0
+
+                    # Close off the current charging session
+                    self.master.recordVehicleSessionEnd(self)
+            self._isCharging = 0
+            self.lastChargingStart = 0
+
+        return self._isCharging
+
+    @property
+    def currentAmps(self):
+        return self.reportedAmpsActual
+
+    @property
+    def currentVoltage(self):
+        return (self.voltsPhaseA, self.voltsPhaseB, self.voltsPhaseC)
+
+    @property
+    def ID(self):
+        return self.TWCID
+
+    def __init__(self, TWCID, maxAmps, config, master, controller):
         self.config = config
         self.configConfig = self.config.get("config", {})
         self.master = master
         self.TWCID = TWCID
         self.maxAmps = maxAmps
+        self.controller = controller
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
         self.useFlexAmpsToStartCharge = self.configConfig.get(
@@ -102,8 +168,8 @@ class Gen2TWC:
 
             if not self.config["config"]["fakeMaster"]:
                 debugOutput += " %02X%02X" % (
-                    self.master.getMasterTWCID()[0],
-                    self.master.getMasterTWCID()[1],
+                    self.controller.getMasterTWCID()[0],
+                    self.controller.getMasterTWCID()[1],
                 )
 
             debugOutput += ": %02X %05.2f/%05.2fA %02X%02X" % (
@@ -322,9 +388,9 @@ class Gen2TWC:
                 # Increase array length to 9
                 self.master.slaveHeartbeatData.append(0x00)
 
-        self.master.getModulesByType("Interface")[0]["ref"].send(
+        self.send(
             bytearray(b"\xFD\xE0")
-            + self.master.getFakeTWCID()
+            + self.self.controller.getFakeTWCID()
             + bytearray(masterID)
             + bytearray(self.master.slaveHeartbeatData)
         )
@@ -438,8 +504,8 @@ class Gen2TWC:
         #                          (20.00A). 01 byte indicates Master is plugged
         #                          in to a car.)
 
-        if len(self.master.getMasterHeartbeatOverride()) >= 7:
-            self.masterHeartbeatData = self.master.getMasterHeartbeatOverride()
+        if len(self.controller.getMasterHeartbeatOverride()) >= 7:
+            self.masterHeartbeatData = self.controller.getMasterHeartbeatOverride()
 
         if self.protocolVersion == 2:
             # TODO: Start and stop charging using protocol 2 commands to TWC
@@ -559,12 +625,15 @@ class Gen2TWC:
                 ).getCarApiVehicles():
                     vehicle.stopAskingToStartCharging = False
 
-        self.master.getModulesByType("Interface")[0]["ref"].send(
+        self.send(
             bytearray(b"\xFB\xE0")
-            + self.master.getFakeTWCID()
+            + self.controller.getFakeTWCID()
             + bytearray(self.TWCID)
             + bytearray(self.masterHeartbeatData)
         )
+
+    def send(self, data):
+        self.controller.getInterfaceModule().send(data)
 
     def receive_slave_heartbeat(self, heartbeatData):
         # Handle heartbeat message received from real slave TWC.
@@ -664,7 +733,7 @@ class Gen2TWC:
         if numCarsCharging > 0:
             desiredAmpsOffered -= sum(
                 slaveTWC.reportedAmpsActual
-                for slaveTWC in self.master.getSlaveTWCs()
+                for slaveTWC in self.controller.getSlaveTWCs()
                 if slaveTWC.TWCID != self.TWCID
             )
             flex = self.master.getAllowedFlex() / numCarsCharging
@@ -1039,8 +1108,8 @@ class Gen2TWC:
                 [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
             )
 
-        if len(self.master.getMasterHeartbeatOverride()) >= 7:
-            self.masterHeartbeatData = self.master.getMasterHeartbeatOverride()
+        if len(self.controller.getMasterHeartbeatOverride()) >= 7:
+            self.masterHeartbeatData = self.controller.getMasterHeartbeatOverride()
 
         if logger.getEffectiveLevel() <= logging.INFO:
             self.print_status(heartbeatData)
@@ -1167,3 +1236,23 @@ class Gen2TWC:
         if lastVehicle != None:
             return lastVehicle
         return None
+
+    def stopCharging(self):
+        self.send(
+            bytearray(b"\xFC\xB2")
+            + self.controller.getMasterTWCID()
+            + self.TWCID
+            + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+        )
+
+    def startCharging(self):
+        self.send(
+            bytearray(b"\xFC\xB1")
+            + self.controller.getMasterTWCID()
+            + self.TWCID
+            + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+        )                
+
+    def snapHistoryData(self):
+        self.historyNumSamples = 0
+        return self.historyAvgAmps
