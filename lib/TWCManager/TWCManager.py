@@ -433,20 +433,14 @@ def update_statuses():
                 extra=logExtra,
             )
 
+        # NOTE: conwatts currently can not be < 0, but as this might
+        # change in the future, e.g. for certain EMS scenarios, let's
+        # keep the check below, just in case
         nominalOffer = master.convertWattsToAmps(
-            genwatts
-            + (
-                chgwatts
-                if (config["config"]["subtractChargerLoad"] and conwatts == 0)
+            genwatts - conwatts
+            + ( chgwatts
+                if (config["config"]["subtractChargerLoad"] and conwatts >= 0)
                 else 0
-            )
-            - (
-                conwatts
-                - (
-                    chgwatts
-                    if (config["config"]["subtractChargerLoad"] and conwatts > 0)
-                    else 0
-                )
             )
         )
         if abs(maxamps - nominalOffer) > 0.005:
@@ -454,16 +448,26 @@ def update_statuses():
             logger.debug(
                 f"Offering {maxampsDisplay} instead of {nominalOfferDisplay} to compensate for inexact current draw"
             )
-            conwatts = genwatts - master.convertAmpsToWatts(maxamps)
+            conwatts = genwatts - master.convertAmpsToWatts(maxamps) \
+                + ( chgwatts
+                    if (config["config"]["subtractChargerLoad"] and conwatts >= 0)
+                    else 0
+                )
         generation = f"{master.convertWattsToAmps(genwatts):.2f}A"
         consumption = f"{master.convertWattsToAmps(conwatts):.2f}A"
-        logger.info(
-            "Limiting charging to %s - %s = %s.",
-            generation,
-            consumption,
-            maxampsDisplay,
-            extra={"colored": "magenta"},
-        )
+        utilization = f"{master.convertWattsToAmps(chgwatts):.2f}A"
+        if (config["config"]["subtractChargerLoad"]):
+            logger.info(
+                "Limiting charging to %s - (%s - %s) = %s.",
+                generation, consumption, utilization, maxampsDisplay,
+                extra={"colored": "magenta"},
+            )
+        else:
+            logger.info(
+                "Limiting charging to %s - %s = %s.",
+                generation, consumption, maxampsDisplay,
+                extra={"colored": "magenta"},
+            )
 
     else:
         # For all other modes, simply show the Amps to charge at
