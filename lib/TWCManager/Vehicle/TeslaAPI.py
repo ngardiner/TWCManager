@@ -711,19 +711,22 @@ class TeslaAPI:
                                 "charging",
                                 "is_charging",
                                 "disconnected",
+                                "requested",
                             ]:
-                                # We asked the car to charge, but it responded that
-                                # it can't, either because it's reached target
-                                # charge state (reason == 'complete'), or it's
-                                # already trying to charge (reason == 'charging') or
-                                # it's not connected to a charger (reason == 'charging').
-                                # In these cases, it won't help to keep asking it to
-                                # charge, so set vehicle.stopAskingToStartCharging =
-                                # True.
+                                # We asked the car to charge, but it responded
+                                # that it can't, either because it's reached
+                                # target charge state (reason == 'complete'), or
+                                # it's already trying to charge (reason ==
+                                # 'charging' or 'requested') or it's not
+                                # connected to a charger (reason ==
+                                # 'disconnected'). In these cases, it won't help
+                                # to keep asking it to charge, so set
+                                # vehicle.stopAskingToStartCharging = True.
                                 #
-                                # Remember, this only means at least one car in the
-                                # list wants us to stop asking and we don't know
-                                # which car in the list is connected to our TWC.
+                                # Remember, this only means at least one car in
+                                # the list wants us to stop asking and we don't
+                                # know which car in the list is connected to our
+                                # TWC.
                                 logger.info(
                                     vehicle.name
                                     + " is done charging or already trying to charge or not connected to a charger."
