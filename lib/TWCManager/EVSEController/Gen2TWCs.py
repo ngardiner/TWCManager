@@ -433,7 +433,7 @@ class Gen2TWCs:
                             ) / 100
 
                             logger.info(
-                                "%.2f amp slave TWC %02X%02X is ready to link.  Sign: %s"
+                                "%.2f amp Gen2 TWC %02X%02X is ready to link.  Sign: %s"
                                 % (
                                     maxAmps,
                                     senderID[0],
@@ -456,8 +456,8 @@ class Gen2TWCs:
 
                             if senderID == self.getFakeTWCID():
                                 logger.info(
-                                    "Slave TWC %02X%02X reports same TWCID as master.  "
-                                    "Slave should resolve by changing its TWCID."
+                                    "Gen2 TWC %02X%02X reports same TWCID as master.  "
+                                    "TWC should resolve by changing its TWCID."
                                     % (senderID[0], senderID[1])
                                 )
                                 # I tested sending a linkready to a real master with the
@@ -491,7 +491,7 @@ class Gen2TWCs:
                                     slaveTWC.minAmpsTWCSupports = 6
 
                                 logger.info(
-                                    "Set slave TWC %02X%02X protocolVersion to %d, minAmpsTWCSupports to %d."
+                                    "Set TWC %02X%02X protocolVersion to %d, minAmpsTWCSupports to %d."
                                     % (
                                         senderID[0],
                                         senderID[1],
@@ -551,7 +551,7 @@ class Gen2TWCs:
                                 # hear heartbeat from a slave that's not in our list.
                                 logger.info(
                                     "ERROR: Received heartbeat message from "
-                                    "slave %02X%02X that we've not met before."
+                                    "TWC %02X%02X that we've not met before."
                                     % (senderID[0], senderID[1])
                                 )
                                 continue
@@ -567,7 +567,7 @@ class Gen2TWCs:
                                 # once so far, so it could have been corruption in the
                                 # data or an unusual case.
                                 logger.info(
-                                    "WARNING: Slave TWC %02X%02X status data: "
+                                    "WARNING: TWC %02X%02X status data: "
                                     "%s sent to unknown TWC %02X%02X."
                                     % (
                                         senderID[0],
@@ -621,7 +621,7 @@ class Gen2TWCs:
                             data = msgMatch.group(6)
 
                             logger.info(
-                                "Slave TWC %02X%02X: Delivered %d kWh, voltage per phase: (%d, %d, %d).",
+                                "TWC %02X%02X: Delivered %d kWh, voltage per phase: (%d, %d, %d).",
                                 senderID[0],
                                 senderID[1],
                                 kWh,
@@ -983,7 +983,7 @@ class Gen2TWCs:
                                 (msgMatch.group(3)[0] << 8) + msgMatch.group(3)[1]
                             ) / 100
                             logger.info(
-                                "%.2f amp slave TWC %02X%02X is ready to link.  Sign: %s"
+                                "%.2f amp Gen2 TWC %02X%02X is ready to link.  Sign: %s"
                                 % (
                                     maxAmps,
                                     senderID[0],
@@ -993,8 +993,8 @@ class Gen2TWCs:
                             )
                             if senderID == self.getFakeTWCID():
                                 logger.info(
-                                    "ERROR: Received slave heartbeat message from "
-                                    "slave %02X%02X that has the same TWCID as our fake slave."
+                                    "ERROR: Received heartbeat message from "
+                                    "TWC %02X%02X that has the same TWCID as our fake TWC."
                                     % (senderID[0], senderID[1])
                                 )
                                 continue
@@ -1014,8 +1014,8 @@ class Gen2TWCs:
 
                             if senderID == self.getFakeTWCID():
                                 logger.info(
-                                    "ERROR: Received slave heartbeat message from "
-                                    "slave %02X%02X that has the same TWCID as our fake slave."
+                                    "ERROR: Received heartbeat message from "
+                                    "TWC %02X%02X that has the same TWCID as our fake TWC."
                                     % (senderID[0], senderID[1])
                                 )
                                 continue
@@ -1337,7 +1337,7 @@ class Gen2TWCs:
         return self.knownTWCs[index]
 
     def getTWCs(self):
-        # Returns a list of all Slave TWCs
+        # Returns a list of all TWCs
         return self.knownTWCs
 
     @property
@@ -1430,19 +1430,19 @@ class Gen2TWCs:
         return int(len(self.knownTWCs))
 
     def stopCharging(self, subTWC=None):
-        # This function will loop through each of the Slave TWCs, and send them the stop command.
+        # This function will loop through each of the TWCs, and send them the stop command.
         # If the subTWC parameter is supplied, we only stop the specified TWC
         for TWC in self.getTWCs():
             if (not subTWC) or (subTWC == TWC.TWCID):
                 TWC.stopCharging()
 
     def startCharging(self):
-        # This function will loop through each of the Slave TWCs, and send them the start command.
+        # This function will loop through each of the TWCs, and send them the start command.
         for TWC in self.getTWCs():
             TWC.startCharging()
 
     def retryVINQuery(self):
-        # For each Slave TWC, check if it's been more than 60 seconds since the last
+        # For each TWC, check if it's been more than 60 seconds since the last
         # VIN query without a VIN. If so, query again.
         for slaveTWC in self.getTWCs():
             if slaveTWC.isCharging == 1:
