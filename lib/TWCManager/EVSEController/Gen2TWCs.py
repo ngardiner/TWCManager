@@ -719,7 +719,7 @@ class Gen2TWCs:
                                     master.queue_background_task(
                                         {
                                             "cmd": "checkVINEntitlement",
-                                            "subTWC": slaveTWC,
+                                            "vin": potentialVIN,
                                         }
                                     )
 

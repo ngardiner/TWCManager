@@ -182,11 +182,11 @@ class TWCMaster:
                     blnUseScheduledAmps = 1
         return blnUseScheduledAmps
 
-    def checkVINEntitlement(self, subTWC):
-        # When provided with the TWC that has had the VIN reported for a vehicle
+    def checkVINEntitlement(self, vin):
+        # When provided with the VIN reported for a vehicle,
         # we check the policy for charging and determine if it is allowed or not
 
-        if not subTWC.currentVIN:
+        if not vin:
             # No VIN supplied. We can't make any decision other than allow
             return 1
 
@@ -194,7 +194,7 @@ class TWCMaster:
             # In this mode, we allow all vehicles to charge unless they
             # are explicitly banned from charging
             if (
-                subTWC.currentVIN
+                vin
                 in self.settings["VehicleGroups"]["Deny Charging"]["Members"]
             ):
                 return 0
@@ -205,7 +205,7 @@ class TWCMaster:
             # In this mode, vehicles may only charge if they are listed
             # in the Allowed VINs list
             if (
-                subTWC.currentVIN
+                vin
                 in self.settings["VehicleGroups"]["Allow Charging"]["Members"]
             ):
                 return 1
@@ -289,6 +289,12 @@ class TWCMaster:
                     self.settings["consumptionOffset"][offsetName]["value"]
                 )
         return offset
+
+    def getEVSEbyID(self, id):
+        for evse in self.getAllEVSEs():
+            if evse.id == id:
+                return evse
+        return None
 
     def getHourResumeTrackGreenEnergy(self):
         return self.settings.get("hourResumeTrackGreenEnergy", -1)
@@ -923,6 +929,18 @@ class TWCMaster:
             logger.info("Exception raised while attempting to save settings file:")
             logger.info(str(e))
             self.lastSaveFailed = 1
+
+    def sendStopCommand(self, vin):
+        evses = self.getAllEVSEs()
+        if vin:
+            evses = [evse for evse in evses if evse.currentVIN == vin]
+        
+        for evse in evses:
+            evse.stopCharging()
+
+    def sendStartCommand(self):
+        for evse in self.getAllEVSEs():
+            evse.startCharging()
 
     def setAllowedFlex(self, amps):
         self.allowedFlex = amps if amps >= 0 else 0

@@ -230,29 +230,25 @@ def background_tasks_thread(master):
                 elif task["cmd"] == "checkVINEntitlement":
                     # The two possible arguments are task["subTWC"] which tells us
                     # which TWC to check, or task["vin"] which tells us which VIN
-                    if task.get("vin", None):
-                        task["subTWC"] = master.getTWCbyVIN(task["vin"])
+                    if not task.get("vin", None):
+                        task["vin"] = master.getEVSEbyID(task["subTWC"]).currentVIN
 
-                    if task["subTWC"]:
-                        if master.checkVINEntitlement(task["subTWC"]):
+                    if task.get("vin", None):
+                        if master.checkVINEntitlement(task["vin"]):
                             logger.info(
-                                "Vehicle %s on TWC %02X%02X is permitted to charge."
+                                "Vehicle %s is permitted to charge."
                                 % (
-                                    task["subTWC"].currentVIN,
-                                    task["subTWC"].TWCID[0],
-                                    task["subTWC"].TWCID[1],
+                                    task["vin"],
                                 )
                             )
                         else:
                             logger.info(
-                                "Vehicle %s on TWC %02X%02X is not permitted to charge. Terminating session."
+                                "Vehicle %s is not permitted to charge. Terminating session."
                                 % (
                                     task["subTWC"].currentVIN,
-                                    task["subTWC"].TWCID[0],
-                                    task["subTWC"].TWCID[1],
                                 )
                             )
-                            master.sendStopCommand(task["subTWC"].TWCID)
+                            master.sendStopCommand(task["vin"])
 
                 elif task["cmd"] == "getLifetimekWh":
                     module = master.getModuleByName("Gen2TWCs")
@@ -310,7 +306,6 @@ def check_green_energy():
     # Set max amps iff charge_amps isn't specified on the policy.
     if master.getModuleByName("Policy").policyIsGreen():
         master.setMaxAmpsToDivideAmongSlaves(master.getMaxAmpsToDivideGreenEnergy())
-
 
 def update_statuses():
 

@@ -68,7 +68,7 @@ class Gen2TWC:
     _isCharging = 0
     lastChargingStart = 0
     VINData = ["", "", ""]
-    currentVIN = ""
+    _currentVIN = ""
     lastVIN = ""
     controller = None
 
@@ -104,21 +104,21 @@ class Gen2TWC:
                 self.master.recordVehicleSessionStart(self)
         else:
             if self._isCharging:
-                    # A vehicle was previously charging and is no longer charging
-                    # Clear the VIN details for this slave and move the last
-                    # vehicle's VIN to lastVIN
-                    self.VINData = ["", "", ""]
-                    if self.currentVIN:
-                        self.lastVIN = self.currentVIN
-                    self.currentVIN = ""
-                    self.master.updateVINStatus()
+                # A vehicle was previously charging and is no longer charging
+                # Clear the VIN details for this slave and move the last
+                # vehicle's VIN to lastVIN
+                self.VINData = ["", "", ""]
+                if self._currentVIN:
+                    self.lastVIN = self._currentVIN
+                self._currentVIN = ""
+                self.master.updateVINStatus()
 
-                    # Stop querying for Vehicle VIN
-                    self.lastVINQuery = 0
-                    self.vinQueryAttempt = 0
+                # Stop querying for Vehicle VIN
+                self.lastVINQuery = 0
+                self.vinQueryAttempt = 0
 
-                    # Close off the current charging session
-                    self.master.recordVehicleSessionEnd(self)
+                # Close off the current charging session
+                self.master.recordVehicleSessionEnd(self)
             self._isCharging = 0
             self.lastChargingStart = 0
 
@@ -134,7 +134,11 @@ class Gen2TWC:
 
     @property
     def ID(self):
-        return self.TWCID
+        return "TWC-%02X%02X" % (self.TWCID[0], self.TWCID[1])
+
+    @property
+    def currentVIN(self):
+        return self._currentVIN
 
     def __init__(self, TWCID, maxAmps, config, master, controller):
         self.config = config
@@ -1227,7 +1231,7 @@ class Gen2TWC:
         currentVehicle = None
         lastVehicle = None
         for vehicle in self.master.getModuleByName("TeslaAPI").getCarApiVehicles():
-            if self.currentVIN == vehicle.VIN:
+            if self._currentVIN == vehicle.VIN:
                 currentVehicle = vehicle
             if self.lastVIN == vehicle.VIN:
                 lastVehicle = vehicle
@@ -1251,7 +1255,7 @@ class Gen2TWC:
             + self.controller.getMasterTWCID()
             + self.TWCID
             + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-        )                
+        )
 
     def snapHistoryData(self):
         self.historyNumSamples = 0
