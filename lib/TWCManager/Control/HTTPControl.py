@@ -375,7 +375,7 @@ def CreateHTTPHandlerClass(master):
                 }
 
                 avgCurrent = 0
-                for slave in master.getSlaveTWCs():
+                for slave in master.getAllEVSEs():
                     avgCurrent += slave.historyAvgAmps
                 data[endTime.isoformat(timespec="seconds")] = master.convertAmpsToWatts(
                     avgCurrent

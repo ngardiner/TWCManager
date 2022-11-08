@@ -161,7 +161,7 @@ class Gen2TWCs:
                                         "Stop sending them heartbeat messages."
                                         % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
                                     )
-                                    master.deleteSlaveTWC(slaveTWC.TWCID)
+                                    self.deleteTWC(slaveTWC.TWCID)
                                 else:
                                     slaveTWC.send_master_heartbeat()
 

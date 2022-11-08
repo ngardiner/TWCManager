@@ -394,7 +394,7 @@ class Gen2TWC:
 
         self.send(
             bytearray(b"\xFD\xE0")
-            + self.self.controller.getFakeTWCID()
+            + self.controller.getFakeTWCID()
             + bytearray(masterID)
             + bytearray(self.master.slaveHeartbeatData)
         )
@@ -737,7 +737,7 @@ class Gen2TWC:
         if numCarsCharging > 0:
             desiredAmpsOffered -= sum(
                 slaveTWC.reportedAmpsActual
-                for slaveTWC in self.controller.getSlaveTWCs()
+                for slaveTWC in self.master.getAllEVSEs()
                 if slaveTWC.TWCID != self.TWCID
             )
             flex = self.master.getAllowedFlex() / numCarsCharging
