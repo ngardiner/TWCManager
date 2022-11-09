@@ -14,11 +14,12 @@ logger = logging.getLogger("\u26FD Serial")
 
 class Gen2TWCs:
 
-    __master = None
-    __config = {}
+    master = None
+    config = {}
     status = False
     stopEvent = None
     thread = None
+    name = "Gen2TWCs"
 
     masterTWCID = ""
     TWCID = None
@@ -44,16 +45,16 @@ class Gen2TWCs:
     slaveSign = bytearray(b"\x77")
 
     def __init__(self, master):
-        self.__master = master
+        self.master = master
 
-        self.__config = master.config
-        self.__configConfig = self.__config.get("config", {})
-        self.__configTWCs = self.__config.get("controller", {}).get("Gen2TWCs", {})
+        self.config = master.config
+        self.configConfig = self.config.get("config", {})
+        self.configTWCs = self.config.get("controller", {}).get("Gen2TWCs", {})
 
-        self.TWCID = self.__master.TWCID
+        self.TWCID = self.master.TWCID
 
-        if "enabled" in self.__configTWCs:
-            self.status = self.__configTWCs["enabled"]
+        if "enabled" in self.configTWCs:
+            self.status = self.configTWCs["enabled"]
         else:
             # Backward-compatible default; assume TWCs enabled if there's
             # a running serial interface
@@ -61,7 +62,7 @@ class Gen2TWCs:
 
         # Unload if this module is disabled or misconfigured
         if not self.status:
-            self.__master.releaseModule("lib.TWCManager.EVSEController", "Gen2TWCs")
+            self.master.releaseModule("lib.TWCManager.EVSEController", "Gen2TWCs")
             return None
 
         self.stopEvent = threading.Event()
@@ -90,7 +91,7 @@ class Gen2TWCs:
         timeTo0Aafter06 = 0
         timeToRaise2A = 0
 
-        fakeMaster = self.__configConfig["fakeMaster"]
+        fakeMaster = self.configConfig["fakeMaster"]
 
         logger.info(
             "TWC Manager starting as fake %s with id %02X%02X and sign %02X"
@@ -140,15 +141,10 @@ class Gen2TWCs:
                         if time.time() - self.getTimeLastTx() >= 1.0:
                             # It's been about a second since our last heartbeat.
                             if self.countTWCs() > 0:
-                                slaveTWC = self.getTWC(
-                                    idxSlaveToSendNextHeartbeat
-                                )
-                                if (
-                                    time.time() - slaveTWC.timeLastRx
-                                    > self.__config.get("interfaces", {})
-                                    .get("RS485", {})
-                                    .get("slaveTimeout", 26)
-                                ):
+                                slaveTWC = self.getTWC(idxSlaveToSendNextHeartbeat)
+                                if time.time() - slaveTWC.timeLastRx > self.config.get(
+                                    "interfaces", {}
+                                ).get("RS485", {}).get("slaveTimeout", 26):
                                     # A real master stops sending heartbeats to a slave
                                     # that hasn't responded for ~26 seconds. It may
                                     # still send the slave a heartbeat every once in
@@ -197,9 +193,7 @@ class Gen2TWCs:
 
                 # If it has been more than 2 minutes since the last kWh value,
                 # queue the command to request it from slaves
-                if fakeMaster == 1 and (
-                    (time.time() - self.lastkWhMessage) > (60 * 2)
-                ):
+                if fakeMaster == 1 and ((time.time() - self.lastkWhMessage) > (60 * 2)):
                     self.lastkWhMessage = time.time()
                     master.queue_background_task({"cmd": "getLifetimekWh"})
 
@@ -506,7 +500,7 @@ class Gen2TWCs:
                             if slaveTWC.wiringMaxAmps > maxAmps:
                                 logger.info(
                                     "\n\n!!! DANGER DANGER !!!\nYou have set wiringMaxAmpsPerTWC to "
-                                    + str(self.__configConfig["wiringMaxAmpsPerTWC"])
+                                    + str(self.configConfig["wiringMaxAmpsPerTWC"])
                                     + " which is greater than the max "
                                     + str(maxAmps)
                                     + " amps your charger says it can handle.  "
@@ -1309,7 +1303,7 @@ class Gen2TWCs:
         self.getInterfaceModule().send(msg)
 
     def getInterfaceModule(self):
-        return self.__master.getModulesByType("Interface")[0]["ref"]
+        return self.master.getModulesByType("Interface")[0]["ref"]
 
     def getLifetimekWh(self):
 
@@ -1344,6 +1338,19 @@ class Gen2TWCs:
     def allEVSEs(self):
         # Public version of getTWCs()
         return self.knownTWCs
+
+    @property
+    def maxPower(self):
+        return self.master.convertAmpsToWatts(self.configConfig["wiringMaxAmpsAllTWCs"])
+    
+    def getSpareAmps(self):
+        # Returns the number of amps that are not being used by any TWC
+        # This is used to determine how many amps can be allocated to a new TWC
+        # that has just been discovered
+        spareAmps = self.configConfig["wiringMaxAmpsAllTWCs"]
+        for twc in self.knownTWCs:
+            spareAmps -= twc.reportedAmpsActual
+        return spareAmps
 
     def getSlaveSign(self):
         return self.slaveSign
@@ -1385,7 +1392,7 @@ class Gen2TWCs:
         except KeyError:
             pass
 
-        newTWC = Gen2TWC(newTWCID, maxAmps, self.__config, self.__master, self)
+        newTWC = Gen2TWC(newTWCID, maxAmps, self.config, self.master, self)
         self.knownTWCsByID[newTWCID] = newTWC
         self.knownTWCs.append(newTWC)
 

@@ -236,17 +236,12 @@ def background_tasks_thread(master):
                     if task.get("vin", None):
                         if master.checkVINEntitlement(task["vin"]):
                             logger.info(
-                                "Vehicle %s is permitted to charge."
-                                % (
-                                    task["vin"],
-                                )
+                                "Vehicle %s is permitted to charge." % (task["vin"],)
                             )
                         else:
                             logger.info(
                                 "Vehicle %s is not permitted to charge. Terminating session."
-                                % (
-                                    task["subTWC"].currentVIN,
-                                )
+                                % (task["subTWC"].currentVIN,)
                             )
                             master.sendStopCommand(task["vin"])
 
@@ -306,6 +301,7 @@ def check_green_energy():
     # Set max amps iff charge_amps isn't specified on the policy.
     if master.getModuleByName("Policy").policyIsGreen():
         master.setMaxAmpsToDivideAmongSlaves(master.getMaxAmpsToDivideGreenEnergy())
+
 
 def update_statuses():
 
@@ -583,16 +579,124 @@ backgroundTasksThread.start()
 
 master.queue_background_task({"cmd": "sunrise"}, 30)
 
+lastDistributePower = 0
 
 while True:
     try:
         time.sleep(0.025)
-        # TODO - check if Distribute Power needs to run
-
 
         # See if there's any message from the web interface.
         if master.getModuleByName("WebIPCControl"):
             master.getModuleByName("WebIPCControl").processIPC()
+
+        # TODO - check if Distribute Power needs to run
+        if time.time() - lastDistributePower < 5:
+            # We don't need to run Distribute Power yet
+            continue
+        lastDistributePower = time.time()
+
+        # Determine our charging policy. This is the policy engine of the
+        # TWCManager application. Using defined rules, we can determine how we
+        # charge.
+        #
+        # Note that policy may re-evaluate less often than Distribute Power
+        # runs.
+        master.getModuleByName("Policy").setChargingPerPolicy()
+
+        # Distribute power to the EVSEs
+        allEVSEs = master.getAllEVSEs()
+
+        # If we have no EVSEs, we can't distribute power
+        if len(allEVSEs) == 0:
+            continue
+
+        #
+        # TODO: Merge duplicate EVSEs
+        #
+
+        #
+        # TODO: Sort EVSEs by priority
+        #
+
+        # First, determine the ideal power distribution
+        #
+        # This is available power distributed evenly between all EVSEs which
+        # are or would like to draw power.
+
+        maxPower = master.getMaxPowerToDivideAmongSlaves()
+        availableFlex = master.getAllowedFlex()
+        useFlexToStart = config["config"].get("useFlexAmpsToStartCharge", False)
+
+        EVSEsCharging = [evse for evse in allEVSEs if evse.isCharging]
+        EVSEsChargingOrWantToCharge = [
+            evse for evse in allEVSEs if evse.isCharging or evse.wantsToCharge
+        ]
+        if len(EVSEsChargingOrWantToCharge) == 0:
+            # No EVSEs want power, so have it ready in case that changes.
+            EVSEsChargingOrWantToCharge = allEVSEs
+
+        # If we can afford to give all EVSEs minimum power, keep the ones that
+        # want to charge
+        EVSEsGetPower = []
+        if maxPower + (availableFlex if useFlexToStart else 0) >= sum(
+            [evse.minPower for evse in EVSEsChargingOrWantToCharge]
+        ):
+            EVSEsGetPower = EVSEsChargingOrWantToCharge
+        else:
+            EVSEsGetPower = EVSEsCharging
+
+        # If we can't afford to give all EVSEs minimum power, we have to ignore
+        # some even though they'd like to charge.
+        while (
+            len(EVSEsGetPower) > 0
+            and sum(evse.minPower for evse in EVSEsGetPower) > maxPower
+        ):
+            if sum(evse.minPower for evse in EVSEsGetPower) - availableFlex <= maxPower:
+                # We can afford to give remaining EVSEs minimum power with flex
+                maxPower = sum(evse.minPower for evse in EVSEsGetPower)
+                availableFlex = 0
+            else:
+                EVSEsGetPower.pop(-1)
+
+        countPowerRecipients = len(EVSEsGetPower)
+
+        #
+        # TODO: Order allEVSEs by max power, lowest to highest
+        #
+
+        # Find controller limits
+        modules = master.getModulesByType("EVSEController")
+        moduleLimits = {}
+        moduleCounts = {}
+        for module in modules:
+            moduleLimits[module["name"]] = module["ref"].maxPower
+            moduleCounts[module["name"]] = sum(1 for evse in EVSEsGetPower if evse.controller.name == module["name"])
+
+        # Now, distribute power to EVSEs
+        currentPower = sum(evse.currentPower for evse in allEVSEs)
+        for evse in sorted(allEVSEs, key=lambda evse: (evse.maxPower, evse.currentPower)):
+            if evse in EVSEsGetPower:
+                # This EVSE gets power, so give it the target power modulo some
+                # safety adjustments
+                amountToOffer = min([
+                    maxPower / countPowerRecipients,
+                    evse.maxPower,
+                    moduleLimits[evse.controller.name] / moduleCounts[evse.controller.name]])
+                evse.setTargetPower(
+                    max([0,
+                        min([
+                            amountToOffer,
+                            maxPower - currentPower + evse.currentPower,
+                        ])
+                    ])
+                )
+                maxPower -= amountToOffer
+                moduleLimits[evse.controller.name] -= amountToOffer
+                moduleCounts[evse.controller.name] -= 1
+                countPowerRecipients -= 1
+            else:
+                # This EVSE doesn't get power
+                evse.setTargetPower(0)
 
     except KeyboardInterrupt:
         logger.info("Exiting after background tasks complete...")

@@ -54,6 +54,7 @@ class Gen2TWC:
 
     lastAmpsOffered = -1
     lastAmpsDesired = -1
+    targetAmps = 0
     useFlexAmpsToStartCharge = False
     timeLastAmpsOfferedChanged = 0
     timeLastAmpsDesiredFlipped = 0
@@ -140,6 +141,25 @@ class Gen2TWC:
     def currentVIN(self):
         return self._currentVIN
 
+    @property
+    def wantsToCharge(self):
+        # For TWCs, can't identify desire unless they're pulling power
+        return self.isCharging
+
+    @property
+    def maxPower(self):
+        return self.master.convertAmpsToWatts(
+            min([self.wiringMaxAmps, self.reportedAmpsMax]),
+            self.currentVoltage
+        )
+
+    @property
+    def minPower(self):
+        return self.master.convertAmpsToWatts(
+            self.minAmpsTWCSupports,
+            self.currentVoltage
+        )
+
     def __init__(self, TWCID, maxAmps, config, master, controller):
         self.config = config
         self.configConfig = self.config.get("config", {})
@@ -149,9 +169,7 @@ class Gen2TWC:
         self.controller = controller
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
-        self.useFlexAmpsToStartCharge = self.configConfig.get(
-            "useFlexAmpsToStartCharge", False
-        )
+
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
     def print_status(self, heartbeatData):
@@ -724,56 +742,11 @@ class Gen2TWC:
         if yesterday < 0:
             yesterday += 7
 
-        # Determine our charging policy. This is the policy engine of the
-        # TWCManager application. Using defined rules, we can determine how
-        # we charge.
-        self.master.getModuleByName("Policy").setChargingPerPolicy()
-
-        # Determine how many cars are charging and how many amps they're using
-        numCarsCharging = self.master.num_cars_charging_now()
-        desiredAmpsOffered = self.master.getMaxAmpsToDivideAmongSlaves()
-        flex = self.master.getAllowedFlex()
-
-        if numCarsCharging > 0:
-            desiredAmpsOffered -= sum(
-                slaveTWC.reportedAmpsActual
-                for slaveTWC in self.master.getAllEVSEs()
-                if slaveTWC.TWCID != self.TWCID
-            )
-            flex = self.master.getAllowedFlex() / numCarsCharging
-
-            # Allocate this slave a fraction of maxAmpsToDivideAmongSlaves divided
-            # by the number of cars actually charging.
-            fairShareAmps = int(
-                self.master.getMaxAmpsToDivideAmongSlaves() / numCarsCharging
-            )
-            if desiredAmpsOffered > fairShareAmps:
-                desiredAmpsOffered = fairShareAmps
-
-            logger.debug(
-                "desiredAmpsOffered TWC: "
-                + self.master.hex_str(self.TWCID)
-                + " reduced from "
-                + str(self.master.getMaxAmpsToDivideAmongSlaves())
-                + " to "
-                + str(desiredAmpsOffered)
-                + " with "
-                + str(numCarsCharging)
-                + " cars charging and flex Amps of "
-                + str(flex)
-                + "."
-            )
+        desiredAmpsOffered = self.targetAmps
 
         minAmpsToOffer = self.config["config"]["minAmpsPerTWC"]
         if self.minAmpsTWCSupports > minAmpsToOffer:
             minAmpsToOffer = self.minAmpsTWCSupports
-
-        if (
-            desiredAmpsOffered < minAmpsToOffer
-            and desiredAmpsOffered + flex >= minAmpsToOffer
-            and (self.useFlexAmpsToStartCharge or self.reportedAmpsActual >= 1.0)
-        ):
-            desiredAmpsOffered = minAmpsToOffer
 
         dampenChanges = False
         if self.master.getModuleByName("Policy").policyIsGreen():
@@ -782,99 +755,7 @@ class Gen2TWC:
         else:
             self.timeLastAmpsDesiredFlipped = 0
 
-        if desiredAmpsOffered < minAmpsToOffer:
-            logger.debug(
-                "desiredAmpsOffered: "
-                + str(desiredAmpsOffered)
-                + " < minAmpsToOffer: "
-                + str(minAmpsToOffer)
-                + " (flexAmps: "
-                + str(flex)
-                + ")"
-            )
-            if numCarsCharging > 0:
-                if (
-                    self.master.getMaxAmpsToDivideAmongSlaves() / numCarsCharging
-                    > minAmpsToOffer
-                ):
-                    # There is enough power available to give each car
-                    # minAmpsToOffer, but currently-charging cars are leaving us
-                    # less power than minAmpsToOffer to give this car.
-                    #
-                    # minAmpsToOffer is based on minAmpsPerTWC which is
-                    # user-configurable, whereas self.minAmpsTWCSupports is based on
-                    # the minimum amps TWC must be set to reliably start a car
-                    # charging.
-                    #
-                    # Unfortunately, we can't tell if a car is plugged in or wanting
-                    # to charge without offering it minAmpsTWCSupports. As the car
-                    # gradually starts to charge, we will see it using power and
-                    # tell other TWCs on the network to use less power. This could
-                    # cause the sum of power used by all TWCs to exceed
-                    # wiringMaxAmpsAllTWCs for a few seconds, but I don't think
-                    # exceeding by up to minAmpsTWCSupports for such a short period
-                    # of time will cause problems.
-                    logger.debug(
-                        "desiredAmpsOffered TWC: "
-                        + self.master.hex_str(self.TWCID)
-                        + " increased from "
-                        + str(desiredAmpsOffered)
-                        + " to "
-                        + str(self.minAmpsTWCSupports)
-                        + " (self.minAmpsTWCSupports)"
-                    )
-
-                    desiredAmpsOffered = self.minAmpsTWCSupports
-
-                else:
-                    # There is not enough power available to give each car
-                    # minAmpsToOffer, so don't offer power to any cars. Alternately,
-                    # we could charge one car at a time and switch cars
-                    # periodically, but I'm not going to try to implement that.
-                    #
-                    # Note that 5A is the lowest value you can set using the Tesla car's
-                    # main screen, so lower values might have some adverse affect on the
-                    # car. I actually tried lower values when the sun was providing
-                    # under 5A of power and found the car would occasionally set itself
-                    # to state 03 and refuse to charge until you re-plugged the charger
-                    # cable. Clicking "Start charging" in the car's UI or in the phone
-                    # app would not start charging.
-                    #
-                    # A 5A charge only delivers ~3 miles of range to the car per hour,
-                    # but it forces the car to remain "on" at a level that it wastes
-                    # some power while it's charging. The lower the amps, the more power
-                    # is wasted. This is another reason not to go below 5A.
-                    #
-                    # So if there isn't at least 5A of power available, pass 0A as the
-                    # desired value. This tells the car to stop charging and it will
-                    # enter state 03 and go to sleep. You will hear the power relay in
-                    # the TWC turn off. When desiredAmpsOffered trends above 6A again,
-                    # it tells the car there's power.
-                    # If a car is set to energy saver mode in the car's UI, the car
-                    # seems to wake every 15 mins or so (unlocking or using phone app
-                    # also wakes it) and next time it wakes, it will see there's power
-                    # and start charging. Without energy saver mode, the car should
-                    # begin charging within about 10 seconds of changing this value.
-                    logger.debug(
-                        "desiredAmpsOffered TWC: "
-                        + self.master.hex_str(self.TWCID)
-                        + " reduced to 0 from "
-                        + str(desiredAmpsOffered)
-                        + " because maxAmpsToDivideAmongSlaves "
-                        + str(self.master.getMaxAmpsToDivideAmongSlaves())
-                        + " / numCarsCharging "
-                        + str(numCarsCharging)
-                        + " < minAmpsToOffer "
-                        + str(minAmpsToOffer)
-                    )
-                    desiredAmpsOffered = 0
-
-            else:
-                # no cars are charging, and desiredAmpsOffered < minAmpsToOffer
-                # so we need to set desiredAmpsOffered to 0
-                logger.debug("no cars charging, setting desiredAmpsOffered to 0")
-                desiredAmpsOffered = 0
-        elif int(self.master.settings.get("chargeRateControl", 1)) == 2:
+        if int(self.master.settings.get("chargeRateControl", 1)) == 2:
             # Exclusive control is given to the Tesla API to control Charge Rate
             # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
 
@@ -1227,6 +1108,10 @@ class Gen2TWC:
             self.reportedAmpsActual
         ) * self.master.getRealPowerFactor(self.reportedAmpsActual)
 
+    @property
+    def currentPower(self):
+        return self.getCurrentChargerLoad()
+
     def getLastVehicle(self):
         currentVehicle = None
         lastVehicle = None
@@ -1260,3 +1145,9 @@ class Gen2TWC:
     def snapHistoryData(self):
         self.historyNumSamples = 0
         return self.historyAvgAmps
+
+    def setTargetPower(self, power):
+        targetAmps = self.master.convertWattsToAmps(power, self.currentVoltage) /  self.master.getRealPowerFactor(self.reportedAmpsActual)
+        targetAmps = min([targetAmps, self.wiringMaxAmps, self.controller.getSpareAmps() + self.reportedAmpsActual])
+        targetAmps = int(targetAmps)
+        self.targetAmps = targetAmps

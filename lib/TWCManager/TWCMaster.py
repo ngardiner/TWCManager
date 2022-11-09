@@ -212,12 +212,20 @@ class TWCMaster:
             else:
                 return 0
 
-    def convertAmpsToWatts(self, amps):
-        (voltage, phases) = self.getVoltageMeasurement()
+    def convertAmpsToWatts(self, amps, voltage=None):
+        if not voltage:
+            (voltage, phases) = self.getVoltageMeasurement()
+        else:
+            phases = sum(1 for p in voltage if p > 0)
+            voltage = sum(voltage) / max([phases, 1])
         return phases * voltage * amps
 
-    def convertWattsToAmps(self, watts):
-        (voltage, phases) = self.getVoltageMeasurement()
+    def convertWattsToAmps(self, watts, voltage=None):
+        if not voltage:
+            (voltage, phases) = self.getVoltageMeasurement()
+        else:
+            phases = max([sum(1 for p in voltage if p > 0), 1])
+            voltage = max([sum(voltage) / max([phases, 1]), 1])
         return watts / (phases * voltage)
 
     def delete_background_task(self, task):
@@ -307,6 +315,10 @@ class TWCMaster:
             return self.maxAmpsToDivideAmongSlaves
         else:
             return 0
+
+    # For now, this is an adapter to contain the Amps-to-Watts conversion
+    def getMaxPowerToDivideAmongSlaves(self):
+        return self.convertAmpsToWatts(self.getMaxAmpsToDivideAmongSlaves())
 
     def getModuleByName(self, name):
         module = self.modules.get(name, None)
