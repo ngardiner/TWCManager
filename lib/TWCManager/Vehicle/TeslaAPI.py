@@ -535,6 +535,15 @@ class TeslaAPI:
             self.__apiVerifier,
         )
 
+    def is_location_within_radius(self, lat, lon, radius):
+        if (
+            abs(self.master.getHomeLatLon()[0] - lat) > radius
+            or abs(self.master.getHomeLatLon()[1] - lon) > radius
+        ):
+            return False
+
+        return True
+
     def is_location_home(self, lat, lon):
         if self.master.getHomeLatLon()[0] == 10000:
             logger.info(
@@ -571,13 +580,10 @@ class TeslaAPI:
         atHomeRadius = (
             1 / 364488.888 * float(self.config["config"].get("atHomeRadius", 10560))
         )
-        if (
-            abs(self.master.getHomeLatLon()[0] - lat) > atHomeRadius
-            or abs(self.master.getHomeLatLon()[1] - lon) > atHomeRadius
-        ):
-            return False
+        return self.is_location_within_radius(lat, lon, atHomeRadius)
 
-        return True
+    def is_far_from_home(self, lat, lon):
+        return not self.is_location_within_radius(lat, lon, 1.4)
 
     def car_api_charge(self, charge):
         # Do not call this function directly.  Call by using background thread:
@@ -873,7 +879,7 @@ class TeslaAPI:
                 and (
                     limit != lastApplied
                     or checkDeparture
-                    or (vehicle.update_location(cacheTime=3600) and not vehicle.atHome)
+                    or (vehicle.update_location() and not vehicle.atHome)
                 )
             ) or (not wasAtHome and checkArrival):
                 vehicle.stopTryingToApplyLimit = False
@@ -1313,6 +1319,7 @@ class CarApiVehicle:
     lastVehicleStatusTime = 0
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
+    statusDeferral = 0
 
     batteryLevel = 10000
     chargeLimit = -1
@@ -1320,6 +1327,11 @@ class CarApiVehicle:
     lon = 10000
     atHome = False
     timeToFullCharge = 0.0
+    availableCurrent = 0
+    actualCurrent = 0
+    phases = 0
+    voltage = 0
+    chargingState = "Unknown"
 
     # Sync values are updated by an external module such as TeslaMate
     syncTimestamp = 0
@@ -1484,9 +1496,9 @@ class CarApiVehicle:
             self.carapi.updateCarApiLastErrorTime(self)
             return (False, None)
 
-    def update_location(self, cacheTime=300):
+    def update_location(self):
         if self.syncSource == "TeslaAPI":
-            return self.update_vehicle_data(cacheTime)
+            return self.update_vehicle_data()
 
         else:
             self.lat = self.syncLat
@@ -1495,7 +1507,7 @@ class CarApiVehicle:
 
             return True
 
-    def update_vehicle_data(self, cacheTime=300):
+    def update_vehicle_data(self):
         url = (
             "/".join([self.carapi.getCarApiBaseURL(), str(self.VIN), "vehicle_data"])
             + "?endpoints="
@@ -1506,7 +1518,7 @@ class CarApiVehicle:
 
         now = time.time()
 
-        if now - self.lastVehicleStatusTime < cacheTime:
+        if now < self.statusDeferral:
             return True
 
         try:
@@ -1527,8 +1539,28 @@ class CarApiVehicle:
             self.timeToFullCharge = charge["time_to_full_charge"]
 
             self.name = response["vehicle_state"]["vehicle_name"] or self.name
+            self.availableCurrent = charge["charger_pilot_current"]
+            self.actualCurrent = charge["charger_actual_current"]
+            self.phases = charge["charger_phases"]
+            self.voltage = charge["charger_voltage"]
+            self.chargingState = charge["charging_state"]
 
             self.lastVehicleStatusTime = now
+
+            if not self.atHome:
+                if self.carapi.is_far_from_home(self.lat, self.lon):
+                    # Car is further from home than can be driven in an
+                    # hour; no point re-checking sooner than that.
+                    self.statusDeferral = now + 3600
+                elif response["shift_state"] == "P" or response["shift_state"] is None:
+                    # Car is not driving, so we can check infrequently. May
+                    # be able to sleep.
+                    self.statusDeferral = now + 1800
+                else:
+                    self.statusDeferral = now + 60
+            else:
+                # Car is at home; need to watch charging
+                self.statusDeferral = now + 60
 
         return result
 
