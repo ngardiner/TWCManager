@@ -660,10 +660,6 @@ while True:
 
         countPowerRecipients = len(EVSEsGetPower)
 
-        #
-        # TODO: Order allEVSEs by max power, lowest to highest
-        #
-
         # Find controller limits
         modules = master.getModulesByType("EVSEController")
         moduleLimits = {}
@@ -679,17 +675,30 @@ while True:
                 # This EVSE gets power, so give it the target power modulo some
                 # safety adjustments
                 amountToOffer = min([
+                    # A fair share of the remaining power
                     maxPower / countPowerRecipients,
+                    # ...unless that's more than it can use...
                     evse.maxPower,
+                    # ...or more than the controller can handle.
                     moduleLimits[evse.controller.name] / moduleCounts[evse.controller.name]])
-                evse.setTargetPower(
-                    max([0,
-                        min([
-                            amountToOffer,
-                            maxPower - currentPower + evse.currentPower,
-                        ])
+
+                # Ensure we wait for other EVSEs to back off before increasing
+                # this one too much.
+                instantOffer = max([0,
+                    min([
+                        amountToOffer,
+                        maxPower - currentPower + evse.currentPower,
                     ])
-                )
+                ])
+
+                if evse.isReadOnly:
+                    # This EVSE is read-only, so we can't change its power
+                    # settings.  We can only respond to what it's doing.
+                    amountToOffer = evse.currentPower
+                else:
+                    evse.setTargetPower(instantOffer)
+
+                # If this couldn't take the full amount, others can get more.
                 maxPower -= amountToOffer
                 moduleLimits[evse.controller.name] -= amountToOffer
                 moduleCounts[evse.controller.name] -= 1
