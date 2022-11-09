@@ -186,46 +186,31 @@ class TeslaMateVehicle:
 
         if topic[0] == self.__mqtt_prefix and topic[1] == "cars":
 
-            if topic[3] == "battery_level":
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].batteryLevel = int(payload)
-                    self.vehicles[topic[2]].lastChargeStatusTime = time.time()
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
+            events = {
+                "battery_level": ["batteryLevel", lambda a: int(a), "lastChargeStatusTime"],
+                "charge_limit_soc": ["chargeLimit", lambda a: int(a), "lastChargeStatusTime"],
+                "latitude": ["syncLat", lambda a: float(a), None],
+                "longitude": ["syncLon", lambda a: float(a), None],
+                "state": ["syncState", lambda a: a, None],
+                "time_to_full_charge": ["timeToFullCharge", lambda a: int(float(a)), "lastChargeStatusTime"],
+                "charger_pilot_current": [ "availableCurrent", lambda a: int(a), "lastChargeStatusTime"],
+                "charger_actual_current": [ "actualCurrent", lambda a: int(a), "lastChargeStatusTime"],
+                "charger_phases": [ "phases", lambda a: int(a), "lastChargeStatusTime"],
+                "charger_voltage": [ "voltage", lambda a: int(a), "lastChargeStatusTime"],
+                "charging_state": [ "chargingState", lambda a: int(a), "lastChargeStatusTime"],
+            }
 
-            elif topic[3] == "charge_limit_soc":
+            if topic[3] in events:
                 if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].chargeLimit = int(payload)
-                    self.vehicles[topic[2]].lastChargeStatusTime = time.time()
+                    self.vehicles[topic[2]].setattr(events[topic[3]][0], events[topic[3]][1](payload))
+                    if events[topic[3]][2]:
+                        self.vehicles[topic[2]].setattr(events[topic[3]][2], time.time())
                     self.vehicles[topic[2]].syncTimestamp = time.time()
 
             elif topic[3] == "display_name":
                 # We can map the car ID in TeslaMate to the vehicle
                 # in the Tesla API module
                 self.updateVehicles(topic[2], payload)
-
-            elif topic[3] == "latitude":
-
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].syncLat = float(payload)
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
-
-            elif topic[3] == "longitude":
-
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].syncLon = float(payload)
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
-
-            elif topic[3] == "state":
-
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].syncState = payload
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
-
-            elif topic[3] == "time_to_full_charge":
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].timeToFullCharge = int(float(payload))
-                    self.vehicles[topic[2]].lastChargeStatusTime = time.time()
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
 
             else:
                 pass

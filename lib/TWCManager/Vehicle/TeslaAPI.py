@@ -513,6 +513,15 @@ class TeslaAPI:
             self.__apiVerifier,
         )
 
+    def is_location_within_radius(self, lat, lon, radius):
+        if (
+            abs(self.master.getHomeLatLon()[0] - lat) > radius
+            or abs(self.master.getHomeLatLon()[1] - lon) > radius
+        ):
+            return False
+
+        return True
+
     def is_location_home(self, lat, lon):
 
         if self.master.getHomeLatLon()[0] == 10000:
@@ -550,13 +559,10 @@ class TeslaAPI:
         atHomeRadius = (
             1 / 364488.888 * float(self.config["config"].get("atHomeRadius", 10560))
         )
-        if (
-            abs(self.master.getHomeLatLon()[0] - lat) > atHomeRadius
-            or abs(self.master.getHomeLatLon()[1] - lon) > atHomeRadius
-        ):
-            return False
+        return self.is_location_within_radius(lat, lon, atHomeRadius)
 
-        return True
+    def is_far_from_home(self, lat, lon):
+        return not self.is_location_within_radius(lat, lon, 1.4)
 
     def car_api_charge(self, charge):
         # Do not call this function directly.  Call by using background thread:
@@ -839,7 +845,7 @@ class TeslaAPI:
                 and (
                     limit != lastApplied
                     or checkDeparture
-                    or (vehicle.update_location(cacheTime=3600) and not vehicle.atHome)
+                    or (vehicle.update_location() and not vehicle.atHome)
                 )
             ) or (not wasAtHome and checkArrival):
                 vehicle.stopTryingToApplyLimit = False
@@ -1218,6 +1224,7 @@ class CarApiVehicle:
     lastChargeStatusTime = 0
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
+    driveStatusDeferral = 60
 
     batteryLevel = 10000
     chargeLimit = -1
@@ -1225,6 +1232,11 @@ class CarApiVehicle:
     lon = 10000
     atHome = False
     timeToFullCharge = 0.0
+    availableCurrent = 0
+    actualCurrent = 0
+    phases = 0
+    voltage = 0
+    chargingState = "Unknown"
 
     # Sync values are updated by an external module such as TeslaMate
     syncTimestamp = 0
@@ -1379,7 +1391,7 @@ class CarApiVehicle:
             self.carapi.updateCarApiLastErrorTime(self)
             return (False, None)
 
-    def update_location(self, cacheTime=60):
+    def update_location(self):
 
         if self.syncSource == "TeslaAPI":
             url = "https://owner-api.teslamotors.com/api/1/vehicles/"
@@ -1387,7 +1399,7 @@ class CarApiVehicle:
 
             now = time.time()
 
-            if now - self.lastDriveStatusTime < cacheTime:
+            if now < self.driveStatusDeferral:
                 return True
 
             try:
@@ -1401,6 +1413,22 @@ class CarApiVehicle:
                 self.lat = response["latitude"]
                 self.lon = response["longitude"]
                 self.atHome = self.carapi.is_location_home(self.lat, self.lon)
+
+                if not self.atHome:
+                    if self.carapi.is_far_from_home(self.lat, self.lon):
+                        # Car is further from home than can be driven in an
+                        # hour; no point re-checking sooner than that.
+                        self.driveStatusDeferral = now + 3600
+                    elif response["shift_state"] == "P" or response["shift_state"] is None:
+                        # Car is not driving, so we can check infrequently. May
+                        # be able to sleep.
+                        self.driveStatusDeferral = now + 1800
+                    else:
+                        self.driveStatusDeferral = now + 60
+                else:
+                    # Car is at home; check for departure infrequently to permit
+                    # sleep.
+                    self.driveStatusDeferral = now + 3600
 
             return result
 
@@ -1432,6 +1460,11 @@ class CarApiVehicle:
 
             if result:
                 self.lastChargeStatusTime = time.time()
+                self.availableCurrent = response["charger_pilot_current"]
+                self.actualCurrent = response["charger_actual_current"]
+                self.phases = response["charger_phases"]
+                self.voltage = response["charger_voltage"]
+                self.chargingState = response["charging_state"]
                 self.chargeLimit = response["charge_limit_soc"]
                 self.batteryLevel = response["battery_level"]
                 self.timeToFullCharge = response["time_to_full_charge"]
