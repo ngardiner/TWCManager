@@ -278,7 +278,7 @@ def CreateHTTPHandlerClass(master):
                     "reportedAmpsActual": 0,
                 }
                 for slaveTWC in master.getAllEVSEs():
-                    TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+                    TWCID = slaveTWC.ID
                     data[TWCID] = {
                         "currentVIN": slaveTWC.currentVIN,
                         "lastAmpsOffered": round(slaveTWC.lastAmpsOffered, 2),

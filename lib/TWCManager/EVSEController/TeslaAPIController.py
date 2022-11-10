@@ -3,7 +3,7 @@
 
 from TWCManager.EVSEInstance.TeslaAPIEVSE import TeslaAPIEVSE
 import logging
-import time
+import sys
 
 logger = logging.getLogger("\u26FD API")
 
@@ -24,23 +24,23 @@ class TeslaAPIController:
 
         self.config = master.config
         self.configConfig = self.config.get("config", {})
-        self.configTWCs = self.config.get("controller", {}).get(
+        self.configAPI = self.config.get("controller", {}).get(
             "TeslaAPIController", {}
         )
 
-        if "enabled" in self.configTWCs:
-            self.status = self.configTWCs["enabled"]
+        if "enabled" in self.configAPI:
+            self.status = self.configAPI["enabled"]
         else:
             # Backward-compatible default; assume enabled if API control is
             # configured for either legacy setting
             self.status = (
-                int(self.settings.get("chargeStopMode", 1)) == 1
+                int(self.master.settings.get("chargeStopMode", 1)) == 1
                 or int(self.master.settings.get("chargeRateControl", 1)) == 2
             )
 
         # Unload if this module is disabled or misconfigured
         if not self.status:
-            self.master.releaseModule("lib.TWCManager.EVSEController", "Gen2TWCs")
+            self.master.releaseModule("lib.TWCManager.EVSEController", "TeslaAPIController")
             return None
 
     def getCarsAtHome(self):
@@ -54,7 +54,7 @@ class TeslaAPIController:
 
     @property
     def allEVSEs(self):
-        return [TeslaAPIEVSE(vehicle, self.master) for vehicle in self.getCarsAtHome()]
+        return [TeslaAPIEVSE(vehicle, self, self.master) for vehicle in self.getCarsAtHome()]
 
     def startAllCharging(self):
         for evse in self.allEVSEs:
@@ -63,3 +63,10 @@ class TeslaAPIController:
     def stopAllCharging(self):
         for evse in self.allEVSEs:
             evse.stopCharging()
+
+    @property
+    def maxPower(self):
+        return sys.maxsize
+
+    def stop(self):
+        pass

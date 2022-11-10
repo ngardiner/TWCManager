@@ -21,7 +21,7 @@ class Gen2TWCs:
     thread = None
     name = "Gen2TWCs"
 
-    masterTWCID = ""
+    masterTWCID = b""
     TWCID = None
 
     slaveHeartbeatData = bytearray(

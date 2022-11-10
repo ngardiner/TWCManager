@@ -564,7 +564,7 @@ class TeslaAPI:
     def is_far_from_home(self, lat, lon):
         return not self.is_location_within_radius(lat, lon, 1.4)
 
-    def car_api_charge(self, charge):
+    def car_api_charge(self, charge, vin=None):
         # Do not call this function directly.  Call by using background thread:
         # queue_background_task({'cmd':'charge', 'charge':<True/False>})
 
@@ -576,9 +576,9 @@ class TeslaAPI:
             for vehicle in self.getCarApiVehicles():
                 vehicle.stopAskingToStartCharging = False
 
-        if now - self.getLastStartOrStopChargeTime() < 60:
+        if vin and now - self.getLastStartOrStopChargeTime() < 60:
 
-            # Don't start or stop more often than once a minute
+            # Don't globally start or stop more often than once a minute
             logger.log(
                 logging.DEBUG2,
                 "car_api_charge return because not long enough since last carApiLastStartOrStopChargeTime",
@@ -597,6 +597,9 @@ class TeslaAPI:
         logger.log(logging.INFO8, "startOrStop is set to " + str(startOrStop))
 
         for vehicle in self.getCarApiVehicles():
+            if vin and vin != vehicle.vin:
+                continue
+
             if charge and vehicle.stopAskingToStartCharging:
                 logger.log(
                     logging.INFO8,

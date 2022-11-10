@@ -636,8 +636,8 @@ class TWCMaster:
 
         total = sum(
             [
-                (slave.voltsPhaseA + slave.voltsPhaseB + slave.voltsPhaseC)
-                for slave in evsesWithVoltage
+                sum(evse.currentVoltage)
+                for evse in evsesWithVoltage
             ]
         )
 

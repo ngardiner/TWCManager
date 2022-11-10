@@ -39,8 +39,8 @@ import datetime
 import yaml
 import threading
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.EVSEInstance.MergedEVSE import MergedEVSE
 import requests
-from enum import Enum
 
 
 logging.addLevelName(19, "INFO2")
@@ -109,6 +109,7 @@ modules_available = [
     "Status.HASSStatus",
     "Status.MQTTStatus",
     "EVSEController.Gen2TWCs",
+    "EVSEController.TeslaAPIController",
 ]
 
 # Enable support for Python Visual Studio Debugger
@@ -208,7 +209,7 @@ def background_tasks_thread(master):
                     # car_api_charge does nothing if it's been under 60 secs since it
                     # was last used so we shouldn't have to worry about calling this
                     # too frequently.
-                    carapi.car_api_charge(task["charge"])
+                    carapi.car_api_charge(task["charge"], task.get("vin", None))
                 elif task["cmd"] == "carApiEmailPassword":
                     carapi.resetCarApiLastErrorTime()
                     carapi.car_api_available(task["email"], task["password"])
@@ -610,9 +611,19 @@ while True:
         if len(allEVSEs) == 0:
             continue
 
-        #
-        # TODO: Merge duplicate EVSEs
-        #
+        # EVSEs with the same VIN are the same EVSE
+        vinLookup = {}
+        for evse in allEVSEs:
+            vin = evse.currentVIN
+            if vin:
+                if vin not in vinLookup:
+                    vinLookup[vin] = []
+                vinLookup[vin].append(evse)
+        for vin, evseList in vinLookup.items():
+            if len(evseList) > 1:
+                for evse in evseList:
+                    allEVSEs.remove(evse)
+                allEVSEs.append(MergedEVSE(*evseList))
 
         #
         # TODO: Sort EVSEs by priority
@@ -666,22 +677,26 @@ while True:
         moduleCounts = {}
         for module in modules:
             moduleLimits[module["name"]] = module["ref"].maxPower
-            moduleCounts[module["name"]] = sum(1 for evse in EVSEsGetPower if evse.controller.name == module["name"])
+            moduleCounts[module["name"]] = sum(1 for evse in EVSEsGetPower if module["name"] in evse.controllers)
 
         # Now, distribute power to EVSEs
         currentPower = sum(evse.currentPower for evse in allEVSEs)
         for evse in sorted(allEVSEs, key=lambda evse: (evse.maxPower, evse.currentPower)):
+            instantOffer = 0
             if evse in EVSEsGetPower:
                 # This EVSE gets power, so give it the target power modulo some
                 # safety adjustments
-                amountToOffer = min([
+                limits = [
                     # A fair share of the remaining power
                     maxPower / countPowerRecipients,
                     # ...unless that's more than it can use...
                     evse.maxPower,
+                ]
+                for controller in evse.controllers:
                     # ...or more than the controller can handle.
-                    moduleLimits[evse.controller.name] / moduleCounts[evse.controller.name]])
+                    limits.append(moduleLimits[controller] / moduleCounts[controller])
 
+                amountToOffer = min(limits)
                 # Ensure we wait for other EVSEs to back off before increasing
                 # this one too much.
                 instantOffer = max([0,
@@ -695,17 +710,23 @@ while True:
                     # This EVSE is read-only, so we can't change its power
                     # settings.  We can only respond to what it's doing.
                     amountToOffer = evse.currentPower
-                else:
-                    evse.setTargetPower(instantOffer)
 
                 # If this couldn't take the full amount, others can get more.
                 maxPower -= amountToOffer
-                moduleLimits[evse.controller.name] -= amountToOffer
-                moduleCounts[evse.controller.name] -= 1
+                for controller in evse.controllers:
+                    moduleLimits[controller] -= amountToOffer
+                    moduleCounts[controller] -= 1
                 countPowerRecipients -= 1
-            else:
-                # This EVSE doesn't get power
-                evse.setTargetPower(0)
+
+            if not evse.isReadOnly:
+                evse.setTargetPower(instantOffer)
+                if instantOffer > 0 and evse.currentPower == 0:
+                    # Notify the EVSE to start charging
+                    evse.startCharging()
+                if instantOffer == 0 and evse.currentPower > 0:
+                    # Notify the EVSE to stop charging
+                    evse.stopCharging()
+                # TODO - 60 second delay needs to be hit in all paths.
 
     except KeyboardInterrupt:
         logger.info("Exiting after background tasks complete...")

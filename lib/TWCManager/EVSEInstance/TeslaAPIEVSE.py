@@ -2,10 +2,17 @@ class TeslaAPIEVSE:
 
     master = None
     vehicle = None
+    controller = None
+    config = None
+    configConfig = None
 
-    def __init__(self, vehicle, master):
+    def __init__(self, vehicle, controller, master):
         self.master = master
         self.vehicle = vehicle
+        self.controller = controller
+
+        self.config = master.config
+        self.configConfig = self.config.get("config", {})
 
     @property
     def isReadOnly(self):
@@ -23,26 +30,36 @@ class TeslaAPIEVSE:
     def wantsToCharge(self):
         return self.isCharging or self.vehicle.chargingState == "Stopped"
 
+    def convertAmpsToWatts(self, amps):
+        return self.master.convertAmpsToWatts(amps, self.currentVoltage) * self.master.getRealPowerFactor(amps)
+
+    def convertWattsToAmps(self, watts):
+        return self.master.convertWattsToAmps(watts, self.currentVoltage)
+
     @property
     def minPower(self):
-        return self.master.convertAmpsToWatts(5, self.currentVoltage)
+        return self.convertAmpsToWatts(5)
 
     @property
     def maxPower(self):
-        return self.master.convertAmpsToWatts(self.currentAmps, self.currentVoltage)
+        self.vehicle.update_charge()
+        return self.convertAmpsToWatts(self.vehicle.availableCurrent)
 
     @property
     def currentPower(self):
-        return self.master.convertAmpsToWatts(self.currentAmps, self.currentVoltage)
+        return self.convertAmpsToWatts(self.currentAmps)
 
     @property
     def currentAmps(self):
+        self.vehicle.update_charge()
         return self.vehicle.actualCurrent
 
     @property
     def currentVoltage(self):
-        voltage = self.vehicle.voltage
-        phases = self.vehicle.phases if self.vehicle.phases else 1
+        self.vehicle.update_charge()
+        # Car will report ~2V when charging is not in progress
+        voltage = self.vehicle.voltage if self.vehicle.voltage > 90 else self.configConfig.get("defaultVoltage", 240)
+        phases = self.vehicle.phases if self.vehicle.phases else self.configConfig.get("numberOfPhases", 1)
         
         return [
             voltage,
@@ -58,4 +75,25 @@ class TeslaAPIEVSE:
     def currentVIN(self):
         return self.vehicle.VIN
 
+    @property
+    def controllers(self):
+        return [self.controller.name]
 
+    def startCharging(self):
+        self.queue_background_task({"cmd": "charge", "charge": True, "vin": self.vehicle.VIN})
+        self.master.getModuleByName("Policy").clearOverride()
+
+    def stopCharging(self):
+        self.queue_background_task({"cmd": "charge", "charge": False, "vin": self.vehicle.VIN})
+
+    def setTargetPower(self, power):
+        desiredAmpsOffered = self.convertWattsToAmps(power)
+
+        self.master.getModuleByName("TeslaAPI").setChargeRate(
+            int(desiredAmpsOffered), self.vehicle
+        )
+
+    def snapHistoryData(self):
+        # Not sure this can be reliably implemented without requesting
+        # charge data from the Tesla API after the fact.
+        return 0

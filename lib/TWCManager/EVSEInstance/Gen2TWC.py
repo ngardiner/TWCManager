@@ -131,7 +131,17 @@ class Gen2TWC:
 
     @property
     def currentVoltage(self):
-        return (self.voltsPhaseA, self.voltsPhaseB, self.voltsPhaseC)
+        if self.voltsPhaseA:
+            return (self.voltsPhaseA, self.voltsPhaseB, self.voltsPhaseC)
+        else:
+            voltage = self.configConfig.get("defaultVoltage", 240)
+            phases = self.configConfig.get("numberOfPhases", 1)
+
+            return (
+                voltage,
+                voltage if phases > 1 else 0,
+                voltage if phases > 2 else 0,
+            )
 
     @property
     def ID(self):
@@ -139,7 +149,9 @@ class Gen2TWC:
 
     @property
     def currentVIN(self):
-        return self._currentVIN
+        if self._currentVIN:
+            return self._currentVIN
+        return self.lastVIN
 
     @property
     def wantsToCharge(self):
@@ -149,7 +161,7 @@ class Gen2TWC:
     @property
     def maxPower(self):
         return self.master.convertAmpsToWatts(
-            min([self.wiringMaxAmps, self.reportedAmpsMax]),
+            min([self.wiringMaxAmps, self.maxAmps]),
             self.currentVoltage
         )
 
@@ -159,6 +171,10 @@ class Gen2TWC:
             self.minAmpsTWCSupports,
             self.currentVoltage
         )
+    
+    @property
+    def controllers(self):
+        return [self.controller.name]
 
     def __init__(self, TWCID, maxAmps, config, master, controller):
         self.config = config
@@ -761,31 +777,6 @@ class Gen2TWC:
 
             # Call the Tesla API to set the charge rate for vehicle connected to this TWC
             # TODO: Identify vehicle
-            if (
-                int(desiredAmpsOffered) == self.__lastAPIAmpsValue
-                and (
-                    self.__lastAPIAmpsRepeat > 50 or self.__lastAPIAmpsRepeat % 10 != 0
-                )
-            ) or self.__lastAPIAmpsRequest > time.time() - 15:
-                # Unfortunately some API requests just don't result in the desired amperage being set, so we allow one in 10
-                # to be repeated up to 50, as long as none had been sent in the last 15 seconds
-                # This results in a small number of repeat requests sent to the API each time
-                # we change the target charge rate, but adds stability to the process
-                self.__lastAPIAmpsRepeat += 1
-            else:
-                self.__lastAPIAmpsRequest = time.time()
-                self.__lastAPIAmpsRepeat = 0
-                self.__lastAPIAmpsValue = int(desiredAmpsOffered)
-
-                # Determine vehicle to control
-                targetVehicle = (
-                    None if self.getLastVehicle() is None else self.getLastVehicle()
-                )
-
-                self.master.getModuleByName("TeslaAPI").setChargeRate(
-                    int(desiredAmpsOffered), targetVehicle
-                )
-
             desiredAmpsOffered = int(self.configConfig.get("wiringMaxAmpsPerTWC", 6))
 
         else:
@@ -1129,7 +1120,7 @@ class Gen2TWC:
     def stopCharging(self):
         self.send(
             bytearray(b"\xFC\xB2")
-            + self.controller.getMasterTWCID()
+            + self.controller.TWCID
             + self.TWCID
             + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
         )
@@ -1137,7 +1128,7 @@ class Gen2TWC:
     def startCharging(self):
         self.send(
             bytearray(b"\xFC\xB1")
-            + self.controller.getMasterTWCID()
+            + self.controller.TWCID
             + self.TWCID
             + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
         )
