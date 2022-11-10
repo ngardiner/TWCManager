@@ -641,7 +641,7 @@ class Gen2TWCs:
                             master.queue_background_task({"cmd": "getLifetimekWh"})
 
                             # Update this detail for the Slave TWC
-                            master.updateSlaveLifetime(
+                            self.updateLifetime(
                                 senderID, kWh, voltsPhaseA, voltsPhaseB, voltsPhaseC
                             )
 
@@ -1107,7 +1107,7 @@ class Gen2TWCs:
                             voltsPhaseC = (data[8] << 8) + data[9]
 
                             # Update this detail for the Slave TWC
-                            master.updateSlaveLifetime(
+                            self.updateLifetime(
                                 senderID,
                                 kWhCounter,
                                 voltsPhaseA,
@@ -1476,3 +1476,10 @@ class Gen2TWCs:
 
     def getFakeTWCID(self):
         return self.TWCID
+
+    def updateLifetime(self, sender, kWh, vPA, vPB, vPC):
+        for twc in self.getTWCs():
+            if twc.TWCID == sender:
+                twc.setLifetimekWh(kWh)
+                twc.setVoltage(vPA, vPB, vPC)
+

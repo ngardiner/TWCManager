@@ -1164,12 +1164,6 @@ class TWCMaster:
 
         return configloc
 
-    def updateSlaveLifetime(self, sender, kWh, vPA, vPB, vPC):
-        for slaveTWC in self.getAllEVSEs():
-            if slaveTWC.TWCID == sender:
-                slaveTWC.setLifetimekWh(kWh)
-                slaveTWC.setVoltage(vPA, vPB, vPC)
-
     def updateVINStatus(self):
         # update current and last VIN IDs for each Slave to all Status modules
         for slaveTWC in self.getAllEVSEs():
