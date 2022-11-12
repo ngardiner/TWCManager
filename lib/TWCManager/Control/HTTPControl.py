@@ -277,7 +277,7 @@ def CreateHTTPHandlerClass(master):
                     "maxAmps": 0,
                     "reportedAmpsActual": 0,
                 }
-                for slaveTWC in master.getAllEVSEs():
+                for slaveTWC in master.getModuleByName("Gen2TWCs").getTWCs():
                     TWCID = slaveTWC.ID
                     data[TWCID] = {
                         "currentVIN": slaveTWC.currentVIN,
