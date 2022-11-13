@@ -597,7 +597,7 @@ class TeslaAPI:
         logger.log(logging.INFO8, "startOrStop is set to " + str(startOrStop))
 
         for vehicle in self.getCarApiVehicles():
-            if vin and vin != vehicle.vin:
+            if vin and vin != vehicle.VIN:
                 continue
 
             if charge and vehicle.stopAskingToStartCharging:

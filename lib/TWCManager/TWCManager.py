@@ -251,7 +251,9 @@ def background_tasks_thread(master):
                     if module:
                         module.getLifetimekWh()
                 elif task["cmd"] == "getVehicleVIN":
-                    master.getVehicleVIN(task["slaveTWC"], task["vinPart"])
+                    module = master.getModuleByName("Gen2TWCs")
+                    if module:
+                        module.getVehicleVIN(task["slaveTWC"], task["vinPart"])
                 elif task["cmd"] == "snapHistoryData":
                     master.snapHistoryData()
                 elif task["cmd"] == "updateStatus":
@@ -623,7 +625,7 @@ while True:
             if len(evseList) > 1:
                 for evse in evseList:
                     allEVSEs.remove(evse)
-                allEVSEs.append(MergedEVSE(*evseList))
+                allEVSEs.append(MergedEVSE(master, *evseList))
 
         #
         # TODO: Sort EVSEs by priority

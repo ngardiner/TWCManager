@@ -80,7 +80,7 @@ class TeslaAPIEVSE:
         return [self.controller.name]
 
     def startCharging(self):
-        self.queue_background_task({"cmd": "charge", "charge": True, "vin": self.vehicle.VIN})
+        self.master.queue_background_task({"cmd": "charge", "charge": True, "vin": self.vehicle.VIN})
         self.master.getModuleByName("Policy").clearOverride()
 
     def stopCharging(self):

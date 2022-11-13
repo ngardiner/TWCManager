@@ -1,8 +1,10 @@
 class MergedEVSE:
 
     evses = []
+    master = None
 
-    def __init__(self, *evses):
+    def __init__(self, master, *evses):
+        self.master = master
         self.evses = evses
 
     @property
@@ -97,4 +99,7 @@ class MergedEVSE:
 
     @property
     def controllers(self):
-        return [evse.controller for evse in self.evses]
+        result = []
+        for evse in self.evses:
+            result.extend(evse.controllers)
+        return result

@@ -696,7 +696,7 @@ class Gen2TWCs:
                                 # Ensure we have a valid VIN
                                 if len(potentialVIN) == 17 or len(potentialVIN) == 0:
                                     # Record Vehicle VIN
-                                    slaveTWC.currentVIN = potentialVIN
+                                    slaveTWC._currentVIN = potentialVIN
 
                                     # Clear VIN retry timer
                                     slaveTWC.lastVINQuery = 0
