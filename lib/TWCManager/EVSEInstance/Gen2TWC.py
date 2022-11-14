@@ -176,6 +176,10 @@ class Gen2TWC:
     def controllers(self):
         return [self.controller.name]
 
+    @property
+    def lastPowerChange(self):
+        return self.timeReportedAmpsActualChangedSignificantly
+
     def __init__(self, TWCID, maxAmps, config, master, controller):
         self.config = config
         self.configConfig = self.config.get("config", {})
@@ -553,8 +557,6 @@ class Gen2TWC:
 
                 if (
                     now - self.timeLastAmpsOfferedChanged < 60
-                    or now - self.timeReportedAmpsActualChangedSignificantly
-                    < self.startStopDelay
                     or self.reportedAmpsActual < 4.0
                 ):
                     # We want to tell the car to stop charging. However, it's

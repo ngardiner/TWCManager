@@ -583,6 +583,7 @@ backgroundTasksThread.start()
 master.queue_background_task({"cmd": "sunrise"}, 30)
 
 lastDistributePower = 0
+startStopDelay = config["config"].get("startStopDelay", 60)
 
 while True:
     try:
@@ -721,6 +722,15 @@ while True:
                 countPowerRecipients -= 1
 
             if not evse.isReadOnly:
+                # If EVSE has changed recently, don't cut it off yet.
+                #
+                # This both allows for the possibility that power might become
+                # available, and also allows the VIN query to detect that we
+                # can use the API instead of disconnecting power abruptly.
+                minPower = 0
+                if evse.currentPower > 0 and time.time() - evse.lastPowerChange < startStopDelay:
+                    minPower = evse.minPower
+                instantOffer = max([minPower, instantOffer])
                 evse.setTargetPower(instantOffer)
                 if instantOffer > 0 and evse.currentPower == 0:
                     # Notify the EVSE to start charging
@@ -728,7 +738,6 @@ while True:
                 if instantOffer == 0 and evse.currentPower > 0:
                     # Notify the EVSE to stop charging
                     evse.stopCharging()
-                # TODO - 60 second delay needs to be hit in all paths.
 
     except KeyboardInterrupt:
         logger.info("Exiting after background tasks complete...")

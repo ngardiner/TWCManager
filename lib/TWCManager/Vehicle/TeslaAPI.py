@@ -1237,6 +1237,7 @@ class CarApiVehicle:
     timeToFullCharge = 0.0
     availableCurrent = 0
     actualCurrent = 0
+    lastCurrentChangeTime = 0
     phases = 0
     voltage = 0
     chargingState = "Unknown"
@@ -1461,6 +1462,7 @@ class CarApiVehicle:
                 logger.log(logging.error, "Got None response from get_car_api()")
                 return False
 
+            prevActualCurrent = self.actualCurrent
             if result:
                 self.lastChargeStatusTime = time.time()
                 self.availableCurrent = response["charger_pilot_current"]
@@ -1471,6 +1473,9 @@ class CarApiVehicle:
                 self.chargeLimit = response["charge_limit_soc"]
                 self.batteryLevel = response["battery_level"]
                 self.timeToFullCharge = response["time_to_full_charge"]
+
+            if self.actualCurrent != prevActualCurrent:
+                self.lastCurrentChangeTime = time.time()
 
             return result
 
