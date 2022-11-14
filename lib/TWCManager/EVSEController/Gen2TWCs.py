@@ -1459,7 +1459,7 @@ class Gen2TWCs:
                     and not slaveTWC.currentVIN
                 ):
                     if (time.time() - slaveTWC.lastVINQuery) >= 60:
-                        self.queue_background_task(
+                        self.master.queue_background_task(
                             {
                                 "cmd": "getVehicleVIN",
                                 "slaveTWC": slaveTWC.TWCID,
@@ -1483,3 +1483,5 @@ class Gen2TWCs:
                 twc.setLifetimekWh(kWh)
                 twc.setVoltage(vPA, vPB, vPC)
 
+    def getTotalAmpsInUse(self):
+        return sum(twc.reportedAmpsActual for twc in self.getTWCs())

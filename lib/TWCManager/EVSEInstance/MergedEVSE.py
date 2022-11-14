@@ -75,7 +75,7 @@ class MergedEVSE:
             evse.startCharging()
 
     def stopCharging(self):
-        stopMode = int(self.settings.get("chargeStopMode", 1))
+        stopMode = int(self.master.settings.get("chargeStopMode", 1))
         if stopMode == 1:
             # Prefer Tesla API
             for evse in self.evses:

@@ -1008,7 +1008,7 @@ class Gen2TWC:
             # Set totalAmpsAllTWCs to the total amps all TWCs are actually using
             # minus amps this TWC is using, plus amps this TWC wants to use.
             totalAmpsAllTWCs = (
-                self.master.getTotalAmpsInUse()
+                self.controller.getTotalAmpsInUse()
                 - self.reportedAmpsActual
                 + self.lastAmpsOffered
             )
@@ -1019,7 +1019,7 @@ class Gen2TWC:
                 # up to wiringMaxAmpsAllTWCs.
                 self.lastAmpsOffered = int(
                     self.config["config"]["wiringMaxAmpsAllTWCs"]
-                    - (self.master.getTotalAmpsInUse() - self.reportedAmpsActual)
+                    - (self.controller.getTotalAmpsInUse() - self.reportedAmpsActual)
                 )
 
                 if self.lastAmpsOffered < self.minAmpsTWCSupports:

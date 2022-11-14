@@ -84,7 +84,7 @@ class TeslaAPIEVSE:
         self.master.getModuleByName("Policy").clearOverride()
 
     def stopCharging(self):
-        self.queue_background_task({"cmd": "charge", "charge": False, "vin": self.vehicle.VIN})
+        self.master.queue_background_task({"cmd": "charge", "charge": False, "vin": self.vehicle.VIN})
 
     def setTargetPower(self, power):
         desiredAmpsOffered = self.convertWattsToAmps(power)
