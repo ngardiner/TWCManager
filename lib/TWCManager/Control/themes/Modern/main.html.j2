@@ -167,7 +167,7 @@ wcmanager/settings.json and try saving your settings again.</b>
     <div class="row border-bottom mb-4">
         <h1 class="display-4">Charge Point{% if (slaves|count > 1) %}s{% endif %}</h1>
     </div>
-    {% set slaves = master.getAllEVSEs() %}
+    {% set slaves = master.getModuleByName("Gen2TWCs").getTWCs() %}
     {% for charger in slaves %}
     {% set twcid = '%02x%02x' % (charger.TWCID[0], charger.TWCID[1]) %}
 
