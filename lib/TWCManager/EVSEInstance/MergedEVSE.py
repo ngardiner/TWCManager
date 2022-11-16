@@ -105,5 +105,5 @@ class MergedEVSE:
         return result
 
     @property
-    def lastPowerChanged(self):
-        return max([evse.lastPowerChanged for evse in self.evses])
+    def lastPowerChange(self):
+        return max([evse.lastPowerChange for evse in self.evses])

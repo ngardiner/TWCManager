@@ -97,3 +97,7 @@ class TeslaAPIEVSE:
         # Not sure this can be reliably implemented without requesting
         # charge data from the Tesla API after the fact.
         return 0
+
+    @property
+    def lastPowerChange(self):
+        return self.vehicle.lastCurrentChangeTime
