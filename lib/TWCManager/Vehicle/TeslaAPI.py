@@ -1328,7 +1328,8 @@ class CarApiVehicle:
     atHome = False
     timeToFullCharge = 0.0
     availableCurrent = 0
-    actualCurrent = 0
+    _actualCurrent = 0
+    lastCurrentChangeTime = 0
     phases = 0
     voltage = 0
     chargingState = "Unknown"
@@ -1570,6 +1571,16 @@ class CarApiVehicle:
 
         else:
             return True
+
+    @property
+    def actualCurrent(self):
+        return self._actualCurrent
+
+    @actualCurrent.setter
+    def actualCurrent(self, value):
+        if value != self._actualCurrent:
+            self._actualCurrent = value
+            self.lastCurrentChangeTime = time.time()
 
     def apply_charge_limit(self, limit):
         if self.stopTryingToApplyLimit:
