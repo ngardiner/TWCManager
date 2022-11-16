@@ -6,6 +6,8 @@ class TeslaAPIEVSE:
     config = None
     configConfig = None
 
+    minAmps = 5
+
     def __init__(self, vehicle, controller, master):
         self.master = master
         self.vehicle = vehicle
@@ -38,7 +40,7 @@ class TeslaAPIEVSE:
 
     @property
     def minPower(self):
-        return self.convertAmpsToWatts(5)
+        return self.convertAmpsToWatts(self.minAmps)
 
     @property
     def maxPower(self):
@@ -87,7 +89,7 @@ class TeslaAPIEVSE:
         self.master.queue_background_task({"cmd": "charge", "charge": False, "vin": self.vehicle.VIN})
 
     def setTargetPower(self, power):
-        desiredAmpsOffered = self.convertWattsToAmps(power)
+        desiredAmpsOffered = max([self.convertWattsToAmps(power), self.minAmps])
 
         self.master.getModuleByName("TeslaAPI").setChargeRate(
             int(desiredAmpsOffered), self.vehicle
