@@ -33,7 +33,9 @@ class TeslaAPIEVSE:
         return self.isCharging or self.vehicle.chargingState == "Stopped"
 
     def convertAmpsToWatts(self, amps):
-        return self.master.convertAmpsToWatts(amps, self.currentVoltage) * self.master.getRealPowerFactor(amps)
+        return self.master.convertAmpsToWatts(
+            amps, self.currentVoltage
+        ) * self.master.getRealPowerFactor(amps)
 
     def convertWattsToAmps(self, watts):
         return self.master.convertWattsToAmps(watts, self.currentVoltage)
@@ -60,9 +62,17 @@ class TeslaAPIEVSE:
     def currentVoltage(self):
         self.vehicle.update_charge()
         # Car will report ~2V when charging is not in progress
-        voltage = self.vehicle.voltage if self.vehicle.voltage > 90 else self.configConfig.get("defaultVoltage", 240)
-        phases = self.vehicle.phases if self.vehicle.phases else self.configConfig.get("numberOfPhases", 1)
-        
+        voltage = (
+            self.vehicle.voltage
+            if self.vehicle.voltage > 90
+            else self.configConfig.get("defaultVoltage", 240)
+        )
+        phases = (
+            self.vehicle.phases
+            if self.vehicle.phases
+            else self.configConfig.get("numberOfPhases", 1)
+        )
+
         return [
             voltage,
             voltage if phases > 1 else 0,
@@ -82,11 +92,15 @@ class TeslaAPIEVSE:
         return [self.controller.name]
 
     def startCharging(self):
-        self.master.queue_background_task({"cmd": "charge", "charge": True, "vin": self.vehicle.VIN})
+        self.master.queue_background_task(
+            {"cmd": "charge", "charge": True, "vin": self.vehicle.VIN}
+        )
         self.master.getModuleByName("Policy").clearOverride()
 
     def stopCharging(self):
-        self.master.queue_background_task({"cmd": "charge", "charge": False, "vin": self.vehicle.VIN})
+        self.master.queue_background_task(
+            {"cmd": "charge", "charge": False, "vin": self.vehicle.VIN}
+        )
 
     def setTargetPower(self, power):
         desiredAmpsOffered = max([self.convertWattsToAmps(power), self.minAmps])

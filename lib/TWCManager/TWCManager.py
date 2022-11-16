@@ -680,11 +680,15 @@ while True:
         moduleCounts = {}
         for module in modules:
             moduleLimits[module["name"]] = module["ref"].maxPower
-            moduleCounts[module["name"]] = sum(1 for evse in EVSEsGetPower if module["name"] in evse.controllers)
+            moduleCounts[module["name"]] = sum(
+                1 for evse in EVSEsGetPower if module["name"] in evse.controllers
+            )
 
         # Now, distribute power to EVSEs
         currentPower = sum(evse.currentPower for evse in allEVSEs)
-        for evse in sorted(allEVSEs, key=lambda evse: (evse.maxPower, evse.currentPower)):
+        for evse in sorted(
+            allEVSEs, key=lambda evse: (evse.maxPower, evse.currentPower)
+        ):
             instantOffer = 0
             if evse in EVSEsGetPower:
                 # This EVSE gets power, so give it the target power modulo some
@@ -702,12 +706,17 @@ while True:
                 amountToOffer = min(limits)
                 # Ensure we wait for other EVSEs to back off before increasing
                 # this one too much.
-                instantOffer = max([0,
-                    min([
-                        amountToOffer,
-                        maxPower - currentPower + evse.currentPower,
-                    ])
-                ])
+                instantOffer = max(
+                    [
+                        0,
+                        min(
+                            [
+                                amountToOffer,
+                                maxPower - currentPower + evse.currentPower,
+                            ]
+                        ),
+                    ]
+                )
 
                 if evse.isReadOnly:
                     # This EVSE is read-only, so we can't change its power
@@ -727,9 +736,12 @@ while True:
                 # This both allows for the possibility that power might become
                 # available, and also allows the VIN query to detect that we
                 # can use the API instead of disconnecting power abruptly.
-                minPower = 0
-                if evse.currentPower > 0 and time.time() - evse.lastPowerChange < startStopDelay:
-                    minPower = evse.minPower
+                minPower = (
+                    evse.minPower
+                    if evse.currentPower > 0
+                    and time.time() - evse.lastPowerChange < startStopDelay
+                    else 0
+                )
                 instantOffer = max([minPower, instantOffer])
                 evse.setTargetPower(instantOffer)
                 if instantOffer > 0 and evse.currentPower == 0:

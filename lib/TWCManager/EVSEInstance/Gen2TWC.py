@@ -161,17 +161,15 @@ class Gen2TWC:
     @property
     def maxPower(self):
         return self.master.convertAmpsToWatts(
-            min([self.wiringMaxAmps, self.maxAmps]),
-            self.currentVoltage
+            min([self.wiringMaxAmps, self.maxAmps]), self.currentVoltage
         )
 
     @property
     def minPower(self):
         return self.master.convertAmpsToWatts(
-            self.minAmpsTWCSupports,
-            self.currentVoltage
+            self.minAmpsTWCSupports, self.currentVoltage
         )
-    
+
     @property
     def controllers(self):
         return [self.controller.name]
@@ -1140,7 +1138,15 @@ class Gen2TWC:
         return self.historyAvgAmps
 
     def setTargetPower(self, power):
-        targetAmps = self.master.convertWattsToAmps(power, self.currentVoltage) /  self.master.getRealPowerFactor(self.reportedAmpsActual)
-        targetAmps = min([targetAmps, self.wiringMaxAmps, self.controller.getSpareAmps() + self.reportedAmpsActual])
+        targetAmps = self.master.convertWattsToAmps(
+            power, self.currentVoltage
+        ) / self.master.getRealPowerFactor(self.reportedAmpsActual)
+        targetAmps = min(
+            [
+                targetAmps,
+                self.wiringMaxAmps,
+                self.controller.getSpareAmps() + self.reportedAmpsActual,
+            ]
+        )
         targetAmps = int(targetAmps)
         self.targetAmps = targetAmps

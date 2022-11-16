@@ -69,7 +69,7 @@ class MergedEVSE:
             return localEvses
         else:
             return self.evses
-        
+
     def startCharging(self):
         for evse in self.evses:
             evse.startCharging()
@@ -90,7 +90,9 @@ class MergedEVSE:
     def setTargetPower(self, power):
         chargeRateControl = self.master.settings.get("chargeRateControl", 1)
         for evse in self.evses:
-            if (chargeRateControl == 1 and evse.isLocal) or (chargeRateControl == 2 and not evse.isLocal):
+            if (chargeRateControl == 1 and evse.isLocal) or (
+                chargeRateControl == 2 and not evse.isLocal
+            ):
                 # Send the preferred amount to the selected EVSE(s)
                 evse.setTargetPower(power)
             else:

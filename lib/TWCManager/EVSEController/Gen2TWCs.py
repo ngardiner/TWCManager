@@ -1342,7 +1342,7 @@ class Gen2TWCs:
     @property
     def maxPower(self):
         return self.master.convertAmpsToWatts(self.configConfig["wiringMaxAmpsAllTWCs"])
-    
+
     def getSpareAmps(self):
         # Returns the number of amps that are not being used by any TWC
         # This is used to determine how many amps can be allocated to a new TWC

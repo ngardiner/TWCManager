@@ -24,9 +24,7 @@ class TeslaAPIController:
 
         self.config = master.config
         self.configConfig = self.config.get("config", {})
-        self.configAPI = self.config.get("controller", {}).get(
-            "TeslaAPIController", {}
-        )
+        self.configAPI = self.config.get("controller", {}).get("TeslaAPIController", {})
 
         if "enabled" in self.configAPI:
             self.status = self.configAPI["enabled"]
@@ -40,7 +38,9 @@ class TeslaAPIController:
 
         # Unload if this module is disabled or misconfigured
         if not self.status:
-            self.master.releaseModule("lib.TWCManager.EVSEController", "TeslaAPIController")
+            self.master.releaseModule(
+                "lib.TWCManager.EVSEController", "TeslaAPIController"
+            )
             return None
 
     def getCarsAtHome(self):
@@ -54,7 +54,9 @@ class TeslaAPIController:
 
     @property
     def allEVSEs(self):
-        return [TeslaAPIEVSE(vehicle, self, self.master) for vehicle in self.getCarsAtHome()]
+        return [
+            TeslaAPIEVSE(vehicle, self, self.master) for vehicle in self.getCarsAtHome()
+        ]
 
     def startAllCharging(self):
         for evse in self.allEVSEs:
