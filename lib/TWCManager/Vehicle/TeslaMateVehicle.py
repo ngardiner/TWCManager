@@ -200,10 +200,6 @@ class TeslaMateVehicle:
                 "charging_state": [ "chargingState", lambda a: int(a), "lastChargeStatusTime"],
             }
 
-            if topic[3] == "charger_actual_current":
-                if int(payload) != self.vehicles[topic[2]].actualCurrent:
-                    self.vehicles[topic[2]].lastCurrentChangeTime = time.time()
-
             if topic[3] in events:
                 if self.vehicles.get(topic[2], None):
                     self.vehicles[topic[2]].setattr(events[topic[3]][0], events[topic[3]][1](payload))
