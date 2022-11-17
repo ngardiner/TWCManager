@@ -116,4 +116,9 @@ class MergedEVSE:
     def snapHistoryData(self):
         # Not sure this can be reliably implemented without requesting
         # charge data from the Tesla API after the fact.
-        return self.preferLocal()[0].snapHistoryData()
+        selectedEVSE = self.preferLocal()[0]
+        result = selectedEVSE.snapHistoryData()
+        for evse in self.evses:
+            if evse != selectedEVSE:
+                evse.snapHistoryData()
+        return result
