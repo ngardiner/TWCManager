@@ -39,7 +39,6 @@ import datetime
 import yaml
 import threading
 from TWCManager.TWCMaster import TWCMaster
-from TWCManager.EVSEInstance.MergedEVSE import MergedEVSE
 import requests
 
 
@@ -608,29 +607,11 @@ while True:
         master.getModuleByName("Policy").setChargingPerPolicy()
 
         # Distribute power to the EVSEs
-        allEVSEs = master.getAllEVSEs()
+        allEVSEs = master.getDedupedEVSEs()
 
         # If we have no EVSEs, we can't distribute power
         if len(allEVSEs) == 0:
             continue
-
-        # EVSEs with the same VIN are the same EVSE
-        vinLookup = {}
-        for evse in allEVSEs:
-            vin = evse.currentVIN
-            if vin:
-                if vin not in vinLookup:
-                    vinLookup[vin] = []
-                vinLookup[vin].append(evse)
-        for vin, evseList in vinLookup.items():
-            if len(evseList) > 1:
-                for evse in evseList:
-                    allEVSEs.remove(evse)
-                allEVSEs.append(MergedEVSE(master, *evseList))
-
-        #
-        # TODO: Sort EVSEs by priority
-        #
 
         # First, determine the ideal power distribution
         #

@@ -63,6 +63,9 @@ class MergedEVSE:
     def currentVIN(self):
         return self.preferLocal()[0].currentVIN
 
+    def lastVIN(self):
+        return self.preferLocal()[0].lastVIN
+
     def preferLocal(self):
         localEvses = [evse for evse in self.evses if evse.isLocal]
         if len(localEvses) > 0:

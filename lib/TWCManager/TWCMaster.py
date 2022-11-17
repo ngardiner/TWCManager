@@ -11,6 +11,7 @@ import time
 import math
 import requests
 import bisect
+from TWCManager.EVSEInstance.MergedEVSE import MergedEVSE
 
 logger = logging.getLogger("\u26FD Master")
 
@@ -193,10 +194,7 @@ class TWCMaster:
         if str(self.settings.get("chargeAuthorizationMode", "1")) == "1":
             # In this mode, we allow all vehicles to charge unless they
             # are explicitly banned from charging
-            if (
-                vin
-                in self.settings["VehicleGroups"]["Deny Charging"]["Members"]
-            ):
+            if vin in self.settings["VehicleGroups"]["Deny Charging"]["Members"]:
                 return 0
             else:
                 return 1
@@ -204,10 +202,7 @@ class TWCMaster:
         elif str(self.settings.get("chargeAuthorizationMode", "1")) == "2":
             # In this mode, vehicles may only charge if they are listed
             # in the Allowed VINs list
-            if (
-                vin
-                in self.settings["VehicleGroups"]["Allow Charging"]["Members"]
-            ):
+            if vin in self.settings["VehicleGroups"]["Allow Charging"]["Members"]:
                 return 1
             else:
                 return 0
@@ -487,7 +482,7 @@ class TWCMaster:
 
     def getTWCbyVIN(self, vin):
         twc = None
-        for slaveTWC in self.getAllEVSEs():
+        for slaveTWC in self.getDedupedEVSEs():
             if slaveTWC.currentVIN == vin:
                 twc = slaveTWC
         return twc
@@ -589,9 +584,14 @@ class TWCMaster:
         return (False, None, None)
 
     def getTotalAmpsInUse(self):
-        # Returns the number of amps currently in use by all TWCs
+        # Returns the number of amps currently in use by all EVSEs
+        #
+        # BUGBUG: Voltages can be different, so we should never work in amps
+        # when we're talking about multiple EVSEs.  We should work in watts.
+        #
+        # Any call to this function likely represents a bug.
         totalAmps = 0
-        for evse in self.getAllEVSEs():
+        for evse in self.getDedupedEVSEs():
             totalAmps += evse.currentAmps
 
         logger.debug("Total amps all slaves are using: " + str(totalAmps))
@@ -624,6 +624,8 @@ class TWCMaster:
 
             if phases:
                 if localPhases != phases:
+                    # BUGBUG: This is fine in the new design; need to fix this
+                    # path to tolerate it.
                     logger.info(
                         "FATAL:  Mix of multi-phase TWC configurations not currently supported."
                     )
@@ -634,12 +636,7 @@ class TWCMaster:
             else:
                 phases = localPhases
 
-        total = sum(
-            [
-                sum(evse.currentVoltage)
-                for evse in evsesWithVoltage
-            ]
-        )
+        total = sum([sum(evse.currentVoltage) for evse in evsesWithVoltage])
 
         return (total / (phases * len(evsesWithVoltage)), phases)
 
@@ -709,18 +706,8 @@ class TWCMaster:
 
     def num_cars_charging_now(self):
 
-        carsCharging = 0
-        for evse in self.getAllEVSEs():
-            if evse.isCharging:
-                carsCharging += 1
-            for module in self.getModulesByType("Status"):
-                module["ref"].setStatus(
-                    evse.ID,
-                    "cars_charging",
-                    "carsCharging",
-                    evse.isCharging,
-                    "",
-                )
+        carsCharging = len([evse for evse in self.getDedupedEVSEs() if evse.isCharging])
+
         logger.debug("Number of cars charging now: " + str(carsCharging))
 
         if carsCharging == 0:
@@ -943,15 +930,15 @@ class TWCMaster:
             self.lastSaveFailed = 1
 
     def sendStopCommand(self, vin):
-        evses = self.getAllEVSEs()
+        evses = self.getDedupedEVSEs()
         if vin:
             evses = [evse for evse in evses if evse.currentVIN == vin]
-        
+
         for evse in evses:
             evse.stopCharging()
 
     def sendStartCommand(self):
-        for evse in self.getAllEVSEs():
+        for evse in self.getDedupedEVSEs():
             evse.startCharging()
 
     def setAllowedFlex(self, amps):
@@ -1062,7 +1049,7 @@ class TWCMaster:
             logger.debug(str(e))
             return
 
-        for evse in self.getAllEVSEs():
+        for evse in self.getDedupedEVSEs():
             avgCurrent += evse.snapHistoryData()
         self.advanceHistorySnap()
 
@@ -1075,6 +1062,9 @@ class TWCMaster:
             self.settings["history"].append(
                 (
                     periodTimestamp.isoformat(timespec="seconds"),
+                    # BUGBUG: Since EVSEs can have different voltage now, need to
+                    # convert using the EVSE's own voltage rather than a
+                    # site-wide value.
                     self.convertAmpsToWatts(avgCurrent)
                     * self.getRealPowerFactor(avgCurrent),
                 )
@@ -1166,10 +1156,10 @@ class TWCMaster:
 
     def updateVINStatus(self):
         # update current and last VIN IDs for each Slave to all Status modules
-        for slaveTWC in self.getAllEVSEs():
+        for slaveTWC in self.getDedupedEVSEs():
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
-                    slaveTWC.TWCID,
+                    slaveTWC.ID,
                     "current_vehicle_vin",
                     "currentVehicleVIN",
                     slaveTWC.currentVIN,
@@ -1177,7 +1167,7 @@ class TWCMaster:
                 )
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
-                    slaveTWC.TWCID,
+                    slaveTWC.ID,
                     "last_vehicle_vin",
                     "lastVehicleVIN",
                     slaveTWC.lastVIN,
@@ -1223,3 +1213,22 @@ class TWCMaster:
             for controller in self.getModulesByType("EVSEController")
             for evse in controller["ref"].allEVSEs
         ]
+
+    def getDedupedEVSEs(self):
+        allEVSEs = self.getAllEVSEs()
+
+        # EVSEs with the same VIN are the same EVSE
+        vinLookup = {}
+        for evse in allEVSEs:
+            vin = evse.currentVIN
+            if vin:
+                if vin not in vinLookup:
+                    vinLookup[vin] = []
+                vinLookup[vin].append(evse)
+        for vin, evseList in vinLookup.items():
+            if len(evseList) > 1:
+                for evse in evseList:
+                    allEVSEs.remove(evse)
+                allEVSEs.append(MergedEVSE(self, *evseList))
+
+        return allEVSEs

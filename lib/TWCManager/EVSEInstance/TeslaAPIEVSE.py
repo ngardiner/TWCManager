@@ -88,6 +88,10 @@ class TeslaAPIEVSE:
         return self.vehicle.VIN
 
     @property
+    def lastVIN(self):
+        return self.vehicle.VIN
+
+    @property
     def controllers(self):
         return [self.controller.name]
 
