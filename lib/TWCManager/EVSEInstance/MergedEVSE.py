@@ -100,7 +100,11 @@ class MergedEVSE:
                 evse.setTargetPower(power)
             else:
                 # All the other EVSEs get their maximum amount
-                evse.setTargetPower(evse.maxPower)
+                #
+                # Need to take the max() here, since the Vehicle will report
+                # its current power as what the TWC is currently offering it.
+                # This at least makes it always increase and never decrease.
+                evse.setTargetPower(max([evse.maxPower, evse.currentPower, power]))
 
     @property
     def controllers(self):
