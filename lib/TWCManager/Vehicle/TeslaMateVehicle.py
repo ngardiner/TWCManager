@@ -18,7 +18,7 @@ class TeslaMateVehicle:
     __config = None
     __configConfig = None
     __configTeslaMate = None
-    __master = None
+    master = None
     __mqtt_host = None
     __mqtt_user = None
     __mqtt_pass = None
@@ -30,7 +30,7 @@ class TeslaMateVehicle:
     vehicles = {}
 
     def __init__(self, master):
-        self.__master = master
+        self.master = master
 
         self.__config = master.config
         try:
@@ -45,7 +45,7 @@ class TeslaMateVehicle:
 
         # Unload if this module is disabled or misconfigured
         if not self.status:
-            self.__master.releaseModule("lib.TWCManager.Vehicle", "TeslaMate")
+            self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaMate")
             return None
 
         # Configure database parameters
@@ -58,7 +58,7 @@ class TeslaMateVehicle:
         self.__mqtt_host = self.__configTeslaMate.get("mqtt_host", None)
         self.__mqtt_user = self.__configTeslaMate.get("mqtt_user", None)
         self.__mqtt_pass = self.__configTeslaMate.get("mqtt_pass", None)
-        self.__mqtt_prefix = self.__configTeslaMate.get("mqtt_prefix", None)
+        self.__mqtt_prefix = self.__configTeslaMate.get("mqtt_prefix", "")
 
         self.syncTelemetry = self.__configTeslaMate.get("syncTelemetry", False)
         self.syncTokens = self.__configTeslaMate.get("syncTokens", False)
@@ -143,7 +143,7 @@ class TeslaMateVehicle:
                 result = cur.fetchone()
 
                 # Set Bearer and Refresh Tokens
-                carapi = self.__master.getModuleByName("TeslaAPI")
+                carapi = self.master.getModuleByName("TeslaAPI")
                 # We don't want to refresh the token - let the source handle that.
                 carapi.setCarApiTokenExpireTime(99999 * 99999 * 99999)
                 carapi.setCarApiBearerToken(result[0])
@@ -175,16 +175,25 @@ class TeslaMateVehicle:
 
     def mqttConnect(self, client, userdata, flags, rc):
         logger.log(logging.INFO5, "MQTT Connected.")
-        logger.log(logging.INFO5, "Subscribe to " + self.__mqtt_prefix + "/cars/#")
-        res = client.subscribe(self.__mqtt_prefix + "/cars/#", qos=0)
+        subscription = "teslamate/"
+        if self.__mqtt_prefix:
+            subscription += self.__mqtt_prefix + "/"
+        subscription += "cars/#"
+        logger.log(logging.INFO5, "Subscribe to " + subscription)
+        res = client.subscribe(subscription, qos=0)
         logger.log(logging.INFO5, "Res: " + str(res))
 
     def mqttMessage(self, client, userdata, message):
 
         topic = str(message.topic).split("/")
+        if len(topic) == 5:
+            if topic[1] != self.__mqtt_prefix:
+                return
+            else:
+                topic = topic[0] + topic[2:]
         payload = str(message.payload.decode("utf-8"))
 
-        if topic[0] == self.__mqtt_prefix and topic[1] == "cars":
+        if topic[0] == "teslamate" and topic[1] == "cars":
 
             if topic[3] == "battery_level":
                 if self.vehicles.get(topic[2], None):
@@ -241,7 +250,7 @@ class TeslaMateVehicle:
             # We already have this vehicle mapped
             pass
         else:
-            for apiVehicle in self.__master.getModuleByName(
+            for apiVehicle in self.master.getModuleByName(
                 "TeslaAPI"
             ).getCarApiVehicles():
                 if apiVehicle.name == vehicle_name:
