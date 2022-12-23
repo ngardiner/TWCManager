@@ -239,12 +239,16 @@ class TeslaMateVehicle:
 
             if topic[3] in events:
                 if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].setattr(
-                        events[topic[3]][0], events[topic[3]][1](payload)
+                    setattr(
+                        self.vehicles[topic[2]],
+                        events[topic[3]][0],
+                        events[topic[3]][1](payload)
                     )
                     if events[topic[3]][2]:
-                        self.vehicles[topic[2]].setattr(
-                            events[topic[3]][2], time.time()
+                        setattr(
+                            self.vehicles[topic[2]],
+                            events[topic[3]][2],
+                            time.time()
                         )
                     self.vehicles[topic[2]].syncTimestamp = time.time()
 
