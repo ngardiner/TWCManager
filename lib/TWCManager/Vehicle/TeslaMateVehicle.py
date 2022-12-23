@@ -29,6 +29,50 @@ class TeslaMateVehicle:
     syncTokens = False
     vehicles = {}
 
+    events = {
+        "battery_level": [
+            "batteryLevel",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "charge_limit_soc": [
+            "chargeLimit",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "latitude": ["syncLat", lambda a: float(a), None],
+        "longitude": ["syncLon", lambda a: float(a), None],
+        "state": ["syncState", lambda a: a, None],
+        "time_to_full_charge": [
+            "timeToFullCharge",
+            lambda a: int(float(a)),
+            "lastChargeStatusTime",
+        ],
+        "charger_pilot_current": [
+            "availableCurrent",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "charger_actual_current": [
+            "actualCurrent",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "charger_phases": ["phases", lambda a: int(a), "lastChargeStatusTime"],
+        "charger_voltage": [
+            "voltage",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "charging_state": [
+            "chargingState",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+    }
+    unknownVehicles = {}
+
+
     def __init__(self, master):
         self.master = master
 
@@ -194,71 +238,42 @@ class TeslaMateVehicle:
         payload = str(message.payload.decode("utf-8"))
 
         if topic[0] == "teslamate" and topic[1] == "cars":
+            self.applyDataToVehicle(topic[2], topic[3], payload)
 
-            events = {
-                "battery_level": [
-                    "batteryLevel",
-                    lambda a: int(a),
-                    "lastChargeStatusTime",
-                ],
-                "charge_limit_soc": [
-                    "chargeLimit",
-                    lambda a: int(a),
-                    "lastChargeStatusTime",
-                ],
-                "latitude": ["syncLat", lambda a: float(a), None],
-                "longitude": ["syncLon", lambda a: float(a), None],
-                "state": ["syncState", lambda a: a, None],
-                "time_to_full_charge": [
-                    "timeToFullCharge",
-                    lambda a: int(float(a)),
-                    "lastChargeStatusTime",
-                ],
-                "charger_pilot_current": [
-                    "availableCurrent",
-                    lambda a: int(a),
-                    "lastChargeStatusTime",
-                ],
-                "charger_actual_current": [
-                    "actualCurrent",
-                    lambda a: int(a),
-                    "lastChargeStatusTime",
-                ],
-                "charger_phases": ["phases", lambda a: int(a), "lastChargeStatusTime"],
-                "charger_voltage": [
-                    "voltage",
-                    lambda a: int(a),
-                    "lastChargeStatusTime",
-                ],
-                "charging_state": [
-                    "chargingState",
-                    lambda a: int(a),
-                    "lastChargeStatusTime",
-                ],
-            }
+    def applyDataToVehicle(self, id, event, payload):
+        events = self.events
 
-            if topic[3] in events:
-                if self.vehicles.get(topic[2], None):
+        if event in events:
+            if self.vehicles.get(id, None):
+                setattr(
+                    self.vehicles[id],
+                    events[event][0],
+                    events[event][1](payload)
+                )
+                if events[event][2]:
                     setattr(
-                        self.vehicles[topic[2]],
-                        events[topic[3]][0],
-                        events[topic[3]][1](payload)
+                        self.vehicles[id],
+                        events[event][2],
+                        time.time()
                     )
-                    if events[topic[3]][2]:
-                        setattr(
-                            self.vehicles[topic[2]],
-                            events[topic[3]][2],
-                            time.time()
-                        )
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
-
-            elif topic[3] == "display_name":
-                # We can map the car ID in TeslaMate to the vehicle
-                # in the Tesla API module
-                self.updateVehicles(topic[2], payload)
-
+                self.vehicles[id].syncTimestamp = time.time()
             else:
-                pass
+                # If we don't know this vehicle yet, save the data.
+                if id not in self.unknownVehicles:
+                    self.unknownVehicles[id] = []
+                self.unknownVehicles[id].append([event, payload])
+
+        elif event == "display_name":
+            # We can map the car ID in TeslaMate to the vehicle
+            # in the Tesla API module
+            self.updateVehicles(id, payload)
+            if id in self.unknownVehicles:
+                for pastEvent in self.unknownVehicles[id]:
+                    self.applyDataToVehicle(id, pastEvent[0], pastEvent[1])
+                del self.unknownVehicles[id]
+        else:
+            pass
+
 
     def mqttSubscribe(self, client, userdata, mid, granted_qos):
         logger.info("Subscribe operation completed with mid " + str(mid))
