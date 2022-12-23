@@ -208,9 +208,17 @@ class TeslaMateVehicle:
                     converter = events[event_name][1]
                     status_property = events[event_name][2]
                     
-                    self.vehicles[vehicle_id].setattr(property_name, converter(payload))
+                    setattr(
+                        self.vehicles[vehicle_id],
+                        property_name,
+                        converter(payload)
+                    )
                     if status_property:
-                        self.vehicles[vehicle_id].setattr(status_property, time.time())
+                        setattr(
+                            self.vehicles[vehicle_id],
+                            status_property,
+                            time.time()
+                        )
                     self.vehicles[vehicle_id].syncTimestamp = time.time()
 
             elif event_name == "display_name":
