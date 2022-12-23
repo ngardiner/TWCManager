@@ -186,11 +186,11 @@ class TeslaMateVehicle:
     def mqttMessage(self, client, userdata, message):
 
         topic = str(message.topic).split("/")
-        if len(topic) == 5:
-            if topic[1] != self.__mqtt_prefix:
+        if len(topic) > 4:
+            prefix = topic[1:-3].join("/")
+            if prefix != self.__mqtt_prefix:
                 return
-            else:
-                topic = topic[0] + topic[2:]
+            topic = [topic[0]] + topic[-3:]
         payload = str(message.payload.decode("utf-8"))
 
         if topic[0] == "teslamate" and topic[1] == "cars":
