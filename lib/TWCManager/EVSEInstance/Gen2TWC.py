@@ -861,7 +861,7 @@ class Gen2TWC:
                     # ...and car hasn't changed its amp draw significantly in
                     # over 10 seconds, meaning it's stuck at its current amp
                     # draw.
-                    now - self.timeReportedAmpsActualChangedSignificantly > 10
+                    now - self.timeReportedAmpsActualChangedSignificantly > 120
                     and self.master.settings.get("spikeAmpsReactively", 1)
                 )
             ):
