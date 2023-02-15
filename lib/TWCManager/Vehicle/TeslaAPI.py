@@ -1447,9 +1447,12 @@ class CarApiVehicle:
 
             return True
 
-    def update_charge(self):
+    def update_charge(self, lazy = False):
 
         if self.syncSource == "TeslaAPI":
+
+            if lazy and not self.is_awake():
+                return False
 
             url = "https://owner-api.teslamotors.com/api/1/vehicles/"
             url = url + str(self.ID) + "/data_request/charge_state"

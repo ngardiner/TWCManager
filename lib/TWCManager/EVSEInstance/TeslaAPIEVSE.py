@@ -46,7 +46,7 @@ class TeslaAPIEVSE:
 
     @property
     def maxPower(self):
-        self.vehicle.update_charge()
+        self.vehicle.update_charge(True)
         return self.convertAmpsToWatts(self.vehicle.availableCurrent)
 
     @property
@@ -55,12 +55,12 @@ class TeslaAPIEVSE:
 
     @property
     def currentAmps(self):
-        self.vehicle.update_charge()
+        self.vehicle.update_charge(True)
         return self.vehicle.actualCurrent
 
     @property
     def currentVoltage(self):
-        self.vehicle.update_charge()
+        self.vehicle.update_charge(True)
         # Car will report ~2V when charging is not in progress
         voltage = (
             self.vehicle.voltage
