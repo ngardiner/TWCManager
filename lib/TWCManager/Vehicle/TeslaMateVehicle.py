@@ -132,6 +132,7 @@ class TeslaMateVehicle:
         self.__client.on_connect = self.mqttConnect
         self.__client.on_message = self.mqttMessage
         self.__client.on_subscribe = self.mqttSubscribe
+        self.__client.on_disconnect = self.mqttDisconnect
 
         logger.log(logging.INFO4, "Attempting connection to MQTT Broker")
 
@@ -149,6 +150,12 @@ class TeslaMateVehicle:
             return False
 
         self.__client.loop_start()
+        threading.Timer(24 * 60 * 60, self.resetMQTT).start()
+
+    def resetMQTT(self):
+        self.__client.disconnect()
+        self.__client.loop_stop()
+        self.doMQTT()
 
     def doSyncTokens(self, firstrun=False):
         # Connect to TeslaMate database and synchronize API tokens
@@ -226,6 +233,10 @@ class TeslaMateVehicle:
         logger.log(logging.INFO5, "Subscribe to " + subscription)
         res = client.subscribe(subscription, qos=0)
         logger.log(logging.INFO5, "Res: " + str(res))
+
+    def mqttDisconnect(self, client, userdata, rc):
+        if rc != 0:
+            logger.log(logging.INFO5, "MQTT Disconnected. Should reconnect automatically.")
 
     def mqttMessage(self, client, userdata, message):
 
