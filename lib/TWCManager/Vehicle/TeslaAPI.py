@@ -1463,6 +1463,7 @@ class CarApiVehicle:
                 return True
 
             try:
+                logger.info("Calling " + url)
                 (result, response) = self.get_car_api(url)
             except TypeError:
                 logger.log(logging.error, "Got None response from get_car_api()")
