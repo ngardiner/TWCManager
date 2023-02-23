@@ -1465,6 +1465,8 @@ class CarApiVehicle:
 
             if now < self.chargeStatusDeferral:
                 return True
+            else:
+                self.chargeStatusDeferral = now + 5
 
             url = "https://owner-api.teslamotors.com/api/1/vehicles/"
             url = url + str(self.ID) + "/data_request/charge_state"
