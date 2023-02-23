@@ -26,11 +26,11 @@ class TeslaAPIEVSE:
 
     @property
     def isCharging(self):
-        return self.vehicle.chargingState == "Charging"
+        return self.vehicle.is_charging()
 
     @property
     def wantsToCharge(self):
-        return self.isCharging or self.vehicle.chargingState == "Stopped"
+        return self.isCharging or self.vehicle.batteryLevel < self.vehicle.chargeLimit
 
     def convertAmpsToWatts(self, amps):
         return self.master.convertAmpsToWatts(

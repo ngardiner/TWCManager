@@ -1246,7 +1246,6 @@ class CarApiVehicle:
     lastCurrentChangeTime = 0
     phases = 0
     voltage = 0
-    chargingState = "Unknown"
 
     # Sync values are updated by an external module such as TeslaMate
     syncTimestamp = 0
@@ -1339,6 +1338,12 @@ class CarApiVehicle:
                 or self.syncState == "updating"
                 or self.syncState == "driving"
             )
+
+    def is_charging(self):
+        if self.syncSource == "TeslaAPI":
+            return self.charging
+        else:
+            return self.syncState == "charging"
 
     def get_car_api(self, url, checkReady=True, provesOnline=True):
         if checkReady and not self.ready():
@@ -1484,13 +1489,18 @@ class CarApiVehicle:
                 self.actualCurrent = response["charger_actual_current"]
                 self.phases = response["charger_phases"]
                 self.voltage = response["charger_voltage"]
-                self.chargingState = response["charging_state"]
                 self.chargeLimit = response["charge_limit_soc"]
                 self.batteryLevel = response["battery_level"]
                 self.timeToFullCharge = response["time_to_full_charge"]
 
-                if self.voltage > 70:
-                    self.chargeStatusDeferral = now + 60
+                self.charging = (
+                    True
+                    if response["charging_state"] == "Charging"
+                    else False
+                )
+
+                if self.charging:
+                    self.chargeStatusDeferral = now + 30
                 elif self.batteryLevel < self.chargeLimit and self.availableCurrent > 0:
                     self.chargeStatusDeferral = now + 1800
                 else:
