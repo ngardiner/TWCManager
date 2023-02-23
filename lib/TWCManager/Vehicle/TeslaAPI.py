@@ -713,6 +713,7 @@ class TeslaAPI:
                     else:
                         if apiResponseDict["response"]["result"] == True:
                             self.resetCarApiLastErrorTime(vehicle)
+                            vehicle.chargeStatusDeferral = now + 10
                         elif charge:
                             reason = apiResponseDict["response"]["reason"]
                             if reason in [
@@ -739,6 +740,10 @@ class TeslaAPI:
                                     + "  Stop asking to start charging."
                                 )
                                 vehicle.stopAskingToStartCharging = True
+                                if reason in ["complete"]:
+                                    vehicle.chargeStatusDeferral = now + 3600
+                                else:
+                                    vehicle.chargeStatusDeferral = now + 10
                                 self.resetCarApiLastErrorTime(vehicle)
                             elif reason == "could_not_wake_buses":
                                 # This error often happens if you call
@@ -1227,7 +1232,8 @@ class CarApiVehicle:
     lastChargeStatusTime = 0
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
-    driveStatusDeferral = 60
+    driveStatusDeferral = 0
+    chargeStatusDeferral = 0
 
     batteryLevel = 10000
     chargeLimit = -1
@@ -1451,16 +1457,17 @@ class CarApiVehicle:
 
         if self.syncSource == "TeslaAPI":
 
-            if lazy and not self.is_awake():
+            # No need to query charge state if we're not at home.
+            if lazy and not (self.is_awake() and self.atHome):
                 return False
-
-            url = "https://owner-api.teslamotors.com/api/1/vehicles/"
-            url = url + str(self.ID) + "/data_request/charge_state"
 
             now = time.time()
 
-            if now - self.lastChargeStatusTime < 60:
+            if now < self.chargeStatusDeferral:
                 return True
+
+            url = "https://owner-api.teslamotors.com/api/1/vehicles/"
+            url = url + str(self.ID) + "/data_request/charge_state"
 
             try:
                 logger.info("Calling " + url)
@@ -1479,6 +1486,13 @@ class CarApiVehicle:
                 self.chargeLimit = response["charge_limit_soc"]
                 self.batteryLevel = response["battery_level"]
                 self.timeToFullCharge = response["time_to_full_charge"]
+
+                if self.voltage > 70:
+                    self.chargeStatusDeferral = now + 60
+                elif self.batteryLevel < self.chargeLimit and self.availableCurrent > 0:
+                    self.chargeStatusDeferral = now + 1800
+                else:
+                    self.chargeStatusDeferral = now + 3600
 
             return result
 
@@ -1547,6 +1561,7 @@ class CarApiVehicle:
             if result is True or reason == "already_set":
                 self.stopTryingToApplyLimit = True
                 self.lastAPIAccessTime = now
+                self.chargeStatusDeferral = now + 10
                 self.carapi.resetCarApiLastErrorTime(self)
                 return True
             elif reason == "could_not_wake_buses":
