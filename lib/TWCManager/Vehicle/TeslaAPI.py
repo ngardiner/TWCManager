@@ -1124,8 +1124,6 @@ class TeslaAPI:
         if not vehicle:
             vehicle = self.getCarApiVehicles()[0]
 
-        vehicle.lastAPIAccessTime = time.time()
-
         url = "https://owner-api.teslamotors.com/api/1/vehicles/"
         url = url + str(vehicle.ID) + "/command/set_charging_amps"
 
@@ -1144,6 +1142,9 @@ class TeslaAPI:
             return False
         except json.decoder.JSONDecodeError:
             return False
+
+        if apiResponseDict.get("response", None):
+            vehicle.lastAPIAccessTime = time.time()
 
         return apiResponseDict
 
@@ -1177,7 +1178,6 @@ class TeslaAPI:
 
     def wakeVehicle(self, vehicle):
         apiResponseDict = None
-        vehicle.lastAPIAccessTime = time.time()
 
         url = "https://owner-api.teslamotors.com/api/1/vehicles/"
         url = url + str(vehicle.ID) + "/wake_up"
@@ -1194,6 +1194,9 @@ class TeslaAPI:
             return False
         except json.decoder.JSONDecodeError:
             return False
+
+        if apiResponseDict.get("response", None):
+            vehicle.lastAPIAccessTime = time.time()
 
         return apiResponseDict
 
