@@ -1350,7 +1350,9 @@ class CarApiVehicle:
         self.name = json["display_name"] or self.VIN or str(self.ID) or "unknown"
 
         # Launch sync monitoring thread
-        Thread(target=self.checkSyncNotStale).start()
+        thread = Thread(target=self.checkSyncNotStale)
+        thread.daemon = True
+        thread.start()
 
     def checkSyncNotStale(self):
         # Once an external system begins providing sync functionality to defer
