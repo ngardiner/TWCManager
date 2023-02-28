@@ -48,7 +48,7 @@ class TeslaMateVehicle:
             lambda a: int(float(a)),
             "lastChargeStatusTime",
         ],
-        "charger_pilot_current": [
+        "charge_current_request_max": [
             "availableCurrent",
             lambda a: int(a),
             "lastChargeStatusTime",
@@ -61,11 +61,6 @@ class TeslaMateVehicle:
         "charger_phases": ["phases", lambda a: int(a), "lastChargeStatusTime"],
         "charger_voltage": [
             "voltage",
-            lambda a: int(a),
-            "lastChargeStatusTime",
-        ],
-        "charging_state": [
-            "chargingState",
             lambda a: int(a),
             "lastChargeStatusTime",
         ],
