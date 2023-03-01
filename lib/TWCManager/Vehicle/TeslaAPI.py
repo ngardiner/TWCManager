@@ -1560,9 +1560,9 @@ class CarApiVehicle:
 
                 apiResponseDict = json.loads(req.text)
             except requests.exceptions.RequestException:
-                pass
+                continue
             except json.decoder.JSONDecodeError:
-                pass
+                continue
 
             result = False
             reason = ""
