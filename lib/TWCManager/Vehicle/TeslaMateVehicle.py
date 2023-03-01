@@ -40,6 +40,7 @@ class TeslaMateVehicle:
             lambda a: int(a),
             "lastChargeStatusTime",
         ],
+        "display_name": ["name", lambda a: str(a), None],
         "latitude": ["syncLat", lambda a: float(a), None],
         "longitude": ["syncLon", lambda a: float(a), None],
         "state": ["syncState", lambda a: a, None],
@@ -251,7 +252,15 @@ class TeslaMateVehicle:
     def applyDataToVehicle(self, id, event, payload):
         events = self.events
 
-        if event in events:
+        if event == "display_name":
+            # We can map the car ID in TeslaMate to the vehicle
+            # in the Tesla API module
+            self.updateVehicles(id, payload)
+            if id in self.unknownVehicles:
+                for pastEvent in self.unknownVehicles[id]:
+                    self.applyDataToVehicle(id, pastEvent[0], pastEvent[1])
+                del self.unknownVehicles[id]
+        elif event in events:
             if self.vehicles.get(id, None):
                 setattr(
                     self.vehicles[id],
@@ -270,15 +279,6 @@ class TeslaMateVehicle:
                 if id not in self.unknownVehicles:
                     self.unknownVehicles[id] = []
                 self.unknownVehicles[id].append([event, payload])
-
-        elif event == "display_name":
-            # We can map the car ID in TeslaMate to the vehicle
-            # in the Tesla API module
-            self.updateVehicles(id, payload)
-            if id in self.unknownVehicles:
-                for pastEvent in self.unknownVehicles[id]:
-                    self.applyDataToVehicle(id, pastEvent[0], pastEvent[1])
-                del self.unknownVehicles[id]
         else:
             pass
 
