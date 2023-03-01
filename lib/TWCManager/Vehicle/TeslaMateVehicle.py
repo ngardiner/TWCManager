@@ -39,6 +39,7 @@ class TeslaMateVehicle:
             lambda a: int(a),
             "lastChargeStatusTime",
         ],
+        "display_name": ["name", lambda a: str(a), None],
         "latitude": ["syncLat", lambda a: float(a), None],
         "longitude": ["syncLon", lambda a: float(a), None],
         "state": ["syncState", lambda a: a, None],
@@ -227,9 +228,15 @@ class TeslaMateVehicle:
 
     def mqttConnect(self, client, userdata, flags, rc, properties=None):
         logger.log(logging.INFO5, "MQTT Connected.")
-        logger.log(logging.INFO5, "Subscribe to " + self.__mqtt_prefix + "/cars/#")
-        res = client.subscribe(self.__mqtt_prefix + "/cars/#", qos=0)
-        logger.log(logging.INFO5, "Res: " + str(res))
+        subscription = "teslamate/"
+        if self.__mqtt_prefix:
+            subscription += self.__mqtt_prefix + "/"
+        subscription += "cars/+/"
+        for topic in self.events.keys():
+            topic = subscription + topic
+            logger.log(logging.INFO5, "Subscribe to " + topic)
+            res = client.subscribe(topic, qos=0)
+            logger.log(logging.INFO5, "Res: " + str(res))
 
     def mqttDisconnect(self, client, userdata, rc):
         if rc != 0:
@@ -245,13 +252,22 @@ class TeslaMateVehicle:
     def applyDataToVehicle(self, id, event, payload):
         events = self.events
 
-        if event in events:
+        if event == "display_name":
+            # We can map the car ID in TeslaMate to the vehicle
+            # in the Tesla API module
+            self.updateVehicles(id, payload)
+            if id in self.unknownVehicles:
+                for pastEvent in self.unknownVehicles[id]:
+                    self.applyDataToVehicle(id, pastEvent[0], pastEvent[1])
+                del self.unknownVehicles[id]
+                
+        elif event in events:
             vehicle = self.vehicles.get(id, None)
             if vehicle:
                 property_name = events[event][0]
                 converter = events[event][1]
                 status_property = events[event][2]
-
+                
                 setattr(
                     vehicle,
                     property_name,
@@ -270,11 +286,6 @@ class TeslaMateVehicle:
                 if id not in self.unknownVehicles:
                     self.unknownVehicles[id] = []
                 self.unknownVehicles[id].append([event, payload])
-
-        elif event == "display_name":
-            # We can map the car ID in TeslaMate to the vehicle
-            # in the Tesla API module
-            self.updateVehicles(id, payload)
 
         else:
             pass
