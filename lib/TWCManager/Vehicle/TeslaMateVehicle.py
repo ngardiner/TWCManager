@@ -226,8 +226,9 @@ class TeslaMateVehicle:
             subscription += self.__mqtt_prefix + "/"
         subscription += "cars/+/"
         for topic in self.events.keys():
-            logger.log(logging.INFO5, "Subscribe to " + subscription)
-            res = client.subscribe(subscription + topic, qos=0)
+            topic = subscription + topic
+            logger.log(logging.INFO5, "Subscribe to " + topic)
+            res = client.subscribe(topic, qos=0)
             logger.log(logging.INFO5, "Res: " + str(res))
 
     def mqttDisconnect(self, client, userdata, rc):
