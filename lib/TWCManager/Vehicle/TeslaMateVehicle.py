@@ -224,10 +224,11 @@ class TeslaMateVehicle:
         subscription = "teslamate/"
         if self.__mqtt_prefix:
             subscription += self.__mqtt_prefix + "/"
-        subscription += "cars/#"
-        logger.log(logging.INFO5, "Subscribe to " + subscription)
-        res = client.subscribe(subscription, qos=0)
-        logger.log(logging.INFO5, "Res: " + str(res))
+        subscription += "cars/+/"
+        for topic in self.events.keys():
+            logger.log(logging.INFO5, "Subscribe to " + subscription)
+            res = client.subscribe(subscription + topic, qos=0)
+            logger.log(logging.INFO5, "Res: " + str(res))
 
     def mqttDisconnect(self, client, userdata, rc):
         if rc != 0:
