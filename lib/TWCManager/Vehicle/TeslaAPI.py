@@ -1249,6 +1249,7 @@ class CarApiVehicle:
     lastCurrentChangeTime = 0
     phases = 0
     voltage = 0
+    charging = False
 
     # Sync values are updated by an external module such as TeslaMate
     syncTimestamp = 0
