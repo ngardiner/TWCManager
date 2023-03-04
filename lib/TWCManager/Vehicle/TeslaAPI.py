@@ -719,6 +719,7 @@ class TeslaAPI:
                             if reason in [
                                 "complete",
                                 "charging",
+                                "requested",
                                 "is_charging",
                                 "disconnected",
                             ]:
