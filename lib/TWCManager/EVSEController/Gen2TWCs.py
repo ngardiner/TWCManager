@@ -537,7 +537,7 @@ class Gen2TWCs:
                             receiverID = msgMatch.group(2)
                             heartbeatData = msgMatch.group(3)
 
-                            if senderID not in self.getTWCByID:
+                            if senderID not in self.knownTWCsByID:
                                 # Normally, a slave only sends us a heartbeat message if
                                 # we send them ours first, so it's not expected we would
                                 # hear heartbeat from a slave that's not in our list.
@@ -548,7 +548,7 @@ class Gen2TWCs:
                                 )
                                 continue
                             else:
-                                slaveTWC = self.getTWCByID(senderID)
+                                slaveTWC = self.knownTWCsByID[senderID]
 
                             if self.getFakeTWCID() == receiverID:
                                 slaveTWC.receive_slave_heartbeat(heartbeatData)
@@ -671,7 +671,7 @@ class Gen2TWCs:
                                 "Slave TWC %02X%02X reported VIN data: %s."
                                 % (senderID[0], senderID[1], self.hex_str(data)),
                             )
-                            slaveTWC = self.getTWCByID(senderID)
+                            slaveTWC = self.knownTWCsByID[senderID]
                             if vinPart == b"\xee":
                                 vinPart = 0
                             if vinPart == b"\xef":
@@ -1316,9 +1316,6 @@ class Gen2TWCs:
                     + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
                 )
             self.lastkWhPoll = now
-
-    def getTWCByID(self, twcid):
-        return self.knownTWCsByID[twcid]
 
     def getTWCID(self, twc):
         return self.knownTWCs[twc].TWCID
