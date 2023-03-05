@@ -6,7 +6,6 @@ logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 
 class URL:
-
     # URL EMS Module
     # Fetches Consumption and Generation details from URL
 
@@ -29,14 +28,8 @@ class URL:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configURL = master.config["sources"]["URL"]
-        except KeyError:
-            self.configURL = {}
+        self.configConfig = master.config.get("config", {})
+        self.configURL = master.config.get("sources", {}).get("URL", {})
         self.status = self.configURL.get("enabled", False)
         self.URL = self.configURL.get("url", None)
         self.consumptionItem = self.configURL.get("consumptionItem", None)
@@ -48,7 +41,6 @@ class URL:
             return None
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("URL EMS Module Disabled. Skipping getConsumption")
             return 0
@@ -60,7 +52,6 @@ class URL:
         return self.consumedW
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("URL EMS Module Disabled. Skipping getGeneration")
             return 0

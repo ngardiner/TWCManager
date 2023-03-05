@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 
 class OpenWeatherMap:
-
     cacheTime = 60
     config = None
     configConfig = None
@@ -28,14 +27,10 @@ class OpenWeatherMap:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configOpenWeatherMap = master.config["sources"]["OpenWeatherMap"]
-        except KeyError:
-            self.configOpenWeatherMap = {}
+        self.configConfig = master.config.get("config", {})
+        self.configOpenWeatherMap = master.config.get("sources", {}).get(
+            "OpenWeatherMap", {}
+        )
 
         self.status = self.configOpenWeatherMap.get("enabled", False)
         self.Latitude = self.configOpenWeatherMap.get("Latitude", 0)
@@ -53,7 +48,6 @@ class OpenWeatherMap:
         return 0
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("OpenWeatherMap EMS Module Disabled. Skipping getGeneration")
             return 0
@@ -80,7 +74,6 @@ class OpenWeatherMap:
         return self.getOpenWeatherMapValue(url)
 
     def getOpenWeatherMapValue(self, url):
-
         # Fetch the specified URL from the OpenWeatherMap and return the data
         self.fetchFailed = False
 
@@ -124,7 +117,6 @@ class OpenWeatherMap:
         return bestjson
 
     def update(self):
-
         month = int(time.strftime("%m"))
         dt = int(time.time())
         if (int(time.time()) - self.lastFetch) > self.cacheTime:

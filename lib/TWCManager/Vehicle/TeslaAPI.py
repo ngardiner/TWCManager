@@ -60,14 +60,12 @@ class TeslaAPI:
 
     def __init__(self, master):
         self.master = master
-        try:
-            self.config = master.config
-            self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
-            self.chargeUpdateInterval = self.config["config"].get(
-                "cloudUpdateInterval", 1800
-            )
-        except KeyError:
-            pass
+        self.config = master.config
+        configConfig = master.config.get("config", {})
+        self.minChargeLevel = configConfig.get("minChargeLevel", -1)
+        self.chargeUpdateInterval = configConfig.get(
+            "cloudUpdateInterval", 1800
+        )
 
         self.generateChallenge()
 

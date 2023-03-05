@@ -9,7 +9,6 @@ logger = logging.getLogger("\U0001F697 TeslaMate")
 
 
 class TeslaMateVehicle:
-
     __db_host = None
     __db_name = None
     __db_pass = None
@@ -68,20 +67,13 @@ class TeslaMateVehicle:
     }
     unknownVehicles = {}
 
-
     def __init__(self, master):
         self.master = master
 
         self.__config = master.config
-        try:
-            self.__configConfig = self.__config["config"]
-        except KeyError:
-            self.__configConfig = {}
-        try:
-            self.__configTeslaMate = self.__config["vehicle"]["TeslaMate"]
-            self.status = self.__config["vehicle"]["TeslaMate"]["enabled"]
-        except KeyError:
-            self.__configTeslaMate = {}
+        self.__configConfig = self.__config.get("config", {})
+        self.__configTeslaMate = self.__config.get("vehicle", {}).get("TeslaMate", {})
+        self.status = self.__configTeslaMate.get("enabled", None)
 
         # Unload if this module is disabled or misconfigured
         if not self.status:
@@ -157,7 +149,6 @@ class TeslaMateVehicle:
         # Connect to TeslaMate database and synchronize API tokens
 
         if self.__db_host and self.__db_name and self.__db_user and self.__db_pass:
-
             conn = None
 
             try:
@@ -198,7 +189,6 @@ class TeslaMateVehicle:
                 self.lastSync = time.time()
 
             else:
-
                 logger.log(
                     logging.ERROR,
                     "Failed to connect to TeslaMate database. Disabling Token Sync",
@@ -211,7 +201,6 @@ class TeslaMateVehicle:
                     self.syncTokens = False
 
         else:
-
             logger.log(
                 logging.ERROR,
                 "TeslaMate Database connection settings not specified. Disabling Token Sync",
@@ -234,10 +223,11 @@ class TeslaMateVehicle:
 
     def mqttDisconnect(self, client, userdata, rc):
         if rc != 0:
-            logger.log(logging.INFO5, "MQTT Disconnected. Should reconnect automatically.")
+            logger.log(
+                logging.INFO5, "MQTT Disconnected. Should reconnect automatically."
+            )
 
     def mqttMessage(self, client, userdata, message):
-
         topic = str(message.topic).split("/")
         if len(topic) > 4:
             prefix = topic[1:-3].join("/")
@@ -262,17 +252,9 @@ class TeslaMateVehicle:
                 del self.unknownVehicles[id]
         elif event in events:
             if self.vehicles.get(id, None):
-                setattr(
-                    self.vehicles[id],
-                    events[event][0],
-                    events[event][1](payload)
-                )
+                setattr(self.vehicles[id], events[event][0], events[event][1](payload))
                 if events[event][2]:
-                    setattr(
-                        self.vehicles[id],
-                        events[event][2],
-                        time.time()
-                    )
+                    setattr(self.vehicles[id], events[event][2], time.time())
                 self.vehicles[id].syncTimestamp = time.time()
             else:
                 # If we don't know this vehicle yet, save the data.
@@ -281,7 +263,6 @@ class TeslaMateVehicle:
                 self.unknownVehicles[id].append([event, payload])
         else:
             pass
-
 
     def mqttSubscribe(self, client, userdata, mid, granted_qos):
         logger.info("Subscribe operation completed with mid " + str(mid))

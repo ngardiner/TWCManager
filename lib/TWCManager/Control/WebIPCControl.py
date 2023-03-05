@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 
 class WebIPCControl:
-
     config = None
     configConfig = None
     configIPC = None
@@ -20,17 +19,11 @@ class WebIPCControl:
 
     def __init__(self, master):
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
+        self.configConfig = master.config.get("config", {})
         self.debugLevel = self.configConfig.get("debugLevel", 0)
         self.master = master
 
-        try:
-            self.configIPC = master.config["control"]["IPC"]
-        except KeyError:
-            self.configIPC = {}
+        self.configIPC = master.config.get("control", {}).get("IPC", {})
         self.status = self.configIPC.get("enabled", False)
 
         # Unload if this module is disabled or misconfigured
@@ -98,7 +91,6 @@ class WebIPCControl:
         return s
 
     def processIPC(self):
-
         ########################################################################
         # See if there's any message from the web interface.
         # If the message is longer than msgMaxSize, MSG_NOERROR tells it to

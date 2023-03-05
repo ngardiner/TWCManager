@@ -4,7 +4,6 @@ logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 
 class HASS:
-
     # HomeAssistant EMS Module
     # Fetches Consumption and Generation details from HomeAssistant
 
@@ -32,14 +31,8 @@ class HASS:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configHASS = master.config["sources"]["HASS"]
-        except KeyError:
-            self.configHASS = {}
+        self.configConfig = master.config.get("config", {})
+        self.configHASS = master.config.get("sources", {}).get("HASS", {})
         self.status = self.configHASS.get("enabled", False)
         self.serverIP = self.configHASS.get("serverIP", None)
         self.serverPort = self.configHASS.get("serverPort", 8123)
@@ -54,7 +47,6 @@ class HASS:
             return None
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("Module Disabled. Skipping getConsumption")
             return 0
@@ -66,7 +58,6 @@ class HASS:
         return self.consumedW
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("Module Disabled. Skipping getGeneration")
             return 0

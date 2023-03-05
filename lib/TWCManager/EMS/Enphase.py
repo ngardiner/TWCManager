@@ -6,7 +6,6 @@ logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 
 class Enphase:
-
     import requests
 
     apiKey = None
@@ -32,14 +31,8 @@ class Enphase:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configEnphase = master.config["sources"]["Enphase"]
-        except KeyError:
-            self.configEnphase = {}
+        self.configConfig = master.config.get("config", {})
+        self.configEnphase = master.config.get("sources", {}).get("Enphase", {})
         self.apiKey = self.configEnphase.get("apiKey", None)
         self.serverIP = self.configEnphase.get("serverIP", None)
         self.serverPort = self.configEnphase.get("serverPort", 80)
@@ -60,7 +53,6 @@ class Enphase:
             self.cacheTime = 10
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("Enphase EMS Module Disabled. Skipping getConsumption")
             return None
@@ -72,7 +64,6 @@ class Enphase:
         return float(self.consumedW)
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("Enphase EMS Module Disabled. Skipping getGeneration")
             return 0
@@ -97,7 +88,6 @@ class Enphase:
         return self.getPortalValue(url)
 
     def getPortalValue(self, url):
-
         # Fetch the specified URL from the Enphase Portal and return the data
         self.fetchFailed = False
 
@@ -126,7 +116,6 @@ class Enphase:
             return r.json()
 
     def update(self):
-
         if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from Portal.
 

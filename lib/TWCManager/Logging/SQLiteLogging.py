@@ -6,7 +6,6 @@ logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 class SQLiteHandler(logging.Handler):
     def __init__(self, db):
-
         logging.Handler.__init__(self)
         self.db = db
         # Initialize the database schema for a database that does not
@@ -144,7 +143,6 @@ class SQLiteHandler(logging.Handler):
 
 
 class SQLiteLogging:
-
     capabilities = {"queryGreenEnergy": True}
     config = None
     configConfig = None
@@ -155,14 +153,8 @@ class SQLiteLogging:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configLogging = master.config["logging"]["SQLite"]
-        except KeyError:
-            self.configLogging = {}
+        self.configConfig = master.config.get("config", {})
+        self.configLogging = master.config.get("logging", {}).get("SQLite", {})
         self.status = self.configLogging.get("enabled", False)
 
         # Unload if this module is disabled or misconfigured

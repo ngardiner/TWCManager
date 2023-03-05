@@ -3,7 +3,6 @@ import time
 
 
 class Efergy:
-
     import requests
 
     cacheTime = 10
@@ -26,14 +25,8 @@ class Efergy:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configEfergy = master.config["sources"]["Efergy"]
-        except KeyError:
-            self.configEfergy = {}
+        self.configConfig = master.config.get("config", {})
+        self.configEfergy = master.config.get("sources", {}).get("Efergy", {})
         self.debugLevel = self.configConfig.get("debugLevel", 0)
         self.status = self.configEfergy.get("enabled", False)
         self.token = self.configEfergy.get("token", None)
@@ -44,7 +37,6 @@ class Efergy:
             return None
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("Efergy EMS Module Disabled. Skipping getConsumption")
             return 0
@@ -56,7 +48,6 @@ class Efergy:
         return float(self.consumedW)
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("Efergy EMS Module Disabled. Skipping getGeneration")
             return 0
@@ -70,7 +61,6 @@ class Efergy:
         return float(self.generatedW)
 
     def getValue(self, url):
-
         # Fetch the specified URL from the Efergy and return the data
         self.fetchFailed = False
 
@@ -97,7 +87,6 @@ class Efergy:
         return self.getValue(url)
 
     def update(self):
-
         if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from Efergy.
 

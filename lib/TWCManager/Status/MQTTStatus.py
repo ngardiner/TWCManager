@@ -9,7 +9,6 @@ logger = logging.getLogger("\U0001F4CA MQTT")
 
 
 class MQTTStatus:
-
     import paho.mqtt.client as mqtt
 
     brokerIP = None
@@ -34,14 +33,8 @@ class MQTTStatus:
     def __init__(self, master):
         self.__config = master.config
         self.__master = master
-        try:
-            self.__configConfig = self.__config["config"]
-        except KeyError:
-            self.__configConfig = {}
-        try:
-            self.__configMQTT = self.__config["status"]["MQTT"]
-        except KeyError:
-            self.__configMQTT = {}
+        self.__configConfig = self.__config.get("config", {})
+        self.__configMQTT = self.__config.get("status", {}).get("MQTT", {})
         self.status = self.__configMQTT.get("enabled", False)
         self.brokerIP = self.__configMQTT.get("brokerIP", None)
         self.topicPrefix = self.__configMQTT.get("topicPrefix", None)
@@ -63,7 +56,6 @@ class MQTTStatus:
 
     def setStatus(self, twcid, key_underscore, key_camelcase, value, unit):
         if self.status:
-
             # Format TWCID nicely
             twident = None
             if len(twcid) == 2:

@@ -537,9 +537,7 @@ class Gen2TWCs:
                             receiverID = msgMatch.group(2)
                             heartbeatData = msgMatch.group(3)
 
-                            try:
-                                slaveTWC = self.getTWCByID(senderID)
-                            except KeyError:
+                            if senderID not in self.getTWCByID:
                                 # Normally, a slave only sends us a heartbeat message if
                                 # we send them ours first, so it's not expected we would
                                 # hear heartbeat from a slave that's not in our list.
@@ -549,6 +547,8 @@ class Gen2TWCs:
                                     % (senderID[0], senderID[1])
                                 )
                                 continue
+                            else:
+                                slaveTWC = self.getTWCByID(senderID)
 
                             if self.getFakeTWCID() == receiverID:
                                 slaveTWC.receive_slave_heartbeat(heartbeatData)
@@ -825,10 +825,9 @@ class Gen2TWCs:
                             receiverID = msgMatch.group(2)
                             heartbeatData = msgMatch.group(3)
                             master.setMasterTWCID(senderID)
-                            try:
-                                slaveTWC = self.knownTWCsByID[receiverID]
-                            except KeyError:
-                                slaveTWC = self.newTWC(receiverID, 80)
+                            if receiverID not in self.knownTWCsByID:
+                                self.knownTWCsByID[receiverID] = self.newTWC(receiverID, 80)
+                            slaveTWC = self.knownTWCsByID[receiverID]
 
                             slaveTWC.masterHeartbeatData = heartbeatData
 
@@ -1014,13 +1013,10 @@ class Gen2TWCs:
                                 )
                                 continue
 
-                            try:
-                                slaveTWC = self.knownTWCsByID[senderID]
-                            except KeyError:
-                                # Slave is unlikely to send another linkready since it's
-                                # already linked with a real Master TWC, so just assume
-                                # it's 80A.
-                                slaveTWC = self.newTWC(senderID, 80)
+                            # Slave is unlikely to send another linkready since it's
+                            # already linked with a real Master TWC, so just assume
+                            # it's 80A if it's new.
+                            slaveTWC = self.knownTWCsByID.get(senderID, self.newTWC(senderID, 80))
 
                             slaveTWC.print_status(heartbeatData)
                         else:
@@ -1384,13 +1380,9 @@ class Gen2TWCs:
         return self.overrideMasterHeartbeatData
 
     def newTWC(self, newTWCID, maxAmps):
-        try:
-            newTWC = self.knownTWCsByID[newTWCID]
-            # We didn't get KeyError exception, so this TWC is already in
-            # knownTWCs and we can simply return it.
-            return newTWC
-        except KeyError:
-            pass
+        if newTWCID in self.knownTWCsByID:
+            # We already know about this TWC, so return it.
+            return self.knownTWCsByID[newTWCID]
 
         newTWC = Gen2TWC(newTWCID, maxAmps, self.config, self.master, self)
         self.knownTWCsByID[newTWCID] = newTWC
@@ -1428,10 +1420,8 @@ class Gen2TWCs:
             if self.knownTWCs[i].TWCID == deleteTWCID:
                 del self.knownTWCs[i]
                 break
-        try:
+        if deleteTWCID in self.knownTWCsByID:
             del self.knownTWCsByID[deleteTWCID]
-        except KeyError:
-            pass
 
     def countTWCs(self):
         return int(len(self.knownTWCs))
