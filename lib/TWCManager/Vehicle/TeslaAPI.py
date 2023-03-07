@@ -677,7 +677,7 @@ class TeslaAPI:
                         vehicle.name
                         + ": "
                         + startOrStop
-                        + " charge response"
+                        + " charge response "
                         + str(apiResponseDict),
                     )
                     # Responses I've seen in apiResponseDict:
@@ -712,15 +712,23 @@ class TeslaAPI:
                         if apiResponseDict["response"]["result"] == True:
                             self.resetCarApiLastErrorTime(vehicle)
                             vehicle.chargeStatusDeferral = now + 10
-                        elif charge:
+                        else:
                             reason = apiResponseDict["response"]["reason"]
-                            if reason in [
-                                "complete",
-                                "charging",
-                                "requested",
-                                "is_charging",
-                                "disconnected",
-                            ]:
+
+                            # Known reasons that are actually success:
+                            nonErrorReasons = []
+                            if charge:
+                                nonErrorReasons = [
+                                    "complete",
+                                    "charging",
+                                    "requested",
+                                    "is_charging",
+                                    "disconnected",
+                                ]
+                            else:
+                                nonErrorReasons = ["not_charging"]
+
+                            if reason in nonErrorReasons:
                                 # We asked the car to charge, but it responded that
                                 # it can't, either because it's reached target
                                 # charge state (reason == 'complete'), or it's
@@ -735,14 +743,14 @@ class TeslaAPI:
                                 # which car in the list is connected to our TWC.
                                 logger.info(
                                     vehicle.name
-                                    + " is done charging or already trying to charge or not connected to a charger."
-                                    + "  Stop asking to start charging."
+                                    + " is already in the desired state. Stop asking."
                                 )
-                                vehicle.stopAskingToStartCharging = True
-                                if reason in ["complete"]:
-                                    vehicle.chargeStatusDeferral = now + 3600
-                                else:
-                                    vehicle.chargeStatusDeferral = now + 10
+                                if charge:
+                                    vehicle.stopAskingToStartCharging = True
+                                    if reason in ["complete"]:
+                                        vehicle.chargeStatusDeferral = now + 3600
+                                    else:
+                                        vehicle.chargeStatusDeferral = now + 10
                                 self.resetCarApiLastErrorTime(vehicle)
                             elif reason == "could_not_wake_buses":
                                 # This error often happens if you call
@@ -770,21 +778,6 @@ class TeslaAPI:
                                 )
                                 result = "error"
                                 self.updateCarApiLastErrorTime(vehicle)
-                        else:
-                            # Stop charge failed with an error I
-                            # haven't seen before, so wait
-                            # carApiErrorRetryMins mins before trying again.
-                            reason = apiResponseDict["response"]["reason"]
-                            logger.info(
-                                'ERROR "'
-                                + reason
-                                + '" when trying to '
-                                + startOrStop
-                                + " car charging via Tesla car API.  Will try again later."
-                                + "\nIf this error persists, please file an issue at https://github.com/ngardiner/TWCManager/ with a copy of this error.",
-                            )
-                            result = "error"
-                            self.updateCarApiLastErrorTime(vehicle)
 
                 except (KeyError, TypeError):
                     # This catches cases like trying to access
