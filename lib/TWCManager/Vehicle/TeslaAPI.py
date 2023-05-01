@@ -711,7 +711,7 @@ class TeslaAPI:
                     else:
                         if apiResponseDict["response"]["result"] == True:
                             self.resetCarApiLastErrorTime(vehicle)
-                            vehicle.chargeStatusDeferral = now + 10
+                            vehicle.statusDeferral = now + 10
                         else:
                             reason = apiResponseDict["response"]["reason"]
 
@@ -748,9 +748,9 @@ class TeslaAPI:
                                 if charge:
                                     vehicle.stopAskingToStartCharging = True
                                     if reason in ["complete"]:
-                                        vehicle.chargeStatusDeferral = now + 3600
+                                        vehicle.statusDeferral = now + 3600
                                     else:
-                                        vehicle.chargeStatusDeferral = now + 10
+                                        vehicle.statusDeferral = now + 10
                                 self.resetCarApiLastErrorTime(vehicle)
                             elif reason == "could_not_wake_buses":
                                 # This error often happens if you call
@@ -1223,12 +1223,10 @@ class CarApiVehicle:
 
     errorCount = 0
     lastErrorTime = 0
-    lastDriveStatusTime = 0
-    lastChargeStatusTime = 0
+    lastVehicleStatusTime = 0
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
-    driveStatusDeferral = 0
-    chargeStatusDeferral = 0
+    statusDeferral = 0
 
     batteryLevel = 10000
     chargeLimit = -1
@@ -1407,46 +1405,7 @@ class CarApiVehicle:
     def update_location(self):
 
         if self.syncSource == "TeslaAPI":
-            url = "https://owner-api.teslamotors.com/api/1/vehicles/"
-            url = url + str(self.ID) + "/data_request/drive_state"
-
-            now = time.time()
-
-            if now < self.driveStatusDeferral:
-                return True
-
-            try:
-                (result, response) = self.get_car_api(url)
-            except TypeError:
-                logger.log(logging.error, "Got None response from get_car_api()")
-                return False
-
-            if result:
-                self.lastDriveStatusTime = now
-                self.lat = response["latitude"]
-                self.lon = response["longitude"]
-                self.atHome = self.carapi.is_location_home(self.lat, self.lon)
-
-                if not self.atHome:
-                    if self.carapi.is_far_from_home(self.lat, self.lon):
-                        # Car is further from home than can be driven in an
-                        # hour; no point re-checking sooner than that.
-                        self.driveStatusDeferral = now + 3600
-                    elif (
-                        response["shift_state"] == "P"
-                        or response["shift_state"] is None
-                    ):
-                        # Car is not driving, so we can check infrequently. May
-                        # be able to sleep.
-                        self.driveStatusDeferral = now + 1800
-                    else:
-                        self.driveStatusDeferral = now + 60
-                else:
-                    # Car is at home; check for departure infrequently to permit
-                    # sleep.
-                    self.driveStatusDeferral = now + 3600
-
-            return result
+            return self.update_vehicle_data()
 
         else:
 
@@ -1456,58 +1415,80 @@ class CarApiVehicle:
 
             return True
 
+    def update_vehicle_data(self, cacheTime=60):
+        url = "https://owner-api.teslamotors.com/api/1/vehicles/"
+        url = url + str(self.ID) + "/vehicle_data"
+
+        now = time.time()
+
+        if now < self.statusDeferral:
+            return True
+
+        try:
+            (result, response) = self.get_car_api(url)
+        except TypeError:
+            logger.log(logging.error, "Got None response from get_car_api()")
+            return False
+
+        if result:
+            drive = response["drive_state"]
+            self.lat = drive["latitude"]
+            self.lon = drive["longitude"]
+            self.atHome = self.carapi.is_location_home(self.lat, self.lon)
+
+            charge = response["charge_state"]
+            self.chargeLimit = charge["charge_limit_soc"]
+            self.batteryLevel = charge["battery_level"]
+            self.timeToFullCharge = charge["time_to_full_charge"]
+            self.availableCurrent = charge["charger_pilot_current"]
+            self.actualCurrent = charge["charger_actual_current"]
+            self.phases = charge["charger_phases"]
+            self.voltage = charge["charger_voltage"]
+
+            self.charging = (
+                True
+                if charge["charging_state"] == "Charging"
+                else False
+            )
+
+            if not self.atHome:
+                if self.carapi.is_far_from_home(self.lat, self.lon):
+                    # Car is further from home than can be driven in an
+                    # hour; no point re-checking sooner than that.
+                    self.statusDeferral = now + 3600
+                elif (
+                    response["shift_state"] == "P"
+                    or response["shift_state"] is None
+                ):
+                    # Car is not driving, so we can check infrequently. May
+                    # be able to sleep.
+                    self.statusDeferral = now + 1800
+                else:
+                    self.statusDeferral = now + 60
+            else:
+                # Car is at home; deferral depends on charge state
+                if self.charging:
+                    self.statusDeferral = now + 30
+                elif self.batteryLevel < self.chargeLimit and self.availableCurrent > 0:
+                    self.statusDeferral = now + 1800
+                else:
+                    self.statusDeferral = now + 3600
+
+            return True
+
+        return False
+
+
     def update_charge(self, lazy = False):
 
         if self.syncSource == "TeslaAPI":
-
             # No need to query charge state if we're not at home.
             if lazy and not (self.is_awake() and self.atHome):
                 return False
 
-            now = time.time()
-
-            if now < self.chargeStatusDeferral:
-                return True
-            else:
-                self.chargeStatusDeferral = now + 60
-
-            url = "https://owner-api.teslamotors.com/api/1/vehicles/"
-            url = url + str(self.ID) + "/data_request/charge_state"
-
-            try:
-                logger.info("Calling " + url)
-                (result, response) = self.get_car_api(url)
-            except TypeError:
-                logger.log(logging.error, "Got None response from get_car_api()")
-                return False
-
-            if result:
-                self.lastChargeStatusTime = time.time()
-                self.availableCurrent = response["charger_pilot_current"]
-                self.actualCurrent = response["charger_actual_current"]
-                self.phases = response["charger_phases"]
-                self.voltage = response["charger_voltage"]
-                self.chargeLimit = response["charge_limit_soc"]
-                self.batteryLevel = response["battery_level"]
-                self.timeToFullCharge = response["time_to_full_charge"]
-
-                self.charging = (
-                    True
-                    if response["charging_state"] == "Charging"
-                    else False
-                )
-
-                if self.charging:
-                    self.chargeStatusDeferral = now + 30
-                elif self.batteryLevel < self.chargeLimit and self.availableCurrent > 0:
-                    self.chargeStatusDeferral = now + 1800
-                else:
-                    self.chargeStatusDeferral = now + 3600
-
-            return result
+            return self.update_vehicle_data()
 
         else:
-
             return True
 
     @property
@@ -1571,7 +1552,7 @@ class CarApiVehicle:
             if result is True or reason == "already_set":
                 self.stopTryingToApplyLimit = True
                 self.lastAPIAccessTime = now
-                self.chargeStatusDeferral = now + 10
+                self.statusDeferral = now + 10
                 self.carapi.resetCarApiLastErrorTime(self)
                 return True
             elif reason == "could_not_wake_buses":
