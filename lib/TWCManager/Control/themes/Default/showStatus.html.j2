@@ -79,7 +79,7 @@
                   <th width='2%'>Commands</th>
                 </tr>
               </thead>
-    {% for twc in master.getSlaveTWCs() %}
+    {% for twc in master.getAllEVSEs() %}
       {% set twcid = '%02x%02x' % (twc.TWCID[0], twc.TWCID[1]) %}
               <tr>
                 <td>{{ twcid }}</td>

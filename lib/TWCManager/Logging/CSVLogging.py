@@ -4,7 +4,6 @@ import logging
 
 
 class CSVLogging:
-
     capabilities = {"queryGreenEnergy": False}
     config = None
     configConfig = None
@@ -16,14 +15,8 @@ class CSVLogging:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configLogging = master.config["logging"]["CSV"]
-        except KeyError:
-            self.configLogging = {}
+        self.configConfig = master.config.get("config", {})
+        self.configLogging = master.config.get("logging", {}).get("CSV", {})
         self.status = self.configLogging.get("enabled", False)
 
         # Unload if this module is disabled or misconfigured

@@ -345,34 +345,46 @@ class Policy:
         if all([isinstance(a, list) for a in (matchValue, condition, value)]):
             return self.checkConditions(matchValue, condition, value, not exitOn)
 
-        # Perform comparison
-        if condition == "gt":
-            # Match must be greater than value
-            return True if matchValue > value else False
-        elif condition == "gte":
-            # Match must be greater than or equal to value
-            return True if matchValue >= value else False
-        elif condition == "lt":
-            # Match must be less than value
-            return True if matchValue < value else False
-        elif condition == "lte":
-            # Match must be less than or equal to value
-            return True if matchValue <= value else False
-        elif condition == "eq":
-            # Match must be equal to value
-            return True if matchValue == value else False
-        elif condition == "ne":
-            # Match must not be equal to value
-            return True if matchValue != value else False
-        elif condition == "false":
-            # Condition: false is a method to ensure a policy entry
-            # is never matched, possibly for testing purposes
+        try:
+            # Perform comparison
+            if condition == "gt":
+                # Match must be greater than value
+                return True if matchValue > value else False
+            elif condition == "gte":
+                # Match must be greater than or equal to value
+                return True if matchValue >= value else False
+            elif condition == "lt":
+                # Match must be less than value
+                return True if matchValue < value else False
+            elif condition == "lte":
+                # Match must be less than or equal to value
+                return True if matchValue <= value else False
+            elif condition == "eq":
+                # Match must be equal to value
+                return True if matchValue == value else False
+            elif condition == "ne":
+                # Match must not be equal to value
+                return True if matchValue != value else False
+            elif condition == "false":
+                # Condition: false is a method to ensure a policy entry
+                # is never matched, possibly for testing purposes
+                return False
+            elif condition == "none":
+                # No condition exists.
+                return True
+            else:
+                raise ValueError("Unknown condition " + condition)
+        except Exception as e:
+            logger.log(
+                logging.ERROR,
+                f"Error evaluating Policy match (%s [{matchValue}]), condition (%s), value (%s)",
+                match,
+                condition,
+                value,
+                e,
+                extra={"colored": "red"},
+            )
             return False
-        elif condition == "none":
-            # No condition exists.
-            return True
-        else:
-            raise ValueError("Unknown condition " + condition)
 
     # exitOn = False returns True if all conditions are True, else False ==> AND
     # exitOn = True returns True if any condition is True, else False ==> OR

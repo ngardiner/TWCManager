@@ -51,9 +51,12 @@ class RS485:
         self.connect()
 
     def connect(self):
-        # Reset any Slave TWC last RX heartbeat counters in case serial reconnection has occurred
-        for slaveTWC in self.master.getSlaveTWCs():
-            slaveTWC.timeLastRx = time.time()
+        # Reset any Slave TWC last RX heartbeat counters in case serial
+        # reconnection has occurred
+        controller = self.master.getModuleByName("Gen2TWCs")
+        if controller:
+            for twc in controller.allEVSEs:
+                twc.timeLastRx = time.time()
 
         # Connect to serial port
         self.ser = self.serial.serial_for_url(self.port, self.baud, timeout=0)

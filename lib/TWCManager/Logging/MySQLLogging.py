@@ -10,7 +10,6 @@ class MySQLHandler(logging.Handler):
     slaveSession = {}
 
     def __init__(self, db):
-
         logging.Handler.__init__(self)
         self.db = db
 
@@ -174,7 +173,6 @@ class MySQLHandler(logging.Handler):
 
 
 class MySQLLogging:
-
     capabilities = {"queryGreenEnergy": True}
     config = None
     configConfig = None
@@ -185,14 +183,8 @@ class MySQLLogging:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configLogging = master.config["logging"]["MySQL"]
-        except KeyError:
-            self.configLogging = {}
+        self.configConfig = master.config.get("config", {})
+        self.configLogging = master.config.get("logging", {}).get("MySQL", {})
         self.status = self.configLogging.get("enabled", False)
 
         # Unload if this module is disabled or misconfigured

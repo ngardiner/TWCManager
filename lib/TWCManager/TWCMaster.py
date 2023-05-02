@@ -1,6 +1,5 @@
 #! /usr/bin/python3
 
-from TWCManager.TWCSlave import TWCSlave
 from datetime import datetime, timedelta
 import json
 import logging
@@ -10,9 +9,9 @@ from sys import modules
 import threading
 import time
 import math
-import random
 import requests
 import bisect
+from TWCManager.EVSEInstance.MergedEVSE import MergedEVSE
 
 logger = logging.getLogger("\u26FD Master")
 
@@ -28,16 +27,12 @@ class TWCMaster:
     consumptionValues = {}
     debugOutputToFile = False
     generationValues = {}
-    lastkWhMessage = time.time()
-    lastkWhPoll = 0
     lastSaveFailed = 0
     lastTWCResponseMsg = None
     lastUpdateCheck = 0
-    masterTWCID = ""
     maxAmpsToDivideAmongSlaves = 0
     modules = {}
     nextHistorySnap = 0
-    overrideMasterHeartbeatData = b""
     protocolVersion = 2
     releasedModules = []
     settings = {
@@ -56,27 +51,12 @@ class TWCMaster:
         "scheduledAmpsStartHour": -1,
         "sendServerTime": 0,
     }
-    slaveHeartbeatData = bytearray(
-        [0x01, 0x0F, 0xA0, 0x0F, 0xA0, 0x00, 0x00, 0x00, 0x00]
-    )
-    slaveTWCs = {}
-    slaveTWCRoundRobin = []
     stopTimeout = datetime.max
     spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
     teslaLoginAskLater = False
-    TWCID = None
     updateVersion = False
     version = "1.3.0"
-
-    # TWCs send a seemingly-random byte after their 2-byte TWC id in a number of
-    # messages. I call this byte their "Sign" for lack of a better term. The byte
-    # never changes unless the TWC is reset or power cycled. We use hard-coded
-    # values for now because I don't know if there are any rules to what values can
-    # be chosen. I picked 77 because it's easy to recognize when looking at logs.
-    # These shouldn't need to be changed.
-    masterSign = bytearray(b"\x77")
-    slaveSign = bytearray(b"\x77")
 
     def __init__(self, TWCID, config):
         self.config = config
@@ -90,10 +70,6 @@ class TWCMaster:
 
     def addkWhDelivered(self, kWh):
         self.settings["kWhDelivered"] = self.settings.get("kWhDelivered", 0) + kWh
-
-    def addSlaveTWC(self, slaveTWC):
-        # Adds the Slave TWC to the Round Robin list
-        return self.slaveTWCRoundRobin.append(slaveTWC)
 
     def advanceHistorySnap(self):
         try:
@@ -207,21 +183,18 @@ class TWCMaster:
                     blnUseScheduledAmps = 1
         return blnUseScheduledAmps
 
-    def checkVINEntitlement(self, subTWC):
-        # When provided with the TWC that has had the VIN reported for a vehicle
+    def checkVINEntitlement(self, vin):
+        # When provided with the VIN reported for a vehicle,
         # we check the policy for charging and determine if it is allowed or not
 
-        if not subTWC.currentVIN:
+        if not vin:
             # No VIN supplied. We can't make any decision other than allow
             return 1
 
         if str(self.settings.get("chargeAuthorizationMode", "1")) == "1":
             # In this mode, we allow all vehicles to charge unless they
             # are explicitly banned from charging
-            if (
-                subTWC.currentVIN
-                in self.settings["VehicleGroups"]["Deny Charging"]["Members"]
-            ):
+            if vin in self.settings["VehicleGroups"]["Deny Charging"]["Members"]:
                 return 0
             else:
                 return 1
@@ -229,24 +202,26 @@ class TWCMaster:
         elif str(self.settings.get("chargeAuthorizationMode", "1")) == "2":
             # In this mode, vehicles may only charge if they are listed
             # in the Allowed VINs list
-            if (
-                subTWC.currentVIN
-                in self.settings["VehicleGroups"]["Allow Charging"]["Members"]
-            ):
+            if vin in self.settings["VehicleGroups"]["Allow Charging"]["Members"]:
                 return 1
             else:
                 return 0
 
-    def convertAmpsToWatts(self, amps):
-        (voltage, phases) = self.getVoltageMeasurement()
+    def convertAmpsToWatts(self, amps, voltage=None):
+        if not voltage:
+            (voltage, phases) = self.getVoltageMeasurement()
+        else:
+            phases = sum(1 for p in voltage if p > 0)
+            voltage = sum(voltage) / max([phases, 1])
         return phases * voltage * amps
 
-    def convertWattsToAmps(self, watts):
-        (voltage, phases) = self.getVoltageMeasurement()
+    def convertWattsToAmps(self, watts, voltage=None):
+        if not voltage:
+            (voltage, phases) = self.getVoltageMeasurement()
+        else:
+            phases = max([sum(1 for p in voltage if p > 0), 1])
+            voltage = max([sum(voltage) / max([phases, 1]), 1])
         return watts / (phases * voltage)
-
-    def countSlaveTWC(self):
-        return int(len(self.slaveTWCRoundRobin))
 
     def delete_background_task(self, task):
         if (
@@ -318,13 +293,14 @@ class TWCMaster:
                 )
         return offset
 
+    def getEVSEbyID(self, id):
+        for evse in self.getAllEVSEs():
+            if evse.id == id:
+                return evse
+        return None
+
     def getHourResumeTrackGreenEnergy(self):
         return self.settings.get("hourResumeTrackGreenEnergy", -1)
-
-    def getMasterTWCID(self):
-        # This is called when TWCManager is in Slave mode, to track the
-        # master's TWCID
-        return self.masterTWCID
 
     def getkWhDelivered(self):
         return self.settings["kWhDelivered"]
@@ -334,6 +310,10 @@ class TWCMaster:
             return self.maxAmpsToDivideAmongSlaves
         else:
             return 0
+
+    # For now, this is an adapter to contain the Amps-to-Watts conversion
+    def getMaxPowerToDivideAmongSlaves(self):
+        return self.convertAmpsToWatts(self.getMaxAmpsToDivideAmongSlaves())
 
     def getModuleByName(self, name):
         module = self.modules.get(name, None)
@@ -349,9 +329,6 @@ class TWCMaster:
             if modinfo["type"] == type:
                 matched.append({"name": module, "ref": modinfo["ref"]})
         return matched
-
-    def getInterfaceModule(self):
-        return self.getModulesByType("Interface")[0]["ref"]
 
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
@@ -423,25 +400,6 @@ class TWCMaster:
 
     def getScheduledAmpsFlexStart(self):
         return int(self.settings.get("scheduledAmpsFlexStart", False))
-
-    def getSlaveLifetimekWh(self):
-
-        # This function is called from a Scheduled Task
-        # If it's been at least 1 minute, then query all known Slave TWCs
-        # to determine their lifetime kWh and per-phase voltages
-        now = time.time()
-        if now >= self.lastkWhPoll + 60:
-            for slaveTWC in self.getSlaveTWCs():
-                self.getInterfaceModule().send(
-                    bytearray(b"\xFB\xEB")
-                    + self.TWCID
-                    + slaveTWC.TWCID
-                    + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
-                )
-            self.lastkWhPoll = now
-
-    def getSlaveSign(self):
-        return self.slaveSign
 
     def getStatus(self):
         chargerLoad = float(self.getChargerLoad())
@@ -522,42 +480,12 @@ class TWCMaster:
     def getSpikeAmps(self):
         return self.spikeAmpsToCancel6ALimit
 
-    def getTimeLastTx(self):
-        return self.getInterfaceModule().timeLastTx
-
     def getTWCbyVIN(self, vin):
         twc = None
-        for slaveTWC in self.getSlaveTWCs():
+        for slaveTWC in self.getDedupedEVSEs():
             if slaveTWC.currentVIN == vin:
                 twc = slaveTWC
         return twc
-
-    def getVehicleVIN(self, slaveID, part):
-        prefixByte = None
-        if int(part) == 0:
-            prefixByte = bytearray(b"\xFB\xEE")
-        if int(part) == 1:
-            prefixByte = bytearray(b"\xFB\xEF")
-        if int(part) == 2:
-            prefixByte = bytearray(b"\xFB\xF1")
-
-        if prefixByte:
-            self.getInterfaceModule().send(
-                prefixByte
-                + self.TWCID
-                + slaveID
-                + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
-            )
-
-    def deleteSlaveTWC(self, deleteSlaveID):
-        for i in range(0, len(self.slaveTWCRoundRobin)):
-            if self.slaveTWCRoundRobin[i].TWCID == deleteSlaveID:
-                del self.slaveTWCRoundRobin[i]
-                break
-        try:
-            del self.slaveTWCs[deleteSlaveID]
-        except KeyError:
-            pass
 
     def getChargerLoad(self):
         # Calculate in watts the load that the charger is generating so
@@ -579,9 +507,6 @@ class TWCMaster:
             consumptionVal += offset
 
         return float(consumptionVal)
-
-    def getFakeTWCID(self):
-        return self.TWCID
 
     def getGeneration(self):
         generationVal = 0
@@ -617,9 +542,6 @@ class TWCMaster:
         latlon[0] = float(self.settings.get("homeLat", 10000))
         latlon[1] = float(self.settings.get("homeLon", 10000))
         return latlon
-
-    def getMasterHeartbeatOverride(self):
-        return self.overrideMasterHeartbeatData
 
     def getMaxAmpsToDivideGreenEnergy(self):
         # Calculate our current generation and consumption in watts
@@ -661,36 +583,29 @@ class TWCMaster:
             return (True, result[0], result[1])
         return (False, None, None)
 
-    def getSlaveByID(self, twcid):
-        return self.slaveTWCs[twcid]
-
-    def getSlaveTWCID(self, twc):
-        return self.slaveTWCRoundRobin[twc].TWCID
-
-    def getSlaveTWC(self, id):
-        return self.slaveTWCRoundRobin[id]
-
-    def getSlaveTWCs(self):
-        # Returns a list of all Slave TWCs
-        return self.slaveTWCRoundRobin
-
     def getTotalAmpsInUse(self):
-        # Returns the number of amps currently in use by all TWCs
+        # Returns the number of amps currently in use by all EVSEs
+        #
+        # BUGBUG: Voltages can be different, so we should never work in amps
+        # when we're talking about multiple EVSEs.  We should work in watts.
+        #
+        # Any call to this function likely represents a bug.
         totalAmps = 0
-        for slaveTWC in self.getSlaveTWCs():
-            totalAmps += slaveTWC.reportedAmpsActual
+        for evse in self.getDedupedEVSEs():
+            totalAmps += evse.currentAmps
 
         logger.debug("Total amps all slaves are using: " + str(totalAmps))
         return totalAmps
 
     def getVoltageMeasurement(self):
-        slavesWithVoltage = [
-            slave
-            for slave in self.getSlaveTWCs()
-            if (slave.voltsPhaseA > 0 or slave.voltsPhaseB > 0 or slave.voltsPhaseC > 0)
-        ]
-        if len(slavesWithVoltage) == 0:
-            # No slaves support returning voltage
+        evsesWithVoltage = []
+        for evse in self.getAllEVSEs():
+            voltage = evse.currentVoltage
+            if voltage[0] > 0 or voltage[1] > 0 or voltage[2] > 0:
+                evsesWithVoltage.append(evse)
+
+        if len(evsesWithVoltage) == 0:
+            # No EVSE instances support returning voltage
             return (
                 self.config["config"].get("defaultVoltage", 240),
                 self.config["config"].get("numberOfPhases", 1),
@@ -700,17 +615,17 @@ class TWCMaster:
         phases = 0
 
         # Detect number of active phases
-        for slave in slavesWithVoltage:
+        for evse in evsesWithVoltage:
             localPhases = 0
-            if slave.voltsPhaseA:
-                localPhases += 1
-            if slave.voltsPhaseB:
-                localPhases += 1
-            if slave.voltsPhaseC:
-                localPhases += 1
+            voltage = evse.currentVoltage
+            for phase in voltage:
+                if phase:
+                    localPhases += 1
 
             if phases:
                 if localPhases != phases:
+                    # BUGBUG: This is fine in the new design; need to fix this
+                    # path to tolerate it.
                     logger.info(
                         "FATAL:  Mix of multi-phase TWC configurations not currently supported."
                     )
@@ -721,14 +636,9 @@ class TWCMaster:
             else:
                 phases = localPhases
 
-        total = sum(
-            [
-                (slave.voltsPhaseA + slave.voltsPhaseB + slave.voltsPhaseC)
-                for slave in slavesWithVoltage
-            ]
-        )
+        total = sum([sum(evse.currentVoltage) for evse in evsesWithVoltage])
 
-        return (total / (phases * len(slavesWithVoltage)), phases)
+        return (total / (phases * len(evsesWithVoltage)), phases)
 
     def hex_str(self, s: str):
         return " ".join("{:02X}".format(ord(c)) for c in s)
@@ -794,96 +704,10 @@ class TWCMaster:
         if not self.settings.get("sunset", None):
             self.settings["sunset"] = 20
 
-    def master_id_conflict(self):
-        # We're playing fake slave, and we got a message from a master with our TWCID.
-        # By convention, as a slave we must change our TWCID because a master will not.
-        self.TWCID[0] = random.randint(0, 0xFF)
-        self.TWCID[1] = random.randint(0, 0xFF)
-
-        # Real slaves change their sign during a conflict, so we do too.
-        self.slaveSign[0] = random.randint(0, 0xFF)
-
-        logger.info(
-            "Master's TWCID matches our fake slave's TWCID.  "
-            "Picked new random TWCID %02X%02X with sign %02X"
-            % (self.TWCID[0], self.TWCID[1], self.slaveSign[0])
-        )
-
-    def newSlave(self, newSlaveID, maxAmps):
-        try:
-            slaveTWC = self.slaveTWCs[newSlaveID]
-            # We didn't get KeyError exception, so this slave is already in
-            # slaveTWCs and we can simply return it.
-            return slaveTWC
-        except KeyError:
-            pass
-
-        slaveTWC = TWCSlave(newSlaveID, maxAmps, self.config, self)
-        self.slaveTWCs[newSlaveID] = slaveTWC
-        self.addSlaveTWC(slaveTWC)
-
-        if self.countSlaveTWC() > 3:
-            logger.info(
-                "WARNING: More than 3 slave TWCs seen on network. Dropping oldest: "
-                + self.hex_str(self.getSlaveTWCID(0))
-                + "."
-            )
-            self.deleteSlaveTWC(self.getSlaveTWCID(0))
-
-        return slaveTWC
-
     def num_cars_charging_now(self):
 
-        carsCharging = 0
-        for slaveTWC in self.getSlaveTWCs():
-            if slaveTWC.reportedAmpsActual >= 1.0:
-                if slaveTWC.isCharging == 0:
-                    # We have detected that a vehicle has started charging on this Slave TWC
-                    # Attempt to request the vehicle's VIN
-                    slaveTWC.isCharging = 1
-                    slaveTWC.lastChargingStart = time.time()
-                    self.queue_background_task(
-                        {
-                            "cmd": "getVehicleVIN",
-                            "slaveTWC": slaveTWC.TWCID,
-                            "vinPart": 0,
-                        }
-                    )
+        carsCharging = len([evse for evse in self.getDedupedEVSEs() if evse.isCharging])
 
-                    # Record our VIN query timestamp
-                    slaveTWC.lastVINQuery = time.time()
-                    slaveTWC.vinQueryAttempt = 1
-
-                    # Record start of current charging session
-                    self.recordVehicleSessionStart(slaveTWC)
-            else:
-                if slaveTWC.isCharging == 1:
-                    # A vehicle was previously charging and is no longer charging
-                    # Clear the VIN details for this slave and move the last
-                    # vehicle's VIN to lastVIN
-                    slaveTWC.VINData = ["", "", ""]
-                    if slaveTWC.currentVIN:
-                        slaveTWC.lastVIN = slaveTWC.currentVIN
-                    slaveTWC.currentVIN = ""
-                    self.updateVINStatus()
-
-                    # Stop querying for Vehicle VIN
-                    slaveTWC.lastVINQuery = 0
-                    slaveTWC.vinQueryAttempt = 0
-
-                    # Close off the current charging session
-                    self.recordVehicleSessionEnd(slaveTWC)
-                slaveTWC.isCharging = 0
-                slaveTWC.lastChargingStart = 0
-            carsCharging += slaveTWC.isCharging
-            for module in self.getModulesByType("Status"):
-                module["ref"].setStatus(
-                    slaveTWC.TWCID,
-                    "cars_charging",
-                    "carsCharging",
-                    slaveTWC.isCharging,
-                    "",
-                )
         logger.debug("Number of cars charging now: " + str(carsCharging))
 
         if carsCharging == 0:
@@ -1072,29 +896,6 @@ class TWCMaster:
         self.settings["chargeNowTimeEnd"] = 0
         self.queue_background_task({"cmd": "saveSettings"})
 
-    def retryVINQuery(self):
-        # For each Slave TWC, check if it's been more than 60 seconds since the last
-        # VIN query without a VIN. If so, query again.
-        for slaveTWC in self.getSlaveTWCs():
-            if slaveTWC.isCharging == 1:
-                if (
-                    slaveTWC.lastVINQuery > 0
-                    and slaveTWC.vinQueryAttempt < 6
-                    and not slaveTWC.currentVIN
-                ):
-                    if (time.time() - slaveTWC.lastVINQuery) >= 60:
-                        self.queue_background_task(
-                            {
-                                "cmd": "getVehicleVIN",
-                                "slaveTWC": slaveTWC.TWCID,
-                                "vinPart": 0,
-                            }
-                        )
-                        slaveTWC.vinQueryAttempt += 1
-                        slaveTWC.lastVINQuery = time.time()
-            else:
-                slaveTWC.lastVINQuery = 0
-
     def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
         if not "chargeLimits" in self.settings:
             self.settings["chargeLimits"] = dict()
@@ -1128,131 +929,17 @@ class TWCMaster:
             logger.info(str(e))
             self.lastSaveFailed = 1
 
-    def send_master_linkready1(self):
+    def sendStopCommand(self, vin):
+        evses = self.getDedupedEVSEs()
+        if vin:
+            evses = [evse for evse in evses if evse.currentVIN == vin]
 
-        logger.log(logging.INFO8, "Send master linkready1")
-
-        # When master is powered on or reset, it sends 5 to 7 copies of this
-        # linkready1 message followed by 5 copies of linkready2 (I've never seen
-        # more or less than 5 of linkready2).
-        #
-        # This linkready1 message advertises master's TWCID to other slaves on the
-        # network.
-        # If a slave happens to have the same id as master, it will pick a new
-        # random TWCID. Other than that, slaves don't seem to respond to linkready1.
-
-        # linkready1 and linkready2 are identical except FC E1 is replaced by FB E2
-        # in bytes 2-3. Both messages will cause a slave to pick a new id if the
-        # slave's id conflicts with master.
-        # If a slave stops sending heartbeats for awhile, master may send a series
-        # of linkready1 and linkready2 messages in seemingly random order, which
-        # means they don't indicate any sort of startup state.
-
-        # linkready1 is not sent again after boot/reset unless a slave sends its
-        # linkready message.
-        # At that point, linkready1 message may start sending every 1-5 seconds, or
-        # it may not be sent at all.
-        # Behaviors I've seen:
-        #   Not sent at all as long as slave keeps responding to heartbeat messages
-        #   right from the start.
-        #   If slave stops responding, then re-appears, linkready1 gets sent
-        #   frequently.
-
-        # One other possible purpose of linkready1 and/or linkready2 is to trigger
-        # an error condition if two TWCs on the network transmit those messages.
-        # That means two TWCs have rotary switches setting them to master mode and
-        # they will both flash their red LED 4 times with top green light on if that
-        # happens.
-
-        # Also note that linkready1 starts with FC E1 which is similar to the FC D1
-        # message that masters send out every 4 hours when idle. Oddly, the FC D1
-        # message contains all zeros instead of the master's id, so it seems
-        # pointless.
-
-        # I also don't understand the purpose of having both linkready1 and
-        # linkready2 since only two or more linkready2 will provoke a response from
-        # a slave regardless of whether linkready1 was sent previously. Firmware
-        # trace shows that slaves do something somewhat complex when they receive
-        # linkready1 but I haven't been curious enough to try to understand what
-        # they're doing. Tests show neither linkready1 or 2 are necessary. Slaves
-        # send slave linkready every 10 seconds whether or not they got master
-        # linkready1/2 and if a master sees slave linkready, it will start sending
-        # the slave master heartbeat once per second and the two are then connected.
-        self.getInterfaceModule().send(
-            bytearray(b"\xFC\xE1")
-            + self.TWCID
-            + self.masterSign
-            + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
-        )
-
-    def send_master_linkready2(self):
-
-        logger.log(logging.INFO8, "Send master linkready2")
-
-        # This linkready2 message is also sent 5 times when master is booted/reset
-        # and then not sent again if no other TWCs are heard from on the network.
-        # If the master has ever seen a slave on the network, linkready2 is sent at
-        # long intervals.
-        # Slaves always ignore the first linkready2, but respond to the second
-        # linkready2 around 0.2s later by sending five slave linkready messages.
-        #
-        # It may be that this linkready2 message that sends FB E2 and the master
-        # heartbeat that sends fb e0 message are really the same, (same FB byte
-        # which I think is message type) except the E0 version includes the TWC ID
-        # of the slave the message is intended for whereas the E2 version has no
-        # recipient TWC ID.
-        #
-        # Once a master starts sending heartbeat messages to a slave, it
-        # no longer sends the global linkready2 message (or if it does,
-        # they're quite rare so I haven't seen them).
-        self.getInterfaceModule().send(
-            bytearray(b"\xFB\xE2")
-            + self.TWCID
-            + self.masterSign
-            + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
-        )
-
-    def send_slave_linkready(self):
-        # In the message below, \x1F\x40 (hex 0x1f40 or 8000 in base 10) refers to
-        # this being a max 80.00Amp charger model.
-        # EU chargers are 32A and send 0x0c80 (3200 in base 10).
-        #
-        # I accidentally changed \x1f\x40 to \x2e\x69 at one point, which makes the
-        # master TWC immediately start blinking its red LED 6 times with top green
-        # LED on. Manual says this means "The networked Wall Connectors have
-        # different maximum current capabilities".
-        msg = (
-            bytearray(b"\xFD\xE2")
-            + self.TWCID
-            + self.slaveSign
-            + bytearray(b"\x1F\x40\x00\x00\x00\x00\x00\x00")
-        )
-        if self.protocolVersion == 2:
-            msg += bytearray(b"\x00\x00")
-
-        self.getInterfaceModule().send(msg)
+        for evse in evses:
+            evse.stopCharging()
 
     def sendStartCommand(self):
-        # This function will loop through each of the Slave TWCs, and send them the start command.
-        for slaveTWC in self.getSlaveTWCs():
-            self.getInterfaceModule().send(
-                bytearray(b"\xFC\xB1")
-                + self.TWCID
-                + slaveTWC.TWCID
-                + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-            )
-
-    def sendStopCommand(self, subTWC=None):
-        # This function will loop through each of the Slave TWCs, and send them the stop command.
-        # If the subTWC parameter is supplied, we only stop the specified TWC
-        for slaveTWC in self.getSlaveTWCs():
-            if (not subTWC) or (subTWC == slaveTWC.TWCID):
-                self.getInterfaceModule().send(
-                    bytearray(b"\xFC\xB2")
-                    + self.TWCID
-                    + slaveTWC.TWCID
-                    + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-                )
+        for evse in self.getDedupedEVSEs():
+            evse.startCharging()
 
     def setAllowedFlex(self, amps):
         self.allowedFlex = amps if amps >= 0 else 0
@@ -1293,11 +980,6 @@ class TWCMaster:
     def setkWhDelivered(self, kWh):
         self.settings["kWhDelivered"] = kWh
         return True
-
-    def setMasterTWCID(self, twcid):
-        # This is called when TWCManager is in Slave mode, to track the
-        # master's TWCID
-        self.masterTWCID = twcid
 
     def setMaxAmpsToDivideAmongSlaves(self, amps):
 
@@ -1367,9 +1049,8 @@ class TWCMaster:
             logger.debug(str(e))
             return
 
-        for slave in self.getSlaveTWCs():
-            avgCurrent += slave.historyAvgAmps
-            slave.historyNumSamples = 0
+        for evse in self.getDedupedEVSEs():
+            avgCurrent += evse.snapHistoryData()
         self.advanceHistorySnap()
 
         if avgCurrent > 0:
@@ -1381,6 +1062,9 @@ class TWCMaster:
             self.settings["history"].append(
                 (
                     periodTimestamp.isoformat(timespec="seconds"),
+                    # BUGBUG: Since EVSEs can have different voltage now, need to
+                    # convert using the EVSE's own voltage rather than a
+                    # site-wide value.
                     self.convertAmpsToWatts(avgCurrent)
                     * self.getRealPowerFactor(avgCurrent),
                 )
@@ -1406,7 +1090,7 @@ class TWCMaster:
             self.queue_background_task({"cmd": "charge", "charge": True})
 
     def stopCarsCharging(self):
-        # This is called by components (mainly TWCSlave) who want to signal to us to
+        # This is called by components who want to signal to us to
         # call our configured routine for stopping vehicles from charging.
         # The default setting is to use the Tesla API. Some people may not want to do
         # this, as it only works for Tesla vehicles and requires logging in with your
@@ -1426,7 +1110,8 @@ class TWCMaster:
             self.settings["respondToSlaves"] = 0
             self.settings["respondToSlavesExpiry"] = time.time() + 60
         if stopMode == 3:
-            self.sendStopCommand()
+            for module in self.getModulesByType("EVSEController"):
+                module["ref"].stopCharging()
 
     def time_now(self):
         return datetime.now().strftime(
@@ -1469,18 +1154,12 @@ class TWCMaster:
 
         return configloc
 
-    def updateSlaveLifetime(self, sender, kWh, vPA, vPB, vPC):
-        for slaveTWC in self.getSlaveTWCs():
-            if slaveTWC.TWCID == sender:
-                slaveTWC.setLifetimekWh(kWh)
-                slaveTWC.setVoltage(vPA, vPB, vPC)
-
     def updateVINStatus(self):
         # update current and last VIN IDs for each Slave to all Status modules
-        for slaveTWC in self.getSlaveTWCs():
+        for slaveTWC in self.getDedupedEVSEs():
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
-                    slaveTWC.TWCID,
+                    slaveTWC.ID,
                     "current_vehicle_vin",
                     "currentVehicleVIN",
                     slaveTWC.currentVIN,
@@ -1488,7 +1167,7 @@ class TWCMaster:
                 )
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
-                    slaveTWC.TWCID,
+                    slaveTWC.ID,
                     "last_vehicle_vin",
                     "lastVehicleVIN",
                     slaveTWC.lastVIN,
@@ -1527,3 +1206,29 @@ class TWCMaster:
         num &= 2**bits - 1
 
         return num
+
+    def getAllEVSEs(self):
+        return [
+            evse
+            for controller in self.getModulesByType("EVSEController")
+            for evse in controller["ref"].allEVSEs
+        ]
+
+    def getDedupedEVSEs(self):
+        allEVSEs = self.getAllEVSEs()
+
+        # EVSEs with the same VIN are the same EVSE
+        vinLookup = {}
+        for evse in allEVSEs:
+            vin = evse.currentVIN
+            if vin:
+                if vin not in vinLookup:
+                    vinLookup[vin] = []
+                vinLookup[vin].append(evse)
+        for vin, evseList in vinLookup.items():
+            if len(evseList) > 1:
+                for evse in evseList:
+                    allEVSEs.remove(evse)
+                allEVSEs.append(MergedEVSE(self, *evseList))
+
+        return allEVSEs

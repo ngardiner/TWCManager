@@ -33,7 +33,7 @@ class TWCProtocol:
         if packet.get("Command", "") != "SlaveLinkready":
             if not packet.get("RecieverID", None):
                 packet["RecieverID"] = bytearray(
-                    str(self.master.getSlaveTWCs()[0].TWCID).encode("utf-8")
+                    str(self.master.getAllEVSEs()[0].TWCID).encode("utf-8")
                 )
 
         if packet["Command"] == "Custom":

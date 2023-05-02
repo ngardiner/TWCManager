@@ -4,7 +4,6 @@ logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 
 class EmonCMS:
-
     # OpenEnergyMonitor (EmonCMS) Module
     # Fetches Consumption and Generation details from Open Energy Monitor
 
@@ -33,14 +32,8 @@ class EmonCMS:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configEmonCMS = master.config["sources"]["EmonCMS"]
-        except KeyError:
-            self.configEmonCMS = {}
+        self.configConfig = master.config.get("config", {})
+        self.configEmonCMS = master.config.get("sources", {}).get("EmonCMS", {})
         self.status = self.configEmonCMS.get("enabled", False)
         self.serverIP = self.configEmonCMS.get("serverIP", None)
         self.serverPort = self.configEmonCMS.get("serverPort", 80)
@@ -57,7 +50,6 @@ class EmonCMS:
             return None
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("Module Disabled. Skipping getConsumption")
             return 0
@@ -69,7 +61,6 @@ class EmonCMS:
         return self.consumedW
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("Module Disabled. Skipping getGeneration")
             return 0

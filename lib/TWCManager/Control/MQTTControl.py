@@ -4,7 +4,6 @@ logger = logging.getLogger("\U0001F3AE MQTT")
 
 
 class MQTTControl:
-
     import paho.mqtt.client as mqtt
     import _thread
 
@@ -24,14 +23,8 @@ class MQTTControl:
 
     def __init__(self, master):
         self.config = master.config
-        try:
-            self.configConfig = self.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configMQTT = self.config["control"]["MQTT"]
-        except KeyError:
-            self.configMQTT = {}
+        self.configConfig = self.config.get("config", {})
+        self.configMQTT = self.config.get("control", {}).get("MQTT", {})
         self.status = self.configMQTT.get("enabled", False)
         self.brokerIP = self.configMQTT.get("brokerIP", None)
         self.master = master
@@ -81,7 +74,6 @@ class MQTTControl:
         logger.log(logging.INFO5, "Res: " + str(res))
 
     def mqttMessage(self, client, userdata, message):
-
         # Takes an MQTT message which has a message body of the following format:
         # [Amps to charge at],[Seconds to charge for]
         # eg. 24,3600

@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 
 class TED:
-
     # I check solar panel generation using an API exposed by The
     # Energy Detective (TED). It's a piece of hardware available
     # at http://www.theenergydetective.com
@@ -34,14 +33,8 @@ class TED:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = self.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configTED = self.config["sources"]["TED"]
-        except KeyError:
-            self.configTED = {}
+        self.configConfig = self.config.get("config", {})
+        self.configTED = self.config.get("sources", {}).get("TED", {})
         self.status = self.configTED.get("enabled", False)
         self.serverIP = self.configTED.get("serverIP", None)
         self.serverPort = self.configTED.get("serverPort", "80")
@@ -52,7 +45,6 @@ class TED:
             return None
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("TED EMS Module Disabled. Skipping getConsumption")
             return 0
@@ -64,7 +56,6 @@ class TED:
         return float(0)
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("TED EMS Module Disabled. Skipping getGeneration")
             return 0
@@ -76,7 +67,6 @@ class TED:
         return float(self.generatedW)
 
     def getTEDValue(self, url):
-
         # Fetch the specified URL from TED and return the data
         self.fetchFailed = False
 
@@ -92,7 +82,6 @@ class TED:
         return r
 
     def update(self):
-
         if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from HomeAssistant sensor.
 

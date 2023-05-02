@@ -9,7 +9,6 @@ logger = logging.getLogger("\U0001F4CA HASS")
 
 
 class HASSStatus:
-
     import threading
     import requests
 
@@ -33,14 +32,8 @@ class HASSStatus:
     def __init__(self, master):
         self.config = master.config
         self.master = master
-        try:
-            self.configConfig = self.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configHASS = self.config["status"]["HASS"]
-        except KeyError:
-            self.configHASS = {}
+        self.configConfig = self.config.get("config", {})
+        self.configHASS = self.config.get("status", {}).get("HASS", {})
         self.status = self.configHASS.get("enabled", False)
         self.serverIP = self.configHASS.get("serverIP", None)
         self.serverPort = self.configHASS.get("serverPort", 8123)
@@ -195,7 +188,6 @@ class HASSStatus:
 
 
 class HASSMessage:
-
     elapsingTime = 0
     sensor = ""
     twcid = ""
