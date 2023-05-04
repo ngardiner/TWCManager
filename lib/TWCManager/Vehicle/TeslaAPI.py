@@ -1483,7 +1483,7 @@ class CarApiVehicle:
 
         if self.syncSource == "TeslaAPI":
             # No need to query charge state if we're not at home.
-            if lazy and not (self.is_awake() and self.atHome):
+            if lazy and not (self.atHome and self.ready()):
                 return False
 
             return self.update_vehicle_data()
