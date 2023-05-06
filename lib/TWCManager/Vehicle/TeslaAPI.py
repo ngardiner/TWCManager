@@ -1357,6 +1357,11 @@ class CarApiVehicle:
             try:
                 req = requests.get(url, headers=headers)
                 logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
+
+                if req.status_code >= 400:
+                    self.carapi.updateCarApiLastErrorTime(self)
+                    continue
+
                 apiResponseDict = json.loads(req.text)
                 # This error can happen here as well:
                 #   {'response': {'reason': 'could_not_wake_buses', 'result': False}}
