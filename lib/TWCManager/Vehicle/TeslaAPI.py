@@ -1354,6 +1354,8 @@ class CarApiVehicle:
 
         # Retry up to 3 times on certain errors.
         for _ in range(0, 3):
+            if self.carapi.getCarApiRetryRemaining(self) > 0:
+                continue
             try:
                 req = requests.get(url, headers=headers)
                 logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
