@@ -20,8 +20,6 @@ class MQTT:
     __topicGeneration = None
     master = None
     status = False
-    serverIP = None
-    serverPort = 8123
 
     def __init__(self, master):
         self.master = master
@@ -37,6 +35,7 @@ class MQTT:
 
         self.status = self.__configMQTT.get("enabled", False)
         self.brokerIP = self.__configMQTT.get("brokerIP", None)
+        self.brokerPort = self.__configMQTT.get("brokerPort", 1883)
         self.username = self.__configMQTT.get("username", None)
         self.password = self.__configMQTT.get("password", None)
 
