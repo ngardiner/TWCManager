@@ -365,6 +365,8 @@ def check_green_energy():
     # Poll all loaded EMS modules for consumption and generation values
     for module in master.getModulesByType("EMS"):
         master.setConsumption(module["name"], module["ref"].getConsumption())
+        if hasattr(module["ref"], "getConsumptionAmps"):
+            master.setConsumptionAmps(module["name"], module["ref"].getConsumptionAmps())
         master.setGeneration(module["name"], module["ref"].getGeneration())
 
     # Set max amps iff charge_amps isn't specified on the policy.
@@ -385,6 +387,8 @@ def check_max_power_from_grid():
     # Poll all loaded EMS modules for consumption and generation values
     for module in master.getModulesByType("EMS"):
         master.setConsumption(module["name"], module["ref"].getConsumption())
+        if hasattr(module["ref"], "getConsumptionAmps"):
+            master.setConsumptionAmps(module["name"], module["ref"].getConsumptionAmps())
         master.setGeneration(module["name"], module["ref"].getGeneration())
     master.setMaxAmpsToDivideFromGrid(master.getMaxAmpsToDivideFromGrid())
 

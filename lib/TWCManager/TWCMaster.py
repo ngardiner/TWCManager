@@ -25,6 +25,7 @@ class TWCMaster:
     backgroundTasksDelayed = []
     config = None
     consumptionValues = {}
+    consumptionAmpsValues = {}
     debugOutputToFile = False
     generationValues = {}
     lastkWhMessage = time.time()
@@ -581,6 +582,17 @@ class TWCMaster:
 
         return float(consumptionVal)
 
+    def getConsumptionAmps(self):
+        consumptionAmpsVal = 0
+
+        for key in self.consumptionAmpsValues:
+            consumptionAmpsVal += float(self.consumptionAmpsValues[key])
+
+        if consumptionAmpsVal < 0:
+            consumptionAmpsVal = 0
+
+        return float(consumptionAmpsVal)
+
     def getFakeTWCID(self):
         return self.TWCID
 
@@ -653,14 +665,20 @@ class TWCMaster:
         return round(amps, 2)
 
     def getMaxAmpsToDivideFromGrid(self):
-        # Calculate our current generation and consumption in watts
-        generationW = float(self.getGeneration())
-        consumptionW = float(self.getConsumption())
-
         currentOffer = min(
             self.getTotalAmpsInUse(),
             self.getMaxAmpsToDivideAmongSlaves(),
         )
+
+        # Get consumptions in Amps, if the EMS source supports it
+        consumptionA = float(self.getConsumptionAmps())
+
+        # Use convertWattsToAmps() if consumptionA is not available
+        if not consumptionA:
+            # Calculate our current generation and consumption in watts
+            consumptionW = float(self.getConsumption())
+            generationW = float(self.getGeneration())
+            consumptionA = self.convertWattsToAmps(consumptionW - generationW)
 
         # Calculate what we should max offer to align with max grid energy
         maxAmpsAllowedFromGrid = self.config["config"]["maxAmpsAllowedFromGrid"]
@@ -1297,6 +1315,9 @@ class TWCMaster:
         # For now, this gives a sum value of all, but in future we could
         # average across sources perhaps, or do a primary/secondary priority
         self.consumptionValues[source] = value
+
+    def setConsumptionAmps(self, source, value):
+        self.consumptionAmpsValues[source] = value
 
     def setGeneration(self, source, value):
         self.generationValues[source] = value
