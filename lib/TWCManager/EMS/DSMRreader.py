@@ -16,6 +16,7 @@ class DSMRreader:
     __configDSMRreader = None
     __connectionState = 0
     consumedW = 0
+    consumedA = 0
     generatedW = 0
     master = None
     status = False
@@ -117,6 +118,14 @@ class DSMRreader:
 
         # Return consumption value
         return self.consumedW
+
+    def getConsumptionAmps(self):
+        if not self.status:
+            logger.debug("Module Disabled. Skipping getConsumptionAmps")
+            return 0
+
+        # Return consumption value
+        return self.consumedA
 
     def getGeneration(self):
         if not self.status:
