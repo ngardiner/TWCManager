@@ -5,7 +5,9 @@ on:
 jobs:
   twcmanager-python3_6_direct:
     name: Python 3.6 - Run Direct
-    runs-on: [ "self-hosted", "build_host" ]
+    # runs-on: [ "self-hosted", "build_host" ]
+    runs-on: ubuntu-latest
+
     container:
       image: twcmanager/twcmanager-testsuite:py3.6.13
       options: --user root
@@ -34,7 +36,9 @@ jobs:
 
   twcmanager-python3_6_service:
     name: Python 3.6 - Run as a Service
-    runs-on: [ "self-hosted", "build_host" ]
+    # runs-on: [ "self-hosted", "build_host" ]
+    runs-on: ubuntu-latest
+
     container:
       image: twcmanager/twcmanager-testsuite:py3.6.13
       options: --user root
@@ -63,7 +67,8 @@ jobs:
 
   twcmanager-python3_7_direct:
     name: Python 3.7 - Run Direct
-    runs-on: [ "self-hosted", "build_host" ]
+    # runs-on: [ "self-hosted", "build_host" ]
+    runs-on: ubuntu-latest
     container:
       image: twcmanager/twcmanager-testsuite:py3.7.10
       options: --user root
@@ -89,7 +94,8 @@ jobs:
 
   twcmanager-python3_7_service:
     name: Python 3.7 - Run as a Service
-    runs-on: [ "self-hosted", "build_host" ]
+    # runs-on: [ "self-hosted", "build_host" ]
+    runs-on: ubuntu-latest
     container:
       image: twcmanager/twcmanager-testsuite:py3.7.10
       options: --user root
@@ -115,7 +121,8 @@ jobs:
 
   twcmanager-python3_8_direct:
     name: Python 3.8 - Run Direct
-    runs-on: [ "self-hosted", "build_host" ]
+    # runs-on: [ "self-hosted", "build_host" ]
+    runs-on: ubuntu-latest
     container:
       image: twcmanager/twcmanager-testsuite:py3.8.12
       options: --user root
@@ -144,7 +151,8 @@ jobs:
 
   twcmanager-python3_9_direct:
     name: Python 3.9 - Run Direct
-    runs-on: [ "self-hosted", "build_host" ]
+    # runs-on: [ "self-hosted", "build_host" ]
+    runs-on: ubuntu-latest
     container:
       image: twcmanager/twcmanager-testsuite:py3.9.10
       options: --user root
