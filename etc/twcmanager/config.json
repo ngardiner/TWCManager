@@ -56,7 +56,8 @@
         # 6A * 230V * 3 = 4140W for three-phase power. Consult an electrician if this
         # doesn't make sense.
         #
-        # https://forums.tesla.com/forum/forums/charging-lowest-amperage-purposely
+        # https://web.archive.org/web/20180807013639/https://forums.tesla.com/forum/forums/charging-lowest-amperage-purposely
+        # and https://teslamotorsclub.com/tmc/threads/low-amp-charging.197800/
         # says another reason to charge at higher power is to preserve battery life.
         # The best charge rate is the capacity of the battery pack / 2.  Home chargers
         # can't reach that rate, so charging as fast as your wiring supports is best
