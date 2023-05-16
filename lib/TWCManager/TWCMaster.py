@@ -681,7 +681,7 @@ class TWCMaster:
             consumptionA = self.convertWattsToAmps(consumptionW - generationW)
 
         # Calculate what we should max offer to align with max grid energy
-        maxAmpsAllowedFromGrid = self.config["config"]["maxAmpsAllowedFromGrid"]
+        maxAmpsAllowedFromGrid = self.config["config"].get("maxAmpsAllowedFromGrid", 16)
         amps = maxAmpsAllowedFromGrid - consumptionA + currentOffer
         if consumptionA > maxAmpsAllowedFromGrid:
             logger.info(f"getMaxAmpsToDivideFromGrid limited power: consumption {consumptionA:.1f}A > {maxAmpsAllowedFromGrid}A")
@@ -1349,7 +1349,7 @@ class TWCMaster:
         if amps > self.config["config"]["wiringMaxAmpsAllTWCs"]:
             # Never tell the slaves to draw more amps than the physical charger
             # wiring can handle.
-            logger.info(
+            logger.error(
                 "ERROR: specified maxAmpsToDivideAmongSlaves "
                 + str(amps)
                 + " > wiringMaxAmpsAllTWCs "

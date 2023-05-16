@@ -55,7 +55,7 @@
         #   "charge_amps": "settings.scheduledAmpsMax",
         #   "charge_limit": "config.scheduledLimit"},
 
-        "maxAmpsAllowedFromGrid": 15,
+        "maxAmpsAllowedFromGrid": 16,
 
 
         # https://teslamotorsclub.com/tmc/threads/model-s-gen2-charger-efficiency-testing.78740/#post-1844789
