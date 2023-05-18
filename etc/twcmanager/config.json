@@ -118,6 +118,11 @@
         # time interval, due to the available amps being set below minimum charge.
         "subtractChargerLoad": false,
 
+        # If your EMS does not return total PV generation but only the power
+        # delivered back to the grid, set treatGenerationAsGridDelivery to
+        # true.
+        "treatGenerationAsGridDelivery": false,
+
         # The minChargeLevel parameter determines the minimum acceptable SOC
         # state for any monitored vehicle. If the SOC is below this value,
         # the car will not be stopped from charging (even if we are not

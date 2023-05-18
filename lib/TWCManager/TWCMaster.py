@@ -63,6 +63,7 @@ class TWCMaster:
     stopTimeout = datetime.max
     spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
+    treatGenerationAsGridDelivery = False
     teslaLoginAskLater = False
     TWCID = None
     updateVersion = False
@@ -81,7 +82,8 @@ class TWCMaster:
         self.config = config
         self.debugOutputToFile = config["config"].get("debugOutputToFile", False)
         self.TWCID = TWCID
-        self.subtractChargerLoad = config["config"]["subtractChargerLoad"]
+        self.subtractChargerLoad = config["config"].get("subtractChargerLoad", False)
+        self.treatGenerationAsGridDelivery = config["config"].get("treatGenerationAsGridDelivery", False)
         self.advanceHistorySnap()
 
         # Register ourself as a module, allows lookups via the Module architecture
@@ -591,7 +593,7 @@ class TWCMaster:
 
         offset = self.getConsumptionOffset()
         if offset < 0:
-            generationVal += -1 * offset
+            generationVal -= offset
 
         return float(generationVal)
 
@@ -602,7 +604,9 @@ class TWCMaster:
         generationOffset = self.getConsumption()
         if self.subtractChargerLoad:
             generationOffset -= self.getChargerLoad()
-        if generationOffset < 0:
+        # Allow negative offset when EMS reports grid delivery instead of
+        # generation. This means the offset increases the total generation.
+        if generationOffset < 0 and not self.treatGenerationAsGridDelivery:
             generationOffset = 0
         return float(generationOffset)
 

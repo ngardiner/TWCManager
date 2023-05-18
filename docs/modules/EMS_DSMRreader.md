@@ -18,12 +18,13 @@ DSMR-reader needs to publish the JSON Telegram messages to an MQTT broker.
 
 ### Note
 
-Given that DSMR-reader measures the total household consumption, this includes the TWC. As a result, the TWC's load will be included in the  Consumption via the P1 output of the smart power meter. Please ensure the following configuration setting is enabled in your `config.json` file:
+Given that DSMR-reader measures the total household consumption, this includes the TWC. As a result, the TWC's load will be included in the  Consumption via the P1 output of the smart power meter. The smart meter does not know the total PV power delivery, just how much power is being delivered back to the grid. Please ensure the following configuration settings are enabled in your `config.json` file:
 
 ```
 {
     "config": {
-        "subtractChargerLoad": true
+        "subtractChargerLoad": true,
+        "treatGenerationAsGridDelivery": true,
     }
 }
 ```
