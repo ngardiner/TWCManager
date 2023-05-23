@@ -162,9 +162,13 @@ class Policy:
                 else:
                     del policy["__latchTime"]
 
-            matched = self.checkConditions(
-                policy["match"], policy["condition"], policy["value"]
-            )
+            matched = False
+            try:
+                matched = self.checkConditions(
+                    policy["match"], policy["condition"], policy["value"]
+                )
+            except:
+                pass
 
             if latched or matched:
                 # Yes, we will now enforce policy
