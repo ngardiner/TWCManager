@@ -83,7 +83,7 @@ class DSMRreader:
 
     def mqttMessage(self, client, userdata, message):
         # Takes an DSMR-reader JSON MQTT message, and update the associated Generation/Consumption value
-        decoded_message = str(message.payload.decode("utf-8","ignore"))
+        decoded_message = str(message.payload.decode("utf-8", "ignore"))
         logger.debug(f"Decoded message {decoded_message}")
         try:
             payload = json.loads(decoded_message)
@@ -93,11 +93,19 @@ class DSMRreader:
             logger.warning(f"Loading JSON from message failed: {str(e)}")
 
         if message.topic == self.__topic:
-            self.consumedW = float(payload.get("electricity_currently_delivered", 0)) * 1000.0
-            logger.log(logging.INFO3, f"Consumption Value updated to {round(self.consumedW)}W")
+            self.consumedW = (
+                float(payload.get("electricity_currently_delivered", 0)) * 1000.0
+            )
+            logger.log(
+                logging.INFO3, f"Consumption Value updated to {round(self.consumedW)}W"
+            )
 
-            self.generatedW = float(payload.get("electricity_currently_returned", 0)) * 1000.0
-            logger.log(logging.INFO3, f"Generation Value updated to {round(self.generatedW)}W")
+            self.generatedW = (
+                float(payload.get("electricity_currently_returned", 0)) * 1000.0
+            )
+            logger.log(
+                logging.INFO3, f"Generation Value updated to {round(self.generatedW)}W"
+            )
 
             ampsL1 = payload.get("phase_power_current_l1", 0)
             ampsL2 = payload.get("phase_power_current_l2", 0)
@@ -106,7 +114,9 @@ class DSMRreader:
                 self.consumedA = max(ampsL1, ampsL2, ampsL3)
             else:
                 self.consumedA = 0
-            logger.log(logging.INFO3, f"Consumption Amps Value updated to {self.consumedA}A")
+            logger.log(
+                logging.INFO3, f"Consumption Amps Value updated to {self.consumedA}A"
+            )
 
     def mqttSubscribe(self, client, userdata, mid, granted_qos):
         logger.info("Subscribe operation completed with mid " + str(mid))

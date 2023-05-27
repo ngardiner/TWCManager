@@ -83,7 +83,9 @@ class TWCMaster:
         self.debugOutputToFile = config["config"].get("debugOutputToFile", False)
         self.TWCID = TWCID
         self.subtractChargerLoad = config["config"].get("subtractChargerLoad", False)
-        self.treatGenerationAsGridDelivery = config["config"].get("treatGenerationAsGridDelivery", False)
+        self.treatGenerationAsGridDelivery = config["config"].get(
+            "treatGenerationAsGridDelivery", False
+        )
         self.advanceHistorySnap()
 
         # Register ourself as a module, allows lookups via the Module architecture
