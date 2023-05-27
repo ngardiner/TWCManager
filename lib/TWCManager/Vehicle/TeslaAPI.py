@@ -1097,12 +1097,16 @@ class TeslaAPI:
         self.carApiTokenExpireTime = value
         return True
 
-    def setChargeRate(self, charge_rate, vehicle=None):
+    def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         # As a fallback to allow initial implementation of the charge rate functionality for single car installs,
         # If no vehcle is specified, we take the first returned to us.
 
         if not vehicle:
             vehicle = self.getCarApiVehicles()[0]
+
+        # Do not set charge_rate to 0 as this will effectively stop the car from charging all together
+        if charge_rate < 1:
+            charge_rate = 1
 
         vehicle.lastAPIAccessTime = time.time()
 
@@ -1118,14 +1122,19 @@ class TeslaAPI:
 
         try:
             req = requests.post(url, headers=headers, json=body)
-            logger.log(logging.INFO8, "Car API cmd set_charging_amps" + str(req))
+            logger.log(logging.INFO8, f"Car API cmd set_charging_amps {charge_rate}A {str(req)}")
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
             return False
         except json.decoder.JSONDecodeError:
             return False
 
-        return apiResponseDict
+        # Set charge rates < 5 twice, see https://github.com/tdorssers/TeslaPy/pull/42
+        if charge_rate < 5 and not set_again:
+            time.sleep(5)
+            return self.setChargeRate(charge_rate, vehicle, set_again=True)
+        else:
+            return apiResponseDict
 
     def updateCarApiLastErrorTime(self, vehicle=None):
         timestamp = time.time()

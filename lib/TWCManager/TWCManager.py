@@ -1169,6 +1169,19 @@ while True:
                         },
                     )
 
+                    # Set minAmpsTWCSupports to 1A for 3 phase chargers
+                    if (
+                        voltsPhaseA >= 200
+                        and voltsPhaseB >= 200
+                        and voltsPhaseC >= 200
+                    ):
+                        slaveTWC.minAmpsTWCSupports = 1
+                        logger.debug(
+                            "Slave TWC %02X%02X: Set minAmpsTWCSupports to 1A",
+                            senderID[0],
+                            senderID[1]
+                        )
+
                     # Update the timestamp of the last reciept of this message
                     master.lastkWhMessage = time.time()
 
