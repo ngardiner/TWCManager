@@ -21,9 +21,13 @@ This document logs the changes per release of TWCManager.
   * (@dtiefnig) - Reference entrypoint script from within Docker container to remove dependency on external source tree
   * (@ngardiner) - Add Current Policy as status value (to be published to HASS / MQTT)
   * (@MikeBishop) - Fix API interactions impacted by Tesla's vehicle_data endpoint changes
+  * (@MikeBishop) - Implement improved VIN Check routine
   * (@RitchieB2B) - Fix MQTT EMS module (missing brokerPort)
   * (@RitchieB2B) - Fix large steps in ChargeNow duration in the web interface
+  * (@RitchieB2B) - Add option to leverage Tesla API for lower amp control, otherwise leverage TWC
+  * (@RitchieB2B) - Add DSM Reader EMS Module
   * (@cods4) - Update to documentation 
+  * (@mattiasclaesson) - Remove unnecessary kWh suffix from web UI
 
 ## v1.2.6 - 2022-02-28
 

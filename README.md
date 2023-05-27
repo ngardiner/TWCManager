@@ -55,6 +55,7 @@ EMS Interfaces read solar generation and/or consumption values from an external 
 | Platform                      | Status        | Details                 |
 | ----------------------------- | ------------- | ----------------------- |
 | Dutch SmartMeter | In Development | Supports DSMR Serial Protocol |
+| [DSMReader](docs/modules/DMS_DSMReader.md)      | Available | Supports DSM Reader via MQTT |
 | [Efergy](docs/modules/EMS_Efergy.md)            | Available | Supports Efergy Pro Sensors |
 | [Enphase](docs/modules/EMS_Enphase.md)          | Available | Supports Enphase Enlighten API |
 | [Fronius Inverter](docs/modules/EMS_Fronius.md) | Available | Supports Fronius Inverter API |
