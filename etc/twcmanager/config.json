@@ -119,6 +119,11 @@
         # time interval, due to the available amps being set below minimum charge.
         "subtractChargerLoad": false,
 
+        # If your EMS does not return total PV generation but only the power
+        # delivered back to the grid, set treatGenerationAsGridDelivery to
+        # true.
+        "treatGenerationAsGridDelivery": false,
+
         # The minChargeLevel parameter determines the minimum acceptable SOC
         # state for any monitored vehicle. If the SOC is below this value,
         # the car will not be stopped from charging (even if we are not
@@ -460,6 +465,14 @@
         # configured simultaneously, currently we will only add together the values recieved from each. This might be
         # useful if you have one interface that provides generation detail and another that provides consumption
         # detail, but if both systems provided both values, it would be duplicated.
+      # The DSMRreader EMS module subscribes to the below MQTT topic to read Consumption/Generation values
+        "DSMRreader": {
+          "enabled": false,
+          "brokerIP": "192.168.1.2",
+          "username": "mqttuser",
+          "password": "mqttpass",
+          "topic": "dsmr/json",
+        },
       # The Efergy server allows fetching of consumption from https://engage.efergy.com/ token is needed
         "Efergy": {
             "enabled": false,

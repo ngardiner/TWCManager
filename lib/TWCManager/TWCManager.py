@@ -86,6 +86,7 @@ modules_available = [
     "Control.HTTPControl",
     "Control.MQTTControl",
     #    "Control.OCPPControl",
+    "EMS.DSMRreader",
     "EMS.Efergy",
     "EMS.EmonCMS",
     "EMS.Enphase",
@@ -364,6 +365,8 @@ def update_statuses():
     # generation and consumption figures
     maxamps = master.getMaxAmpsToDivideAmongSlaves()
     maxampsDisplay = f"{maxamps:.2f}A"
+    subtractChargerLoad = config["config"].get("subtractChargerLoad", False)
+    treatGenerationAsGridDelivery = config["config"].get("treatGenerationAsGridDelivery", False)
     if master.getModuleByName("Policy").policyIsGreen():
         genwatts = master.getGeneration()
         conwatts = master.getConsumption()
@@ -371,12 +374,16 @@ def update_statuses():
         chgwatts = master.getChargerLoad()
         othwatts = 0
 
-        if config["config"]["subtractChargerLoad"]:
+        if subtractChargerLoad:
             if conwatts > 0:
                 othwatts = conwatts - chgwatts
 
             if conoffset > 0:
                 othwatts -= conoffset
+
+        if treatGenerationAsGridDelivery:
+            # Calculate total generation when it is already consumed by TWC
+            genwatts = max(0, genwatts + chgwatts - conwatts)
 
         # Extra parameters to send with logs
         logExtra = {
@@ -432,14 +439,14 @@ def update_statuses():
             genwatts
             + (
                 chgwatts
-                if (config["config"]["subtractChargerLoad"] and conwatts == 0)
+                if (subtractChargerLoad and conwatts == 0)
                 else 0
             )
             - (
                 conwatts
                 - (
                     chgwatts
-                    if (config["config"]["subtractChargerLoad"] and conwatts > 0)
+                    if (subtractChargerLoad and conwatts > 0)
                     else 0
                 )
             )
