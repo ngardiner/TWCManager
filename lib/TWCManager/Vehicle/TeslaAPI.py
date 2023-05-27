@@ -1122,7 +1122,10 @@ class TeslaAPI:
 
         try:
             req = requests.post(url, headers=headers, json=body)
-            logger.log(logging.INFO8, f"Car API cmd set_charging_amps {charge_rate}A {str(req)}")
+            logger.log(
+                logging.INFO8,
+                f"Car API cmd set_charging_amps {charge_rate}A {str(req)}",
+            )
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
             return False

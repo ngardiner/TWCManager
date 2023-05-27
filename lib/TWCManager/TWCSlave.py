@@ -806,7 +806,9 @@ class TWCSlave:
                 # so we need to set desiredAmpsOffered to 0
                 logger.debug("no cars charging, setting desiredAmpsOffered to 0")
                 desiredAmpsOffered = 0
-        elif chargeRateControl == 2 or (chargeRateControl == 3 and desiredAmpsOffered < 6):
+        elif chargeRateControl == 2 or (
+            chargeRateControl == 3 and desiredAmpsOffered < 6
+        ):
             # Control is given to the Tesla API to control Charge Rate
             # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
             self.APIcontrol = True
@@ -845,8 +847,7 @@ class TWCSlave:
             # high enough charge rate so it is not limiting the TWC control
             if chargeRateControl == 3 and self.APIcontrol:
                 self.master.getModuleByName("TeslaAPI").setChargeRate(
-                    self.wiringMaxAmps,
-                    self.getLastVehicle()
+                    self.wiringMaxAmps, self.getLastVehicle()
                 )
                 self.APIcontrol = False
 
