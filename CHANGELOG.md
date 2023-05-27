@@ -20,6 +20,10 @@ This document logs the changes per release of TWCManager.
   * (@dtiefnig / @MikeBishop) - Update Tesla API charging states
   * (@dtiefnig) - Reference entrypoint script from within Docker container to remove dependency on external source tree
   * (@ngardiner) - Add Current Policy as status value (to be published to HASS / MQTT)
+  * (@MikeBishop) - Fix API interactions impacted by Tesla's vehicle_data endpoint changes
+  * (@RitchieB2B) - Fix MQTT EMS module (missing brokerPort)
+  * (@RitchieB2B) - Fix large steps in ChargeNow duration in the web interface
+  * (@cods4) - Update to documentation 
 
 ## v1.2.6 - 2022-02-28
 
