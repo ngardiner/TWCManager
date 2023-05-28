@@ -9,6 +9,7 @@ setup(
     packages=find_namespace_packages(where="lib"),
     python_requires=">= 3.6",
     include_package_data=True,
+    long_description="Controls the charge rate of certain versions of Tesla Wall Connector (TWC) via the built-in Load Sharing protocol.",
     # Dependencies
     install_requires=[
         "cryptography<3.4",

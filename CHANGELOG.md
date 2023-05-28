@@ -2,32 +2,37 @@
 
 This document logs the changes per release of TWCManager.
 
-## v1.3.0 - Latest Development version
+## v1.3.1 - Latest Development version
 
-  * Bugfixes
+## v1.3.0 - 2023-05-28
+
+* Bugfixes
      * (@dtiefnig) - Fix issue with logic around detecting instances of multi-phase system incompatibility
      * (@dtiefnig) - Fix issue with zero-byte VINs causing infinite VIN fetch retries
      * (@MikeBishop) - Fix rounding in calculation of current offer when calculating delta to new offer to improve accuracy
      * (@ngardiner) - Adjust voltage / phase detection to handle combinations of 1/2/3 phase systems, as long as all slave TWCs have the same number of active phases
      * (@ccutrer) - Fix openhab integration to properly parse floats
      * (@ngardiner) - Detect issues with serial connection (RS485) and automatically reconnect
-  * (@hopfi2k) - Major "Modern Theme" update. Switched to Bootstrap 5.02, bug fixes, now fully responsive
-  * (@ngardiner) - Add Home Location view and modification controls to settings page
-  * (@ngardiner) - Add MQTT EMS module (currently pre-release for testing)
-  * (@dtiefnig) - Add switch to output plain text Console output (turn off color)
-  * (@dtiefnig) - Unify single and multi-car charge at home behaviour
-  * (@dtiefnig) - Add Modbus TCP support for SolarEdge EMS module
-  * (@dtiefnig / @MikeBishop) - Update Tesla API charging states
-  * (@dtiefnig) - Reference entrypoint script from within Docker container to remove dependency on external source tree
-  * (@ngardiner) - Add Current Policy as status value (to be published to HASS / MQTT)
-  * (@MikeBishop) - Fix API interactions impacted by Tesla's vehicle_data endpoint changes
-  * (@MikeBishop) - Implement improved VIN Check routine
-  * (@RitchieB2B) - Fix MQTT EMS module (missing brokerPort)
-  * (@RitchieB2B) - Fix large steps in ChargeNow duration in the web interface
-  * (@RitchieB2B) - Add option to leverage Tesla API for lower amp control, otherwise leverage TWC
-  * (@RitchieB2B) - Add DSM Reader EMS Module
-  * (@cods4) - Update to documentation 
-  * (@mattiasclaesson) - Remove unnecessary kWh suffix from web UI
+     * (@RitchieB2B) - Fix MQTT EMS module (missing brokerPort)
+     * (@RitchieB2B) - Fix large steps in ChargeNow duration in the web interface
+     * (@mattiasclaesson) - Remove unnecessary kWh suffix from web UI
+
+* Features
+
+    * (@hopfi2k) - Major "Modern Theme" update. Switched to Bootstrap 5.02, bug fixes, now fully responsive
+    * (@ngardiner) - Add Home Location view and modification controls to settings page
+    * (@ngardiner) - Add MQTT EMS module (currently pre-release for testing)
+    * (@dtiefnig) - Add switch to output plain text Console output (turn off color)
+    * (@dtiefnig) - Unify single and multi-car charge at home behaviour
+    * (@dtiefnig) - Add Modbus TCP support for SolarEdge EMS module
+    * (@dtiefnig / @MikeBishop) - Update Tesla API charging states
+    * (@dtiefnig) - Reference entrypoint script from within Docker container to remove dependency on external source tree
+    * (@ngardiner) - Add Current Policy as status value (to be published to HASS / MQTT)
+    * (@MikeBishop) - Fix API interactions impacted by Tesla's vehicle_data endpoint changes
+    * (@MikeBishop) - Implement improved VIN Check routine
+    * (@RitchieB2B) - Add option to leverage Tesla API for lower amp control, otherwise leverage TWC
+    * (@RitchieB2B) - Add DSM Reader EMS Module
+    * (@cods4) - Update to documentation 
 
 ## v1.2.6 - 2022-02-28
 
