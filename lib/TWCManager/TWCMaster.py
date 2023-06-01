@@ -668,7 +668,7 @@ class TWCMaster:
         currentOffer = min(
             self.getTotalAmpsInUse(),
             self.getMaxAmpsToDivideAmongSlaves(),
-        )
+        ) if self.getTotalAmpsInUse() > 0 else self.getMaxAmpsToDivideAmongSlaves()
 
         # Get consumptions in Amps, if the EMS source supports it
         consumptionA = float(self.getConsumptionAmps())
