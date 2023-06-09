@@ -13,8 +13,8 @@ This document logs the changes per release of TWCManager.
      * (@ngardiner) - Adjust voltage / phase detection to handle combinations of 1/2/3 phase systems, as long as all slave TWCs have the same number of active phases
      * (@ccutrer) - Fix openhab integration to properly parse floats
      * (@ngardiner) - Detect issues with serial connection (RS485) and automatically reconnect
-     * (@RitchieB2B) - Fix MQTT EMS module (missing brokerPort)
-     * (@RitchieB2B) - Fix large steps in ChargeNow duration in the web interface
+     * (@RichieB2B) - Fix MQTT EMS module (missing brokerPort)
+     * (@RichieB2B) - Fix large steps in ChargeNow duration in the web interface
      * (@mattiasclaesson) - Remove unnecessary kWh suffix from web UI
 
 * Features
@@ -30,8 +30,8 @@ This document logs the changes per release of TWCManager.
     * (@ngardiner) - Add Current Policy as status value (to be published to HASS / MQTT)
     * (@MikeBishop) - Fix API interactions impacted by Tesla's vehicle_data endpoint changes
     * (@MikeBishop) - Implement improved VIN Check routine
-    * (@RitchieB2B) - Add option to leverage Tesla API for lower amp control, otherwise leverage TWC
-    * (@RitchieB2B) - Add DSM Reader EMS Module
+    * (@RichieB2B) - Add option to leverage Tesla API for lower amp control, otherwise leverage TWC
+    * (@RichieB2B) - Add DSM Reader EMS Module
     * (@cods4) - Update to documentation 
 
 ## v1.2.6 - 2022-02-28
