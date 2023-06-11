@@ -16,7 +16,7 @@ The following packages are required to fetch and install the TWCManager project.
 
 ```
 sudo apt-get update
-sudo apt-get install -y git python3 python3-pip python3-setuptools python3-dev libatlas-base-dev
+sudo apt-get install -y git python3 python3-pip python3-setuptools python3-dev libatlas-base-dev lsb-release
 ```
 
 ## Default to Python3
@@ -74,13 +74,13 @@ You can check that this command has been successful by running ```python --versi
 
 During this step, the source code and all related files will be cloned from the GitHub repository and installed into the appropriate location on your system.
 
-We have two versions of the codebase that you may want to check out. The stable version is **v1.2.4**, which will only change for stability or urgent fixes. To check out **v1.2.4**, follow these steps:
+We have two versions of the codebase that you may want to check out. The stable version is **v1.2.4**, which will only change for stability or urgent fixes. To check out **v1.3.0**, follow these steps:
 
 
 ```
 git clone https://github.com/ngardiner/TWCManager
 cd TWCManager
-git checkout v1.2.4
+git checkout v1.3.0
 sudo make install
 ```
 
