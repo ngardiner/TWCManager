@@ -1425,6 +1425,7 @@ class CarApiVehicle:
     def update_vehicle_data(self, cacheTime=60):
         url = "https://owner-api.teslamotors.com/api/1/vehicles/"
         url = url + str(self.ID) + "/vehicle_data"
+        url = url + "?endpoints=location_data%3Bcharge_state%3Bclimate_state%3Bvehicle_state%3Bgui_settings%3Bvehicle_config"
 
         now = time.time()
 
