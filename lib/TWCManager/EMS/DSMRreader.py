@@ -109,12 +109,24 @@ class DSMRreader:
 
             # Determine the most consumed Amps among all phases
             self.consumedA = 0
-            if payload.get("phase_currently_delivered_l1", 0) > payload.get("phase_currently_returned_l1", 0):
-                self.consumedA = max(self.consumedA, payload.get("phase_power_current_l1", 0))
-            if payload.get("phase_currently_delivered_l2", 0) > payload.get("phase_currently_returned_l2", 0):
-                self.consumedA = max(self.consumedA, payload.get("phase_power_current_l2", 0))
-            if payload.get("phase_currently_delivered_l3", 0) > payload.get("phase_currently_returned_l3", 0):
-                self.consumedA = max(self.consumedA, payload.get("phase_power_current_l3", 0))
+            if payload.get("phase_currently_delivered_l1", 0) > payload.get(
+                "phase_currently_returned_l1", 0
+            ):
+                self.consumedA = max(
+                    self.consumedA, payload.get("phase_power_current_l1", 0)
+                )
+            if payload.get("phase_currently_delivered_l2", 0) > payload.get(
+                "phase_currently_returned_l2", 0
+            ):
+                self.consumedA = max(
+                    self.consumedA, payload.get("phase_power_current_l2", 0)
+                )
+            if payload.get("phase_currently_delivered_l3", 0) > payload.get(
+                "phase_currently_returned_l3", 0
+            ):
+                self.consumedA = max(
+                    self.consumedA, payload.get("phase_power_current_l3", 0)
+                )
             logger.log(
                 logging.INFO3, f"Consumption Amps Value updated to {self.consumedA}A"
             )
