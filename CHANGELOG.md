@@ -3,6 +3,10 @@
 This document logs the changes per release of TWCManager.
 
 ## v1.3.1 - Latest Development version
+* (@RichieB2B) - Support for the new API endpoint for location telemetry
+* (@RichieB2B) - More accurate getConsumptionAmps for DSMRreader (esp. for unbalanced 3-phase circuits)
+* Bugfixes
+     * (@ngardiner) - Avoid web interface crash when ampsList cannot be derived from minAmpsPerTWC and wiringMaxAmpsPerTWC (root cause under investigation)
 
 ## v1.3.0 - 2023-05-28
 
