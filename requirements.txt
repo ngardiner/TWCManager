@@ -5,6 +5,8 @@ jinja2>=2.11.2
 ocpp
 paho_mqtt>=1.5.0
 psycopg2
+pymodbus<3.0.0; python_version < '3.8'
+pymodbus>=3.0.0; python_version >= '3.8'
 pyModbusTCP>=0.1.8
 pymysql
 pyserial>=3.4
