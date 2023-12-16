@@ -1,7 +1,7 @@
 import logging
 import json
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = logging.getLogger("\U000026A1 DSMRread")
 
 
 class DSMRreader:

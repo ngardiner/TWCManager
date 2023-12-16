@@ -3,7 +3,7 @@ import growattServer
 import datetime
 
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = logging.getLogger("\U000026C5 Growatt")
 
 
 class Growatt:

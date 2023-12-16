@@ -8,7 +8,7 @@ import array
 import scipy.stats
 import json
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = logging.getLogger("\U000026A1 P1Monitr")
 
 
 class P1Monitor:
