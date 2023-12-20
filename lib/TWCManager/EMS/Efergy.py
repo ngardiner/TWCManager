@@ -3,6 +3,7 @@ import time
 
 logger = logging.getLogger("\U000026A1 Efergy")
 
+
 class Efergy:
     import requests
 
