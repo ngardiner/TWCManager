@@ -26,7 +26,7 @@ on:
         required: true
         default: "no"
       trigger_docker_release_cloud:
-        description: Trigger docker release build (using release_version)
+        description: Generate docker release build (using release_version) via cloud.
         required: true
         default: "no"
       trigger_docker_testing_cloud:
