@@ -18,10 +18,11 @@ on:
         required: true
         default: "v1.2.3"
       trigger_docker_latest:
+        description: Generate a :latest docker image using self-hosted runners.
         required: true
         default: "no"
       trigger_docker_latest_cloud:
-        description: Allows generating a :latest docker image using cloud compute.
+        description: Generate a :latest docker image using cloud compute.
         required: true
         default: "no"
       trigger_docker_release_cloud:
