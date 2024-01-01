@@ -28,6 +28,7 @@ class TWCMaster:
     consumptionAmpsValues = {}
     debugOutputToFile = False
     generationValues = {}
+    lastMaxAmpsToDivideFromGrid = 0
     lastkWhMessage = time.time()
     lastkWhPoll = 0
     lastSaveFailed = 0
@@ -665,10 +666,13 @@ class TWCMaster:
         return round(amps, 2)
 
     def getMaxAmpsToDivideFromGrid(self):
-        currentOffer = min(
-            self.getTotalAmpsInUse(),
-            self.getMaxAmpsToDivideAmongSlaves(),
-        ) if self.getTotalAmpsInUse() > 0 else self.getMaxAmpsToDivideAmongSlaves()
+        # Only recalculate once every 30 seconds to allow things to settle
+        now = time.time()
+        if now - self.lastMaxAmpsToDivideFromGrid < 30:
+            logger.debug(f"getMaxAmpsToDivideFromGrid returns cashed value {self.maxAmpsToDivideFromGrid}")
+            return self.maxAmpsToDivideFromGrid
+
+        currentOffer = self.getTotalAmpsInUse() if self.getTotalAmpsInUse() > 0 else self.getMaxAmpsToDivideAmongSlaves()
 
         # Get consumptions in Amps, if the EMS source supports it
         consumptionA = float(self.getConsumptionAmps())
@@ -687,6 +691,9 @@ class TWCMaster:
             logger.info(f"getMaxAmpsToDivideFromGrid limited power: consumption {consumptionA:.1f}A > {maxAmpsAllowedFromGrid}A")
         amps = amps / self.getRealPowerFactor(amps)
         logger.debug("MaxAmpsToDivideFromGrid: +++++++++++++++: " + str(amps))
+
+        # Update time for comparing next time
+        self.lastMaxAmpsToDivideFromGrid = now
 
         return round(amps, 2)
 
