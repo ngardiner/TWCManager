@@ -18,6 +18,8 @@ class TeslaAPI:
     __apiState = None
     __authURL = "https://auth.tesla.com/oauth2/v3/token"
     __callbackURL = "https://auth.tesla.com/void/callback"
+    baseURL = "https://owner-api.teslamotors.com/api/1/vehicles"
+    proxyCert = None
     carApiLastErrorTime = 0
     carApiBearerToken = ""
     carApiRefreshToken = ""
@@ -1212,6 +1214,8 @@ class CarApiVehicle:
     carapi = None
     __config = None
     debuglevel = 0
+    baseURL = "https://owner-api.teslamotors.com/api/1/vehicles"
+    proxyCert = None
     ID = None
     name = ""
     syncSource = "TeslaAPI"
@@ -1245,6 +1249,8 @@ class CarApiVehicle:
     def __init__(self, json, carapi, config):
         self.carapi = carapi
         self.__config = config
+        self.baseURL = config["config"].get("teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles")
+        self.proxyCert = config["config"].get("httpProxyCert", None)
         self.ID = json["id"]
         self.VIN = json["vin"]
         self.name = json["display_name"]
