@@ -644,7 +644,7 @@ class TeslaAPI:
                 self.applyChargeLimit(self.lastChargeLimitApplied, checkArrival=True)
 
             url = self.baseURL + "/"
-            url = url + str(vehicle.ID) + "/command/charge_" + startOrStop
+            url = url + str(vehicle.VIN) + "/command/charge_" + startOrStop
             headers = {
                 "accept": "application/json",
                 "Authorization": "Bearer " + self.getCarApiBearerToken(),
@@ -1118,7 +1118,7 @@ class TeslaAPI:
         vehicle.lastAPIAccessTime = time.time()
 
         url = self.baseURL + "/"
-        url = url + str(vehicle.ID) + "/command/set_charging_amps"
+        url = url + str(vehicle.VIN) + "/command/set_charging_amps"
 
         headers = {
             "accept": "application/json",
@@ -1179,7 +1179,7 @@ class TeslaAPI:
         vehicle.lastAPIAccessTime = time.time()
 
         url = self.baseURL + "/"
-        url = url + str(vehicle.ID) + "/wake_up"
+        url = url + str(vehicle.VIN) + "/wake_up"
 
         headers = {
             "accept": "application/json",
@@ -1320,7 +1320,7 @@ class CarApiVehicle:
     # Permits opportunistic API requests
     def is_awake(self):
         if self.syncSource == "TeslaAPI":
-            url = self.baseURL + "/" + str(self.ID)
+            url = self.baseURL + "/" + str(self.VIN)
             (result, response) = self.get_car_api(
                 url, checkReady=False, provesOnline=False
             )
@@ -1407,7 +1407,7 @@ class CarApiVehicle:
 
     def update_vehicle_data(self, cacheTime=60):
         url = self.baseURL + "/"
-        url = url + str(self.ID) + "/vehicle_data"
+        url = url + str(self.VIN) + "/vehicle_data"
         url = (
             url
             + "?endpoints=location_data%3Bcharge_state%3Bclimate_state%3Bvehicle_state%3Bgui_settings%3Bvehicle_config"
@@ -1464,7 +1464,7 @@ class CarApiVehicle:
         self.lastLimitAttemptTime = now
 
         url = self.baseURL + "/"
-        url = url + str(self.ID) + "/command/set_charge_limit"
+        url = url + str(self.VIN) + "/command/set_charge_limit"
 
         headers = {
             "accept": "application/json",
