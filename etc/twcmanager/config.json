@@ -152,7 +152,9 @@
         # new protocol. This requires the URL of the proxy to be set as
         # "teslaApiUrl" above and the proxy certificate for validation here.
         # See https://github.com/teslamotors/vehicle-command
-        "httpProxyCert": "/path/to/public_key.pem",
+        #
+        # Only set "httpProxyCert" when setting "teslaApiUrl" to a local proxy.
+        #"httpProxyCert": "/path/to/public_key.pem",
 
         # The cloudUpdateInterval determines how often to poll certain
         # data retrieved from the Tesla API to evaluate policy.
