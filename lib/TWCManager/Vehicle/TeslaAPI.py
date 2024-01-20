@@ -19,6 +19,7 @@ class TeslaAPI:
     __authURL = "https://auth.tesla.com/oauth2/v3/token"
     __callbackURL = "https://auth.tesla.com/void/callback"
     baseURL = "https://owner-api.teslamotors.com/api/1/vehicles"
+    refreshClientID = "ownerapi"
     proxyCert = None
     carApiLastErrorTime = 0
     carApiBearerToken = ""
@@ -64,6 +65,7 @@ class TeslaAPI:
         try:
             self.config = master.config
             self.baseURL = self.config["config"].get("teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles")
+            self.refreshClientID = self.config["config"].get("teslaApiClientID", "ownerapi")
             self.proxyCert = self.config["config"].get("httpProxyCert", None)
             self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
             self.chargeUpdateInterval = self.config["config"].get(
@@ -108,10 +110,9 @@ class TeslaAPI:
         # days when first issued, so we'll get a new token every 15 days.
         headers = {"accept": "application/json", "Content-Type": "application/json"}
         data = {
-            "client_id": "ownerapi",
+            "client_id": self.refreshClientID,
             "grant_type": "refresh_token",
             "refresh_token": self.getCarApiRefreshToken(),
-            "scope": "openid email offline_access",
         }
         req = None
         now = time.time()

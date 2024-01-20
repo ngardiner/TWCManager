@@ -155,6 +155,9 @@
         #
         # Only set "httpProxyCert" when setting "teslaApiUrl" to a local proxy.
         #"httpProxyCert": "/path/to/public_key.pem",
+        #
+        # Only set "teslaApiClientID" when setting "teslaApiUrl" to a local proxy.
+        #"teslaApiClientID": "client-id-of-proxy",
 
         # The cloudUpdateInterval determines how often to poll certain
         # data retrieved from the Tesla API to evaluate policy.
