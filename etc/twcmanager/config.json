@@ -142,6 +142,11 @@
         # FleetAPI http proxy:    https://localhost:4443/api/1/vehicles
         "teslaApiUrl": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
 
+        # The client_id of the app registered with Tesla. Registration is
+        # required to use the FleetAPI and Vehicle Command protocol.
+        # See https://developer.tesla.com/docs/fleet-api#authentication
+        #"teslaApiClientID": "client-id-of-registered-app",
+
         # Since 2024 the Tesla Vehicle Command protocol is required for all
         # vehicles manufacturered after 2021. The Tesla Vehicle Command proxy
         # will automatically fall back to the FleetAPI for older vehicles.
@@ -155,9 +160,6 @@
         #
         # Only set "httpProxyCert" when setting "teslaApiUrl" to a local proxy.
         #"httpProxyCert": "/path/to/public_key.pem",
-        #
-        # Only set "teslaApiClientID" when setting "teslaApiUrl" to a local proxy.
-        #"teslaApiClientID": "client-id-of-proxy",
 
         # The cloudUpdateInterval determines how often to poll certain
         # data retrieved from the Tesla API to evaluate policy.
