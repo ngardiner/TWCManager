@@ -66,7 +66,7 @@ class TeslaAPI:
             self.config = master.config
             self.baseURL = self.config["config"].get("teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles")
             self.refreshClientID = self.config["config"].get("teslaApiClientID", "ownerapi")
-            self.proxyCert = self.config["config"].get("httpProxyCert", None)
+            self.proxyCert = self.config["config"].get("httpProxyCert", True)
             self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
             self.chargeUpdateInterval = self.config["config"].get(
                 "cloudUpdateInterval", 1800
