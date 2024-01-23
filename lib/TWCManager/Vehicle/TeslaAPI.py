@@ -64,8 +64,12 @@ class TeslaAPI:
         self.master = master
         try:
             self.config = master.config
-            self.baseURL = self.config["config"].get("teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles")
-            self.refreshClientID = self.config["config"].get("teslaApiClientID", "ownerapi")
+            self.baseURL = self.config["config"].get(
+                "teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles"
+            )
+            self.refreshClientID = self.config["config"].get(
+                "teslaApiClientID", "ownerapi"
+            )
             self.proxyCert = self.config["config"].get("httpProxyCert", True)
             self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
             self.chargeUpdateInterval = self.config["config"].get(
@@ -1250,7 +1254,9 @@ class CarApiVehicle:
     def __init__(self, json, carapi, config):
         self.carapi = carapi
         self.__config = config
-        self.baseURL = config["config"].get("teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles")
+        self.baseURL = config["config"].get(
+            "teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles"
+        )
         self.proxyCert = config["config"].get("httpProxyCert", None)
         self.ID = json["id"]
         self.VIN = json["vin"]
@@ -1475,7 +1481,9 @@ class CarApiVehicle:
 
         for _ in range(0, 3):
             try:
-                req = requests.post(url, headers=headers, json=body, verify=self.proxyCert)
+                req = requests.post(
+                    url, headers=headers, json=body, verify=self.proxyCert
+                )
                 logger.log(logging.INFO8, "Car API cmd set_charge_limit " + str(req))
 
                 apiResponseDict = json.loads(req.text)
