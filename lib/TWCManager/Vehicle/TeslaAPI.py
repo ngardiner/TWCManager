@@ -18,6 +18,9 @@ class TeslaAPI:
     __apiState = None
     __authURL = "https://auth.tesla.com/oauth2/v3/token"
     __callbackURL = "https://auth.tesla.com/void/callback"
+    baseURL = "https://owner-api.teslamotors.com/api/1/vehicles"
+    refreshClientID = "ownerapi"
+    proxyCert = None
     carApiLastErrorTime = 0
     carApiBearerToken = ""
     carApiRefreshToken = ""
@@ -61,6 +64,9 @@ class TeslaAPI:
         self.master = master
         try:
             self.config = master.config
+            self.baseURL = self.config["config"].get("teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles")
+            self.refreshClientID = self.config["config"].get("teslaApiClientID", "ownerapi")
+            self.proxyCert = self.config["config"].get("httpProxyCert", True)
             self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
             self.chargeUpdateInterval = self.config["config"].get(
                 "cloudUpdateInterval", 1800
@@ -104,10 +110,9 @@ class TeslaAPI:
         # days when first issued, so we'll get a new token every 15 days.
         headers = {"accept": "application/json", "Content-Type": "application/json"}
         data = {
-            "client_id": "ownerapi",
+            "client_id": self.refreshClientID,
             "grant_type": "refresh_token",
             "refresh_token": self.getCarApiRefreshToken(),
-            "scope": "openid email offline_access",
         }
         req = None
         now = time.time()
@@ -219,13 +224,13 @@ class TeslaAPI:
 
         if self.getCarApiBearerToken() != "":
             if self.getVehicleCount() < 1:
-                url = "https://owner-api.teslamotors.com/api/1/vehicles"
+                url = self.baseURL
                 headers = {
                     "accept": "application/json",
                     "Authorization": "Bearer " + self.getCarApiBearerToken(),
                 }
                 try:
-                    req = requests.get(url, headers=headers)
+                    req = requests.get(url, headers=headers, verify=self.proxyCert)
                     logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
                     apiResponseDict = json.loads(req.text)
                 except requests.exceptions.RequestException:
@@ -639,8 +644,8 @@ class TeslaAPI:
             if charge:
                 self.applyChargeLimit(self.lastChargeLimitApplied, checkArrival=True)
 
-            url = "https://owner-api.teslamotors.com/api/1/vehicles/"
-            url = url + str(vehicle.ID) + "/command/charge_" + startOrStop
+            url = self.baseURL + "/"
+            url = url + str(vehicle.VIN) + "/command/charge_" + startOrStop
             headers = {
                 "accept": "application/json",
                 "Authorization": "Bearer " + self.getCarApiBearerToken(),
@@ -649,7 +654,7 @@ class TeslaAPI:
             # Retry up to 3 times on certain errors.
             for _ in range(0, 3):
                 try:
-                    req = requests.post(url, headers=headers)
+                    req = requests.post(url, headers=headers, verify=self.proxyCert)
                     logger.log(
                         logging.INFO8,
                         "Car API cmd charge_" + startOrStop + " " + str(req),
@@ -1113,8 +1118,8 @@ class TeslaAPI:
 
         vehicle.lastAPIAccessTime = time.time()
 
-        url = "https://owner-api.teslamotors.com/api/1/vehicles/"
-        url = url + str(vehicle.ID) + "/command/set_charging_amps"
+        url = self.baseURL + "/"
+        url = url + str(vehicle.VIN) + "/command/set_charging_amps"
 
         headers = {
             "accept": "application/json",
@@ -1124,7 +1129,7 @@ class TeslaAPI:
         body = {"charging_amps": charge_rate}
 
         try:
-            req = requests.post(url, headers=headers, json=body)
+            req = requests.post(url, headers=headers, json=body, verify=self.proxyCert)
             logger.log(
                 logging.INFO8,
                 f"Car API cmd set_charging_amps {charge_rate}A {str(req)}",
@@ -1174,15 +1179,15 @@ class TeslaAPI:
         apiResponseDict = None
         vehicle.lastAPIAccessTime = time.time()
 
-        url = "https://owner-api.teslamotors.com/api/1/vehicles/"
-        url = url + str(vehicle.ID) + "/wake_up"
+        url = self.baseURL + "/"
+        url = url + str(vehicle.VIN) + "/wake_up"
 
         headers = {
             "accept": "application/json",
             "Authorization": "Bearer " + self.getCarApiBearerToken(),
         }
         try:
-            req = requests.post(url, headers=headers)
+            req = requests.post(url, headers=headers, verify=self.proxyCert)
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
@@ -1210,6 +1215,8 @@ class CarApiVehicle:
     carapi = None
     __config = None
     debuglevel = 0
+    baseURL = "https://owner-api.teslamotors.com/api/1/vehicles"
+    proxyCert = None
     ID = None
     name = ""
     syncSource = "TeslaAPI"
@@ -1243,6 +1250,8 @@ class CarApiVehicle:
     def __init__(self, json, carapi, config):
         self.carapi = carapi
         self.__config = config
+        self.baseURL = config["config"].get("teslaApiUrl", "https://owner-api.teslamotors.com/api/1/vehicles")
+        self.proxyCert = config["config"].get("httpProxyCert", None)
         self.ID = json["id"]
         self.VIN = json["vin"]
         self.name = json["display_name"]
@@ -1312,7 +1321,7 @@ class CarApiVehicle:
     # Permits opportunistic API requests
     def is_awake(self):
         if self.syncSource == "TeslaAPI":
-            url = "https://owner-api.teslamotors.com/api/1/vehicles/" + str(self.ID)
+            url = self.baseURL + "/" + str(self.VIN)
             (result, response) = self.get_car_api(
                 url, checkReady=False, provesOnline=False
             )
@@ -1339,7 +1348,7 @@ class CarApiVehicle:
         # Retry up to 3 times on certain errors.
         for _ in range(0, 3):
             try:
-                req = requests.get(url, headers=headers)
+                req = requests.get(url, headers=headers, verify=self.proxyCert)
                 logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
                 apiResponseDict = json.loads(req.text)
                 # This error can happen here as well:
@@ -1398,8 +1407,8 @@ class CarApiVehicle:
             return True
 
     def update_vehicle_data(self, cacheTime=60):
-        url = "https://owner-api.teslamotors.com/api/1/vehicles/"
-        url = url + str(self.ID) + "/vehicle_data"
+        url = self.baseURL + "/"
+        url = url + str(self.VIN) + "/vehicle_data"
         url = (
             url
             + "?endpoints=location_data%3Bcharge_state%3Bclimate_state%3Bvehicle_state%3Bgui_settings%3Bvehicle_config"
@@ -1455,8 +1464,8 @@ class CarApiVehicle:
 
         self.lastLimitAttemptTime = now
 
-        url = "https://owner-api.teslamotors.com/api/1/vehicles/"
-        url = url + str(self.ID) + "/command/set_charge_limit"
+        url = self.baseURL + "/"
+        url = url + str(self.VIN) + "/command/set_charge_limit"
 
         headers = {
             "accept": "application/json",
@@ -1466,7 +1475,7 @@ class CarApiVehicle:
 
         for _ in range(0, 3):
             try:
-                req = requests.post(url, headers=headers, json=body)
+                req = requests.post(url, headers=headers, json=body, verify=self.proxyCert)
                 logger.log(logging.INFO8, "Car API cmd set_charge_limit " + str(req))
 
                 apiResponseDict = json.loads(req.text)
