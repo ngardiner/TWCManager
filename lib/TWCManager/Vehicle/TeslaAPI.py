@@ -22,10 +22,10 @@ class TeslaAPI:
     __callbackURL = "https://auth.tesla.com/void/callback"
     baseURL = ""
     regionURL = {
-        'OwnerAPI': 'https://owner-api.teslamotors.com/api/1/vehicles',
-        'NA': 'https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles',
-        'EU': 'https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles',
-        'CN': 'https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles',
+        "OwnerAPI": "https://owner-api.teslamotors.com/api/1/vehicles",
+        "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
+        "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
+        "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
     }
     refreshClientID = "ownerapi"
     verifyCert = True
@@ -237,8 +237,8 @@ class TeslaAPI:
         if self.getCarApiBearerToken() != "":
             if self.getVehicleCount() < 1:
                 url = self.baseURL
-                if 'owner-api' in url:
-                    url = url.replace('vehicles', 'products')
+                if "owner-api" in url:
+                    url = url.replace("vehicles", "products")
                 headers = {
                     "accept": "application/json",
                     "Authorization": "Bearer " + self.getCarApiBearerToken(),
@@ -1111,11 +1111,15 @@ class TeslaAPI:
             else:
                 self.carApiBearerToken = token
                 if not self.baseURL:
-                    decoded = jwt.decode(token, options={"verify_signature": False, "verify_aud": False}, leeway=datetime.timedelta(days=300))
-                    if 'owner-api' in ''.join(decoded.get('aud', '')):
-                        self.baseURL = self.regionURL['OwnerAPI']
-                    elif decoded.get('ou_code', '') in self.regionURL:
-                        self.baseURL = self.regionURL[decoded['ou_code']]
+                    decoded = jwt.decode(
+                        token,
+                        options={"verify_signature": False, "verify_aud": False},
+                        leeway=datetime.timedelta(days=300),
+                    )
+                    if "owner-api" in "".join(decoded.get("aud", "")):
+                        self.baseURL = self.regionURL["OwnerAPI"]
+                    elif decoded.get("ou_code", "") in self.regionURL:
+                        self.baseURL = self.regionURL[decoded["ou_code"]]
                 return True
         else:
             return False
