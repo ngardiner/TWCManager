@@ -131,17 +131,6 @@
         # you will need to un-comment it to have it take effect.
         #"minChargeLevel": 10,
 
-        # The Tesla API URL is base URL for all REST API calls. This should
-        # include the "/api/1/vehicles" path.
-        # Known values are:
-        #
-        # OwnerAPI (legacy):      https://owner-api.teslamotors.com/api/1/vehicles
-        # FleetAPI North America: https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles
-        # FleetAPI Europe:        https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles
-        # FleetAPI China:         https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles
-        # FleetAPI http proxy:    https://localhost:4443/api/1/vehicles
-        "teslaApiUrl": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
-
         # The client_id of the app registered with Tesla. Registration is
         # required to use the FleetAPI and Vehicle Command protocol.
         # See https://developer.tesla.com/docs/fleet-api#authentication
@@ -155,11 +144,15 @@
         # Instead it relies on the Tesla Vehicle Command proxy which translates
         # the FleetAPI REST calls if the destination vehicle supports the
         # new protocol. This requires the URL of the proxy to be set as
-        # "teslaApiUrl" above and the proxy certificate for validation here.
+        # "teslaProxy" and the proxy certificate for validation as
+        # "teslaProxyCert".
         # See https://github.com/teslamotors/vehicle-command
         #
-        # Only set "httpProxyCert" when setting "teslaApiUrl" to a local proxy.
-        #"httpProxyCert": "/path/to/public_key.pem",
+        # The URL of the Tesla HTTP Proxy running locally
+        # "teslaProxy": "https://localhost:4443"
+        #
+        # Only set "teslaProxyCert" when "teslaProxy" is set.
+        #"teslaProxyCert": "/path/to/public_key.pem",
 
         # The cloudUpdateInterval determines how often to poll certain
         # data retrieved from the Tesla API to evaluate policy.
