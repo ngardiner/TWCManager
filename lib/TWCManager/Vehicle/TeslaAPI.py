@@ -89,8 +89,8 @@ class TeslaAPI:
         self.generateChallenge()
 
     def addVehicle(self, json):
-        self.carApiVehicles.append(CarApiVehicle(json, self, self.config))
-        return True
+        if "vin" in json:
+            self.carApiVehicles.append(CarApiVehicle(json, self, self.config))
 
     def apiDebugInterface(self, command, vehicleID, parameters):
         # Provides an interface from the Web UI to allow commands to be run interactively
