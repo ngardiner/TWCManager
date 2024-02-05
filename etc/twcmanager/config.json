@@ -149,7 +149,7 @@
         # See https://github.com/teslamotors/vehicle-command
         #
         # The URL of the Tesla HTTP Proxy running locally
-        # "teslaProxy": "https://localhost:4443"
+        # "teslaProxy": "https://localhost:4443",
         #
         # Only set "teslaProxyCert" when "teslaProxy" is set.
         #"teslaProxyCert": "/path/to/public_key.pem",
