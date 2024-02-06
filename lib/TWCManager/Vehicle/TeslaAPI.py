@@ -1112,7 +1112,11 @@ class TeslaAPI:
                 if not self.baseURL:
                     decoded = jwt.decode(
                         token,
-                        options={"verify_signature": False, "verify_aud": False, "verify_exp": False},
+                        options={
+                            "verify_signature": False,
+                            "verify_aud": False,
+                            "verify_exp": False,
+                        },
                     )
                     if "owner-api" in "".join(decoded.get("aud", "")):
                         self.baseURL = self.regionURL["OwnerAPI"]
