@@ -9,7 +9,6 @@ from threading import Thread
 import time
 from urllib.parse import parse_qs
 import jwt
-import datetime
 
 logger = logging.getLogger("\U0001F697 TeslaAPI")
 
@@ -1113,8 +1112,7 @@ class TeslaAPI:
                 if not self.baseURL:
                     decoded = jwt.decode(
                         token,
-                        options={"verify_signature": False, "verify_aud": False},
-                        leeway=datetime.timedelta(days=300),
+                        options={"verify_signature": False, "verify_aud": False, "verify_exp": False},
                     )
                     if "owner-api" in "".join(decoded.get("aud", "")):
                         self.baseURL = self.regionURL["OwnerAPI"]

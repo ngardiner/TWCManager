@@ -18,6 +18,7 @@ setup(
         "ocpp",
         "paho_mqtt>=1.5.0",
         "psycopg2",
+        "pyjwt",
         "pyModbusTCP>=0.1.8",
         "pymysql",
         "pyserial>=3.4",
