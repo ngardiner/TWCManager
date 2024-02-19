@@ -104,7 +104,7 @@ The following documents provide detail on specific areas of configuration:
 Once the above steps are complete, start the TWCManager script with the following command:
 
 ```
-sudo -u twcmanager python -m TWCManager
+sudo -u twcmanager python3 -m TWCManager
 ```
 
 ### Monitoring the script operation
@@ -158,7 +158,7 @@ From version v1.2.4 of TWCManager and beyond, you can use pip to upgrade TWCMana
 To upgrade TWCManager to the latest version:
 
 ```
-sudo pip install --upgrade twcmanager
+sudo pip3 install --upgrade twcmanager
 ```
 
 ### Development Version
