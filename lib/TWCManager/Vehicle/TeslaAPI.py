@@ -219,14 +219,14 @@ class TeslaAPI:
 
         if self.getCarApiBearerToken() != "":
             if self.getVehicleCount() < 1:
-                url = "https://owner-api.teslamotors.com/api/1/vehicles"
+                url = "https://owner-api.teslamotors.com/api/1/products"
                 headers = {
                     "accept": "application/json",
                     "Authorization": "Bearer " + self.getCarApiBearerToken(),
                 }
                 try:
                     req = requests.get(url, headers=headers)
-                    logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
+                    logger.log(logging.INFO8, "Car API cmd products " + str(req))
                     apiResponseDict = json.loads(req.text)
                 except requests.exceptions.RequestException:
                     logger.info("Failed to make API call " + url)
@@ -241,7 +241,9 @@ class TeslaAPI:
                     logger.debug("Car API vehicle list" + str(apiResponseDict) + "\n")
 
                     for i in range(0, apiResponseDict["count"]):
-                        self.addVehicle(apiResponseDict["response"][i])
+                        product = apiResponseDict["response"][i]
+                        if "vehicle_id" in product:
+                            self.addVehicle(product)
                     self.resetCarApiLastErrorTime()
                 except (KeyError, TypeError):
                     # This catches cases like trying to access
