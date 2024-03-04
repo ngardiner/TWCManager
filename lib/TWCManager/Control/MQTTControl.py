@@ -48,7 +48,10 @@ class MQTTControl:
             # to determine if they represent control messages
             logger.debug("Attempting to Connect")
             if self.brokerIP:
-                self.__client = self.mqtt.Client("MQTTCtrl")
+                if hasattr(self.mqtt, 'CallbackAPIVersion'):
+                    self.__client = self.mqtt.Client(self.mqtt.CallbackAPIVersion.VERSION2, "MQTTCtrl")
+                else:
+                    self.__client = self.mqtt.Client("MQTTCtrl")
                 if self.username and self.password:
                     self.__client.username_pw_set(self.username, self.password)
                 self.__client.on_connect = self.mqttConnect
@@ -73,7 +76,7 @@ class MQTTControl:
             else:
                 logger.log(logging.INFO4, "Module enabled but no brokerIP specified.")
 
-    def mqttConnect(self, client, userdata, flags, rc):
+    def mqttConnect(self, client, userdata, flags, rc, properties=None):
         logger.log(logging.INFO5, "MQTT Connected.")
         logger.log(logging.INFO5, "Subscribe to " + self.topicPrefix + "/#")
         res = self.__client.subscribe(self.topicPrefix + "/#", qos=0)
@@ -109,5 +112,5 @@ class MQTTControl:
             logger.log(logging.INFO3, "MQTT Message called Stop")
             self._thread.interrupt_main()
 
-    def mqttSubscribe(self, client, userdata, mid, granted_qos):
+    def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))

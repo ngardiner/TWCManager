@@ -48,7 +48,10 @@ class DSMRreader:
 
         logger.debug("Attempting to Connect to DSMR-reader MQTT Broker")
         if self.brokerIP:
-            self.__client = self.mqtt.Client("DSMRreader.EMS")
+            if hasattr(self.mqtt, 'CallbackAPIVersion'):
+                self.__client = self.mqtt.Client(self.mqtt.CallbackAPIVersion.VERSION2, "DSMRreader.EMS")
+            else:
+                self.__client = self.mqtt.Client("DSMRreader.EMS")
             if self.username and self.password:
                 self.__client.username_pw_set(self.username, self.password)
             self.__client.on_connect = self.mqttConnect
@@ -73,7 +76,7 @@ class DSMRreader:
         else:
             logger.log(logging.INFO4, "Module enabled but no brokerIP specified.")
 
-    def mqttConnect(self, client, userdata, flags, rc):
+    def mqttConnect(self, client, userdata, flags, rc, properties=None):
         logger.log(logging.INFO5, "DSMRreader MQTT Connected.")
 
         if self.__topic:
@@ -131,7 +134,7 @@ class DSMRreader:
                 logging.INFO3, f"Consumption Amps Value updated to {self.consumedA}A"
             )
 
-    def mqttSubscribe(self, client, userdata, mid, granted_qos):
+    def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
 
     def getConsumption(self):

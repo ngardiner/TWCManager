@@ -49,7 +49,10 @@ class MQTT:
 
         logger.debug("Attempting to Connect to MQTT Broker")
         if self.brokerIP:
-            self.__client = self.mqtt.Client("MQTT.EMS")
+            if hasattr(self.mqtt, 'CallbackAPIVersion'):
+                self.__client = self.mqtt.Client(self.mqtt.CallbackAPIVersion.VERSION2, "MQTT.EMS")
+            else:
+                self.__client = self.mqtt.Client("MQTT.EMS")
             if self.username and self.password:
                 self.__client.username_pw_set(self.username, self.password)
             self.__client.on_connect = self.mqttConnect
@@ -74,7 +77,7 @@ class MQTT:
         else:
             logger.log(logging.INFO4, "Module enabled but no brokerIP specified.")
 
-    def mqttConnect(self, client, userdata, flags, rc):
+    def mqttConnect(self, client, userdata, flags, rc, properties=None):
         logger.log(logging.INFO5, "MQTT Connected.")
 
         if self.__topicConsumption:
@@ -99,7 +102,7 @@ class MQTT:
             self.generatedW = payload
             logger.log(logging.INFO3, "MQTT EMS Generation Value updated")
 
-    def mqttSubscribe(self, client, userdata, mid, granted_qos):
+    def mqttSubscribe(self, client, userdata, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
 
     def getConsumption(self):
