@@ -13,7 +13,7 @@ test_duration_max = 120
 test_state = 0
 
 if hasattr(mqtt, 'CallbackAPIVersion'):
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "MQTT.EMS.Test")
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "MQTT.EMS.Test", protocol=mqtt.MQTTv5)
 else:
     client = mqtt.Client("MQTT.EMS.Test")
 client.username_pw_set("twcmanager", "twcmanager")
