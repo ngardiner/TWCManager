@@ -81,7 +81,10 @@ class TeslaMateVehicle:
             timer.start()
 
     def doMQTT(self):
-        self.__client = mqtt.Client("TWCTeslaMate")
+        if hasattr(mqtt, 'CallbackAPIVersion'):
+            self.__client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "TWCTeslaMate", protocol=mqtt.MQTTv5)
+        else:
+            self.__client = mqtt.Client("TWCTeslaMate")
         if self.__mqtt_user and self.__mqtt_pass:
             self.__client.username_pw_set(self.__mqtt_user, self.__mqtt_pass)
         self.__client.on_connect = self.mqttConnect
@@ -169,7 +172,7 @@ class TeslaMateVehicle:
             # Required database details not provided. Turn off token sync
             self.syncTokens = False
 
-    def mqttConnect(self, client, userdata, flags, rc):
+    def mqttConnect(self, client, userdata, flags, rc, properties=None):
         logger.log(logging.INFO5, "MQTT Connected.")
         logger.log(logging.INFO5, "Subscribe to " + self.__mqtt_prefix + "/cars/#")
         res = client.subscribe(self.__mqtt_prefix + "/cars/#", qos=0)
@@ -221,7 +224,7 @@ class TeslaMateVehicle:
             else:
                 pass
 
-    def mqttSubscribe(self, client, userdata, mid, granted_qos):
+    def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
 
     def updateVehicles(self, vehicle_id, vehicle_name):

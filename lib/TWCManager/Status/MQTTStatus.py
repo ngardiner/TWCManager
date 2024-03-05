@@ -106,7 +106,10 @@ class MQTTStatus:
             if self.connectionState == 0:
                 logger.debug("MQTT Status: Attempting to Connect")
                 try:
-                    client = self.mqtt.Client()
+                    if hasattr(self.mqtt, 'CallbackAPIVersion'):
+                        client = self.mqtt.Client(self.mqtt.CallbackAPIVersion.VERSION2, "MQTTStatus", protocol=self.mqtt.MQTTv5)
+                    else:
+                        client = self.mqtt.Client("MQTTStatus")
                     if self.username and self.password:
                         client.username_pw_set(self.username, self.password)
                     client.on_connect = self.mqttConnected
@@ -130,7 +133,7 @@ class MQTTStatus:
                     logger.debug(str(e))
                     return False
 
-    def mqttConnected(self, client, userdata, flags, rc):
+    def mqttConnected(self, client, userdata, flags, rc, properties=None):
         # This callback function is called once the MQTT client successfully
         # connects to the MQTT server. It will then publish all queued messages
         # to the server, and then disconnect.
