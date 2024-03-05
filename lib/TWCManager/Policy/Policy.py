@@ -231,9 +231,7 @@ class Policy:
 
         # Clear stopAskingToStartCharging so we try charging each car at
         # least once
-        for vehicle in self.master.getModuleByName(
-            "TeslaAPI"
-        ).getCarApiVehicles():
+        for vehicle in self.master.getModuleByName("TeslaAPI").getCarApiVehicles():
             vehicle.stopAskingToStartCharging = False
 
         # Report current policy via Status modules
