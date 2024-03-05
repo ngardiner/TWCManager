@@ -366,10 +366,10 @@ class TWCSlave:
         #                   Manual says this code means 'The networked Wall
         #                   Connectors have different maximum current
         #                   capabilities.'
-        #   	0000 1000 = No effect
-        #   	0001 0000 = No effect
-        #   	0010 0000 = No effect
-        #   	0100 0000 = No effect
+        #       0000 1000 = No effect
+        #       0001 0000 = No effect
+        #       0010 0000 = No effect
+        #       0100 0000 = No effect
         #       1000 0000 = No effect
         #     When two bits are set, the lowest bit (rightmost bit) seems to
         #     take precedence (ie 111 results in 3 blinks, 110 results in 5
@@ -576,6 +576,16 @@ class TWCSlave:
         self.reportedAmpsMax = ((heartbeatData[1] << 8) + heartbeatData[2]) / 100
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
+
+        if self.reportedState == 0x02:
+            logger.info(
+                "WARNING: slave TWC %02X%02X is sending error with status data: %s"
+                % (
+                    self.TWCID[0],
+                    self.TWCID[1],
+                    self.master.hex_str(heartbeatData),
+                )
+            )
 
         if self.reportedAmpsActual != self.reportedAmpsLast:
             self.reportedAmpsLast = self.reportedAmpsActual
