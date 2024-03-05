@@ -5,10 +5,13 @@ This document logs the changes per release of TWCManager.
 ## v1.3.2 - Latest Development version
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules
 * (@RichieB2B) - Support for new fleet API and vehicle command proxy
+* (@RichieB2B) - Upgrade MQTT support for paho v2/MQTTv5
+* (@RichieB2B) - Enable reporting of Slave error messages
+* (@RichieB2B) - Reset stopAskingToStartCharging more often
 * Bugfixes
     * (@RichieB2B) - Fix issues with mysql status logging statements
 
-## v1.3.1 - Latest Development version
+## v1.3.1 - 2023-11-19
 * (@RichieB2B) - Support for new fleet API endpoint for location telemetry
 * (@RichieB2B) - More accurate getConsumptionAmps for DSMRreader (esp. for unbalanced 3-phase circuits)
 * Bugfixes
