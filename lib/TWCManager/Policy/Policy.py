@@ -229,6 +229,13 @@ class Policy:
             limit = -1
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
 
+        # Clear stopAskingToStartCharging so we try charging each car at
+        # least once
+        for vehicle in self.master.getModuleByName(
+            "TeslaAPI"
+        ).getCarApiVehicles():
+            vehicle.stopAskingToStartCharging = False
+
         # Report current policy via Status modules
         for module in self.master.getModulesByType("Status"):
             module["ref"].setStatus(

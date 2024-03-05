@@ -859,6 +859,7 @@ class TeslaAPI:
                 )
             ) or (not wasAtHome and checkArrival):
                 vehicle.stopTryingToApplyLimit = False
+                vehicle.stopAskingToStartCharging = False
 
         if needToWake and self.car_api_available(applyLimit=True) is False:
             logger.log(
@@ -904,9 +905,11 @@ class TeslaAPI:
 
             if not wasAtHome and vehicle.atHome:
                 logger.log(logging.INFO2, vehicle.name + " has arrived")
+                vehicle.stopAskingToStartCharging = False
                 outside = vehicle.chargeLimit
             elif wasAtHome and not vehicle.atHome:
                 logger.log(logging.INFO2, vehicle.name + " has departed")
+                vehicle.stopAskingToStartCharging = False
                 forgetVehicle = True
 
             if limit == -1 or not vehicle.atHome:
