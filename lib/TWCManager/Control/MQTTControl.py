@@ -48,8 +48,12 @@ class MQTTControl:
             # to determine if they represent control messages
             logger.debug("Attempting to Connect")
             if self.brokerIP:
-                if hasattr(self.mqtt, 'CallbackAPIVersion'):
-                    self.__client = self.mqtt.Client(self.mqtt.CallbackAPIVersion.VERSION2, "MQTTCtrl", protocol=self.mqtt.MQTTv5)
+                if hasattr(self.mqtt, "CallbackAPIVersion"):
+                    self.__client = self.mqtt.Client(
+                        self.mqtt.CallbackAPIVersion.VERSION2,
+                        "MQTTCtrl",
+                        protocol=self.mqtt.MQTTv5,
+                    )
                 else:
                     self.__client = self.mqtt.Client("MQTTCtrl")
                 if self.username and self.password:

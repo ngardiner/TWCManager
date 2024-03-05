@@ -106,8 +106,12 @@ class MQTTStatus:
             if self.connectionState == 0:
                 logger.debug("MQTT Status: Attempting to Connect")
                 try:
-                    if hasattr(self.mqtt, 'CallbackAPIVersion'):
-                        client = self.mqtt.Client(self.mqtt.CallbackAPIVersion.VERSION2, "MQTTStatus", protocol=self.mqtt.MQTTv5)
+                    if hasattr(self.mqtt, "CallbackAPIVersion"):
+                        client = self.mqtt.Client(
+                            self.mqtt.CallbackAPIVersion.VERSION2,
+                            "MQTTStatus",
+                            protocol=self.mqtt.MQTTv5,
+                        )
                     else:
                         client = self.mqtt.Client("MQTTStatus")
                     if self.username and self.password:

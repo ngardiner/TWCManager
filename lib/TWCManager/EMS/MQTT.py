@@ -49,8 +49,12 @@ class MQTT:
 
         logger.debug("Attempting to Connect to MQTT Broker")
         if self.brokerIP:
-            if hasattr(self.mqtt, 'CallbackAPIVersion'):
-                self.__client = self.mqtt.Client(self.mqtt.CallbackAPIVersion.VERSION2, "MQTT.EMS", protocol=self.mqtt.MQTTv5)
+            if hasattr(self.mqtt, "CallbackAPIVersion"):
+                self.__client = self.mqtt.Client(
+                    self.mqtt.CallbackAPIVersion.VERSION2,
+                    "MQTT.EMS",
+                    protocol=self.mqtt.MQTTv5,
+                )
             else:
                 self.__client = self.mqtt.Client("MQTT.EMS")
             if self.username and self.password:

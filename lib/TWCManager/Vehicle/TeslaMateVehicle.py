@@ -81,8 +81,10 @@ class TeslaMateVehicle:
             timer.start()
 
     def doMQTT(self):
-        if hasattr(mqtt, 'CallbackAPIVersion'):
-            self.__client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "TWCTeslaMate", protocol=mqtt.MQTTv5)
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            self.__client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION2, "TWCTeslaMate", protocol=mqtt.MQTTv5
+            )
         else:
             self.__client = mqtt.Client("TWCTeslaMate")
         if self.__mqtt_user and self.__mqtt_pass:

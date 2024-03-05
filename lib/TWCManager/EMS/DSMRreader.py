@@ -48,8 +48,12 @@ class DSMRreader:
 
         logger.debug("Attempting to Connect to DSMR-reader MQTT Broker")
         if self.brokerIP:
-            if hasattr(self.mqtt, 'CallbackAPIVersion'):
-                self.__client = self.mqtt.Client(self.mqtt.CallbackAPIVersion.VERSION2, "DSMRreader.EMS", protocol=self.mqtt.MQTTv5)
+            if hasattr(self.mqtt, "CallbackAPIVersion"):
+                self.__client = self.mqtt.Client(
+                    self.mqtt.CallbackAPIVersion.VERSION2,
+                    "DSMRreader.EMS",
+                    protocol=self.mqtt.MQTTv5,
+                )
             else:
                 self.__client = self.mqtt.Client("DSMRreader.EMS")
             if self.username and self.password:
