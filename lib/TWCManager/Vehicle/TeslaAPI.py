@@ -1443,13 +1443,11 @@ class CarApiVehicle:
             return True
 
     def update_vehicle_data(self, cacheTime=60):
-        url = "/".join([
-            self.carapi.getCarApiBaseURL(),
-            str(self.VIN),
-            "vehicle_data"
-        ]) + "?endpoints=" + "%3B".join([
-            "location_data","charge_state","drive_state"
-        ])
+        url = (
+            "/".join([self.carapi.getCarApiBaseURL(), str(self.VIN), "vehicle_data"])
+            + "?endpoints="
+            + "%3B".join(["location_data", "charge_state", "drive_state"])
+        )
 
         now = time.time()
 
