@@ -144,7 +144,7 @@ jobs:
         .
 
     - name: Publish distribution package to Test PyPI
-      uses: pypa/gh-action-pypi-publish@master
+      uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.TEST_PYPI_API_TOKEN }}
         skip_existing: true
@@ -232,14 +232,14 @@ jobs:
         --outdir dist/
         .
     - name: Publish distribution package to Test PyPI
-      uses: pypa/gh-action-pypi-publish@master
+      uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.TEST_PYPI_API_TOKEN }}
         skip_existing: true
         repository_url: https://test.pypi.org/legacy/
 
     - name: Publish distribution package to Production PyPI
-      uses: pypa/gh-action-pypi-publish@master
+      uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
 
