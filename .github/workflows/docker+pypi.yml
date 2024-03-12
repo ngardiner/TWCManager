@@ -16,7 +16,7 @@ on:
       release_version:
         description: The version that you would like to create a release for.
         required: true
-        default: "v1.2.3"
+        default: "v1.3.2"
       trigger_docker_latest:
         description: Generate a :latest docker image using self-hosted runners.
         required: true
@@ -218,15 +218,14 @@ jobs:
         python-version: 3.7
 
     - name: Install pypa/build
-      run: |
-        python -m pip install build --user
-
-    - name: Install wheel
-      run: |
-        python -m pip install wheel --user
+      run: >-
+        python -m
+        pip install
+        build
+        --user
 
     - name: Build a binary wheel and a source tarball
-      run: |
+      run: >-
         python -m build --sdist --wheel --outdir dist/ .
 
     - name: Publish distribution package to Test PyPI
