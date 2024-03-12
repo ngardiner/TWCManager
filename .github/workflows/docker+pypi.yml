@@ -30,7 +30,7 @@ on:
         required: true
         default: "no"
       trigger_docker_testing_cloud:
-        description: Allows generating a :testing docker image using cloud compute.
+        description: Allows generating a :testing docker image using cloud runners.
         required: true
         default: "no"
       trigger_pypi_dev:
@@ -38,6 +38,11 @@ on:
         required: true
         default: "no"
       trigger_pypi_prod:
+        description: "Should we trigger a pypi package upload using self-hosted runners?"
+        required: true
+        default: "no"
+      trigger_pypi_cloud:
+        description: "Should we trigger a pypi package upload using cloud runners?"
         required: true
         default: "no"
 
@@ -93,7 +98,7 @@ jobs:
       uses: ngardiner/gh-action-pypi-publish-proxy@master
       with:
         password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        skip_existing: true
+        skip-existing: true
         repository_url: https://test.pypi.org/legacy/
 
   pypi-dev-cloud:
@@ -147,7 +152,7 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        skip_existing: true
+        skip-existing: true
         repository_url: https://test.pypi.org/legacy/
 
   pypi:
@@ -189,7 +194,7 @@ jobs:
       uses: ngardiner/gh-action-pypi-publish-proxy@master
       with:
         password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        skip_existing: true
+        skip-existing: true
         repository_url: https://test.pypi.org/legacy/
 
     - name: Publish distribution package to Production PyPI
@@ -203,7 +208,7 @@ jobs:
 
     if: |
       (vars.build_env == 'cloud' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_pypi_prod == 'yes')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_pypi_cloud == 'yes')
 
     steps:
     - name: Check out Repository
@@ -217,26 +222,20 @@ jobs:
         python-version: 3.7
 
     - name: Install pypa/build
-      run: >-
-        python -m
-        pip install
-        build
-        --user
+      run: python -m pip install build --user
+
+    - name: Install wheel
+      run: python -m pip install wheel --user
 
     - name: Build a binary wheel and a source tarball
-      run: >-
-        python -m
-        build
-        --sdist
-        --wheel
-        --outdir dist/
-        .
+      run: python -m build --sdist --wheel --outdir dist/ .
+
     - name: Publish distribution package to Test PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        skip_existing: true
-        repository_url: https://test.pypi.org/legacy/
+        skip-existing: true
+        repository-url: https://test.pypi.org/legacy/
 
     - name: Publish distribution package to Production PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
