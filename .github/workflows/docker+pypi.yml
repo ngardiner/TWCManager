@@ -44,7 +44,10 @@ on:
 jobs:
   pypi-dev:
     name: Build a PyPi Package if this is a commit to the ci_dev branch
-    runs-on: [ "self-hosted", "build_host" ]
+# uncomment to build on self-hosted runners
+    #runs-on: [ "self-hosted", "build_host" ]
+# uncomment to run on cloud runners
+    runs-on: [ "ubuntu-latest" ]
 
     if: |
       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/ci_dev')) ||
@@ -98,7 +101,10 @@ jobs:
 
   pypi:
     name: Build a PyPi Package if this is a tagged release commit
-    runs-on: [ "self-hosted", "build_host" ]
+# uncomment to build on self-hosted runners
+    #runs-on: [ "self-hosted", "build_host" ]
+# uncomment to run on cloud runners
+    runs-on: [ "ubuntu-latest" ]
 
     if: |
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags')) ||
