@@ -148,7 +148,8 @@ jobs:
     runs-on: [ "self-hosted", "build_host" ]
 
     if: |
-      github.event_name == 'push' ||
+#      uncomment to run on self-hosted runners
+#      github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_docker_latest == 'yes')
 
     steps:
@@ -190,6 +191,8 @@ jobs:
     runs-on: [ "ubuntu-latest" ]
 
     if: |
+# uncomment to run on cloud runners
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_docker_latest_cloud == 'yes'
 
     steps:
