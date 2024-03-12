@@ -129,7 +129,7 @@ class TWCMaster:
             except requests.exceptions.RequestException:
                 logger.info("Failed to fetch package details: " + url)
                 if req:
-                  logger.log(logging.INFO6, "Response: " + req.text)
+                    logger.log(logging.INFO6, "Response: " + req.text)
                 pass
             except json.decoder.JSONDecodeError:
                 logger.info("Could not parse JSON result from " + url)

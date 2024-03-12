@@ -249,12 +249,12 @@ class TeslaAPI:
                 except requests.exceptions.RequestException:
                     logger.info("Failed to make API call " + url)
                     if req:
-                      logger.log(logging.INFO6, "Response: " + req.text)
+                        logger.log(logging.INFO6, "Response: " + req.text)
                     pass
                 except json.decoder.JSONDecodeError:
                     logger.info("Could not parse JSON result from " + url)
                     if req:
-                      logger.log(logging.INFO6, "Response: " + req.text)
+                        logger.log(logging.INFO6, "Response: " + req.text)
                     pass
 
                 try:
