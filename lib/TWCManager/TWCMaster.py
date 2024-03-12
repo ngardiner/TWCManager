@@ -119,6 +119,8 @@ class TWCMaster:
 
             # Fetch the JSON data from PyPi for our package
             url = "https://pypi.org/pypi/twcmanager/json"
+            req = None
+            pkgInfo = None
 
             try:
                 req = requests.get(url)
@@ -134,7 +136,7 @@ class TWCMaster:
                 logger.log(logging.INFO6, "Response: " + req.text)
                 pass
 
-            if pkgInfo.get("info", {}).get("version", None):
+            if pkgInfo and pkgInfo.get("info", {}).get("version", None):
                 if pkgInfo["info"]["version"] != self.version:
                     # Versions don't match. Let's make sure the new one really is newer
                     current_arr = [int(v) for v in self.version.split(".")]

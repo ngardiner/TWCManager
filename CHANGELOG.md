@@ -10,6 +10,7 @@ This document logs the changes per release of TWCManager.
 * (@RichieB2B) - Reset stopAskingToStartCharging more often
 * Bugfixes
     * (@RichieB2B) - Fix issues with mysql status logging statements
+    * (@ngardiner) - Fix issues preventing web UI display when internet access is unavaiable
 
 ## v1.3.1 - 2023-11-19
 * (@RichieB2B) - Support for new fleet API endpoint for location telemetry
