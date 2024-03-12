@@ -211,8 +211,6 @@ jobs:
     steps:
     - name: Check out Repository
       uses: actions/checkout@v3
-      with:
-        path: ./pypi-dev
 
     - name: Set up Python 3.7
       uses: actions/setup-python@v4
@@ -220,6 +218,7 @@ jobs:
         python-version: 3.7
 
     - name: Install pypa/build and build a binary wheel and a source tarball
+      shell: sh
       run: >-
         python -m pip install --upgrade pip
         python -m pip install build --user
@@ -231,13 +230,11 @@ jobs:
         password: ${{ secrets.TEST_PYPI_API_TOKEN }}
         skip-existing: true
         repository-url: https://test.pypi.org/legacy/
-        path: ./pypi-dev
 
     - name: Publish distribution package to Production PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
-        path: ./pypi-dev
 
   docker-latest:
     name: Create docker-latest Docker Image from current head
