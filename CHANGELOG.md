@@ -4,6 +4,8 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
 * Placeholder - TWC abstraction code
+* Bugfixes
+    * (@MikeBishop) - Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
 
 ## v1.3.2 - 2023-03-12
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules
