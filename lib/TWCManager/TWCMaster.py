@@ -125,8 +125,9 @@ class TWCMaster:
                 logger.log(logging.INFO8, "Requesting PyPi package info " + str(req))
                 pkgInfo = json.loads(req.text)
             except requests.exceptions.RequestException:
-                logger.info("Failed to fetch package details " + url)
-                logger.log(logging.INFO6, "Response: " + req.text)
+                logger.info("Failed to fetch package details: " + url)
+                if req:
+                  logger.log(logging.INFO6, "Response: " + req.text)
                 pass
             except json.decoder.JSONDecodeError:
                 logger.info("Could not parse JSON result from " + url)

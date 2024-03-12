@@ -248,11 +248,13 @@ class TeslaAPI:
                     apiResponseDict = json.loads(req.text)
                 except requests.exceptions.RequestException:
                     logger.info("Failed to make API call " + url)
-                    logger.log(logging.INFO6, "Response: " + req.text)
+                    if req:
+                      logger.log(logging.INFO6, "Response: " + req.text)
                     pass
                 except json.decoder.JSONDecodeError:
                     logger.info("Could not parse JSON result from " + url)
-                    logger.log(logging.INFO6, "Response: " + req.text)
+                    if req:
+                      logger.log(logging.INFO6, "Response: " + req.text)
                     pass
 
                 try:
