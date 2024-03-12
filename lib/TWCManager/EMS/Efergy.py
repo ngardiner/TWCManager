@@ -1,5 +1,6 @@
 # Efergy
 import time
+import logging
 
 logger = logging.getLogger("\U000026A1 Efergy")
 
