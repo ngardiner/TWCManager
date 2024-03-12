@@ -1115,22 +1115,22 @@ class TeslaAPI:
             else:
                 self.carApiBearerToken = token
                 if not self.baseURL:
-                  try:
-                    decoded = jwt.decode(
-                        token,
-                        options={
-                            "verify_signature": False,
-                            "verify_aud": False,
-                            "verify_exp": False,
-                        },
-                    )
-                    if "owner-api" in "".join(decoded.get("aud", "")):
+                    try:
+                        decoded = jwt.decode(
+                            token,
+                            options={
+                                "verify_signature": False,
+                                "verify_aud": False,
+                                "verify_exp": False,
+                            },
+                        )
+                        if "owner-api" in "".join(decoded.get("aud", "")):
+                            self.baseURL = self.regionURL["OwnerAPI"]
+                        elif decoded.get("ou_code", "") in self.regionURL:
+                            self.baseURL = self.regionURL[decoded["ou_code"]]
+                    except jwt.exceptions.DecodeError:
+                        # Fallback to owner-api if we get an exception decoding jwt token
                         self.baseURL = self.regionURL["OwnerAPI"]
-                    elif decoded.get("ou_code", "") in self.regionURL:
-                        self.baseURL = self.regionURL[decoded["ou_code"]]
-                  except jwt.exceptions.DecodeError:
-                    # Fallback to owner-api if we get an exception decoding jwt token
-                    self.baseURL = self.regionURL["OwnerAPI"]
                 return True
         else:
             return False
