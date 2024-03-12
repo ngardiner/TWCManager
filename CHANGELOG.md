@@ -2,6 +2,9 @@
 
 This document logs the changes per release of TWCManager.
 
+## v1.4.0 - Upcoming Development release
+* Placeholder - TWC abstraction code
+
 ## v1.3.2 - Latest Development version
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules
 * (@RichieB2B) - Support for new fleet API and vehicle command proxy

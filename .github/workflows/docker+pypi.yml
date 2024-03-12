@@ -155,7 +155,7 @@ jobs:
     runs-on: [ "self-hosted", "build_host" ]
 
     if: |
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags')) ||
+      (vars.build_env == 'self-hosted' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags')) ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_pypi_prod == 'yes')
 
     steps:
@@ -194,6 +194,52 @@ jobs:
 
     - name: Publish distribution package to Production PyPI
       uses: ngardiner/gh-action-pypi-publish-proxy@master
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+
+  pypi-cloud:
+    name: Build a PyPi Package if this is a tagged release commit
+    runs-on: ubuntu-latest
+
+    if: |
+      (vars.build_env == 'cloud' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_pypi_prod == 'yes')
+
+    steps:
+    - name: Check out Repository
+      uses: actions/checkout@v3
+      with:
+        path: ./pypi
+
+    - name: Set up Python 3.7
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.7
+
+    - name: Install pypa/build
+      run: >-
+        python -m
+        pip install
+        build
+        --user
+
+    - name: Build a binary wheel and a source tarball
+      run: >-
+        python -m
+        build
+        --sdist
+        --wheel
+        --outdir dist/
+        .
+    - name: Publish distribution package to Test PyPI
+      uses: pypa/gh-action-pypi-publish@master
+      with:
+        password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        skip_existing: true
+        repository_url: https://test.pypi.org/legacy/
+
+    - name: Publish distribution package to Production PyPI
+      uses: pypa/gh-action-pypi-publish@master
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
 
