@@ -2,11 +2,10 @@ import logging
 import requests
 import time
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = logging.getLogger("\U000026A1 URL")
 
 
 class URL:
-
     # URL EMS Module
     # Fetches Consumption and Generation details from URL
 
@@ -48,7 +47,6 @@ class URL:
             return None
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("URL EMS Module Disabled. Skipping getConsumption")
             return 0
@@ -60,7 +58,6 @@ class URL:
         return self.consumedW
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("URL EMS Module Disabled. Skipping getGeneration")
             return 0

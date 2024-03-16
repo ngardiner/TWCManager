@@ -1,7 +1,7 @@
 # TWCManager
 
-[![Stable Release](https://img.shields.io/badge/Stable_Release-1.2.6-blue)](https://github.com/ngardiner/TWCManager/releases/tag/v1.2.6)
-[![Development Release](https://img.shields.io/badge/Devel_Release-1.3.0-green.svg)](https://github.com/ngardiner/TWCManager/tree/main)
+[![Stable Release](https://img.shields.io/badge/Stable_Release-1.3.2-blue)](https://github.com/ngardiner/TWCManager/releases/tag/v1.3.2)
+[![Development Release](https://img.shields.io/badge/Devel_Release-1.4.0-green.svg)](https://github.com/ngardiner/TWCManager/tree/main)
 ![Build Status](https://github.com/ngardiner/TWCManager/actions/workflows/test_suite.yml/badge.svg)
 ![GitHub commits](https://img.shields.io/github/commit-activity/m/ngardiner/TWCManager)
 ![Docker Pulls](https://img.shields.io/docker/pulls/twcmanager/twcmanager.svg)
@@ -55,6 +55,7 @@ EMS Interfaces read solar generation and/or consumption values from an external 
 | Platform                      | Status        | Details                 |
 | ----------------------------- | ------------- | ----------------------- |
 | Dutch SmartMeter | In Development | Supports DSMR Serial Protocol |
+| [DSMReader](docs/modules/DMS_DSMReader.md)      | Available | Supports DSM Reader via MQTT |
 | [Efergy](docs/modules/EMS_Efergy.md)            | Available | Supports Efergy Pro Sensors |
 | [Enphase](docs/modules/EMS_Enphase.md)          | Available | Supports Enphase Enlighten API |
 | [Fronius Inverter](docs/modules/EMS_Fronius.md) | Available | Supports Fronius Inverter API |

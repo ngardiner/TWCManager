@@ -4,11 +4,12 @@ from setuptools import setup, find_namespace_packages
 
 setup(
     name="TWCManager",
-    version="1.3.0",
+    version="1.3.2",
     package_dir={"": "lib"},
     packages=find_namespace_packages(where="lib"),
     python_requires=">= 3.6",
     include_package_data=True,
+    long_description="Controls the charge rate of certain versions of Tesla Wall Connector (TWC) via the built-in Load Sharing protocol.",
     # Dependencies
     install_requires=[
         "cryptography<3.4",
@@ -17,6 +18,7 @@ setup(
         "ocpp",
         "paho_mqtt>=1.5.0",
         "psycopg2",
+        "pyjwt",
         "pyModbusTCP>=0.1.8",
         "pymysql",
         "pyserial>=3.4",

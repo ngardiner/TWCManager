@@ -2,24 +2,57 @@
 
 This document logs the changes per release of TWCManager.
 
-## v1.3.0 - Latest Development version
+## v1.4.0 - Upcoming Development release
+* Placeholder - TWC abstraction code
+* Bugfixes
+    * (@MikeBishop) - Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
 
-  * Bugfixes
+## v1.3.2 - 2023-03-12
+* (@RichieB2B) - Nicer looking log prefixes for EMS modules
+* (@RichieB2B) - Support for new fleet API and vehicle command proxy
+* (@RichieB2B) - Upgrade MQTT support for paho v2/MQTTv5
+* (@RichieB2B) - Enable reporting of Slave error messages
+* (@RichieB2B) - Reset stopAskingToStartCharging more often
+* Bugfixes
+    * (@RichieB2B) - Fix issues with mysql status logging statements
+    * (@ngardiner) - Fix issues preventing web UI display when internet access is unavailable
+
+## v1.3.1 - 2023-11-19
+* (@RichieB2B) - Support for new fleet API endpoint for location telemetry
+* (@RichieB2B) - More accurate getConsumptionAmps for DSMRreader (esp. for unbalanced 3-phase circuits)
+* Bugfixes
+     * (@ngardiner) - Avoid web interface crash when ampsList cannot be derived from minAmpsPerTWC and wiringMaxAmpsPerTWC (root cause under investigation)
+     * (@ngardiner) - Fix issue with dependency versions
+
+## v1.3.0 - 2023-05-28
+
+* Bugfixes
      * (@dtiefnig) - Fix issue with logic around detecting instances of multi-phase system incompatibility
      * (@dtiefnig) - Fix issue with zero-byte VINs causing infinite VIN fetch retries
      * (@MikeBishop) - Fix rounding in calculation of current offer when calculating delta to new offer to improve accuracy
      * (@ngardiner) - Adjust voltage / phase detection to handle combinations of 1/2/3 phase systems, as long as all slave TWCs have the same number of active phases
      * (@ccutrer) - Fix openhab integration to properly parse floats
      * (@ngardiner) - Detect issues with serial connection (RS485) and automatically reconnect
-  * (@hopfi2k) - Major "Modern Theme" update. Switched to Bootstrap 5.02, bug fixes, now fully responsive
-  * (@ngardiner) - Add Home Location view and modification controls to settings page
-  * (@ngardiner) - Add MQTT EMS module (currently pre-release for testing)
-  * (@dtiefnig) - Add switch to output plain text Console output (turn off color)
-  * (@dtiefnig) - Unify single and multi-car charge at home behaviour
-  * (@dtiefnig) - Add Modbus TCP support for SolarEdge EMS module
-  * (@dtiefnig / @MikeBishop) - Update Tesla API charging states
-  * (@dtiefnig) - Reference entrypoint script from within Docker container to remove dependency on external source tree
-  * (@ngardiner) - Add Current Policy as status value (to be published to HASS / MQTT)
+     * (@RichieB2B) - Fix MQTT EMS module (missing brokerPort)
+     * (@RichieB2B) - Fix large steps in ChargeNow duration in the web interface
+     * (@mattiasclaesson) - Remove unnecessary kWh suffix from web UI
+
+* Features
+
+    * (@hopfi2k) - Major "Modern Theme" update. Switched to Bootstrap 5.02, bug fixes, now fully responsive
+    * (@ngardiner) - Add Home Location view and modification controls to settings page
+    * (@ngardiner) - Add MQTT EMS module (currently pre-release for testing)
+    * (@dtiefnig) - Add switch to output plain text Console output (turn off color)
+    * (@dtiefnig) - Unify single and multi-car charge at home behaviour
+    * (@dtiefnig) - Add Modbus TCP support for SolarEdge EMS module
+    * (@dtiefnig / @MikeBishop) - Update Tesla API charging states
+    * (@dtiefnig) - Reference entrypoint script from within Docker container to remove dependency on external source tree
+    * (@ngardiner) - Add Current Policy as status value (to be published to HASS / MQTT)
+    * (@MikeBishop) - Fix API interactions impacted by Tesla's vehicle_data endpoint changes
+    * (@MikeBishop) - Implement improved VIN Check routine
+    * (@RichieB2B) - Add option to leverage Tesla API for lower amp control, otherwise leverage TWC
+    * (@RichieB2B) - Add DSM Reader EMS Module
+    * (@cods4) - Update to documentation 
 
 ## v1.2.6 - 2022-02-28
 

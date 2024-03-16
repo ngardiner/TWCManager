@@ -1,10 +1,9 @@
 import logging
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = logging.getLogger("\U000026A1 MQTT")
 
 
 class MQTT:
-
     # MQTT EMS Module
     # Subscribes to Consumption and Generation details from MQTT Publisher
 
@@ -21,8 +20,6 @@ class MQTT:
     __topicGeneration = None
     master = None
     status = False
-    serverIP = None
-    serverPort = 8123
 
     def __init__(self, master):
         self.master = master
@@ -38,6 +35,7 @@ class MQTT:
 
         self.status = self.__configMQTT.get("enabled", False)
         self.brokerIP = self.__configMQTT.get("brokerIP", None)
+        self.brokerPort = self.__configMQTT.get("brokerPort", 1883)
         self.username = self.__configMQTT.get("username", None)
         self.password = self.__configMQTT.get("password", None)
 
@@ -51,7 +49,14 @@ class MQTT:
 
         logger.debug("Attempting to Connect to MQTT Broker")
         if self.brokerIP:
-            self.__client = self.mqtt.Client("MQTT.EMS")
+            if hasattr(self.mqtt, "CallbackAPIVersion"):
+                self.__client = self.mqtt.Client(
+                    self.mqtt.CallbackAPIVersion.VERSION2,
+                    "MQTT.EMS",
+                    protocol=self.mqtt.MQTTv5,
+                )
+            else:
+                self.__client = self.mqtt.Client("MQTT.EMS")
             if self.username and self.password:
                 self.__client.username_pw_set(self.username, self.password)
             self.__client.on_connect = self.mqttConnect
@@ -76,7 +81,7 @@ class MQTT:
         else:
             logger.log(logging.INFO4, "Module enabled but no brokerIP specified.")
 
-    def mqttConnect(self, client, userdata, flags, rc):
+    def mqttConnect(self, client, userdata, flags, rc, properties=None):
         logger.log(logging.INFO5, "MQTT Connected.")
 
         if self.__topicConsumption:
@@ -90,7 +95,6 @@ class MQTT:
             logger.log(logging.INFO5, "Res: " + str(res))
 
     def mqttMessage(self, client, userdata, message):
-
         # Takes an MQTT message, and update the associated Generation/Consumption value
         payload = str(message.payload.decode("utf-8"))
 
@@ -102,11 +106,10 @@ class MQTT:
             self.generatedW = payload
             logger.log(logging.INFO3, "MQTT EMS Generation Value updated")
 
-    def mqttSubscribe(self, client, userdata, mid, granted_qos):
+    def mqttSubscribe(self, client, userdata, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("Module Disabled. Skipping getConsumption")
             return 0
@@ -115,7 +118,6 @@ class MQTT:
         return self.consumedW
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("Module Disabled. Skipping getGeneration")
             return 0

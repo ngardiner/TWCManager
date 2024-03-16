@@ -2,11 +2,10 @@ import logging
 import requests
 import time
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = logging.getLogger("\U000026A1 OpenHab")
 
 
 class OpenHab:
-
     # OpenHab EMS Module
     # Fetches Consumption and Generation details from OpenHab
 
@@ -50,7 +49,6 @@ class OpenHab:
             return None
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("OpenHab EMS Module Disabled. Skipping getConsumption")
             return 0
@@ -62,7 +60,6 @@ class OpenHab:
         return self.consumedW
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("OpenHab EMS Module Disabled. Skipping getGeneration")
             return 0

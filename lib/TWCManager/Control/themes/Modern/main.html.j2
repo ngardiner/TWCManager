@@ -246,7 +246,7 @@ wcmanager/settings.json and try saving your settings again.</b>
         <!-- Lifetime Amps -->
         <div class="col-lg-2 pt-lg-0 col-md-4 pt-3 col-4 text-center">
             <div class="row-inline display-6 fw-light">
-                <span class="text-body me-1" id="{{ twcid }}_lifetimekWh">0000</span>kWh
+                <span class="text-body me-1" id="{{ twcid }}_lifetimekWh">0000</span>
             </div>
             <div class="row">
                 <span class="text-muted">Lifetime kWh</span>
@@ -297,12 +297,17 @@ wcmanager/settings.json and try saving your settings again.</b>
     <div class="row">
         <div class="col-12 col-md-6 col-lg-4">
             <label for="chargeNowDuration" class="form-label text-muted">Charge duration <span class="text-dark font-weight-bold" id="{{ twcid }}_durationVal">1</span> hour</label>
-            <input type="range" class="form-range" id="chargeNowDuration" name="chargeNowDuration" min="1" max="24" step="5" value="1" onInput="$('#{{ twcid }}_durationVal').html($(this).val())">
+            <input type="range" class="form-range" id="chargeNowDuration" name="chargeNowDuration" min="1" max="24" step="1" value="1" onInput="$('#{{ twcid }}_durationVal').html($(this).val())">
         </div>
         <hr class="d-block d-md-none my-md-0 my-4">
         <div class="col-12 col-md-6 col-lg-4">
-            {% set ampsMin = ampsList[1] %}
-            {% set ampsMax = ampsList|last %}
+            {% if ampsList|length > 1 %}
+              {% set ampsMin = ampsList[1] %}
+              {% set ampsMax = ampsList|last %}
+            {% else %}
+              {% set ampsMin = [0,"0A"] %}
+              {% set ampsMax = [0,"0A"] %}
+            {% endif %}
             <label for="chargeNowRate" class="form-label text-muted">Charge with <span class="text-dark font-weight-bold" id="{{ twcid }}_ampsVal">{{ ampsMin[0] }}</span> A</label>
             <input type="range" class="form-range" id="chargeNowRate" name="chargeNowRate" min="{{ ampsMin[0]}}" max="{{ ampsMax[0] }}" step="1" value="{{ ampsMin[0] }}" onInput="$('#{{ twcid }}_ampsVal').html($(this).val())">
         </div>

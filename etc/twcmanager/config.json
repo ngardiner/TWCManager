@@ -56,7 +56,8 @@
         # 6A * 230V * 3 = 4140W for three-phase power. Consult an electrician if this
         # doesn't make sense.
         #
-        # https://forums.tesla.com/forum/forums/charging-lowest-amperage-purposely
+        # https://web.archive.org/web/20180807013639/https://forums.tesla.com/forum/forums/charging-lowest-amperage-purposely
+        # and https://teslamotorsclub.com/tmc/threads/low-amp-charging.197800/
         # says another reason to charge at higher power is to preserve battery life.
         # The best charge rate is the capacity of the battery pack / 2.  Home chargers
         # can't reach that rate, so charging as fast as your wiring supports is best
@@ -118,12 +119,40 @@
         # time interval, due to the available amps being set below minimum charge.
         "subtractChargerLoad": false,
 
+        # If your EMS does not return total PV generation but only the power
+        # delivered back to the grid, set treatGenerationAsGridDelivery to
+        # true.
+        "treatGenerationAsGridDelivery": false,
+
         # The minChargeLevel parameter determines the minimum acceptable SOC
         # state for any monitored vehicle. If the SOC is below this value,
         # the car will not be stopped from charging (even if we are not
         # generating sufficient energy). This value is disabled by default;
         # you will need to un-comment it to have it take effect.
         #"minChargeLevel": 10,
+
+        # The client_id of the app registered with Tesla. Registration is
+        # required to use the FleetAPI and Vehicle Command protocol.
+        # See https://developer.tesla.com/docs/fleet-api#authentication
+        #"teslaApiClientID": "client-id-of-registered-app",
+
+        # Since 2024 the Tesla Vehicle Command protocol is required for all
+        # vehicles manufacturered after 2021. The Tesla Vehicle Command proxy
+        # will automatically fall back to the FleetAPI for older vehicles.
+        #
+        # TWCManager does not implement the Tesla Vehicle Command protocol.
+        # Instead it relies on the Tesla Vehicle Command proxy which translates
+        # the FleetAPI REST calls if the destination vehicle supports the
+        # new protocol. This requires the URL of the proxy to be set as
+        # "teslaProxy" and the proxy certificate for validation as
+        # "teslaProxyCert".
+        # See https://github.com/teslamotors/vehicle-command
+        #
+        # The URL of the Tesla HTTP Proxy running locally
+        # "teslaProxy": "https://localhost:4443",
+        #
+        # Only set "teslaProxyCert" when "teslaProxy" is set.
+        #"teslaProxyCert": "/path/to/public_key.pem",
 
         # The cloudUpdateInterval determines how often to poll certain
         # data retrieved from the Tesla API to evaluate policy.
@@ -459,6 +488,14 @@
         # configured simultaneously, currently we will only add together the values recieved from each. This might be
         # useful if you have one interface that provides generation detail and another that provides consumption
         # detail, but if both systems provided both values, it would be duplicated.
+      # The DSMRreader EMS module subscribes to the below MQTT topic to read Consumption/Generation values
+        "DSMRreader": {
+          "enabled": false,
+          "brokerIP": "192.168.1.2",
+          "username": "mqttuser",
+          "password": "mqttpass",
+          "topic": "dsmr/json",
+        },
       # The Efergy server allows fetching of consumption from https://engage.efergy.com/ token is needed
         "Efergy": {
             "enabled": false,

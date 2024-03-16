@@ -86,6 +86,7 @@ modules_available = [
     "Control.HTTPControl",
     "Control.MQTTControl",
     #    "Control.OCPPControl",
+    "EMS.DSMRreader",
     "EMS.Efergy",
     "EMS.EmonCMS",
     "EMS.Enphase",
@@ -360,11 +361,14 @@ def check_green_energy():
 
 
 def update_statuses():
-
     # Print a status update if we are on track green energy showing the
     # generation and consumption figures
     maxamps = master.getMaxAmpsToDivideAmongSlaves()
     maxampsDisplay = f"{maxamps:.2f}A"
+    subtractChargerLoad = config["config"].get("subtractChargerLoad", False)
+    treatGenerationAsGridDelivery = config["config"].get(
+        "treatGenerationAsGridDelivery", False
+    )
     if master.getModuleByName("Policy").policyIsGreen():
         genwatts = master.getGeneration()
         conwatts = master.getConsumption()
@@ -372,12 +376,16 @@ def update_statuses():
         chgwatts = master.getChargerLoad()
         othwatts = 0
 
-        if config["config"]["subtractChargerLoad"]:
+        if subtractChargerLoad:
             if conwatts > 0:
                 othwatts = conwatts - chgwatts
 
             if conoffset > 0:
                 othwatts -= conoffset
+
+        if treatGenerationAsGridDelivery:
+            # Calculate total generation when it is already consumed by TWC
+            genwatts = max(0, genwatts + chgwatts - conwatts)
 
         # Extra parameters to send with logs
         logExtra = {
@@ -389,7 +397,6 @@ def update_statuses():
         }
 
         if (genwatts or conwatts) and (not conoffset and not othwatts):
-
             logger.info(
                 "Green energy Generates %s, Consumption %s (Charger Load %s)",
                 f"{genwatts:.0f}W",
@@ -399,7 +406,6 @@ def update_statuses():
             )
 
         elif (genwatts or conwatts) and othwatts and not conoffset:
-
             logger.info(
                 "Green energy Generates %s, Consumption %s (Charger Load %s, Other Load %s)",
                 f"{genwatts:.0f}W",
@@ -410,7 +416,6 @@ def update_statuses():
             )
 
         elif (genwatts or conwatts) and othwatts and conoffset > 0:
-
             logger.info(
                 "Green energy Generates %s, Consumption %s (Charger Load %s, Other Load %s, Offset %s)",
                 f"{genwatts:.0f}W",
@@ -422,7 +427,6 @@ def update_statuses():
             )
 
         elif (genwatts or conwatts) and othwatts and conoffset < 0:
-
             logger.info(
                 "Green energy Generates %s (Offset %s), Consumption %s (Charger Load %s, Other Load %s)",
                 f"{genwatts:.0f}W",
@@ -435,19 +439,8 @@ def update_statuses():
 
         nominalOffer = master.convertWattsToAmps(
             genwatts
-            + (
-                chgwatts
-                if (config["config"]["subtractChargerLoad"] and conwatts == 0)
-                else 0
-            )
-            - (
-                conwatts
-                - (
-                    chgwatts
-                    if (config["config"]["subtractChargerLoad"] and conwatts > 0)
-                    else 0
-                )
-            )
+            + (chgwatts if (subtractChargerLoad and conwatts == 0) else 0)
+            - (conwatts - (chgwatts if (subtractChargerLoad and conwatts > 0) else 0))
         )
         if abs(maxamps - nominalOffer) > 0.005:
             nominalOfferDisplay = f"{nominalOffer:.2f}A"
@@ -496,7 +489,6 @@ def update_statuses():
 
 
 def update_sunrise_sunset():
-
     ltNow = time.localtime()
     latlong = master.getHomeLatLon()
     if latlong[0] == 10000:
@@ -1175,6 +1167,15 @@ while True:
                         },
                     )
 
+                    # Set minAmpsTWCSupports to 1A for 3 phase chargers
+                    if voltsPhaseA >= 200 and voltsPhaseB >= 200 and voltsPhaseC >= 200:
+                        slaveTWC.minAmpsTWCSupports = 1
+                        logger.debug(
+                            "Slave TWC %02X%02X: Set minAmpsTWCSupports to 1A",
+                            senderID[0],
+                            senderID[1],
+                        )
+
                     # Update the timestamp of the last reciept of this message
                     master.lastkWhMessage = time.time()
 
@@ -1233,7 +1234,87 @@ while True:
                         potentialVIN = "".join(slaveTWC.VINData)
 
                         # Ensure we have a valid VIN
-                        if len(potentialVIN) == 17 or len(potentialVIN) == 0:
+                        vinValid = True
+
+                        if len(potentialVIN) != 17 and len(potentialVIN) != 0:
+                            vinValid = False
+
+                        if vinValid and len(potentialVIN) == 17:
+                            potentialVIN = potentialVIN.upper()
+                            check = potentialVIN[8]
+                            if check == "X":
+                                check = 10
+                            elif check.isdigit():
+                                check = int(check)
+                            else:
+                                vinValid = False
+
+                        if vinValid and len(potentialVIN) == 17:
+                            weights = [
+                                8,
+                                7,
+                                6,
+                                5,
+                                4,
+                                3,
+                                2,
+                                10,
+                                0,
+                                9,
+                                8,
+                                7,
+                                6,
+                                5,
+                                4,
+                                3,
+                                2,
+                            ]
+                            replaceValues = {
+                                "A": 1,
+                                "B": 2,
+                                "C": 3,
+                                "D": 4,
+                                "E": 5,
+                                "F": 6,
+                                "G": 7,
+                                "H": 8,
+                                "J": 1,
+                                "K": 2,
+                                "L": 3,
+                                "M": 4,
+                                "N": 5,
+                                "P": 7,
+                                "R": 9,
+                                "S": 2,
+                                "T": 3,
+                                "U": 4,
+                                "V": 5,
+                                "W": 6,
+                                "X": 7,
+                                "Y": 8,
+                                "Z": 9,
+                                "1": 1,
+                                "2": 2,
+                                "3": 3,
+                                "4": 4,
+                                "5": 5,
+                                "6": 6,
+                                "7": 7,
+                                "8": 8,
+                                "9": 9,
+                                "0": 0,
+                            }
+
+                            sum = 0
+                            for digit, weight in zip(potentialVIN, weights):
+                                if digit not in replaceValues:
+                                    vinValid = False
+                                    break
+                                sum += replaceValues[digit] * weight
+                            if sum % 11 != check:
+                                vinValid = False
+
+                        if vinValid:
                             # Record Vehicle VIN
                             slaveTWC.currentVIN = potentialVIN
 
@@ -1258,7 +1339,7 @@ while True:
 
                             vinPart += 1
                         else:
-                            # Unfortunately the VIN was not the right length.
+                            # Unfortunately the VIN was not received correctly.
                             # Re-request VIN
                             master.queue_background_task(
                                 {

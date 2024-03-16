@@ -3,7 +3,7 @@
 import paho.mqtt.client as mqtt
 import time
 
-def mqttConnected(client, userdata, flags, rc):
+def mqttConnected(client, userdata, flags, rc, properties=None):
     global test_state
     test_state = 1
 
@@ -12,7 +12,10 @@ test_duration = 0
 test_duration_max = 120
 test_state = 0
 
-client = mqtt.Client("MQTT.EMS.Test")
+if hasattr(mqtt, 'CallbackAPIVersion'):
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "MQTT.EMS.Test", protocol=mqtt.MQTTv5)
+else:
+    client = mqtt.Client("MQTT.EMS.Test")
 client.username_pw_set("twcmanager", "twcmanager")
 client.on_connect = mqttConnected
 

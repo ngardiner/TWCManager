@@ -9,7 +9,6 @@ logger = logging.getLogger("\U0001F697 TeslaMate")
 
 
 class TeslaMateVehicle:
-
     __db_host = None
     __db_name = None
     __db_pass = None
@@ -82,7 +81,12 @@ class TeslaMateVehicle:
             timer.start()
 
     def doMQTT(self):
-        self.__client = mqtt.Client("TWCTeslaMate")
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            self.__client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION2, "TWCTeslaMate", protocol=mqtt.MQTTv5
+            )
+        else:
+            self.__client = mqtt.Client("TWCTeslaMate")
         if self.__mqtt_user and self.__mqtt_pass:
             self.__client.username_pw_set(self.__mqtt_user, self.__mqtt_pass)
         self.__client.on_connect = self.mqttConnect
@@ -110,7 +114,6 @@ class TeslaMateVehicle:
         # Connect to TeslaMate database and synchronize API tokens
 
         if self.__db_host and self.__db_name and self.__db_user and self.__db_pass:
-
             conn = None
 
             try:
@@ -151,7 +154,6 @@ class TeslaMateVehicle:
                 self.lastSync = time.time()
 
             else:
-
                 logger.log(
                     logging.ERROR,
                     "Failed to connect to TeslaMate database. Disabling Token Sync",
@@ -164,7 +166,6 @@ class TeslaMateVehicle:
                     self.syncTokens = False
 
         else:
-
             logger.log(
                 logging.ERROR,
                 "TeslaMate Database connection settings not specified. Disabling Token Sync",
@@ -173,7 +174,7 @@ class TeslaMateVehicle:
             # Required database details not provided. Turn off token sync
             self.syncTokens = False
 
-    def mqttConnect(self, client, userdata, flags, rc):
+    def mqttConnect(self, client, userdata, flags, rc, properties=None):
         logger.log(logging.INFO5, "MQTT Connected.")
         subscription = "teslamate/"
         if self.__mqtt_prefix:
@@ -184,7 +185,6 @@ class TeslaMateVehicle:
         logger.log(logging.INFO5, "Res: " + str(res))
 
     def mqttMessage(self, client, userdata, message):
-
         topic = str(message.topic).split("/")
         if len(topic) > 4:
             prefix = topic[1:-3].join("/")
@@ -194,7 +194,6 @@ class TeslaMateVehicle:
         payload = str(message.payload.decode("utf-8"))
 
         if topic[0] == "teslamate" and topic[1] == "cars":
-
             if topic[3] == "battery_level":
                 if self.vehicles.get(topic[2], None):
                     self.vehicles[topic[2]].batteryLevel = int(payload)
@@ -213,19 +212,16 @@ class TeslaMateVehicle:
                 self.updateVehicles(topic[2], payload)
 
             elif topic[3] == "latitude":
-
                 if self.vehicles.get(topic[2], None):
                     self.vehicles[topic[2]].syncLat = float(payload)
                     self.vehicles[topic[2]].syncTimestamp = time.time()
 
             elif topic[3] == "longitude":
-
                 if self.vehicles.get(topic[2], None):
                     self.vehicles[topic[2]].syncLon = float(payload)
                     self.vehicles[topic[2]].syncTimestamp = time.time()
 
             elif topic[3] == "state":
-
                 if self.vehicles.get(topic[2], None):
                     self.vehicles[topic[2]].syncState = payload
                     self.vehicles[topic[2]].syncTimestamp = time.time()
@@ -239,7 +235,7 @@ class TeslaMateVehicle:
             else:
                 pass
 
-    def mqttSubscribe(self, client, userdata, mid, granted_qos):
+    def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
 
     def updateVehicles(self, vehicle_id, vehicle_name):

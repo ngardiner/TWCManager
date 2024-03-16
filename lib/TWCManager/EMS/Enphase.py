@@ -2,11 +2,10 @@
 import logging
 import time
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = logging.getLogger("\U000026C5 Enphase")
 
 
 class Enphase:
-
     import requests
 
     apiKey = None
@@ -60,7 +59,6 @@ class Enphase:
             self.cacheTime = 10
 
     def getConsumption(self):
-
         if not self.status:
             logger.debug("Enphase EMS Module Disabled. Skipping getConsumption")
             return None
@@ -72,7 +70,6 @@ class Enphase:
         return float(self.consumedW)
 
     def getGeneration(self):
-
         if not self.status:
             logger.debug("Enphase EMS Module Disabled. Skipping getGeneration")
             return 0
@@ -97,7 +94,6 @@ class Enphase:
         return self.getPortalValue(url)
 
     def getPortalValue(self, url):
-
         # Fetch the specified URL from the Enphase Portal and return the data
         self.fetchFailed = False
 
@@ -126,7 +122,6 @@ class Enphase:
             return r.json()
 
     def update(self):
-
         if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from Portal.
 

@@ -13,7 +13,7 @@ webbuild: webdeps build_pkg
 
 config:
 	# Create twcmanager user and group
-	$(SUDO) useradd -U -M $(USER) 2>/dev/null; exit 0
+	$(SUDO) useradd -U -m $(USER) 2>/dev/null; exit 0
 	$(SUDO) usermod -a -G dialout $(USER)
 
 	# Create configuration directory

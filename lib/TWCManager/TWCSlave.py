@@ -8,7 +8,6 @@ logger = logging.getLogger("\u26FD Slave")
 
 
 class TWCSlave:
-
     config = None
     configConfig = None
     TWCID = None
@@ -77,6 +76,7 @@ class TWCSlave:
         self.master = master
         self.TWCID = TWCID
         self.maxAmps = maxAmps
+        self.APIcontrol = False
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
         self.useFlexAmpsToStartCharge = self.configConfig.get(
@@ -85,7 +85,6 @@ class TWCSlave:
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
     def print_status(self, heartbeatData):
-
         try:
             debugOutput = "SHB %02X%02X: %02X %05.2f/%05.2fA %02X%02X" % (
                 self.TWCID[0],
@@ -367,10 +366,10 @@ class TWCSlave:
         #                   Manual says this code means 'The networked Wall
         #                   Connectors have different maximum current
         #                   capabilities.'
-        #   	0000 1000 = No effect
-        #   	0001 0000 = No effect
-        #   	0010 0000 = No effect
-        #   	0100 0000 = No effect
+        #       0000 1000 = No effect
+        #       0001 0000 = No effect
+        #       0010 0000 = No effect
+        #       0100 0000 = No effect
         #       1000 0000 = No effect
         #     When two bits are set, the lowest bit (rightmost bit) seems to
         #     take precedence (ie 111 results in 3 blinks, 110 results in 5
@@ -538,13 +537,13 @@ class TWCSlave:
                     self.master.stopCarsCharging()
             elif (
                 self.lastAmpsOffered >= self.config["config"]["minAmpsPerTWC"]
-                and self.reportedAmpsActual < 2.0
+                and self.reportedAmpsActual < 1.0
                 and self.reportedState != 0x02
             ):
                 # Car is not charging and is not reporting an error state, so
                 # try starting charge via car api.
                 self.master.startCarsCharging()
-            elif self.reportedAmpsActual > 4.0:
+            elif self.reportedAmpsActual >= 1.0:
                 # At least one plugged in car is successfully charging. We don't
                 # know which car it is, so we must set
                 # vehicle.stopAskingToStartCharging = False on all vehicles such
@@ -577,6 +576,16 @@ class TWCSlave:
         self.reportedAmpsMax = ((heartbeatData[1] << 8) + heartbeatData[2]) / 100
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
+
+        if self.reportedState == 0x02:
+            logger.info(
+                "WARNING: slave TWC %02X%02X is sending error with status data: %s"
+                % (
+                    self.TWCID[0],
+                    self.TWCID[1],
+                    self.master.hex_str(heartbeatData),
+                )
+            )
 
         if self.reportedAmpsActual != self.reportedAmpsLast:
             self.reportedAmpsLast = self.reportedAmpsActual
@@ -660,6 +669,12 @@ class TWCSlave:
         numCarsCharging = self.master.num_cars_charging_now()
         desiredAmpsOffered = self.master.getMaxAmpsToDivideAmongSlaves()
         flex = self.master.getAllowedFlex()
+
+        # Get charge rate control mode from settings
+        # 1 = Use TWC Exclusively to control Charge Rate
+        # 2 = Use Tesla API Exclusively to control Charge Rate
+        # 3 = Use TWC >= 6A + Tesla API < 6A to control Charge Rate
+        chargeRateControl = int(self.master.settings.get("chargeRateControl", 1))
 
         if numCarsCharging > 0:
             desiredAmpsOffered -= sum(
@@ -801,9 +816,12 @@ class TWCSlave:
                 # so we need to set desiredAmpsOffered to 0
                 logger.debug("no cars charging, setting desiredAmpsOffered to 0")
                 desiredAmpsOffered = 0
-        elif int(self.master.settings.get("chargeRateControl", 1)) == 2:
-            # Exclusive control is given to the Tesla API to control Charge Rate
+        elif chargeRateControl == 2 or (
+            chargeRateControl == 3 and desiredAmpsOffered < 6
+        ):
+            # Control is given to the Tesla API to control Charge Rate
             # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
+            self.APIcontrol = True
 
             # Call the Tesla API to set the charge rate for vehicle connected to this TWC
             # TODO: Identify vehicle
@@ -832,9 +850,17 @@ class TWCSlave:
                     int(desiredAmpsOffered), targetVehicle
                 )
 
-            desiredAmpsOffered = int(self.configConfig.get("wiringMaxAmpsPerTWC", 6))
+            desiredAmpsOffered = self.wiringMaxAmps
 
         else:
+            # If we just switched from API to TWC make sure the car is set to a
+            # high enough charge rate so it is not limiting the TWC control
+            if chargeRateControl == 3 and self.APIcontrol:
+                self.master.getModuleByName("TeslaAPI").setChargeRate(
+                    self.wiringMaxAmps, self.getLastVehicle()
+                )
+                self.APIcontrol = False
+
             # We can tell the TWC how much power to use in 0.01A increments, but
             # the car will only alter its power in larger increments (somewhere
             # between 0.5 and 0.6A). The car seems to prefer being sent whole

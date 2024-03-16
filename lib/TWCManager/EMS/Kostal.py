@@ -22,7 +22,7 @@ MIN_CACHE_SECONDS = 10
 ENDIAN_BIG = 0x01  # big endian (ABCD) Sunspec
 ENDIAN_LITTLE = 0x00  # little endian (CDAB) Standard Modbus
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = logging.getLogger("\U000026C5 Kostal")
 
 
 #
@@ -105,7 +105,6 @@ class Kostal:
     # read registers directly from the inverter via Modbus protocol
     #
     def __readModbus(self, address, data_format="Float"):
-
         # open the Modbus connection if neccessary
         if not self.modbus.is_open():
             self.modbus.open()

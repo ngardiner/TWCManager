@@ -10,7 +10,6 @@ class MySQLHandler(logging.Handler):
     slaveSession = {}
 
     def __init__(self, db):
-
         logging.Handler.__init__(self)
         self.db = db
 
@@ -29,7 +28,7 @@ class MySQLHandler(logging.Handler):
 
                 query = """
                     INSERT INTO charge_sessions (chargeid, startTime, startkWh, slaveTWC)
-                    VALUES (%s,now(),%s,'%s')
+                    VALUES (%s,now(),%s,%s)
                 """
 
                 # Ensure database connection is alive, or reconnect if not
@@ -70,8 +69,8 @@ class MySQLHandler(logging.Handler):
                 chgid = self.slaveSession.get(twcid, 0)
                 if getattr(record, "vehicleVIN", None):
                     query = """
-                        UPDATE charge_sessions SET vehicleVIN = '%s'
-                        WHERE chargeid = %s AND slaveTWC = '%s'
+                        UPDATE charge_sessions SET vehicleVIN = %s
+                        WHERE chargeid = %s AND slaveTWC = %s
                     """
 
                     # Ensure database connection is alive, or reconnect if not
@@ -85,7 +84,7 @@ class MySQLHandler(logging.Handler):
                     rows = 0
                     try:
                         rows = cur.execute(
-                            query % (getattr(record, "vehicleVIN", ""), chgid, twcid)
+                            query, (getattr(record, "vehicleVIN", ""), chgid, twcid)
                         )
                     except Exception as e:
                         logger.error("Error updating MySQL database: %s", e)
@@ -105,7 +104,7 @@ class MySQLHandler(logging.Handler):
                 chgid = self.slaveSession.get(twcid, 0)
                 query = """
                     UPDATE charge_sessions SET endTime = now(), endkWh = %s
-                    WHERE chargeid = %s AND slaveTWC = '%s'
+                    WHERE chargeid = %s AND slaveTWC = %s
                 """
 
                 # Ensure database connection is alive, or reconnect if not
@@ -174,7 +173,6 @@ class MySQLHandler(logging.Handler):
 
 
 class MySQLLogging:
-
     capabilities = {"queryGreenEnergy": True}
     config = None
     configConfig = None
