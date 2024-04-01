@@ -124,6 +124,7 @@ class TeslaAPI:
             "client_id": self.refreshClientID,
             "grant_type": "refresh_token",
             "refresh_token": self.getCarApiRefreshToken(),
+            "scope": "offline_access",
         }
         req = None
         now = time.time()
