@@ -194,6 +194,11 @@ class Policy:
             self.limitOverride = False
             self.fireWebhook("enter")
 
+            # Clear stopAskingToStartCharging so we try charging each car at
+            # least once
+            for vehicle in self.master.getModuleByName("TeslaAPI").getCarApiVehicles():
+                vehicle.stopAskingToStartCharging = False
+
         if updateLatch and "latch_period" in policy:
             policy["__latchTime"] = time.time() + policy["latch_period"] * 60
 
@@ -228,11 +233,6 @@ class Policy:
         if not (limit >= 50 and limit <= 100):
             limit = -1
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
-
-        # Clear stopAskingToStartCharging so we try charging each car at
-        # least once
-        for vehicle in self.master.getModuleByName("TeslaAPI").getCarApiVehicles():
-            vehicle.stopAskingToStartCharging = False
 
         # Report current policy via Status modules
         for module in self.master.getModulesByType("Status"):
