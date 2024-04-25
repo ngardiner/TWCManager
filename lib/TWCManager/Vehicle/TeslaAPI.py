@@ -634,6 +634,16 @@ class TeslaAPI:
             # more than once per minute.
             self.updateLastStartOrStopChargeTime()
 
+            # Don't attempt to start or stop charging a disconnected car.
+            if vehicle.chargingState == "Disconnected":
+                logger.info(
+                    vehicle.name
+                    + " is disconnected.  Do not "
+                    + startOrStop
+                    + " charge."
+                )
+                continue
+
             # only start/stop charging cars parked at home.
 
             if vehicle.update_location() is False:
@@ -727,16 +737,14 @@ class TeslaAPI:
                                 "complete",
                                 "charging",
                                 "is_charging",
-                                "disconnected",
                                 "requested",
                             ]:
                                 # We asked the car to charge, but it responded
                                 # that it can't, either because it's reached
                                 # target charge state (reason == 'complete'), or
                                 # it's already trying to charge (reason ==
-                                # 'charging' or 'requested') or it's not
-                                # connected to a charger (reason ==
-                                # 'disconnected'). In these cases, it won't help
+                                # 'charging' or 'requested').
+                                # In these cases, it won't help
                                 # to keep asking it to charge, so set
                                 # vehicle.stopAskingToStartCharging = True.
                                 #
@@ -1277,6 +1285,7 @@ class CarApiVehicle:
     lon = 10000
     atHome = False
     timeToFullCharge = 0.0
+    chargingState = ""
 
     # Sync values are updated by an external module such as TeslaMate
     syncTimestamp = 0
@@ -1471,6 +1480,7 @@ class CarApiVehicle:
             self.chargeLimit = charge["charge_limit_soc"]
             self.batteryLevel = charge["battery_level"]
             self.timeToFullCharge = charge["time_to_full_charge"]
+            self.chargingState = charge.get("charging_state", "")
 
             self.lastVehicleStatusTime = now
 
