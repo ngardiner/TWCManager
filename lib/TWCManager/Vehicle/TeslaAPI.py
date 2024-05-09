@@ -722,7 +722,7 @@ class TeslaAPI:
                         if apiResponseDict["response"]["result"] == True:
                             self.resetCarApiLastErrorTime(vehicle)
                         elif charge:
-                            reason = apiResponseDict["response"]["reason"]
+                            reason = self.findReason(apiResponseDict)
                             if reason in [
                                 "complete",
                                 "charging",
@@ -781,7 +781,7 @@ class TeslaAPI:
                             # Stop charge failed with an error I
                             # haven't seen before, so wait
                             # carApiErrorRetryMins mins before trying again.
-                            reason = apiResponseDict["response"]["reason"]
+                            reason = self.findReason(apiResponseDict)
                             logger.info(
                                 'ERROR "'
                                 + reason
@@ -809,6 +809,13 @@ class TeslaAPI:
             logger.info("Car API " + startOrStop + " charge result: " + result)
 
         return result
+
+    def findReason(self, apiResponseDict):
+        if "reason" in apiResponseDict["response"]:
+            return apiResponseDict["response"]["reason"]
+        elif "string" in apiResponseDict["response"]:
+            return apiResponseDict["response"]["string"].split(": ")[-1]
+        return ""
 
     def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
         if limit != -1 and (limit < 50 or limit > 100):
