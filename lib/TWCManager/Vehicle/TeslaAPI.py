@@ -1129,9 +1129,16 @@ class TeslaAPI:
                             self.baseURL = self.regionURL["OwnerAPI"]
                         elif decoded.get("ou_code", "") in self.regionURL:
                             self.baseURL = self.regionURL[decoded["ou_code"]]
+                        
+                        if "exp" in decoded:
+                            self.setCarApiTokenExpireTime(int(decoded["exp"]))
+                        else:
+                            self.setCarApiTokenExpireTime(time.time() + 8 * 60 * 60)
+
                     except jwt.exceptions.DecodeError:
                         # Fallback to owner-api if we get an exception decoding jwt token
                         self.baseURL = self.regionURL["OwnerAPI"]
+                        self.setCarApiTokenExpireTime(time.time() + 8 * 60 * 60)
                 return True
         else:
             return False
@@ -1230,6 +1237,10 @@ class TeslaAPI:
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
+            if req.status_code == 401 and "expired" in req.text:
+                # If the token is expired, refresh it and try again
+                self.apiRefresh()
+                return self.wakeVehicle(vehicle)
             return False
         except json.decoder.JSONDecodeError:
             return False
@@ -1393,7 +1404,12 @@ class CarApiVehicle:
                 # This one is somewhat common:
                 #   {'response': None, 'error': 'vehicle unavailable: {:error=>"vehicle unavailable:"}', 'error_description': ''}
             except requests.exceptions.RequestException:
-                pass
+                if req.status_code == 401 and "expired" in req.text:
+                    # If the token is expired, refresh it and try again
+                    self.apiRefresh()
+                    continue
+                else:
+                    pass
             except json.decoder.JSONDecodeError:
                 pass
 
