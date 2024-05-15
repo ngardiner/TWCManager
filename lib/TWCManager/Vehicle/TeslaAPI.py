@@ -1145,7 +1145,7 @@ class TeslaAPI:
 
     def setCarApiRefreshToken(self, token):
         self.carApiRefreshToken = token
-        if not self.master.tokenSyncEnabled() and (
+        if token and not self.master.tokenSyncEnabled() and (
             self.getCarApiBearerToken() == ""
             or self.getCarApiTokenExpireTime() - time.time() < 60 * 60
         ):
