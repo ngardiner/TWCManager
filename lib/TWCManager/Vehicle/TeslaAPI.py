@@ -1403,6 +1403,7 @@ class CarApiVehicle:
         for _ in range(0, 3):
             try:
                 req = requests.get(url, headers=headers, verify=self.verifyCert)
+                req.raise_for_status()
                 logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
                 apiResponseDict = json.loads(req.text)
                 # This error can happen here as well:
@@ -1410,7 +1411,14 @@ class CarApiVehicle:
                 # This one is somewhat common:
                 #   {'response': None, 'error': 'vehicle unavailable: {:error=>"vehicle unavailable:"}', 'error_description': ''}
             except requests.exceptions.RequestException:
-                pass
+                if req.status_code == 401 and "expired" in req.text:
+                    # If the token is expired, refresh it and try again
+                    self.apiRefresh()
+                    continue
+                elif req.status_code == 429:
+                    # We're explicitly being told to back off
+                    self.errorCount = max(30, self.errorCount)
+                return False, None
             except json.decoder.JSONDecodeError:
                 pass
 
