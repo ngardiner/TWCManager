@@ -449,6 +449,8 @@ class TeslaAPI:
                                 # in 15 minutes. We'll show an error about this
                                 # later.
                                 vehicle.delayNextWakeAttempt = 15 * 60
+                            else:
+                                vehicle.delayNextWakeAttempt = 25
 
                         if state == "error":
                             logger.info(
