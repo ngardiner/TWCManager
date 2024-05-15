@@ -1235,8 +1235,16 @@ class TeslaAPI:
         try:
             req = requests.post(url, headers=headers, verify=self.verifyCert)
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
+            req.raise_for_status()
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
+            if req.status_code == 401 and "expired" in req.text:
+                # If the token is expired, refresh it and try again
+                self.apiRefresh()
+                return self.wakeVehicle(vehicle)
+            elif req.status_code == 429:
+                # We're explicitly being told to back off
+                self.errorCount = max(30, self.errorCount)
             return False
         except json.decoder.JSONDecodeError:
             return False
