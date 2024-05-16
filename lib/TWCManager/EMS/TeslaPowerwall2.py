@@ -258,7 +258,9 @@ class TeslaPowerwall2:
                     products = list()
 
                     try:
-                        r = self.httpSession.get(url, headers=headers, verify=carapi.verifyCert)
+                        r = self.httpSession.get(
+                            url, headers=headers, verify=carapi.verifyCert
+                        )
                         r.raise_for_status()
                         bodyjson = r.json()
                         products = [
@@ -288,13 +290,17 @@ class TeslaPowerwall2:
                     bodyjson = None
 
                     try:
-                        r = self.httpSession.get(url, headers=headers, verify=carapi.verifyCert)
+                        r = self.httpSession.get(
+                            url, headers=headers, verify=carapi.verifyCert
+                        )
                         r.raise_for_status()
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
                     except:
                         if r.status_code is 403:
-                            logger.warn("Error fetching Powerwall cloud data; does your API token have energy_device_data scope?")
+                            logger.warn(
+                                "Error fetching Powerwall cloud data; does your API token have energy_device_data scope?"
+                            )
                         pass
 
             self.lastFetch[key] = (now, lastData)
