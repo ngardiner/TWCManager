@@ -238,6 +238,7 @@ class TeslaPowerwall2:
         carapi = self.master.getModuleByName("TeslaAPI")
         token = carapi.getCarApiBearerToken()
         expiry = carapi.getCarApiTokenExpireTime()
+        baseURL = carapi.getCarApiBaseURL()
         now = time.time()
         key = "CLOUD/live_status"
 
@@ -252,12 +253,12 @@ class TeslaPowerwall2:
                     "Content-Type": "application/json",
                 }
                 if not self.cloudID:
-                    url = "https://owner-api.teslamotors.com/api/1/products"
+                    url = baseURL.replace("vehicles", "products")
                     bodyjson = None
                     products = list()
 
                     try:
-                        r = self.httpSession.get(url, headers=headers)
+                        r = self.httpSession.get(url, headers=headers, verify=carapi.verifyCert)
                         r.raise_for_status()
                         bodyjson = r.json()
                         products = [
@@ -282,16 +283,18 @@ class TeslaPowerwall2:
                         logger.info("Couldn't find a Powerwall on your Tesla account.")
 
                 if self.cloudID:
-                    url = f"https://owner-api.teslamotors.com/api/1/energy_sites/{self.cloudID}/live_status"
+                    url = baseURL.replace("vehicles", "energy_sites")
+                    url = f"{url}/{self.cloudID}/live_status"
                     bodyjson = None
-                    result = dict()
 
                     try:
-                        r = self.httpSession.get(url, headers=headers)
+                        r = self.httpSession.get(url, headers=headers, verify=carapi.verifyCert)
                         r.raise_for_status()
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
                     except:
+                        if r.status_code is 403:
+                            logger.warn("Error fetching Powerwall cloud data; does your API token have energy_device_data scope?")
                         pass
 
             self.lastFetch[key] = (now, lastData)
