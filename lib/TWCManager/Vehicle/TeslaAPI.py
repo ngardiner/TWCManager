@@ -148,7 +148,7 @@ class TeslaAPI:
             # on web interface. I feel this is safer than trying to log in every
             # ten minutes with a bad token because Tesla might decide to block
             # remote access to your car after too many authorization errors.
-            self.master.queue_background_task({"cmd": "saveSettings"})                
+            self.master.queue_background_task({"cmd": "saveSettings"})
             return False
         except json.decoder.JSONDecodeError:
             logger.log(
@@ -1139,7 +1139,7 @@ class TeslaAPI:
                             self.baseURL = self.regionURL["OwnerAPI"]
                         elif decoded.get("ou_code", "") in self.regionURL:
                             self.baseURL = self.regionURL[decoded["ou_code"]]
-                    
+
                     if "exp" in decoded:
                         self.setCarApiTokenExpireTime(int(decoded["exp"]))
                     else:
@@ -1155,9 +1155,13 @@ class TeslaAPI:
 
     def setCarApiRefreshToken(self, token):
         self.carApiRefreshToken = token
-        if token and not self.master.tokenSyncEnabled() and (
-            self.getCarApiBearerToken() == ""
-            or self.getCarApiTokenExpireTime() - time.time() < 60 * 60
+        if (
+            token
+            and not self.master.tokenSyncEnabled()
+            and (
+                self.getCarApiBearerToken() == ""
+                or self.getCarApiTokenExpireTime() - time.time() < 60 * 60
+            )
         ):
             return self.apiRefresh()
         return True
