@@ -450,6 +450,8 @@ class TeslaAPI:
                                 # in 15 minutes. We'll show an error about this
                                 # later.
                                 vehicle.delayNextWakeAttempt = 15 * 60
+                            else:
+                                vehicle.delayNextWakeAttempt = 25
 
                         if state == "error":
                             logger.info(
@@ -723,7 +725,7 @@ class TeslaAPI:
                         if apiResponseDict["response"]["result"] == True:
                             self.resetCarApiLastErrorTime(vehicle)
                         elif charge:
-                            reason = apiResponseDict["response"]["reason"]
+                            reason = self.findReason(apiResponseDict)
                             if reason in [
                                 "complete",
                                 "charging",
@@ -782,7 +784,7 @@ class TeslaAPI:
                             # Stop charge failed with an error I
                             # haven't seen before, so wait
                             # carApiErrorRetryMins mins before trying again.
-                            reason = apiResponseDict["response"]["reason"]
+                            reason = self.findReason(apiResponseDict)
                             logger.info(
                                 'ERROR "'
                                 + reason
@@ -810,6 +812,13 @@ class TeslaAPI:
             logger.info("Car API " + startOrStop + " charge result: " + result)
 
         return result
+
+    def findReason(self, apiResponseDict):
+        if "reason" in apiResponseDict["response"]:
+            return apiResponseDict["response"]["reason"]
+        elif "string" in apiResponseDict["response"]:
+            return apiResponseDict["response"]["string"].split(": ")[-1]
+        return ""
 
     def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
         if limit != -1 and (limit < 50 or limit > 100):
@@ -1241,6 +1250,7 @@ class TeslaAPI:
         try:
             req = requests.post(url, headers=headers, verify=self.verifyCert)
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
+            req.raise_for_status()
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
             if req.status_code == 401 and "expired" in req.text:
@@ -1406,6 +1416,7 @@ class CarApiVehicle:
         for _ in range(0, 3):
             try:
                 req = requests.get(url, headers=headers, verify=self.verifyCert)
+                req.raise_for_status()
                 logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
                 apiResponseDict = json.loads(req.text)
                 # This error can happen here as well:
