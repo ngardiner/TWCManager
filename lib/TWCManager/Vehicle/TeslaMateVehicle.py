@@ -28,6 +28,51 @@ class TeslaMateVehicle:
     syncTokens = False
     vehicles = {}
 
+    events = {
+        "battery_level": [
+            "batteryLevel",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "charge_limit_soc": [
+            "chargeLimit",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "display_name": ["name", lambda a: str(a), None],
+        "latitude": ["syncLat", lambda a: float(a), None],
+        "longitude": ["syncLon", lambda a: float(a), None],
+        "state": ["syncState", lambda a: a, None],
+        "time_to_full_charge": [
+            "timeToFullCharge",
+            lambda a: int(float(a)),
+            "lastChargeStatusTime",
+        ],
+        "charger_pilot_current": [
+            "availableCurrent",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "charger_actual_current": [
+            "actualCurrent",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "charger_phases": ["phases", lambda a: int(a), "lastChargeStatusTime"],
+        "charger_voltage": [
+            "voltage",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+        "charging_state": [
+            "chargingState",
+            lambda a: int(a),
+            "lastChargeStatusTime",
+        ],
+    }
+    unknownVehicles = {}
+
+
     def __init__(self, master):
         self.__master = master
 
@@ -92,6 +137,7 @@ class TeslaMateVehicle:
         self.__client.on_connect = self.mqttConnect
         self.__client.on_message = self.mqttMessage
         self.__client.on_subscribe = self.mqttSubscribe
+        self.__client.on_disconnect = self.mqttDisconnect
 
         logger.log(logging.INFO4, "Attempting connection to MQTT Broker")
 
@@ -109,6 +155,12 @@ class TeslaMateVehicle:
             return False
 
         self.__client.loop_start()
+        threading.Timer(24 * 60 * 60, self.resetMQTT).start()
+
+    def resetMQTT(self):
+        self.__client.disconnect()
+        self.__client.loop_stop()
+        self.doMQTT()
 
     def doSyncTokens(self, firstrun=False):
         # Connect to TeslaMate database and synchronize API tokens
@@ -176,55 +228,67 @@ class TeslaMateVehicle:
 
     def mqttConnect(self, client, userdata, flags, rc, properties=None):
         logger.log(logging.INFO5, "MQTT Connected.")
-        logger.log(logging.INFO5, "Subscribe to " + self.__mqtt_prefix + "/cars/#")
-        res = client.subscribe(self.__mqtt_prefix + "/cars/#", qos=0)
-        logger.log(logging.INFO5, "Res: " + str(res))
+        subscription = "teslamate/"
+        if self.__mqtt_prefix:
+            subscription += self.__mqtt_prefix + "/"
+        subscription += "cars/+/"
+        for topic in self.events.keys():
+            topic = subscription + topic
+            logger.log(logging.INFO5, "Subscribe to " + topic)
+            res = client.subscribe(topic, qos=0)
+            logger.log(logging.INFO5, "Res: " + str(res))
+
+    def mqttDisconnect(self, client, flags, rc, properties=None):
+        if rc != 0:
+            logger.log(logging.INFO5, "MQTT Disconnected. Should reconnect automatically.")
 
     def mqttMessage(self, client, userdata, message):
         topic = str(message.topic).split("/")
         payload = str(message.payload.decode("utf-8"))
 
-        if topic[0] == self.__mqtt_prefix and topic[1] == "cars":
-            if topic[3] == "battery_level":
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].batteryLevel = int(payload)
-                    self.vehicles[topic[2]].lastChargeStatusTime = time.time()
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
+        if topic[0] == "teslamate" and topic[1] == "cars":
+            self.applyDataToVehicle(topic[2], topic[3], payload)
 
-            elif topic[3] == "charge_limit_soc":
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].chargeLimit = int(payload)
-                    self.vehicles[topic[2]].lastChargeStatusTime = time.time()
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
+    def applyDataToVehicle(self, id, event, payload):
+        events = self.events
 
-            elif topic[3] == "display_name":
-                # We can map the car ID in TeslaMate to the vehicle
-                # in the Tesla API module
-                self.updateVehicles(topic[2], payload)
-
-            elif topic[3] == "latitude":
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].syncLat = float(payload)
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
-
-            elif topic[3] == "longitude":
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].syncLon = float(payload)
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
-
-            elif topic[3] == "state":
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].syncState = payload
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
-
-            elif topic[3] == "time_to_full_charge":
-                if self.vehicles.get(topic[2], None):
-                    self.vehicles[topic[2]].timeToFullCharge = int(float(payload))
-                    self.vehicles[topic[2]].lastChargeStatusTime = time.time()
-                    self.vehicles[topic[2]].syncTimestamp = time.time()
+        if event == "display_name":
+            # We can map the car ID in TeslaMate to the vehicle
+            # in the Tesla API module
+            self.updateVehicles(id, payload)
+            if id in self.unknownVehicles:
+                for pastEvent in self.unknownVehicles[id]:
+                    self.applyDataToVehicle(id, pastEvent[0], pastEvent[1])
+                del self.unknownVehicles[id]
+                
+        elif event in events:
+            vehicle = self.vehicles.get(id, None)
+            if vehicle:
+                property_name = events[event][0]
+                converter = events[event][1]
+                status_property = events[event][2]
+                
+                setattr(
+                    vehicle,
+                    property_name,
+                    converter(payload)
+                )
+                if status_property:
+                    setattr(
+                        vehicle,
+                        status_property,
+                        time.time()
+                    )
+                vehicle.syncTimestamp = time.time()
 
             else:
-                pass
+                # If we don't know this vehicle yet, save the data.
+                if id not in self.unknownVehicles:
+                    self.unknownVehicles[id] = []
+                self.unknownVehicles[id].append([event, payload])
+
+        else:
+            pass
 
     def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
@@ -233,9 +297,10 @@ class TeslaMateVehicle:
         # Called by mqttMessage each time we get the display_name topic
         # We check to see if this aligns with a vehicle we know of from the API
 
-        if self.vehicles.get(vehicle_id, None):
+        vehicle = self.vehicles.get(vehicle_id, None)
+        if vehicle:
             # We already have this vehicle mapped
-            pass
+            vehicle.name = vehicle_name
         else:
             for apiVehicle in self.__master.getModuleByName(
                 "TeslaAPI"
