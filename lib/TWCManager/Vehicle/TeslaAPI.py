@@ -131,18 +131,31 @@ class TeslaAPI:
         try:
             req = requests.post(self.refreshURL, headers=headers, json=data)
             logger.log(logging.INFO2, "Car API request" + str(req))
+            req.raise_for_status()
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
-            logger.log(
-                logging.INFO2, "Request Exception parsing API Token Refresh Response"
-            )
-            pass
-        except ValueError:
-            pass
+            if req.status_code == 401:
+                logger.log(
+                    logging.INFO2,
+                    "TeslaAPI",
+                    "ERROR: Can't access Tesla car via API.  Please supply fresh tokens.",
+                )
+                self.setCarApiBearerToken("")
+                self.setCarApiRefreshToken("")
+            self.updateCarApiLastErrorTime()
+            # Instead of just setting carApiLastErrorTime, erase tokens to
+            # prevent further authorization attempts until user enters password
+            # on web interface. I feel this is safer than trying to log in every
+            # ten minutes with a bad token because Tesla might decide to block
+            # remote access to your car after too many authorization errors.
+            self.master.queue_background_task({"cmd": "saveSettings"})                
+            return False
         except json.decoder.JSONDecodeError:
             logger.log(
                 logging.INFO2, "JSON Decode Error parsing API Token Refresh Response"
             )
+            pass
+        except ValueError:
             pass
 
         try:
@@ -151,24 +164,12 @@ class TeslaAPI:
             self.setCarApiRefreshToken(apiResponseDict["refresh_token"])
             self.setCarApiTokenExpireTime(now + apiResponseDict["expires_in"])
             self.master.queue_background_task({"cmd": "saveSettings"})
+            return True
 
-        except KeyError:
-            logger.log(
-                logging.INFO2,
-                "TeslaAPI",
-                "ERROR: Can't access Tesla car via API.  Please log in again via web interface.",
-            )
-            self.updateCarApiLastErrorTime()
-            # Instead of just setting carApiLastErrorTime, erase tokens to
-            # prevent further authorization attempts until user enters password
-            # on web interface. I feel this is safer than trying to log in every
-            # ten minutes with a bad token because Tesla might decide to block
-            # remote access to your car after too many authorization errors.
-            self.setCarApiBearerToken("")
-            self.setCarApiRefreshToken("")
-            self.master.queue_background_task({"cmd": "saveSettings"})
-        except UnboundLocalError:
+        except:
             pass
+
+        return False
 
     def car_api_available(
         self, email=None, password=None, charge=None, applyLimit=None
@@ -1149,7 +1150,7 @@ class TeslaAPI:
             self.getCarApiBearerToken() == ""
             or self.getCarApiTokenExpireTime() - time.time() < 60 * 60
         ):
-            self.apiRefresh()
+            return self.apiRefresh()
         return True
 
     def setCarApiTokenExpireTime(self, value):
@@ -1244,8 +1245,11 @@ class TeslaAPI:
         except requests.exceptions.RequestException:
             if req.status_code == 401 and "expired" in req.text:
                 # If the token is expired, refresh it and try again
-                self.apiRefresh()
-                return self.wakeVehicle(vehicle)
+                if self.apiRefresh():
+                    return self.wakeVehicle(vehicle)
+            elif req.status_code == 429:
+                # We're explicitly being told to back off
+                self.errorCount = max(30, self.errorCount)
             return False
         except json.decoder.JSONDecodeError:
             return False
@@ -1411,10 +1415,12 @@ class CarApiVehicle:
             except requests.exceptions.RequestException:
                 if req.status_code == 401 and "expired" in req.text:
                     # If the token is expired, refresh it and try again
-                    self.apiRefresh()
-                    continue
-                else:
-                    pass
+                    if self.apiRefresh():
+                        continue
+                elif req.status_code == 429:
+                    # We're explicitly being told to back off
+                    self.errorCount = max(30, self.errorCount)
+                return False, None
             except json.decoder.JSONDecodeError:
                 pass
 
