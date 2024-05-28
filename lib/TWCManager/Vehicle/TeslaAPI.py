@@ -681,6 +681,19 @@ class TeslaAPI:
                 except json.decoder.JSONDecodeError:
                     pass
 
+                # The Tesla FleetAPI proxy has a slightly different response format:
+                #   {'response': {'result': False, 'string': 'car could not execute command: disconnected'}, 'error': '', 'error_description': ''}
+                # We convert it back to the Tesla OwnerAPI format.
+                try:
+                    if not "reason" in apiResponseDict["response"] and apiResponseDict[
+                        "response"
+                    ]["string"].startswith("car could not execute command: "):
+                        apiResponseDict["response"]["reason"] = apiResponseDict[
+                            "response"
+                        ]["string"][31:]
+                except (KeyError, TypeError):
+                    pass
+
                 try:
                     logger.log(
                         logging.INFO4,
