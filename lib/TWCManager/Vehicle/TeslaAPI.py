@@ -645,12 +645,17 @@ class TeslaAPI:
 
             if not vehicle.atHome:
                 # Vehicle is not at home, so don't change its charge state.
-                logger.info(
+                message = (
                     vehicle.name
                     + " is not at home.  Do not "
                     + startOrStop
                     + " charge."
                 )
+                # Stop asking to start charging when not at home.
+                if startOrStop == "start":
+                    vehicle.stopAskingToStartCharging = True
+                    message += "  Stop asking to start charging."
+                logger.info(message)
                 continue
 
             # If you send charge_start/stop less than 1 second after calling
