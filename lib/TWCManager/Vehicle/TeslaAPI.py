@@ -1441,6 +1441,7 @@ class CarApiVehicle:
                 elif req.status_code == 429:
                     # We're explicitly being told to back off
                     self.errorCount = max(30, self.errorCount)
+                    self.carapi.updateCarApiLastErrorTime(self)
                 return False, None
             except json.decoder.JSONDecodeError:
                 pass
