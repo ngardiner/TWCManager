@@ -28,7 +28,7 @@ class TeslaBLE:
         # Check that binary exists, otherwise unload
         if not os.path.isfile(self.binaryPath):
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
-            return False
+            return
 
     def car_api_charge(self, charge):
         # This is not very well thought out at all - we'll just loop through

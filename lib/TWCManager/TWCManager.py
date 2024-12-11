@@ -263,7 +263,7 @@ def background_tasks_thread(master):
 
                     # In the new world, we try the BLE command first, and if
                     # that fails, we try the API
-                    if not carble.car_api_charge(task["charge"]):
+                    if not carble or not carble.car_api_charge(task["charge"]):
                         carapi.car_api_charge(task["charge"])
                 elif task["cmd"] == "carApiEmailPassword":
                     carapi.resetCarApiLastErrorTime()
