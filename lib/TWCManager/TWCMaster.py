@@ -672,10 +672,16 @@ class TWCMaster:
         # Only recalculate once every 30 seconds to allow things to settle
         now = time.time()
         if now - self.lastMaxAmpsToDivideFromGrid < 30:
-            logger.debug(f"getMaxAmpsToDivideFromGrid returns cashed value {self.maxAmpsToDivideFromGrid}")
+            logger.debug(
+                f"getMaxAmpsToDivideFromGrid returns cashed value {self.maxAmpsToDivideFromGrid}"
+            )
             return self.maxAmpsToDivideFromGrid
 
-        currentOffer = self.getTotalAmpsInUse() if self.getTotalAmpsInUse() > 0 else self.getMaxAmpsToDivideAmongSlaves()
+        currentOffer = (
+            self.getTotalAmpsInUse()
+            if self.getTotalAmpsInUse() > 0
+            else self.getMaxAmpsToDivideAmongSlaves()
+        )
 
         # Get consumptions in Amps, if the EMS source supports it
         consumptionA = float(self.getConsumptionAmps())
@@ -691,7 +697,9 @@ class TWCMaster:
         maxAmpsAllowedFromGrid = self.config["config"].get("maxAmpsAllowedFromGrid", 16)
         amps = maxAmpsAllowedFromGrid - consumptionA + currentOffer
         if consumptionA > maxAmpsAllowedFromGrid:
-            logger.info(f"getMaxAmpsToDivideFromGrid limited power: consumption {consumptionA:.1f}A > {maxAmpsAllowedFromGrid}A")
+            logger.info(
+                f"getMaxAmpsToDivideFromGrid limited power: consumption {consumptionA:.1f}A > {maxAmpsAllowedFromGrid}A"
+            )
         amps = amps / self.getRealPowerFactor(amps)
         logger.debug("MaxAmpsToDivideFromGrid: +++++++++++++++: " + str(amps))
 
@@ -699,7 +707,6 @@ class TWCMaster:
         self.lastMaxAmpsToDivideFromGrid = now
 
         return round(amps, 2)
-
 
     def getNormalChargeLimit(self, ID):
         if "chargeLimits" in self.settings and str(ID) in self.settings["chargeLimits"]:
@@ -1374,16 +1381,17 @@ class TWCMaster:
             )
             amps = self.config["config"]["wiringMaxAmpsAllTWCs"]
 
-        activePolicy=str(self.getModuleByName("Policy").active_policy)
-        if (activePolicy == "Charge Now with Grid power limit" or \
-            activePolicy == "Scheduled Charging with Grid power limit") and \
-            amps > self.maxAmpsToDivideFromGrid:
+        activePolicy = str(self.getModuleByName("Policy").active_policy)
+        if (
+            activePolicy == "Charge Now with Grid power limit"
+            or activePolicy == "Scheduled Charging with Grid power limit"
+        ) and amps > self.maxAmpsToDivideFromGrid:
             # Never tell the slaves to draw more amps from grid than allowed
             amps = self.maxAmpsToDivideFromGrid
             logger.info(
-                "maxAmpsToDivideAmongSlaves limited to not draw more power from the grid than allowed: " + str(amps)
+                "maxAmpsToDivideAmongSlaves limited to not draw more power from the grid than allowed: "
+                + str(amps)
             )
-
 
         self.maxAmpsToDivideAmongSlaves = amps
 
