@@ -1326,6 +1326,8 @@ class CarApiVehicle:
         self.ID = json["id"]
         self.VIN = json["vin"]
         self.name = json["display_name"]
+        if not self.name:
+            self.name = self.VIN
 
         # Launch sync monitoring thread
         Thread(target=self.checkSyncNotStale).start()
