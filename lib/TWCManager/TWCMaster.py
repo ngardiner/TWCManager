@@ -778,6 +778,12 @@ class TWCMaster:
         carapi.setCarApiRefreshToken(self.settings.get("carApiRefreshToken", ""))
         carapi.setCarApiTokenExpireTime(self.settings.get("carApiTokenExpireTime", ""))
 
+        # We start with vehicles, but this should be templated in future for all modules to both remove the above logic,
+        # and to push settings logic out to the individual modules
+        mods = self.getModulesByType("Vehicle")
+        for mod in mods:
+            mod["ref"].updateSettings()
+
         # If particular details are missing from the Settings dict, create them
         if not self.settings.get("VehicleGroups", None):
             self.settings["VehicleGroups"] = {}

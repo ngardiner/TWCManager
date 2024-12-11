@@ -81,6 +81,7 @@ modules_available = [
     "Interface.TCP",
     "Policy.Policy",
     "Vehicle.TeslaAPI",
+    "Vehicle.TeslaBLE",
     "Vehicle.TeslaMateVehicle",
     "Control.WebIPCControl",
     "Control.HTTPControl",
@@ -246,6 +247,7 @@ def unescape_msg(inmsg: bytearray, msgLen):
 
 def background_tasks_thread(master):
     carapi = master.getModuleByName("TeslaAPI")
+    carble = master.getModuleByName("TeslaBLE")
 
     while True:
         try:
@@ -258,7 +260,11 @@ def background_tasks_thread(master):
                     # car_api_charge does nothing if it's been under 60 secs since it
                     # was last used so we shouldn't have to worry about calling this
                     # too frequently.
-                    carapi.car_api_charge(task["charge"])
+
+                    # In the new world, we try the BLE command first, and if
+                    # that fails, we try the API
+                    if not carble.car_api_charge(task["charge"]):
+                        carapi.car_api_charge(task["charge"])
                 elif task["cmd"] == "carApiEmailPassword":
                     carapi.resetCarApiLastErrorTime()
                     carapi.car_api_available(task["email"], task["password"])

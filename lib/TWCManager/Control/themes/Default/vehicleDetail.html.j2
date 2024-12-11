@@ -88,6 +88,39 @@
     </table>
     {% endif %}
 
+    {% if 'TeslaBLE' in master.modules %}
+      <p>&nbsp;</b>
+      <h3>BLE Control</h3>
+      <table>
+        <tr>
+          <th>Status</th>
+          <td>Not Implemented</td>
+{% if master.settings["Vehicles"][vin].get("BLEPeeringStatus","") == "peered" %}
+Vehicle is peered.
+{% endif %}
+
+        </tr>
+        <tr>
+          <th>Action</th>
+          <td>
+            {% if master.settings["Vehicles"][vin].get("BLEPeeringStatus","") == "peered" %}
+            <form method=POST action=/vehicle/localMgmt>
+              <input type=hidden name="operation" value="pair" />
+              <input type=hidden name="vin" value="{{vin}}" />
+              <input type=submit value="Re-pair with Vehicle">
+            </form>
+            {% else %}
+            <form method=POST action=/vehicle/localMgmt>
+              <input type=hidden name="operation" value="pair" />
+              <input type=hidden name="vin" value="{{vin}}" />
+              <input type=submit value="Pair with Vehicle">
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+    {% endif %}
+
     <p>&nbsp;</p>
     <h3>Group Management</h3>
     <table>

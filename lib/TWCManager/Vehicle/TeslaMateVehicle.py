@@ -250,3 +250,6 @@ class TeslaMateVehicle:
                         + vehicle_name
                         + " telemetry being provided by TeslaMate"
                     )
+
+    def updateSettings(self):
+        return True

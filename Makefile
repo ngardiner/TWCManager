@@ -1,5 +1,7 @@
 DEPS := git libffi-dev libpq-dev libssl-dev
 WEBDEPS := $(DEPS) lighttpd
+GODIST := go1.23.4.linux-armv6l.tar.gz
+HOME := /home/twcmanager
 SUDO := sudo
 USER := twcmanager
 GROUP := twcmanager
@@ -15,6 +17,7 @@ config:
 	# Create twcmanager user and group
 	$(SUDO) useradd -U -m $(USER) 2>/dev/null; exit 0
 	$(SUDO) usermod -a -G dialout $(USER)
+	$(SUDO) usermod -a -G bluetooth $(USER)
 
 	# Create configuration directory
 	$(SUDO) mkdir -p /etc/twcmanager
@@ -49,6 +52,19 @@ endif
 
 install: deps install_pkg config
 webinstall: webdeps install_pkg config webfiles
+
+tesla-control:
+	mkdir -p $(HOME)/gobin
+	cd $(HOME) && wget https://go.dev/dl/$(GODIST)
+	cd $(HOME) && tar -xvf $(GODIST)
+	rm $(HOME)/$(GODIST)
+	echo "export GOPATH=$(HOME)/go" >> /home/twcmanager/.bashrc
+	echo "export $$PATH:\$GOPATH/bin" >> /home/twcmanager/.bashrc
+	git clone https://github.com/teslamotors/vehicle-command $(HOME)/vehicle-control || exit 0
+	cd $(HOME)/vehicle-control && GOPATH=$(HOME)/go PATH=$(HOME)/go/bin:$$PATH go get ./...
+	cd $(HOME)/vehicle-control && GOPATH=$(HOME)/go PATH=$(HOME)/go/bin:$$PATH go build ./...
+	cd $(HOME)/vehicle-control && GOPATH=$(HOME)/go PATH=$(HOME)/go/bin:$$PATH GOBIN=$(HOME)/gobin go install ./...
+	setcap 'cap_net_raw,cap_net_admin+eip' $(HOME)/gobin/tesla-control
 
 testconfig:
 	# Create twcmanager user and group

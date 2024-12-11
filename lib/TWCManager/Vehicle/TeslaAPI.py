@@ -1283,6 +1283,9 @@ class TeslaAPI:
             default=10000,
         )
 
+    def updateSettings(self):
+        return True
+
 
 class CarApiVehicle:
     carapi = None
