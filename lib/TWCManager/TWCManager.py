@@ -255,7 +255,6 @@ def unescape_msg(inmsg: bytearray, msgLen):
 
 def background_tasks_thread(master):
     carapi = master.getModuleByName("TeslaAPI")
-    carble = master.getModuleByName("TeslaBLE")
 
     while True:
         try:
@@ -265,14 +264,17 @@ def background_tasks_thread(master):
                 if task["cmd"] == "applyChargeLimit":
                     carapi.applyChargeLimit(limit=task["limit"])
                 elif task["cmd"] == "charge":
-                    # car_api_charge does nothing if it's been under 60 secs since it
-                    # was last used so we shouldn't have to worry about calling this
-                    # too frequently.
-
-                    # In the new world, we try the BLE command first, and if
-                    # that fails, we try the API
-                    if not carble or not carble.car_api_charge(task["charge"]):
-                        carapi.car_api_charge(task["charge"])
+                    # Based on module priority, try local / API charge command, until one succeeds
+                    # or we run out of options.
+                    ret = False
+                    priority = 100
+                    while ret == False and priority > 0:
+                        module_name, module_ref, priority = master.getModuleByPriority("Vehicle", priority)
+                        ret = module_ref.car_api_charge(task["charge"])
+                        if ret:
+                            master.stats["moduleSuccess"][module_name] = (master.stats["moduleSuccess"].get(module_name,0) + 1)
+                        else:
+                            master.stats["moduleFailure"][module_name] = (master.stats["moduleFailure"].get(module_name,0) + 1)
                 elif task["cmd"] == "carApiEmailPassword":
                     carapi.resetCarApiLastErrorTime()
                     carapi.car_api_available(task["email"], task["password"])
