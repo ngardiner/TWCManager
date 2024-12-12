@@ -645,12 +645,17 @@ class TeslaAPI:
 
             if not vehicle.atHome:
                 # Vehicle is not at home, so don't change its charge state.
-                logger.info(
+                message = (
                     vehicle.name
                     + " is not at home.  Do not "
                     + startOrStop
                     + " charge."
                 )
+                # Stop asking to start charging when not at home.
+                if startOrStop == "start":
+                    vehicle.stopAskingToStartCharging = True
+                    message += "  Stop asking to start charging."
+                logger.info(message)
                 continue
 
             # If you send charge_start/stop less than 1 second after calling
@@ -1264,6 +1269,7 @@ class TeslaAPI:
             elif req.status_code == 429:
                 # We're explicitly being told to back off
                 self.errorCount = max(30, self.errorCount)
+                self.updateCarApiLastErrorTime(vehicle)
             return False
         except json.decoder.JSONDecodeError:
             return False
@@ -1440,6 +1446,7 @@ class CarApiVehicle:
                 elif req.status_code == 429:
                     # We're explicitly being told to back off
                     self.errorCount = max(30, self.errorCount)
+                    self.carapi.updateCarApiLastErrorTime(self)
                 return False, None
             except json.decoder.JSONDecodeError:
                 pass
@@ -1479,7 +1486,7 @@ class CarApiVehicle:
             self.carapi.updateCarApiLastErrorTime(self)
             return (False, None)
 
-    def update_location(self, cacheTime=60):
+    def update_location(self, cacheTime=300):
         if self.syncSource == "TeslaAPI":
             return self.update_vehicle_data(cacheTime)
 
@@ -1490,7 +1497,7 @@ class CarApiVehicle:
 
             return True
 
-    def update_vehicle_data(self, cacheTime=60):
+    def update_vehicle_data(self, cacheTime=300):
         url = (
             "/".join([self.carapi.getCarApiBaseURL(), str(self.VIN), "vehicle_data"])
             + "?endpoints="
