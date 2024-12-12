@@ -126,6 +126,15 @@
       </tr>
     </table>
 
+    <table>
+    {% for stat in master.stats %}
+    <tr>
+      <th>{{ stat }}</th>
+      <td>{{ master.stats[stat] }}</td>
+    </tr>
+    {% endfor %}
+    </table>
+
     <p>&nbsp;</p>
     <input class='btn btn-outline-success' type=submit value='Save Settings' />
   </body>
