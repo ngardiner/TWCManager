@@ -379,7 +379,6 @@ class TWCMaster:
                 high_name = module["name"]
 
         self.stats["moduleDispatch"][high_name] = (self.stats["moduleDispatch"].get(high_name,0) + 1)
-        print(self.stats)
         return high_name, high_ref, high_pri
 
     def getModulesByType(self, type):
