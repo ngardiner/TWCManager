@@ -72,14 +72,14 @@ class TeslaBLE:
 
     def sendCommand(self, vin, command, args=None):
         command_string = [
-                self.binaryPath,
-                "-debug",
-                "-ble",
-                "-vin",
-                vin,
-                "-key-file",
-                self.pipeName,
-                command,
+            self.binaryPath,
+            "-debug",
+            "-ble",
+            "-vin",
+            vin,
+            "-key-file",
+            self.pipeName,
+            command,
         ]
         if args:
             command_string.append(args)
