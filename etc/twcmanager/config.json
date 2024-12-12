@@ -91,6 +91,12 @@
         # rates really does.
         "minAmpsPerTWC": 12,
 
+        # By default TWCManager will limit charging to whole Amps only and never more
+        # than the PV surplus. This strategy can be changed by setting roundingAmps
+        # to "half" or "quart". Or to allow rounding to the nearest number (that
+        # might be more than the PV surplus) use "round", "roundHalf" or "roundQuart".
+        "roundingAmps": "int",
+
         # If the system rapidly changes its mind about whether to start or stop charging,
         # this parameter keeps charging / not charging until the decision remains stable
         # for this many seconds.
