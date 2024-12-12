@@ -63,6 +63,11 @@ class TWCMaster:
     )
     slaveTWCs = {}
     slaveTWCRoundRobin = []
+    stats = {
+      "moduleDispatch": {},
+      "moduleFailures": {},
+      "moduleSuccess": {}
+    }
     stopTimeout = datetime.max
     spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
@@ -110,6 +115,15 @@ class TWCMaster:
         except ValueError as e:
             logger.debug("Exception in advanceHistorySnap: " + str(e))
 
+    def calculateModulePriority(self, type, name):
+        # Currently implements a static priority for Vehicle modules, can be dynamic in future
+        if type == "Vehicle":
+            if name == "TeslaBLE":
+                return 20
+            if name == "TeslaAPI":
+                return 10
+        else:
+            return 0
     def cancelStopCarsCharging(self):
         self.delete_background_task({"cmd": "charge", "charge": False})
 
@@ -349,12 +363,31 @@ class TWCMaster:
         else:
             return None
 
+    def getModuleByPriority(self, type, priority):
+        # Takes a priority, finds the next lowest priority module
+        # Returns this module and associated priority
+
+        modules_matched = self.getModulesByType(type)
+        high_pri = 0
+        high_ref = None
+        high_name = ""
+
+        for module in modules_matched:
+            if module["priority"] and module["priority"] < priority and module["priority"] > high_pri:
+                high_pri = module["priority"]
+                high_ref = module["ref"]
+                high_name = module["name"]
+
+        self.stats["moduleDispatch"][high_name] = (self.stats["moduleDispatch"].get(high_name,0) + 1)
+        print(self.stats)
+        return high_name, high_ref, high_pri
+
     def getModulesByType(self, type):
         matched = []
         for module in self.modules:
             modinfo = self.modules[module]
             if modinfo["type"] == type:
-                matched.append({"name": module, "ref": modinfo["ref"]})
+                matched.append({"name": module, "ref": modinfo["ref"], "priority": modinfo["priority"]})
         return matched
 
     def getInterfaceModule(self):
@@ -1005,6 +1038,10 @@ class TWCMaster:
                         "ref": module["ref"],
                         "type": module["type"],
                     }
+                    # Assign a module priority where a module meets certain criteria
+                    # The intention of this is to allow us to prioritise local vehicle control
+                    # over API control going forward, with a uniform interface to do os
+                    self.modules[module["name"]]["priority"] = self.calculateModulePriority(module["type"], module["name"])
             else:
                 logger.log(
                     logging.INFO7,
