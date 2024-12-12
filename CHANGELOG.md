@@ -4,6 +4,9 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
 * Placeholder - TWC abstraction code
+* (@ngardiner) - Initial commit of local Tesla BLE vehicle control module
+* (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
+* (@RichieB2B) - Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
 * Bugfixes
     * (@MikeBishop) - Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
     * (@dtiefnig) - Specify access scope for token refresh
