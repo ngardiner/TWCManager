@@ -41,6 +41,13 @@ class TeslaBLE:
                 self.stopCharging(vehicle)
                 return self.pingVehicle(vehicle)
 
+    def parseCommandOutput(self, output):
+        success = False
+        if "Updated session info for DOMAIN_VEHICLE_SECURITY" in output:
+            success = True
+
+        return success
+
     def peerWithVehicle(self, vin):
         result = subprocess.run(
             [
@@ -57,17 +64,14 @@ class TeslaBLE:
             stdout=subprocess.PIPE,
         )
         self.sendPublicKey(vin)
-        logger.info("Command Response: " + result.stderr.decode("utf-8"))
+        return self.parseCommandOutput(ret)
 
     def pingVehicle(self, vin):
         ret = self.sendCommand(vin, "ping")
-        if "Updated session info for DOMAIN_VEHICLE_SECURITY" in ret:
-            return True
-        return False
+        return self.parseCommandOutput(ret)
 
-    def sendCommand(self, vin, command):
-        result = subprocess.run(
-            [
+    def sendCommand(self, vin, command, args=None):
+        command_string = [
                 self.binaryPath,
                 "-debug",
                 "-ble",
@@ -76,23 +80,30 @@ class TeslaBLE:
                 "-key-file",
                 self.pipeName,
                 command,
-            ],
+        ]
+        if args:
+            command_string.append(args)
+
+        result = subprocess.run(
+            command_string,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         self.sendPrivateKey(vin)
-        logger.info("Command Response: " + result.stderr.decode("utf-8"))
         return result.stderr.decode("utf-8")
 
+    def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
+        ret = self.sendCommand(vehicle, "charging-set-amps", charge_rate)
+        return self.parseCommandOutput(ret)
+
     def startCharging(self, vin):
+        self.wakeVehicle(vin)
         ret = self.sendCommand(vin, "charging-start")
-        if "Updated session info for DOMAIN_VEHICLE_SECURITY" in ret:
-            return True
+        return self.parseCommandOutput(ret)
 
     def stopCharging(self, vin):
         ret = self.sendCommand(vin, "charging-stop")
-        if "Updated session info for DOMAIN_VEHICLE_SECURITY" in ret:
-            return True
+        return self.parseCommandOutput(ret)
 
     def scanForVehicles(self):
         # This function allows other modules to prompt us to connect to BLE
@@ -140,6 +151,9 @@ class TeslaBLE:
                     self.master.queue_background_task({"cmd": "saveSettings"})
         else:
             logger.log(logging.INFO2, "No known vehicles.")
+
+    def wakeVehicle(self, vin):
+        self.sendCommand(vin, "wake")
 
     def closeFIFO(self):
         os.close(self.pipe)
