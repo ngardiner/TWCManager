@@ -274,7 +274,7 @@ def background_tasks_thread(master):
                         if ret:
                             master.stats["moduleSuccess"][module_name] = (master.stats["moduleSuccess"].get(module_name,0) + 1)
                         else:
-                            master.stats["moduleFailure"][module_name] = (master.stats["moduleFailure"].get(module_name,0) + 1)
+                            master.stats["moduleFailures"][module_name] = (master.stats["moduleFailures"].get(module_name,0) + 1)
                 elif task["cmd"] == "carApiEmailPassword":
                     carapi.resetCarApiLastErrorTime()
                     carapi.car_api_available(task["email"], task["password"])
