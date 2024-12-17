@@ -46,3 +46,5 @@ Honest Assessment of Current State
 * Start and Stop charging works, BLE takes priority over API. Code should identify successful stop/start
 
 * Does not control charge rate for vehicles, but could do so quite easily. Will be next step I would say.
+
+* BLE control is generally stable, but temperamental. I have observed that after a period of time, use of BLE control can contribute to walk up unlock not working or requiring bluetooth to be turned off/on on phone, there are also reports of potential instability if there is significant distance between the TWCManager device and the vehicle.
