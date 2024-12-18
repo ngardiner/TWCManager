@@ -1513,7 +1513,7 @@ class TWCMaster:
             ]
             self.queue_background_task({"cmd": "saveSettings"})
 
-    def startCarsCharging(self):
+    def startCarsCharging(self, vin = None):
         # This function is the opposite functionality to the stopCarsCharging function
         # below
         stopMode = int(self.settings.get("chargeStopMode", 1))
@@ -1523,9 +1523,9 @@ class TWCMaster:
         elif stopMode == 2:
             self.settings["respondToSlaves"] = 1
         elif stopMode == 3:
-            self.queue_background_task({"cmd": "charge", "charge": True})
+            self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
 
-    def stopCarsCharging(self):
+    def stopCarsCharging(self, vin = None):
         # This is called by components (mainly TWCSlave) who want to signal to us to
         # call our configured routine for stopping vehicles from charging.
         # The default setting is to use the Tesla API. Some people may not want to do
@@ -1537,7 +1537,7 @@ class TWCMaster:
         # 3 = Send TWC Stop command to each slave
         stopMode = int(self.settings.get("chargeStopMode", 1))
         if stopMode == 1:
-            self.queue_background_task({"cmd": "charge", "charge": False})
+            self.queue_background_task({"cmd": "charge", "charge": False, "vin": vin})
             if self.stopTimeout == datetime.max:
                 self.stopTimeout = datetime.now() + timedelta(seconds=10)
             elif datetime.now() > self.stopTimeout:

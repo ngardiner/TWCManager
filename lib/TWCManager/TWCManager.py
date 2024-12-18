@@ -270,7 +270,7 @@ def background_tasks_thread(master):
                     priority = 100
                     while ret == False and priority > 0:
                         module_name, module_ref, priority = master.getModuleByPriority("Vehicle", priority)
-                        ret = module_ref.car_api_charge(task["charge"])
+                        ret = module_ref.car_api_charge(task)
                         if ret:
                             master.stats["moduleSuccess"][module_name] = (master.stats["moduleSuccess"].get(module_name,0) + 1)
                         else:

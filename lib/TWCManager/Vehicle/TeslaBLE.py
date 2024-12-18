@@ -48,16 +48,25 @@ class TeslaBLE:
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
 
-    def car_api_charge(self, charge):
+    def car_api_charge(self, task):
         # This is not very well thought out at all - we'll just loop through
         # and ask all cars to charge for now
-        for vehicle in self.master.settings["Vehicles"].keys():
-            if charge:
-                self.startCharging(vehicle)
-                return self.pingVehicle(vehicle)
+        if task["vin"]:
+            if task["charge"]:
+                self.startCharging(task["vin"])
+                return self.pingVehicle(task["vin"])
             else:
-                self.stopCharging(vehicle)
-                return self.pingVehicle(vehicle)
+                self.stopCharging(task["vin"])
+                return self.pingVehicle(task["vin"])
+
+        else:
+            for vehicle in self.master.settings["Vehicles"].keys():
+                if task["charge"]:
+                    self.startCharging(vehicle)
+                    return self.pingVehicle(vehicle)
+                else:
+                    self.stopCharging(vehicle)
+                    return self.pingVehicle(vehicle)
 
     def parseCommandOutput(self, output):
         success = False
