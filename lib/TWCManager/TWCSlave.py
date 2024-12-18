@@ -551,7 +551,7 @@ class TWCSlave:
                     # more than once per minute. Once the car gets the message to
                     # stop, reportedAmpsActualSignificantChangeMonitor should drop
                     # to near zero within a few seconds.
-                    self.master.stopCarsCharging()
+                    self.master.stopCarsCharging(self.currentVIN)
             elif (
                 self.lastAmpsOffered >= self.config["config"]["minAmpsPerTWC"]
                 and self.reportedAmpsActual < 1.0
@@ -559,7 +559,7 @@ class TWCSlave:
             ):
                 # Car is not charging and is not reporting an error state, so
                 # try starting charge via car api.
-                self.master.startCarsCharging()
+                self.master.startCarsCharging(self.currentVIN)
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
             bytearray(b"\xfb\xe0")
