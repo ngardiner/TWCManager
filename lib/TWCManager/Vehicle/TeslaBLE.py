@@ -49,9 +49,9 @@ class TeslaBLE:
             return
 
     def car_api_charge(self, task):
-        # This is not very well thought out at all - we'll just loop through
-        # and ask all cars to charge for now
-        if task["vin"]:
+        # If we know the VIN of the vehicle connected to the TWC Slave, we'll send the command
+        # directly to that vehicle
+        if task.get("vin", None):
             if task["charge"]:
                 self.startCharging(task["vin"])
                 return self.pingVehicle(task["vin"])
@@ -60,6 +60,8 @@ class TeslaBLE:
                 return self.pingVehicle(task["vin"])
 
         else:
+            # If we don't know the VIN, we send to all vehicles - probably not the best logic for
+            # multi-vehicle installs, but it's equally possible that the TWC doesn't read the VIN.
             for vehicle in self.master.settings["Vehicles"].keys():
                 if task["charge"]:
                     self.startCharging(vehicle)
