@@ -172,11 +172,14 @@ class TeslaAPI:
         return False
 
     def car_api_available(
-        self, email=None, password=None, charge=None, applyLimit=None
+        self, email=None, password=None, task=None, applyLimit=None
     ):
         now = time.time()
         needSleep = False
         apiResponseDict = {}
+        charge = None
+        if task:
+            charge = task.get("charge", None)
 
         if self.getCarApiRetryRemaining():
             # It's been under carApiErrorRetryMins minutes since the car API
