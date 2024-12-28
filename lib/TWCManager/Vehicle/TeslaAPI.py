@@ -1328,9 +1328,7 @@ class CarApiVehicle:
         self.verifyCert = config["config"].get("teslaProxyCert", True)
         self.ID = json["id"]
         self.VIN = json["vin"]
-        self.name = json["display_name"]
-        if not self.name:
-            self.name = self.VIN
+        self.name = json["display_name"] or self.VIN or str(self.ID) or "unknown"
 
         # Launch sync monitoring thread
         Thread(target=self.checkSyncNotStale).start()
@@ -1494,7 +1492,9 @@ class CarApiVehicle:
         url = (
             "/".join([self.carapi.getCarApiBaseURL(), str(self.VIN), "vehicle_data"])
             + "?endpoints="
-            + "%3B".join(["location_data", "charge_state", "drive_state"])
+            + "%3B".join(
+                ["location_data", "charge_state", "drive_state", "vehicle_state"]
+            )
         )
 
         now = time.time()
@@ -1518,6 +1518,8 @@ class CarApiVehicle:
             self.chargeLimit = charge["charge_limit_soc"]
             self.batteryLevel = charge["battery_level"]
             self.timeToFullCharge = charge["time_to_full_charge"]
+
+            self.name = response["vehicle_state"]["vehicle_name"] or self.name
 
             self.lastVehicleStatusTime = now
 
