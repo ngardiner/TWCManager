@@ -1555,7 +1555,7 @@ class CarApiVehicle:
                     # Car is further from home than can be driven in an
                     # hour; no point re-checking sooner than that.
                     self.statusDeferral = now + 3600
-                elif response["shift_state"] == "P" or response["shift_state"] is None:
+                elif drive["shift_state"] == "P" or drive["shift_state"] is None:
                     # Car is not driving, so we can check infrequently. May
                     # be able to sleep.
                     self.statusDeferral = now + 1800
