@@ -1560,7 +1560,7 @@ class CarApiVehicle:
                     # be able to sleep.
                     self.statusDeferral = now + 1800
                 else:
-                    self.statusDeferral = now + 60
+                    self.statusDeferral = now + 300
             else:
                 # Car is at home; need to watch charging
                 self.statusDeferral = now + 60
