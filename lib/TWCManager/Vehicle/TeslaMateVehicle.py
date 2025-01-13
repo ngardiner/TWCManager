@@ -246,6 +246,12 @@ class TeslaMateVehicle:
         topic = str(message.topic).split("/")
         payload = str(message.payload.decode("utf-8"))
 
+        if len(topic) > 4:
+            prefix = topic[1:-3].join("/")
+            if prefix != self.__mqtt_prefix:
+                return
+            topic = [topic[0]] + topic[-3:]
+
         if topic[0] == "teslamate" and topic[1] == "cars":
             self.applyDataToVehicle(topic[2], topic[3], payload)
 
