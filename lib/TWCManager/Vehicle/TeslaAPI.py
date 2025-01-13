@@ -1563,7 +1563,7 @@ class CarApiVehicle:
                     self.statusDeferral = now + 300
             else:
                 # Car is at home; need to watch charging
-                self.statusDeferral = now + 60
+                self.statusDeferral = now + 300
 
         return result
 
