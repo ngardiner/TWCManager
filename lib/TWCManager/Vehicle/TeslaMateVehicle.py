@@ -66,7 +66,7 @@ class TeslaMateVehicle:
         ],
         "charging_state": [
             "chargingState",
-            lambda a: int(a),
+            lambda a: str(a),
             "lastChargeStatusTime",
         ],
     }
