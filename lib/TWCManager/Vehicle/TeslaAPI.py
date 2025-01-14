@@ -660,7 +660,7 @@ class TeslaAPI:
                 logger.info(message)
                 continue
 
-            if vehicle.chargeState in ["Disconnected", "Complete"]:
+            if vehicle.chargingState in ["Disconnected", "Complete"]:
                 # Sending a command to a disconnected or complete vehicle is
                 # useless.
                 logger.info(
@@ -672,7 +672,7 @@ class TeslaAPI:
                 vehicle.stopAskingToStartCharging = True
                 continue
 
-            if vehicle.chargeState == "Charging" and charge:
+            if vehicle.chargingState == "Charging" and charge:
                 # Don't start charging if car is already charging.
                 logger.info(
                     vehicle.name
