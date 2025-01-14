@@ -623,8 +623,8 @@ class TWCSlave:
 
             # If the drop-off was an expected completion, don't restart
             lastVehicle = self.getLastVehicle()
-            if lastVehicle is not None and (
-                lastVehicle.chargingState in ["Complete", "Disconnected"] or
+            if (lastVehicle is not None and
+                lastVehicle.chargingState is "Charging" and
                 lastVehicle.timeToFullCharge * 60 <= 5
             ):
                 lastVehicle.stopAskingToStartCharging = True
