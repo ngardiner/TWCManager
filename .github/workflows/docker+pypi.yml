@@ -57,10 +57,10 @@ jobs:
       with:
         path: ./pypi-dev
 
-    - name: Set up Python 3.7
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: 3.7
+        python-version: 3.12
 
     - name: Install pypa/build
       run: >-
@@ -109,10 +109,10 @@ jobs:
     - name: Check out Repository
       uses: actions/checkout@v3
 
-    - name: Set up Python 3.7
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: 3.7
+        python-version: 3.12
 
     - name: Install pypa/build
       run: >-
@@ -158,10 +158,10 @@ jobs:
       with:
         path: ./pypi
 
-    - name: Set up Python 3.7
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: 3.7
+        python-version: 3.12
 
     - name: Install pypa/build
       run: >-
@@ -195,10 +195,10 @@ jobs:
     - name: Check out Repository
       uses: actions/checkout@v3
 
-    - name: Set up Python 3.7
+    - name: Set up Python 3.12
       uses: actions/setup-python@v4
       with:
-        python-version: 3.7
+        python-version: 3.12
 
     - name: Install pypa/build and build a binary wheel and a source tarball
       run: |
