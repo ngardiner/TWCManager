@@ -957,7 +957,7 @@ class TeslaAPI:
                 # We're removing any applied limit, provided it hasn't been manually changed
                 #
                 # If lastApplied == -1, the manual-change path is always selected.
-                if wasAtHome and vehicle.chargeLimit == lastApplied:
+                if wasAtHome and vehicle.chargeLimit == lastApplied and vehicle.chargeLimit != outside:
                     if vehicle.apply_charge_limit(outside):
                         logger.log(
                             logging.INFO2,
