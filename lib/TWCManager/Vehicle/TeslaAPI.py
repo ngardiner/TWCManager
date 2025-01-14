@@ -1582,7 +1582,7 @@ class CarApiVehicle:
             reason = ""
             try:
                 result = apiResponseDict["response"]["result"]
-                reason = self.findReason(apiResponseDict)
+                reason = self.carapi.findReason(apiResponseDict)
             except (KeyError, TypeError):
                 # This catches unexpected cases like trying to access
                 # apiResponseDict['response'] when 'response' doesn't exist
