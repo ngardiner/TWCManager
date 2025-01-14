@@ -263,10 +263,11 @@ class TeslaMateVehicle:
             # in the Tesla API module
             self.updateVehicles(id, payload)
             if id in self.unknownVehicles:
-                for pastEvent in self.unknownVehicles[id]:
-                    self.applyDataToVehicle(id, pastEvent[0], pastEvent[1])
+                pastEvents = self.unknownVehicles[id]
                 del self.unknownVehicles[id]
-                
+                for pastEvent in pastEvents:
+                    self.applyDataToVehicle(id, pastEvent[0], pastEvent[1])
+
         elif event in events:
             vehicle = self.vehicles.get(id, None)
             if vehicle:
