@@ -664,6 +664,31 @@ class TeslaAPI:
                 logger.info(message)
                 continue
 
+            if vehicle.update_charge() is False:
+                result = "error"
+                continue
+
+            if vehicle.chargeState in ["Disconnected", "Complete"]:
+                # Sending a command to a disconnected or complete vehicle is
+                # useless.
+                logger.info(
+                    vehicle.name
+                    + " is not able to charge.  Do not "
+                    + startOrStop
+                    + " charge."
+                )
+                vehicle.stopAskingToStartCharging = True
+                continue
+
+            if vehicle.chargeState == "Charging" and charge:
+                # Don't start charging if car is already charging.
+                logger.info(
+                    vehicle.name
+                    + " is already charging.  Do not start charge."
+                )
+                vehicle.stopAskingToStartCharging = True
+                continue
+
             # If you send charge_start/stop less than 1 second after calling
             # update_location(), the charge command usually returns:
             #   {'response': {'result': False, 'reason': 'could_not_wake_buses'}}
