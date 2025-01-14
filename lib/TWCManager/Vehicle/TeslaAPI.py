@@ -629,11 +629,11 @@ class TeslaAPI:
             if not vehicle.ready():
                 continue
 
-            if (
-                vehicle.update_charge()
-                and vehicle.batteryLevel < self.minChargeLevel
-                and not charge
-            ):
+            if not vehicle.update_charge() or not vehicle.update_location():
+                result = "error"
+                continue
+
+            if vehicle.batteryLevel < self.minChargeLevel and not charge:
                 # If the vehicle's charge state is lower than the configured minimum,
                 #   don't stop it from charging, even if we'd otherwise not charge.
                 continue
@@ -644,10 +644,6 @@ class TeslaAPI:
             self.updateLastStartOrStopChargeTime()
 
             # only start/stop charging cars parked at home.
-
-            if vehicle.update_location() is False:
-                result = "error"
-                continue
 
             if not vehicle.atHome:
                 # Vehicle is not at home, so don't change its charge state.
@@ -662,10 +658,6 @@ class TeslaAPI:
                     vehicle.stopAskingToStartCharging = True
                     message += "  Stop asking to start charging."
                 logger.info(message)
-                continue
-
-            if vehicle.update_charge() is False:
-                result = "error"
                 continue
 
             if vehicle.chargeState in ["Disconnected", "Complete"]:
