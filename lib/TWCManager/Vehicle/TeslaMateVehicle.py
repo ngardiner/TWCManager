@@ -250,6 +250,14 @@ class TeslaMateVehicle:
                 setattr(vehicle, property_name, converter(payload))
                 vehicle.syncTimestamp = time.time()
 
+                # If sync timed out and has recovered, log it
+                if vehicle.syncSource != "TeslaMateVehicle":
+                    vehicle.syncSource = "TeslaMateVehicle"
+                    logger.info(
+                        "Vehicle "
+                        + vehicle.name
+                        + " telemetry has resumed being provided by TeslaMate"
+                    )
             else:
                 # If we don't know this vehicle yet, save the data.
                 if id not in self.unknownVehicles:
