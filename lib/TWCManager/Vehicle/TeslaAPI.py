@@ -1366,7 +1366,7 @@ class CarApiVehicle:
         while True:
             if (
                 self.syncSource != "TeslaAPI"
-                and self.self.is_awake()
+                and self.is_awake()
                 and (self.syncTimestamp < (time.time() - self.syncTimeout))
             ):
                 logger.error(
