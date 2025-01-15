@@ -29,49 +29,20 @@ class TeslaMateVehicle:
     vehicles = {}
 
     events = {
-        "battery_level": [
-            "batteryLevel",
-            lambda a: int(a),
-            "lastChargeStatusTime",
-        ],
-        "charge_limit_soc": [
-            "chargeLimit",
-            lambda a: int(a),
-            "lastChargeStatusTime",
-        ],
-        "display_name": ["name", lambda a: str(a), None],
-        "latitude": ["syncLat", lambda a: float(a), None],
-        "longitude": ["syncLon", lambda a: float(a), None],
-        "state": ["syncState", lambda a: a, None],
-        "time_to_full_charge": [
-            "timeToFullCharge",
-            lambda a: int(float(a)),
-            "lastChargeStatusTime",
-        ],
-        "charger_pilot_current": [
-            "availableCurrent",
-            lambda a: int(a),
-            "lastChargeStatusTime",
-        ],
-        "charger_actual_current": [
-            "actualCurrent",
-            lambda a: int(a),
-            "lastChargeStatusTime",
-        ],
-        "charger_phases": ["phases", lambda a: int(a), "lastChargeStatusTime"],
-        "charger_voltage": [
-            "voltage",
-            lambda a: int(a),
-            "lastChargeStatusTime",
-        ],
-        "charging_state": [
-            "chargingState",
-            lambda a: str(a),
-            "lastChargeStatusTime",
-        ],
+        "battery_level": ["batteryLevel", lambda a: int(a)],
+        "charge_limit_soc": ["chargeLimit", lambda a: int(a)],
+        "display_name": ["name", lambda a: str(a)],
+        "latitude": ["syncLat", lambda a: float(a)],
+        "longitude": ["syncLon", lambda a: float(a)],
+        "state": ["syncState", lambda a: a],
+        "time_to_full_charge": ["timeToFullCharge", lambda a: int(float(a))],
+        "charger_pilot_current": ["availableCurrent", lambda a: int(a)],
+        "charger_actual_current": ["actualCurrent", lambda a: int(a)],
+        "charger_phases": ["phases", lambda a: int(a)],
+        "charger_voltage": ["voltage", lambda a: int(a)],
+        "charging_state": ["chargingState", lambda a: str(a)],
     }
     unknownVehicles = {}
-
 
     def __init__(self, master):
         self.__master = master
@@ -240,7 +211,9 @@ class TeslaMateVehicle:
 
     def mqttDisconnect(self, client, userdata, flags, rc, properties=None):
         if rc != 0:
-            logger.log(logging.INFO5, "MQTT Disconnected. Should reconnect automatically.")
+            logger.log(
+                logging.INFO5, "MQTT Disconnected. Should reconnect automatically."
+            )
 
     def mqttMessage(self, client, userdata, message):
         topic = str(message.topic).split("/")
@@ -273,19 +246,8 @@ class TeslaMateVehicle:
             if vehicle:
                 property_name = events[event][0]
                 converter = events[event][1]
-                status_property = events[event][2]
-                
-                setattr(
-                    vehicle,
-                    property_name,
-                    converter(payload)
-                )
-                if status_property:
-                    setattr(
-                        vehicle,
-                        status_property,
-                        time.time()
-                    )
+
+                setattr(vehicle, property_name, converter(payload))
                 vehicle.syncTimestamp = time.time()
 
             else:

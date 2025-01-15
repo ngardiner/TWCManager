@@ -1316,7 +1316,6 @@ class CarApiVehicle:
 
     errorCount = 0
     lastErrorTime = 0
-    lastVehicleStatusTime = 0
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
     statusDeferral = 0
@@ -1547,8 +1546,6 @@ class CarApiVehicle:
             self.phases = charge["charger_phases"]
             self.voltage = charge["charger_voltage"]
             self.chargingState = charge["charging_state"]
-
-            self.lastVehicleStatusTime = now
 
             if not self.atHome:
                 if self.carapi.is_far_from_home(self.lat, self.lon):
