@@ -238,7 +238,7 @@ class TeslaMateVehicle:
             res = client.subscribe(topic, qos=0)
             logger.log(logging.INFO5, "Res: " + str(res))
 
-    def mqttDisconnect(self, client, flags, rc, properties=None):
+    def mqttDisconnect(self, client, userdata, flags, rc, properties=None):
         if rc != 0:
             logger.log(logging.INFO5, "MQTT Disconnected. Should reconnect automatically.")
 
