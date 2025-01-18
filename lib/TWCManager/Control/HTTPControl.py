@@ -1211,9 +1211,9 @@ def CreateHTTPHandlerClass(master):
                         master.settings["Schedule"][match.group(2)] = {}
 
                     # Set per-day settings
-                    master.settings["Schedule"][match.group(2)][
-                        match.group(1)
-                    ] = self.getFieldValue(key)
+                    master.settings["Schedule"][match.group(2)][match.group(1)] = (
+                        self.getFieldValue(key)
+                    )
 
                 else:
                     if master.settings["Schedule"].get("Settings", None) == None:

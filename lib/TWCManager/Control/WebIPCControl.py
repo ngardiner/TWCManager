@@ -242,10 +242,12 @@ class WebIPCControl:
                     if m:
                         twcMsg = self.trim_pad(
                             bytearray.fromhex(m.group(1).decode("ascii")),
-                            15
-                            if self.master.countSlaveTWC() == 0
-                            or slaveTWCRoundRobin[0].protocolVersion == 2
-                            else 13,
+                            (
+                                15
+                                if self.master.countSlaveTWC() == 0
+                                or slaveTWCRoundRobin[0].protocolVersion == 2
+                                else 13
+                            ),
                         )
                         if (twcMsg[0:2] == b"\xFC\x19") or (twcMsg[0:2] == b"\xFC\x1A"):
                             logger.info(
