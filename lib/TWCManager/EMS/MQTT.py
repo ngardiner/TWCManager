@@ -106,7 +106,7 @@ class MQTT:
             self.generatedW = payload
             logger.log(logging.INFO3, "MQTT EMS Generation Value updated")
 
-    def mqttSubscribe(self, client, userdata, reason_codes, properties=None):
+    def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
 
     def getConsumption(self):
