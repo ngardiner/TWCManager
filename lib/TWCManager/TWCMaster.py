@@ -649,7 +649,7 @@ class TWCMaster:
     def getMasterHeartbeatOverride(self):
         return self.overrideMasterHeartbeatData
 
-    def getMaxAmpsToDivideGreenEnergy(self, targetW=0):
+    def getMaxAmpsForTargetGridUsage(self, targetW=0):
         # Calculate our current generation and consumption in watts
         generationW = float(self.getGeneration())
         consumptionW = float(self.getConsumption())

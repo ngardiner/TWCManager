@@ -301,8 +301,8 @@ class Policy:
         #
         # If value refers to a function, execute the function and capture the
         # output
-        if value == "getMaxAmpsToDivideGreenEnergy()":
-            return self.master.getMaxAmpsToDivideGreenEnergy()
+        if value in ["getMaxAmpsToDivideGreenEnergy()", "getMaxAmpsForTargetGridUsage()"]:
+            return self.master.getMaxAmpsForTargetGridUsage()
         elif value == "checkScheduledCharging()":
             return self.master.checkScheduledCharging()
 
