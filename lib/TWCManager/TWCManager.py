@@ -336,8 +336,6 @@ def background_tasks_thread(master):
                     master.saveSettings()
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
-                elif task["cmd"] == "checkMaxPowerFromGrid":
-                    check_max_power_from_grid()
 
         except:
             logger.info(
@@ -356,15 +354,7 @@ def background_tasks_thread(master):
 
 
 def check_green_energy():
-    global config, hass, master
-
-    # Check solar panel generation using an API exposed by
-    # the HomeAssistant API.
-    #
-    # You may need to customize the sensor entity_id values
-    # to match those used in your environment. This is configured
-    # in the config section at the top of this file.
-    #
+    global config, master
 
     # Poll all loaded EMS modules for consumption and generation values
     for module in master.getModulesByType("EMS"):
@@ -379,26 +369,12 @@ def check_green_energy():
     if master.getModuleByName("Policy").policyIsGreen():
         master.setMaxAmpsToDivideAmongSlaves(master.getMaxAmpsToDivideGreenEnergy())
 
-
-def check_max_power_from_grid():
-    global config, hass, master
-
-    # Check solar panel generation using an API exposed by
-    # the HomeAssistant API.
-    #
-    # You may need to customize the sensor entity_id values
-    # to match those used in your environment. This is configured
-    # in the config section at the top of this file.
-    #
-    # Poll all loaded EMS modules for consumption and generation values
-    for module in master.getModulesByType("EMS"):
-        master.setConsumption(module["name"], module["ref"].getConsumption())
-        if hasattr(module["ref"], "getConsumptionAmps"):
-            master.setConsumptionAmps(
-                module["name"], module["ref"].getConsumptionAmps()
+    if config.get("config",{}).get("maxAmpsAllowedFromGrid", None):
+        master.setLimitAmpsToDivideAmongSlaves(
+            master.getMaxAmpsToDivideGreenEnergy(
+                master.convertAmpsToWatts(config["config"]["maxAmpsAllowedFromGrid"])
             )
-        master.setGeneration(module["name"], module["ref"].getGeneration())
-    master.setMaxAmpsToDivideFromGrid(master.getMaxAmpsToDivideFromGrid())
+        )
 
 
 def update_statuses():

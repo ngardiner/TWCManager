@@ -118,11 +118,6 @@ class Policy:
                 for name, position in [("after", 3), ("before", 1), ("emergency", 0)]:
                     self.charge_policy[position:position] = config_extend.get(name, [])
 
-            if config_policy.get("alwaysPollEMS", False):
-                for policy in self.charge_policy:
-                    if policy.get("background_task", None) is None:
-                        policy["background_task"] = "checkGreenEnergy"
-
             # Set the Policy Check Interval if specified
             policy_engine = config_policy.get("engine")
             if policy_engine:
@@ -220,6 +215,14 @@ class Policy:
         bgt = policy.get("background_task", None)
         if bgt:
             self.master.queue_background_task({"cmd": bgt})
+
+        # If we are not checking green energy already but we need to, queue that
+        # as well.
+        if bgt is not "checkGreenEnergy":
+            alwaysPoll = self.config.get("policy",{}).get("alwaysPollEMS", False)
+            maxAmps = self.config.get("config",{}).get("maxAmpsAllowedFromGrid", None)
+            if alwaysPoll or maxAmps or self.policyIsGreen():
+                self.master.queue_background_task({"cmd": "checkGreenEnergy"})
 
         # If a charge limit is defined for this policy, apply it
         limit = limit = self.policyValue(policy.get("charge_limit", -1))
@@ -324,10 +327,7 @@ class Policy:
     def policyIsGreen(self):
         current = self.getPolicyByName(self.active_policy)
         if current:
-            return (
-                current.get("background_task", "") == "checkGreenEnergy"
-                and current.get("charge_amps", None) == None
-            )
+            return current.get("charge_amps", None) is None
         return False
 
     def doesConditionMatch(self, match, condition, value, exitOn):
