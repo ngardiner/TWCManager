@@ -674,6 +674,23 @@ class TWCMaster:
         availableW = float(generationW + targetW - generationOffset)
         availableAmps = self.convertWattsToAmps(availableW)
 
+        # Get consumption Amps for highest phase, if the EMS source supports it
+        consumptionA = float(self.getConsumptionAmps())
+
+        # Check if we need to limit the Amps
+        maxAmpsAllowedFromGrid = self.config["config"].get("maxAmpsAllowedFromGrid")
+
+        # Limit based on highest phase Amps, if possible
+        if (
+            consumptionA
+            and maxAmpsAllowedFromGrid
+            and consumptionA > maxAmpsAllowedFromGrid
+        ):
+            newOffer = maxAmpsAllowedFromGrid - consumptionA + currentOffer
+            logger.info(
+                f"getMaxAmpsForTargetGridUsage limited Amps to {newOffer:.1f}A: consumption {consumptionA:.1f}A > {maxAmpsAllowedFromGrid}A"
+            )
+
         # Offer the smaller of the two, but not less than zero.
         amps = max(
             min(newOffer, availableAmps / self.getRealPowerFactor(availableAmps)), 0
