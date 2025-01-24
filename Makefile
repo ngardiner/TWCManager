@@ -6,6 +6,7 @@ SUDO := sudo
 USER := twcmanager
 GROUP := twcmanager
 VER := $(shell lsb_release -sr)
+BLUETOOTH = $(shell grep -c bluetooth /etc/group)
 
 .PHONY: tests upload
 
@@ -17,8 +18,9 @@ config:
 	# Create twcmanager user and group
 	$(SUDO) useradd -U -m $(USER) 2>/dev/null; exit 0
 	$(SUDO) usermod -a -G dialout $(USER)
+ifeq ($(BLUETOOTH),1)
 	$(SUDO) usermod -a -G bluetooth $(USER)
-
+endif
 	# Create configuration directory
 	$(SUDO) mkdir -p /etc/twcmanager
 ifeq (,$(wildcard /etc/twcmanager/config.json))
