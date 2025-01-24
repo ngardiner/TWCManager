@@ -374,7 +374,7 @@ def check_green_energy():
     elif config.get("config",{}).get("maxAmpsAllowedFromGrid", None):
         master.setLimitAmpsToDivideAmongSlaves(
             master.getMaxAmpsForTargetGridUsage(
-                master.convertAmpsToWatts(config["config"]["maxAmpsAllowedFromGrid"])
+                config["config"]["maxAmpsAllowedFromGrid"]
             )
         )
 
