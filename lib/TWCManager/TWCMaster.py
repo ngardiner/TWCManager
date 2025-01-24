@@ -653,7 +653,10 @@ class TWCMaster:
         # Calculate our current generation and consumption in amps
         generationA = float(self.convertWattsToAmps(self.getGeneration()))
         consumptionA = float(self.getConsumptionAmps())
-        if not consumptionA:
+
+        # Use consumption on all phases when the target is 0 or consumptionA
+        # is not available
+        if targetA == 0 or not consumptionA:
             consumptionA = float(self.convertWattsToAmps(self.getConsumption()))
         availableA = generationA + targetA - consumptionA
 
@@ -674,9 +677,7 @@ class TWCMaster:
         availableA = float(generationA + targetA - generationOffsetA)
 
         # Offer the smaller of the two, but not less than zero.
-        amps = max(
-            min(newOffer, availableA / self.getRealPowerFactor(availableA)), 0
-        )
+        amps = max(min(newOffer, availableA / self.getRealPowerFactor(availableA)), 0)
         return round(amps, 2)
 
     def getNormalChargeLimit(self, ID):
