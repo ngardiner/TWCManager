@@ -35,7 +35,7 @@ class TeslaMateVehicle:
         "latitude": ["syncLat", lambda a: float(a)],
         "longitude": ["syncLon", lambda a: float(a)],
         "state": ["syncState", lambda a: a],
-        "time_to_full_charge": ["timeToFullCharge", lambda a: int(float(a))],
+        "time_to_full_charge": ["timeToFullCharge", lambda a: float(a)],
         "charger_pilot_current": ["availableCurrent", lambda a: int(a)],
         "charger_actual_current": ["actualCurrent", lambda a: int(a)],
         "charger_phases": ["phases", lambda a: int(a)],
