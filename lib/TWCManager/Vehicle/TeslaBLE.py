@@ -5,6 +5,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
 import logging
 import os
+import shutil
 import subprocess
 from threading import Timer
 import time
@@ -13,9 +14,10 @@ logger = logging.getLogger("\U0001F697 TeslaBLE")
 
 
 class TeslaBLE:
-    binaryPath = "/home/twcmanager/gobin/tesla-control"
+    binaryPath = None
     commandTimeout = 10
     config = None
+    configConfig = None
     master = None
     pipe = None
     pipeName = "/tmp/ble_data"
@@ -26,9 +28,21 @@ class TeslaBLE:
             self.config = self.master.config
         except KeyError:
             pass
+        self.configConfig = self.config.get("config", {})
+
+        # Determine best binary location
+        self.binaryPath = self.configConfig.get("teslaControlPath", os.path.expanduser('~/gobin/tesla-control'))
+
+        # Failing this, search system path
+        if not self.binaryPath or not os.path.isfile(self.binaryPath):
+            self.binaryPath = shutil.which('tesla-control')
+
+        # Final fallback prior to failure
+        if not self.binaryPath or not os.path.isfile(self.binaryPath):
+            self.binaryPath = "/home/twcmanager/gobin/tesla-control"
 
         # Check that binary exists, otherwise unload
-        if not os.path.isfile(self.binaryPath):
+        if not self.binaryPath or not os.path.isfile(self.binaryPath):
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
 
