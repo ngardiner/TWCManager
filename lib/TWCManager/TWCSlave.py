@@ -83,6 +83,7 @@ class TWCSlave:
             "useFlexAmpsToStartCharge", False
         )
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
+        self.roundingAmps = self.configConfig.get("roundingAmps", "int")
 
     def print_status(self, heartbeatData):
         try:
@@ -812,7 +813,7 @@ class TWCSlave:
             # Call the Tesla API to set the charge rate for vehicle connected to this TWC
             # TODO: Identify vehicle
             if (
-                int(desiredAmpsOffered) == self.__lastAPIAmpsValue
+                self.rounding(desiredAmpsOffered) == self.__lastAPIAmpsValue
                 and (
                     self.__lastAPIAmpsRepeat > 50 or self.__lastAPIAmpsRepeat % 10 != 0
                 )
@@ -825,7 +826,7 @@ class TWCSlave:
             else:
                 self.__lastAPIAmpsRequest = time.time()
                 self.__lastAPIAmpsRepeat = 0
-                self.__lastAPIAmpsValue = int(desiredAmpsOffered)
+                self.__lastAPIAmpsValue = self.rounding(desiredAmpsOffered)
 
                 # Determine vehicle to control
                 targetVehicle = (
@@ -833,7 +834,7 @@ class TWCSlave:
                 )
 
                 self.master.getModuleByName("TeslaAPI").setChargeRate(
-                    int(desiredAmpsOffered), targetVehicle
+                    int(self.rounding(desiredAmpsOffered)), targetVehicle
                 )
 
             desiredAmpsOffered = self.wiringMaxAmps
@@ -854,7 +855,7 @@ class TWCSlave:
             # one second and 12.0A the next second, the car reduces its power
             # use to ~5.14-5.23A and refuses to go higher. So it seems best to
             # stick with whole amps.
-            desiredAmpsOffered = int(desiredAmpsOffered)
+            desiredAmpsOffered = self.rounding(desiredAmpsOffered)
 
             # Mid Oct 2017, Tesla pushed a firmware update to their cars
             # that seems to create the following bug:
@@ -1032,7 +1033,7 @@ class TWCSlave:
         # look like this:
         #   S 032e 0.25/0.00A: 03 0000 0019 0000 M: 05 0000 0000 0000
         if self.reportedAmpsMax != desiredAmpsOffered or desiredAmpsOffered == 0:
-            desiredHundredthsOfAmps = int(desiredAmpsOffered * 100)
+            desiredHundredthsOfAmps = int(self.rounding(desiredAmpsOffered) * 100)
             self.masterHeartbeatData = bytearray(
                 [
                     (0x09 if self.protocolVersion == 2 else 0x05),
@@ -1179,3 +1180,16 @@ class TWCSlave:
         if lastVehicle != None:
             return lastVehicle
         return None
+
+    def rounding(self, value):
+        if self.roundingAmps == 'half':
+            return int(value * 2) / 2
+        if self.roundingAmps == 'quart':
+            return int(value * 4) / 4
+        if self.roundingAmps == 'round':
+            return round(value)
+        if self.roundingAmps == 'roundHalf':
+            return round(value * 2) / 2
+        if self.roundingAmps == 'roundQuart':
+            return round(value * 4) / 4
+        return int(value)
