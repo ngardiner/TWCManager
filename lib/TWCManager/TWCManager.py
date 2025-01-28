@@ -80,6 +80,7 @@ modules_available = [
     "Interface.RS485",
     "Interface.TCP",
     "Policy.Policy",
+    "Vehicle.VehiclePriority",
     "Vehicle.TeslaAPI",
     "Vehicle.TeslaBLE",
     "Vehicle.TeslaMateVehicle",
@@ -264,17 +265,7 @@ def background_tasks_thread(master):
                 if task["cmd"] == "applyChargeLimit":
                     carapi.applyChargeLimit(limit=task["limit"])
                 elif task["cmd"] == "charge":
-                    # Based on module priority, try local / API charge command, until one succeeds
-                    # or we run out of options.
-                    ret = False
-                    priority = 100
-                    while ret == False and priority > 0:
-                        module_name, module_ref, priority = master.getModuleByPriority("Vehicle", priority)
-                        ret = module_ref.car_api_charge(task)
-                        if ret:
-                            master.stats["moduleSuccess"][module_name] = (master.stats["moduleSuccess"].get(module_name,0) + 1)
-                        else:
-                            master.stats["moduleFailures"][module_name] = (master.stats["moduleFailures"].get(module_name,0) + 1)
+                    master.getModuleByName("VehiclePriority").car_api_charge(task)
                 elif task["cmd"] == "carApiEmailPassword":
                     carapi.resetCarApiLastErrorTime()
                     carapi.car_api_available(task["email"], task["password"])
