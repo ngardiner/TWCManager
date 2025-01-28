@@ -15,7 +15,7 @@ logger = logging.getLogger("\U0001F697 TeslaBLE")
 
 class TeslaBLE:
     binaryPath = None
-    commandTimeout = 10
+    commandTimeout = 5
     config = None
     configConfig = None
     master = None

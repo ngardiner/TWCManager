@@ -23,7 +23,7 @@ class VehiclePriority:
                 if ret:
                     self.master.stats["moduleSuccess"][module_name] = (self.master.stats["moduleSuccess"].get(module_name,0) + 1)
                 else:
-                    self.master.stats["moduleFailure"][module_name] = (self.master.stats["moduleFailure"].get(module_name,0) + 1)
+                    self.master.stats["moduleFailures"][module_name] = (self.master.stats["moduleFailures"].get(module_name,0) + 1)
 
             return ret
         return method
