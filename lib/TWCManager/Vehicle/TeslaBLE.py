@@ -102,7 +102,7 @@ class TeslaBLE:
             command,
         ]
         if args:
-            command_string.append(args)
+            command_string.append(str(args))
 
         result = subprocess.Popen(
             command_string,
@@ -120,8 +120,19 @@ class TeslaBLE:
         return stderr.decode("utf-8")
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
-        ret = self.sendCommand(vehicle, "charging-set-amps", charge_rate)
-        return self.parseCommandOutput(ret)
+        if vehicle:
+            ret = self.sendCommand(vehicle, "charging-set-amps", charge_rate)
+            return self.parseCommandOutput(ret)
+        else:
+            # It's possible that a TWC doesn't know the vehicle VIN
+            # This really isn't optimal but we'll limit charge rate for all known vehicles
+            # This also means we need to detect success of any one vehicle and return that
+            success = False
+            for vehicle in self.master.settings["Vehicles"].keys():
+                ret = self.sendCommand(vehicle, "charging-set-amps", charge_rate)
+                if self.parseCommandOutput(ret):
+                    success = True
+            return success
 
     def startCharging(self, vin):
         self.wakeVehicle(vin)
@@ -184,7 +195,10 @@ class TeslaBLE:
 
     def closeFile(self):
         self.pipe.close()
-        os.unlink(self.pipeName)
+        try:
+            os.unlink(self.pipeName)
+        except FileNotFoundError:
+            pass
 
     def openFile(self):
         # Open output file for passing data to tesla-control
@@ -197,10 +211,12 @@ class TeslaBLE:
         )
 
     def sendPrivateKey(self, vin):
-        self.openFile()
-        self.pipe.write(
-            base64.b64decode(self.master.settings["Vehicles"][vin]["privKey"]),
-        )
+        if vin in self.master.settings["Vehicles"]:
+            if "privKey" in self.master.settings["Vehicles"][vin]:
+              self.openFile()
+              self.pipe.write(
+                  base64.b64decode(self.master.settings["Vehicles"][vin]["privKey"]),
+              )
 
     def updateSettings(self):
         # Called by TWCMaster when settings are read/updated
