@@ -213,10 +213,10 @@ class TeslaBLE:
     def sendPrivateKey(self, vin):
         if vin in self.master.settings["Vehicles"]:
             if "privKey" in self.master.settings["Vehicles"][vin]:
-              self.openFile()
-              self.pipe.write(
-                  base64.b64decode(self.master.settings["Vehicles"][vin]["privKey"]),
-              )
+                self.openFile()
+                self.pipe.write(
+                    base64.b64decode(self.master.settings["Vehicles"][vin]["privKey"]),
+                )
 
     def updateSettings(self):
         # Called by TWCMaster when settings are read/updated
