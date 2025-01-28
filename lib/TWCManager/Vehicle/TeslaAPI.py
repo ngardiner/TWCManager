@@ -186,14 +186,11 @@ class TeslaAPI:
         return False
 
     def car_api_available(
-        self, email=None, password=None, task=None, applyLimit=None
+        self, email=None, password=None, charge=None, applyLimit=None
     ):
         now = time.time()
         needSleep = False
         apiResponseDict = {}
-        charge = None
-        if task:
-            charge = task.get("charge", None)
 
         if self.getCarApiRetryRemaining():
             # It's been under carApiErrorRetryMins minutes since the car API
@@ -608,9 +605,13 @@ class TeslaAPI:
     def is_far_from_home(self, lat, lon):
         return not self.is_location_within_radius(lat, lon, 1.4)
 
-    def car_api_charge(self, charge):
+    def car_api_charge(self, task):
         # Do not call this function directly.  Call by using background thread:
         # queue_background_task({'cmd':'charge', 'charge':<True/False>})
+
+        charge = None
+        if task:
+            charge = task.get("charge", None)
 
         now = time.time()
         apiResponseDict = {}
