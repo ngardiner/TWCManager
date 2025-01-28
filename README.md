@@ -105,6 +105,7 @@ Status interfaces publish TWCManager status information to external systems. Cur
 | Platform    | Details                                  |
 | ----------- | ---------------------------------------- |
 | TeslaAPI    | Allows start/stop charging via Tesla API |
+| [TeslaBLE](docs/modules/Vehicle_TeslaBLE.md) | Allows start/stop charging via Bluetooth Low Energy |
 | [TeslaMate](docs/modules/Vehicle_TeslaMate.md) | TeslaMate integration (Tesla API Tokens) |
 
 ## Warnings

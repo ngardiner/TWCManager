@@ -526,12 +526,16 @@ class TWCMaster:
             and scheduledChargingDays > 0
             and self.getScheduledAmpsMax() > 0,
             "amps": self.getScheduledAmpsMax(),
-            "startingMinute": int(data["scheduledChargingStartHour"] * 60)
-            if data["scheduledChargingStartHour"] >= 0
-            else -1,
-            "endingMinute": int(data["scheduledChargingEndHour"] * 60)
-            if data["scheduledChargingEndHour"] >= 0
-            else -1,
+            "startingMinute": (
+                int(data["scheduledChargingStartHour"] * 60)
+                if data["scheduledChargingStartHour"] >= 0
+                else -1
+            ),
+            "endingMinute": (
+                int(data["scheduledChargingEndHour"] * 60)
+                if data["scheduledChargingEndHour"] >= 0
+                else -1
+            ),
             "monday": (scheduledChargingDays & 1) == 1,
             "tuesday": (scheduledChargingDays & 2) == 2,
             "wednesday": (scheduledChargingDays & 4) == 4,
@@ -540,12 +544,12 @@ class TWCMaster:
             "saturday": (scheduledChargingDays & 32) == 32,
             "sunday": (scheduledChargingDays & 64) == 64,
             "flexStartEnabled": self.getScheduledAmpsFlexStart(),
-            "flexStartingMinute": int(scheduledFlexTime[0] * 60)
-            if scheduledFlexTime[0] >= 0
-            else -1,
-            "flexEndingMinute": int(scheduledFlexTime[1] * 60)
-            if scheduledFlexTime[1] >= 0
-            else -1,
+            "flexStartingMinute": (
+                int(scheduledFlexTime[0] * 60) if scheduledFlexTime[0] >= 0 else -1
+            ),
+            "flexEndingMinute": (
+                int(scheduledFlexTime[1] * 60) if scheduledFlexTime[1] >= 0 else -1
+            ),
             "flexMonday": (scheduledFlexTime[2] & 1) == 1,
             "flexTuesday": (scheduledFlexTime[2] & 2) == 2,
             "flexWednesday": (scheduledFlexTime[2] & 4) == 4,

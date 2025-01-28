@@ -5,18 +5,22 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
 import logging
 import os
+import shutil
 import subprocess
+from threading import Timer
 import time
 
 logger = logging.getLogger("\U0001F697 TeslaBLE")
 
 
 class TeslaBLE:
-    binaryPath = "/home/twcmanager/gobin/tesla-control"
+    binaryPath = None
+    commandTimeout = 10
     config = None
+    configConfig = None
     master = None
     pipe = None
-    pipeName = "/tmp/ble_pipe"
+    pipeName = "/tmp/ble_data"
 
     def __init__(self, master):
         self.master = master
@@ -24,9 +28,23 @@ class TeslaBLE:
             self.config = self.master.config
         except KeyError:
             pass
+        self.configConfig = self.config.get("config", {})
+
+        # Determine best binary location
+        self.binaryPath = self.configConfig.get(
+            "teslaControlPath", os.path.expanduser("~/gobin/tesla-control")
+        )
+
+        # Failing this, search system path
+        if not self.binaryPath or not os.path.isfile(self.binaryPath):
+            self.binaryPath = shutil.which("tesla-control")
+
+        # Final fallback prior to failure
+        if not self.binaryPath or not os.path.isfile(self.binaryPath):
+            self.binaryPath = "/home/twcmanager/gobin/tesla-control"
 
         # Check that binary exists, otherwise unload
-        if not os.path.isfile(self.binaryPath):
+        if not self.binaryPath or not os.path.isfile(self.binaryPath):
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
 
@@ -60,6 +78,7 @@ class TeslaBLE:
         return success
 
     def peerWithVehicle(self, vin):
+        self.sendPublicKey(vin)
         result = subprocess.run(
             [
                 self.binaryPath,
@@ -74,7 +93,7 @@ class TeslaBLE:
             ],
             stdout=subprocess.PIPE,
         )
-        self.sendPublicKey(vin)
+        self.closeFile()
         return self.parseCommandOutput(ret)
 
     def pingVehicle(self, vin):
@@ -82,6 +101,7 @@ class TeslaBLE:
         return self.parseCommandOutput(ret)
 
     def sendCommand(self, vin, command, args=None):
+        self.sendPrivateKey(vin)
         command_string = [
             self.binaryPath,
             "-debug",
@@ -95,13 +115,20 @@ class TeslaBLE:
         if args:
             command_string.append(args)
 
-        result = subprocess.run(
+        result = subprocess.Popen(
             command_string,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        self.sendPrivateKey(vin)
-        return result.stderr.decode("utf-8")
+        timer = Timer(self.commandTimeout, result.kill)
+        try:
+            timer.start()
+            stdout, stderr = result.communicate()
+        finally:
+            timer.cancel()
+
+        self.closeFile()
+        return stderr.decode("utf-8")
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         ret = self.sendCommand(vehicle, "charging-set-amps", charge_rate)
@@ -133,32 +160,32 @@ class TeslaBLE:
                     private_key = ec.generate_private_key(
                         ec.SECP256R1(), default_backend()
                     )
-                    self.master.settings["Vehicles"][vehicle][
-                        "privKey"
-                    ] = base64.b64encode(
-                        private_key.private_bytes(
-                            serialization.Encoding.PEM,
-                            serialization.PrivateFormat.PKCS8,
-                            serialization.NoEncryption(),
-                        )
-                    ).decode()
+                    self.master.settings["Vehicles"][vehicle]["privKey"] = (
+                        base64.b64encode(
+                            private_key.private_bytes(
+                                serialization.Encoding.PEM,
+                                serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption(),
+                            )
+                        ).decode()
+                    )
                     public_key = private_key.public_key()
-                    self.master.settings["Vehicles"][vehicle][
-                        "pubKey"
-                    ] = base64.b64encode(
-                        public_key.public_bytes(
-                            serialization.Encoding.X962,
-                            serialization.PublicFormat.UncompressedPoint,
-                        )
-                    ).decode()
-                    self.master.settings["Vehicles"][vehicle][
-                        "pubKeyPEM"
-                    ] = base64.b64encode(
-                        public_key.public_bytes(
-                            serialization.Encoding.PEM,
-                            serialization.PublicFormat.SubjectPublicKeyInfo,
-                        )
-                    ).decode()
+                    self.master.settings["Vehicles"][vehicle]["pubKey"] = (
+                        base64.b64encode(
+                            public_key.public_bytes(
+                                serialization.Encoding.X962,
+                                serialization.PublicFormat.UncompressedPoint,
+                            )
+                        ).decode()
+                    )
+                    self.master.settings["Vehicles"][vehicle]["pubKeyPEM"] = (
+                        base64.b64encode(
+                            public_key.public_bytes(
+                                serialization.Encoding.PEM,
+                                serialization.PublicFormat.SubjectPublicKeyInfo,
+                            )
+                        ).decode()
+                    )
                     self.master.queue_background_task({"cmd": "saveSettings"})
         else:
             logger.log(logging.INFO2, "No known vehicles.")
@@ -166,36 +193,25 @@ class TeslaBLE:
     def wakeVehicle(self, vin):
         self.sendCommand(vin, "wake")
 
-    def closeFIFO(self):
-        os.close(self.pipe)
+    def closeFile(self):
+        self.pipe.close()
+        os.unlink(self.pipeName)
 
-    def openFIFO(self):
-        # Open FIFO pipe for passing data to tesla-control
-        try:
-            os.mkfifo(self.pipeName)
-        except FileExistsError:
-            pass
-        except OSError as oe:
-            if oe.errno != errno.EEXIST:
-                raise
-
-        self.pipe = os.open(self.pipeName, os.O_WRONLY)
+    def openFile(self):
+        # Open output file for passing data to tesla-control
+        self.pipe = open(self.pipeName, "wb", 0)
 
     def sendPublicKey(self, vin):
-        self.openFIFO()
-        os.write(
-            self.pipe,
+        self.openFile()
+        self.pipe.write(
             base64.b64decode(self.master.settings["Vehicles"][vin]["pubKeyPEM"]),
         )
-        self.closeFIFO()
 
     def sendPrivateKey(self, vin):
-        self.openFIFO()
-        os.write(
-            self.pipe,
+        self.openFile()
+        self.pipe.write(
             base64.b64decode(self.master.settings["Vehicles"][vin]["privKey"]),
         )
-        self.closeFIFO()
 
     def updateSettings(self):
         # Called by TWCMaster when settings are read/updated

@@ -543,20 +543,6 @@ class TWCSlave:
                 # Car is not charging and is not reporting an error state, so
                 # try starting charge via car api.
                 self.master.startCarsCharging(self.currentVIN)
-            elif self.reportedAmpsActual >= 1.0:
-                # At least one plugged in car is successfully charging. We don't
-                # know which car it is, so we must set
-                # vehicle.stopAskingToStartCharging = False on all vehicles such
-                # that if any vehicle is not charging without us calling
-                # car_api_charge(False), we'll try to start it charging again at
-                # least once. This probably isn't necessary but might prevent
-                # some unexpected case from never starting a charge. It also
-                # seems less confusing to see in the output that we always try
-                # to start API charging after the car stops taking a charge.
-                for vehicle in self.master.getModuleByName(
-                    "TeslaAPI"
-                ).getCarApiVehicles():
-                    vehicle.stopAskingToStartCharging = False
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
             bytearray(b"\xFB\xE0")

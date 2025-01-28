@@ -648,12 +648,17 @@ class TeslaAPI:
 
             if not vehicle.atHome:
                 # Vehicle is not at home, so don't change its charge state.
-                logger.info(
+                message = (
                     vehicle.name
                     + " is not at home.  Do not "
                     + startOrStop
                     + " charge."
                 )
+                # Stop asking to start charging when not at home.
+                if startOrStop == "start":
+                    vehicle.stopAskingToStartCharging = True
+                    message += "  Stop asking to start charging."
+                logger.info(message)
                 continue
 
             # If you send charge_start/stop less than 1 second after calling
@@ -1267,6 +1272,7 @@ class TeslaAPI:
             elif req.status_code == 429:
                 # We're explicitly being told to back off
                 self.errorCount = max(30, self.errorCount)
+                self.updateCarApiLastErrorTime(vehicle)
             return False
         except json.decoder.JSONDecodeError:
             return False
@@ -1331,9 +1337,7 @@ class CarApiVehicle:
         self.verifyCert = config["config"].get("teslaProxyCert", True)
         self.ID = json["id"]
         self.VIN = json["vin"]
-        self.name = json["display_name"]
-        if not self.name:
-            self.name = self.VIN
+        self.name = json["display_name"] or self.VIN or str(self.ID) or "unknown"
 
         # Launch sync monitoring thread
         Thread(target=self.checkSyncNotStale).start()
@@ -1443,6 +1447,7 @@ class CarApiVehicle:
                 elif req.status_code == 429:
                     # We're explicitly being told to back off
                     self.errorCount = max(30, self.errorCount)
+                    self.carapi.updateCarApiLastErrorTime(self)
                 return False, None
             except json.decoder.JSONDecodeError:
                 pass
@@ -1482,7 +1487,7 @@ class CarApiVehicle:
             self.carapi.updateCarApiLastErrorTime(self)
             return (False, None)
 
-    def update_location(self, cacheTime=60):
+    def update_location(self, cacheTime=300):
         if self.syncSource == "TeslaAPI":
             return self.update_vehicle_data(cacheTime)
 
@@ -1493,11 +1498,13 @@ class CarApiVehicle:
 
             return True
 
-    def update_vehicle_data(self, cacheTime=60):
+    def update_vehicle_data(self, cacheTime=300):
         url = (
             "/".join([self.carapi.getCarApiBaseURL(), str(self.VIN), "vehicle_data"])
             + "?endpoints="
-            + "%3B".join(["location_data", "charge_state", "drive_state"])
+            + "%3B".join(
+                ["location_data", "charge_state", "drive_state", "vehicle_state"]
+            )
         )
 
         now = time.time()
@@ -1521,6 +1528,8 @@ class CarApiVehicle:
             self.chargeLimit = charge["charge_limit_soc"]
             self.batteryLevel = charge["battery_level"]
             self.timeToFullCharge = charge["time_to_full_charge"]
+
+            self.name = response["vehicle_state"]["vehicle_name"] or self.name
 
             self.lastVehicleStatusTime = now
 
@@ -1576,7 +1585,7 @@ class CarApiVehicle:
             reason = ""
             try:
                 result = apiResponseDict["response"]["result"]
-                reason = apiResponseDict["response"]["reason"]
+                reason = self.carapi.findReason(apiResponseDict)
             except (KeyError, TypeError):
                 # This catches unexpected cases like trying to access
                 # apiResponseDict['response'] when 'response' doesn't exist
