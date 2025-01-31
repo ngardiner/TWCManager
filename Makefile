@@ -1,6 +1,7 @@
 DEPS := git libffi-dev libpq-dev libssl-dev
 WEBDEPS := $(DEPS) lighttpd
-GODIST := go1.23.4.linux-armv6l.tar.gz
+ARCH := $(shell uname -m)
+GODIST := go1.23.4.linux-$(ARCH).tar.gz
 HOME := /home/twcmanager
 SUDO := sudo
 USER := twcmanager
@@ -11,7 +12,7 @@ BLUETOOTH = $(shell grep -c bluetooth /etc/group)
 .PHONY: tests upload
 
 build: deps build_pkg
-docker: deps build_pkg config
+docker: deps build_pkg config tesla-control
 webbuild: webdeps build_pkg
 
 config:

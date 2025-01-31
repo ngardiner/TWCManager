@@ -534,7 +534,7 @@ class TWCSlave:
                     # more than once per minute. Once the car gets the message to
                     # stop, reportedAmpsActualSignificantChangeMonitor should drop
                     # to near zero within a few seconds.
-                    self.master.stopCarsCharging()
+                    self.master.stopCarsCharging(self.currentVIN)
             elif (
                 self.lastAmpsOffered >= self.config["config"]["minAmpsPerTWC"]
                 and self.reportedAmpsActual < 1.0
@@ -542,7 +542,7 @@ class TWCSlave:
             ):
                 # Car is not charging and is not reporting an error state, so
                 # try starting charge via car api.
-                self.master.startCarsCharging()
+                self.master.startCarsCharging(self.currentVIN)
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
             bytearray(b"\xFB\xE0")
@@ -832,14 +832,9 @@ class TWCSlave:
                     None if self.getLastVehicle() is None else self.getLastVehicle()
                 )
 
-                if not self.master.getModuleByName(
-                    "TeslaBLE"
-                ) or not self.master.getModuleByName("TeslaBLE").setChargeRate(
+                self.master.getModuleByName("VehiclePriority").setChargeRate(
                     int(desiredAmpsOffered), targetVehicle
-                ):
-                    self.master.getModuleByName("TeslaAPI").setChargeRate(
-                        int(desiredAmpsOffered), targetVehicle
-                    )
+                )
 
             desiredAmpsOffered = self.wiringMaxAmps
 
@@ -847,14 +842,9 @@ class TWCSlave:
             # If we just switched from API to TWC make sure the car is set to a
             # high enough charge rate so it is not limiting the TWC control
             if chargeRateControl == 3 and self.APIcontrol:
-                if not self.master.getModuleByName(
-                    "TeslaBLE"
-                ) or not self.master.getModuleByName("TeslaBLE").setChargeRate(
+                self.master.getModuleByName("VehiclePriority").setChargeRate(
                     self.wiringMaxAmps, self.getLastVehicle()
-                ):
-                    self.master.getModuleByName("TeslaAPI").setChargeRate(
-                        self.wiringMaxAmps, self.getLastVehicle()
-                    )
+                )
                 self.APIcontrol = False
 
             # We can tell the TWC how much power to use in 0.01A increments, but

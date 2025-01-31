@@ -80,6 +80,7 @@ modules_available = [
     "Interface.RS485",
     "Interface.TCP",
     "Policy.Policy",
+    "Vehicle.VehiclePriority",
     "Vehicle.TeslaAPI",
     "Vehicle.TeslaBLE",
     "Vehicle.TeslaMateVehicle",
@@ -255,7 +256,6 @@ def unescape_msg(inmsg: bytearray, msgLen):
 
 def background_tasks_thread(master):
     carapi = master.getModuleByName("TeslaAPI")
-    carble = master.getModuleByName("TeslaBLE")
 
     while True:
         try:
@@ -265,14 +265,7 @@ def background_tasks_thread(master):
                 if task["cmd"] == "applyChargeLimit":
                     carapi.applyChargeLimit(limit=task["limit"])
                 elif task["cmd"] == "charge":
-                    # car_api_charge does nothing if it's been under 60 secs since it
-                    # was last used so we shouldn't have to worry about calling this
-                    # too frequently.
-
-                    # In the new world, we try the BLE command first, and if
-                    # that fails, we try the API
-                    if not carble or not carble.car_api_charge(task["charge"]):
-                        carapi.car_api_charge(task["charge"])
+                    master.getModuleByName("VehiclePriority").car_api_charge(task)
                 elif task["cmd"] == "carApiEmailPassword":
                     carapi.resetCarApiLastErrorTime()
                     carapi.car_api_available(task["email"], task["password"])

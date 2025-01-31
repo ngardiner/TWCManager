@@ -579,9 +579,13 @@ class TeslaAPI:
 
         return True
 
-    def car_api_charge(self, charge):
+    def car_api_charge(self, task):
         # Do not call this function directly.  Call by using background thread:
         # queue_background_task({'cmd':'charge', 'charge':<True/False>})
+
+        charge = None
+        if task:
+            charge = task.get("charge", None)
 
         now = time.time()
         apiResponseDict = {}

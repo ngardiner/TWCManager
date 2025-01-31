@@ -15,7 +15,7 @@ logger = logging.getLogger("\U0001F697 TeslaBLE")
 
 class TeslaBLE:
     binaryPath = None
-    commandTimeout = 10
+    commandTimeout = 5
     config = None
     configConfig = None
     master = None
@@ -48,16 +48,27 @@ class TeslaBLE:
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
 
-    def car_api_charge(self, charge):
-        # This is not very well thought out at all - we'll just loop through
-        # and ask all cars to charge for now
-        for vehicle in self.master.settings["Vehicles"].keys():
-            if charge:
-                self.startCharging(vehicle)
-                return self.pingVehicle(vehicle)
+    def car_api_charge(self, task):
+        # If we know the VIN of the vehicle connected to the TWC Slave, we'll send the command
+        # directly to that vehicle
+        if task.get("vin", None):
+            if task["charge"]:
+                self.startCharging(task["vin"])
+                return self.pingVehicle(task["vin"])
             else:
-                self.stopCharging(vehicle)
-                return self.pingVehicle(vehicle)
+                self.stopCharging(task["vin"])
+                return self.pingVehicle(task["vin"])
+
+        else:
+            # If we don't know the VIN, we send to all vehicles - probably not the best logic for
+            # multi-vehicle installs, but it's equally possible that the TWC doesn't read the VIN.
+            for vehicle in self.master.settings["Vehicles"].keys():
+                if task["charge"]:
+                    self.startCharging(vehicle)
+                    return self.pingVehicle(vehicle)
+                else:
+                    self.stopCharging(vehicle)
+                    return self.pingVehicle(vehicle)
 
     def parseCommandOutput(self, output):
         success = False

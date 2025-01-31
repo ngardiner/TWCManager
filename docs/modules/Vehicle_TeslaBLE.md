@@ -13,7 +13,7 @@ The tesla-control binary can be built for you via the TWCManager Makefile.
 
 ### Installation Steps
 
-  * Update twcmanager to at least vx.xx to introduce Tesla BLE support (you could alternatively do this via the web-based update option)
+  * Update twcmanager to at least vx.xx (update after release) to introduce Tesla BLE support (you could alternatively do this via the web-based update option)
 
 ```make install```
 
@@ -21,7 +21,7 @@ The tesla-control binary can be built for you via the TWCManager Makefile.
 
 ```make tesla-control```
 
-This will download the required golang distribution, and build the tesla-control binary in the default HOME directory, which is ```/home/twcmanager```. You may have an alternate home location that you would like to use, in which case you would specify make HOME=x tesla-control.
+This will download the required golang distribution, and build the tesla-control binary in the default HOME directory, which is ```/home/twcmanager```. You may have an alternate home location that you would like to use, in which case you would specify ```make HOME=/home/$USER tesla-control```.
 
 If you would prefer to build tesla-control yourself, or you are able to install it as part of a binary package distribution, you can skip this step.
 
@@ -44,7 +44,7 @@ Once TWCManager restarts, it will check for the tesla-control command. If this e
 
   * Ensure the vehicle is near to your TWCManager device, and that you have your key card available.
   * Click the Pair with Vehicle button, which will initiate Bluetooth Pairing
-  * Enter the vehicle, tap your card on the dash and accept the peering
+  * Enter the vehicle, tap your card on the card reader location in front of the center console and accept the peering
 
 ### Controlling charge rate using tesla-control
 
