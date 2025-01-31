@@ -1,6 +1,6 @@
 DEPS := git libffi-dev libpq-dev libssl-dev
 WEBDEPS := $(DEPS) lighttpd
-ARCH := $(shell uname -m)
+ARCH := $(shell uname -m | sed s/x86_64/amd64/)
 GODIST := go1.23.4.linux-$(ARCH).tar.gz
 HOME := /home/twcmanager
 SUDO := sudo
@@ -15,6 +15,8 @@ build: deps build_pkg
 docker: deps build_pkg config tesla-control
 webbuild: webdeps build_pkg
 
+arch:
+	echo $(ARCH)
 config:
 	# Create twcmanager user and group
 	$(SUDO) useradd -U -m $(USER) 2>/dev/null; exit 0
