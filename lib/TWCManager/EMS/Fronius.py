@@ -3,7 +3,7 @@ import logging
 import requests
 import time
 
-logger = logging.getLogger("\U000026C5 Fronius")
+logger = logging.getLogger("\U000026c5 Fronius")
 
 
 class Fronius:

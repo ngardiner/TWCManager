@@ -63,7 +63,7 @@ logging.INFO9 = 12
 logging.DEBUG2 = 9
 
 
-logger = logging.getLogger("\u26FD Manager")
+logger = logging.getLogger("\u26fd Manager")
 
 # Define available modules for the instantiator
 # All listed modules will be loaded at boot time
@@ -928,14 +928,14 @@ while True:
             # voltage/kWh report.
             if (
                 master.lastTWCResponseMsg == b""
-                and msg[0:2] != b"\xFB\xE0"
-                and msg[0:2] != b"\xFD\xE0"
-                and msg[0:2] != b"\xFC\xE1"
-                and msg[0:2] != b"\xFB\xE2"
-                and msg[0:2] != b"\xFD\xE2"
-                and msg[0:2] != b"\xFB\xEB"
-                and msg[0:2] != b"\xFD\xEB"
-                and msg[0:2] != b"\xFD\xE0"
+                and msg[0:2] != b"\xfb\xe0"
+                and msg[0:2] != b"\xfd\xe0"
+                and msg[0:2] != b"\xfc\xe1"
+                and msg[0:2] != b"\xfb\xe2"
+                and msg[0:2] != b"\xfd\xe2"
+                and msg[0:2] != b"\xfb\xeb"
+                and msg[0:2] != b"\xfd\xeb"
+                and msg[0:2] != b"\xfd\xe0"
             ):
                 master.lastTWCResponseMsg = msg
 
@@ -1720,10 +1720,10 @@ while True:
                             )
                         )
                         master.getInterfaceModule().send(
-                            bytearray(b"\xFD\xEB")
+                            bytearray(b"\xfd\xeb")
                             + fakeTWCID
                             + kWhPacked
-                            + bytearray(b"\x00\xF0\x00\x00\x00\x00\x00")
+                            + bytearray(b"\x00\xf0\x00\x00\x00\x00\x00")
                         )
                 else:
                     msgMatch = re.search(

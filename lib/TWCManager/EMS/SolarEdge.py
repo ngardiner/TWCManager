@@ -3,7 +3,7 @@ import logging
 import time
 import solaredge_modbus
 
-logger = logging.getLogger("\U000026C5 SolarEdg")
+logger = logging.getLogger("\U000026c5 SolarEdg")
 
 
 class SolarEdge:

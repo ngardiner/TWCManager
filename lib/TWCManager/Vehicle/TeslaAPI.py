@@ -10,7 +10,7 @@ import time
 from urllib.parse import parse_qs
 import jwt
 
-logger = logging.getLogger("\U0001F697 TeslaAPI")
+logger = logging.getLogger("\U0001f697 TeslaAPI")
 
 
 class TeslaAPI:

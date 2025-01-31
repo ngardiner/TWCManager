@@ -1,7 +1,7 @@
 import logging
 import time
 
-logger = logging.getLogger("\U0001F50C RS485")
+logger = logging.getLogger("\U0001f50c RS485")
 
 
 class RS485:

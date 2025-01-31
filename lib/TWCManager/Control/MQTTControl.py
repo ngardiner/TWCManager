@@ -1,6 +1,6 @@
 import logging
 
-logger = logging.getLogger("\U0001F3AE MQTT")
+logger = logging.getLogger("\U0001f3ae MQTT")
 
 
 class MQTTControl:

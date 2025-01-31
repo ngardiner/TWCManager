@@ -2,7 +2,7 @@ import logging
 import requests
 import time
 
-logger = logging.getLogger("\U000026A1 OpenHab")
+logger = logging.getLogger("\U000026a1 OpenHab")
 
 
 class OpenHab:

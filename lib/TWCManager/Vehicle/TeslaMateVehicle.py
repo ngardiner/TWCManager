@@ -5,7 +5,7 @@ import _thread
 import threading
 import time
 
-logger = logging.getLogger("\U0001F697 TeslaMate")
+logger = logging.getLogger("\U0001f697 TeslaMate")
 
 
 class TeslaMateVehicle:

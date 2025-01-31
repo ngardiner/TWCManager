@@ -16,7 +16,7 @@ import time
 import urllib.parse
 import uuid
 
-logger = logging.getLogger("\U0001F3AE HTTP")
+logger = logging.getLogger("\U0001f3ae HTTP")
 
 
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):

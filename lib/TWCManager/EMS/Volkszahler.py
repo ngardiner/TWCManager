@@ -3,7 +3,7 @@ import requests
 import time
 import re
 
-logger = logging.getLogger("\U000026C5 Volkszlr")
+logger = logging.getLogger("\U000026c5 Volkszlr")
 
 
 class Volkszahler:

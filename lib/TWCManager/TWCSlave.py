@@ -4,7 +4,7 @@ import re
 import time
 
 
-logger = logging.getLogger("\u26FD Slave")
+logger = logging.getLogger("\u26fd Slave")
 
 
 class TWCSlave:
@@ -322,7 +322,7 @@ class TWCSlave:
                 self.master.slaveHeartbeatData.append(0x00)
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
-            bytearray(b"\xFD\xE0")
+            bytearray(b"\xfd\xe0")
             + self.master.getFakeTWCID()
             + bytearray(masterID)
             + bytearray(self.master.slaveHeartbeatData)
@@ -545,7 +545,7 @@ class TWCSlave:
                 self.master.startCarsCharging()
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
-            bytearray(b"\xFB\xE0")
+            bytearray(b"\xfb\xe0")
             + self.master.getFakeTWCID()
             + bytearray(self.TWCID)
             + bytearray(self.masterHeartbeatData)

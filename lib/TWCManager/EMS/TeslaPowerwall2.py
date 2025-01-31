@@ -2,7 +2,7 @@
 import logging
 import time
 
-logger = logging.getLogger("\U000026C5 TeslaPwl")
+logger = logging.getLogger("\U000026c5 TeslaPwl")
 
 
 class TeslaPowerwall2:

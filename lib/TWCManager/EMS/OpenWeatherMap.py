@@ -3,7 +3,7 @@ import logging
 import requests
 import time
 
-logger = logging.getLogger("\U000026C5 OpenWthr")
+logger = logging.getLogger("\U000026c5 OpenWthr")
 
 
 class OpenWeatherMap:

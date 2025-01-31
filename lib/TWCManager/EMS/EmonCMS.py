@@ -1,6 +1,6 @@
 import logging
 
-logger = logging.getLogger("\U000026A1 EmonCMS")
+logger = logging.getLogger("\U000026a1 EmonCMS")
 
 
 class EmonCMS:
