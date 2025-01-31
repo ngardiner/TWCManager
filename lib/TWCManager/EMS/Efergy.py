@@ -2,7 +2,7 @@
 import time
 import logging
 
-logger = logging.getLogger("\U000026A1 Efergy")
+logger = logging.getLogger("\U000026a1 Efergy")
 
 
 class Efergy:

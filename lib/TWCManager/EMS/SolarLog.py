@@ -1,7 +1,7 @@
 import logging
 import time
 
-logger = logging.getLogger("\U000026C5 SolarLog")
+logger = logging.getLogger("\U000026c5 SolarLog")
 
 
 class SolarLog:

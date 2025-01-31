@@ -2,7 +2,7 @@
 import logging
 import time
 
-logger = logging.getLogger("\U000026C5 Enphase")
+logger = logging.getLogger("\U000026c5 Enphase")
 
 
 class Enphase:

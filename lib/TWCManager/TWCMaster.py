@@ -14,7 +14,7 @@ import random
 import requests
 import bisect
 
-logger = logging.getLogger("\u26FD Master")
+logger = logging.getLogger("\u26fd Master")
 
 
 class TWCMaster:
@@ -439,7 +439,7 @@ class TWCMaster:
         if now >= self.lastkWhPoll + 60:
             for slaveTWC in self.getSlaveTWCs():
                 self.getInterfaceModule().send(
-                    bytearray(b"\xFB\xEB")
+                    bytearray(b"\xfb\xeb")
                     + self.TWCID
                     + slaveTWC.TWCID
                     + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -545,11 +545,11 @@ class TWCMaster:
     def getVehicleVIN(self, slaveID, part):
         prefixByte = None
         if int(part) == 0:
-            prefixByte = bytearray(b"\xFB\xEE")
+            prefixByte = bytearray(b"\xfb\xee")
         if int(part) == 1:
-            prefixByte = bytearray(b"\xFB\xEF")
+            prefixByte = bytearray(b"\xfb\xef")
         if int(part) == 2:
-            prefixByte = bytearray(b"\xFB\xF1")
+            prefixByte = bytearray(b"\xfb\xf1")
 
         if prefixByte:
             self.getInterfaceModule().send(
@@ -1245,7 +1245,7 @@ class TWCMaster:
         # linkready1/2 and if a master sees slave linkready, it will start sending
         # the slave master heartbeat once per second and the two are then connected.
         self.getInterfaceModule().send(
-            bytearray(b"\xFC\xE1")
+            bytearray(b"\xfc\xe1")
             + self.TWCID
             + self.masterSign
             + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -1271,7 +1271,7 @@ class TWCMaster:
         # no longer sends the global linkready2 message (or if it does,
         # they're quite rare so I haven't seen them).
         self.getInterfaceModule().send(
-            bytearray(b"\xFB\xE2")
+            bytearray(b"\xfb\xe2")
             + self.TWCID
             + self.masterSign
             + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -1287,10 +1287,10 @@ class TWCMaster:
         # LED on. Manual says this means "The networked Wall Connectors have
         # different maximum current capabilities".
         msg = (
-            bytearray(b"\xFD\xE2")
+            bytearray(b"\xfd\xe2")
             + self.TWCID
             + self.slaveSign
-            + bytearray(b"\x1F\x40\x00\x00\x00\x00\x00\x00")
+            + bytearray(b"\x1f\x40\x00\x00\x00\x00\x00\x00")
         )
         if self.protocolVersion == 2:
             msg += bytearray(b"\x00\x00")
@@ -1301,7 +1301,7 @@ class TWCMaster:
         # This function will loop through each of the Slave TWCs, and send them the start command.
         for slaveTWC in self.getSlaveTWCs():
             self.getInterfaceModule().send(
-                bytearray(b"\xFC\xB1")
+                bytearray(b"\xfc\xb1")
                 + self.TWCID
                 + slaveTWC.TWCID
                 + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -1313,7 +1313,7 @@ class TWCMaster:
         for slaveTWC in self.getSlaveTWCs():
             if (not subTWC) or (subTWC == slaveTWC.TWCID):
                 self.getInterfaceModule().send(
-                    bytearray(b"\xFC\xB2")
+                    bytearray(b"\xfc\xb2")
                     + self.TWCID
                     + slaveTWC.TWCID
                     + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")

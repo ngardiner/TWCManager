@@ -2,7 +2,7 @@ import logging
 import time
 
 
-logger = logging.getLogger("\u26FD Policy")
+logger = logging.getLogger("\u26fd Policy")
 
 
 class Policy:

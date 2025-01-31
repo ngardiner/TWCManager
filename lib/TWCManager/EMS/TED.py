@@ -5,7 +5,7 @@ import requests
 import time
 
 
-logger = logging.getLogger("\U000026C5 TED")
+logger = logging.getLogger("\U000026c5 TED")
 
 
 class TED:

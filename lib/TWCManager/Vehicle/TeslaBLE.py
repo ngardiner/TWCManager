@@ -10,7 +10,7 @@ import subprocess
 from threading import Timer
 import time
 
-logger = logging.getLogger("\U0001F697 TeslaBLE")
+logger = logging.getLogger("\U0001f697 TeslaBLE")
 
 
 class TeslaBLE:

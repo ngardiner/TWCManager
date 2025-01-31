@@ -1,6 +1,6 @@
 import logging
 
-logger = logging.getLogger("\U000026C5 IotaWatt")
+logger = logging.getLogger("\U000026c5 IotaWatt")
 
 
 class IotaWatt:

@@ -5,7 +5,7 @@ import logging
 import time
 
 
-logger = logging.getLogger("\U0001F4CA HASS")
+logger = logging.getLogger("\U0001f4ca HASS")
 
 
 class HASSStatus:

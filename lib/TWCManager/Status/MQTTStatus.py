@@ -5,7 +5,7 @@ import logging
 import time
 
 
-logger = logging.getLogger("\U0001F4CA MQTT")
+logger = logging.getLogger("\U0001f4ca MQTT")
 
 
 class MQTTStatus:

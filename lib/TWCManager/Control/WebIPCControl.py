@@ -249,13 +249,13 @@ class WebIPCControl:
                                 else 13
                             ),
                         )
-                        if (twcMsg[0:2] == b"\xFC\x19") or (twcMsg[0:2] == b"\xFC\x1A"):
+                        if (twcMsg[0:2] == b"\xfc\x19") or (twcMsg[0:2] == b"\xfc\x1a"):
                             logger.info(
                                 "\n*** ERROR: Web interface requested sending command:\n"
                                 + self.master.hex_str(twcMsg)
                                 + "\nwhich could permanently disable the TWC.  Aborting.\n"
                             )
-                        elif twcMsg[0:2] == b"\xFB\xE8":
+                        elif twcMsg[0:2] == b"\xfb\xe8":
                             logger.info(
                                 "\n*** ERROR: Web interface requested sending command:\n"
                                 + self.master.hex_str(twcMsg)

@@ -65,7 +65,7 @@ class TWCProtocol:
 
         elif packet["Command"] == "GetFirmwareVersion":
             msg = (
-                bytearray(b"\xFB\x1B")
+                bytearray(b"\xfb\x1b")
                 + packet["SenderID"]
                 + packet["RecieverID"]
                 + bytearray(b"\x00\x00\xa0\x00\x00\x00\x00")
@@ -77,7 +77,7 @@ class TWCProtocol:
 
         elif packet["Command"] == "SlaveHeartbeat":
             msg = (
-                bytearray(b"\xFD\xE0")
+                bytearray(b"\xfd\xe0")
                 + packet["SenderID"]
                 + packet["RecieverID"]
                 + bytearray(b"\x00\x00\xa0\x00\x00\x00\x00")
@@ -89,7 +89,7 @@ class TWCProtocol:
 
         elif packet["Command"] == "SlaveLinkready":
             msg = (
-                bytearray(b"\xFD\xE2")
+                bytearray(b"\xfd\xe2")
                 + packet["SenderID"]
                 + packet["Sign"]
                 + packet["Amps"]
