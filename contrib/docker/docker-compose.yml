@@ -5,6 +5,7 @@ services:
     image: twcmanager/twcmanager:latest
     restart: always
     devices:
+      - "/dev/bus/usb:/dev/bus/usb"
       - "/dev/ttyUSB0:/dev/ttyUSB0"
     ports:
       - 80:80
@@ -14,3 +15,9 @@ services:
     volumes:
       - /etc/twcmanager:/etc/twcmanager
       - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket
+    cap_add:
+      - CAP_NET_ADMIN  # Required for managing network interfaces (Bluetooth uses these)
+      - CAP_NET_RAW    # Required for raw network access (Bluetooth uses this)
