@@ -1,7 +1,8 @@
 DEPS := git libffi-dev libpq-dev libssl-dev
 WEBDEPS := $(DEPS) lighttpd
-ARCH := $(shell uname -m | sed s/x86_64/amd64/ | sed s/aarch64/arm64/)
-GODIST := go1.23.4.linux-$(ARCH).tar.gz
+ARCH := $(shell uname -m)
+GOARCH := $(shell echo $(ARCH) | sed s/x86_64/amd64/ | sed s/aarch64/arm64/ | sed s/armv7l/armv6l/)
+GODIST := go1.23.4.linux-$(GOARCH).tar.gz
 HOME := /home/twcmanager
 SUDO := sudo
 USER := twcmanager
