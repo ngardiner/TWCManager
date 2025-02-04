@@ -219,8 +219,8 @@ class Policy:
         # If we are not checking green energy already but we need to, queue that
         # as well.
         if bgt is not "checkGreenEnergy":
-            alwaysPoll = self.config.get("policy",{}).get("alwaysPollEMS", False)
-            maxAmps = self.config.get("config",{}).get("maxAmpsAllowedFromGrid", None)
+            alwaysPoll = self.config.get("policy", {}).get("alwaysPollEMS", False)
+            maxAmps = self.config.get("config", {}).get("maxAmpsAllowedFromGrid", None)
             if alwaysPoll or maxAmps or self.policyIsGreen():
                 self.master.queue_background_task({"cmd": "checkGreenEnergy"})
 
@@ -301,7 +301,10 @@ class Policy:
         #
         # If value refers to a function, execute the function and capture the
         # output
-        if value in ["getMaxAmpsToDivideGreenEnergy()", "getMaxAmpsForTargetGridUsage()"]:
+        if value in [
+            "getMaxAmpsToDivideGreenEnergy()",
+            "getMaxAmpsForTargetGridUsage()",
+        ]:
             return self.master.getMaxAmpsForTargetGridUsage()
         elif value == "checkScheduledCharging()":
             return self.master.checkScheduledCharging()

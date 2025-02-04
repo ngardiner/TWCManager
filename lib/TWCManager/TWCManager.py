@@ -368,10 +368,8 @@ def check_green_energy():
     # Set max amps iff charge_amps isn't specified on the policy.
     if master.getModuleByName("Policy").policyIsGreen():
         master.setMaxAmpsToDivideAmongSlaves(master.getMaxAmpsForTargetGridUsage())
-        master.setLimitAmpsToDivideAmongSlaves(
-            config["config"]["wiringMaxAmpsAllTWCs"]
-        )
-    elif config.get("config",{}).get("maxAmpsAllowedFromGrid", None):
+        master.setLimitAmpsToDivideAmongSlaves(config["config"]["wiringMaxAmpsAllTWCs"])
+    elif config.get("config", {}).get("maxAmpsAllowedFromGrid", None):
         master.setLimitAmpsToDivideAmongSlaves(
             master.getMaxAmpsForTargetGridUsage(
                 config["config"]["maxAmpsAllowedFromGrid"]
