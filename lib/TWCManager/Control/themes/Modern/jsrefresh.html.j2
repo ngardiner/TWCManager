@@ -48,7 +48,7 @@
                     $('#surplusAmps').html(surplusAmps.toFixed(2));
 
                     // Change the state of the Charge Now button based on Charge Policy
-                    if (json["currentPolicy"] == "Charge Now" || json["currentPolicy"] == "Charge Now with Grid power limit") {
+                    if (json["currentPolicy"] == "Charge Now") {
                         if ($("#start_chargenow").length) {
                             $("#start_chargenow").html("Update Charge Now");
                             $("#cancel_chargenow").prop("disabled", false);

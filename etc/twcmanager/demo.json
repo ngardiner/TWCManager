@@ -343,8 +343,6 @@
       #   "match": [ "tm_hour", "tm_hour", "settings.hourResumeTrackGreenEnergy" ],
       #   "condition": [ "gte", "lt", "lte" ],
       #   "value": [ 6, 20, "tm_hour" ],
-      #   "charge_amps": "getMaxAmpsToDivideGreenEnergy()",
-      #   "background_task": "checkGreenEnergy",
       #   "charge_limit": "config.greenEnergyLimit" },
 
       # { "name": "Non Scheduled Charging",

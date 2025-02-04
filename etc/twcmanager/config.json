@@ -32,30 +32,11 @@
         # wiringMaxAmpsPerTWC = 50 * 0.8 = 40 and wiringMaxAmpsAllTWCs = 40 + 40 = 80.
         "wiringMaxAmpsPerTWC": 6,
 
-
-        # If you what to limit the power drawn from the Grid you need to set this
-        # maxAmpsAllowedFromGrid and extend the policy you what it to apply, i.e.:
-        # { "name": "Charge Now with Grid power limit",
-        #   "match": [
-        #       "settings.chargeNowAmps",
-        #       "settings.chargeNowTimeEnd",
-        #       "settings.chargeNowTimeEnd",
-        #   ],
-        #   "condition": ["gt", "gt", "gt"],
-        #   "value": [0, 0, "now"],
-        #   "background_task": "checkMaxPowerFromGrid",
-        #   "charge_amps": "settings.chargeNowAmps",
-        #   "charge_limit": "config.chargeNowLimit"},
-
-        # { "name": "Scheduled Charging with Grid power limit",
-        #   "match": [ "checkScheduledCharging()" ],
-        #   "condition": [ "eq" ],
-        #   "value": [ 1 ],
-        #   "background_task": "checkMaxPowerFromGrid",
-        #   "charge_amps": "settings.scheduledAmpsMax",
-        #   "charge_limit": "config.scheduledLimit"},
-
-        "maxAmpsAllowedFromGrid": 16,
+        # If you would like to limit the overall grid draw (chargers and house combined),
+        # set maxAmpsAllowedFromGrid to the maximum number of amps you want to draw from
+        # the grid.  This is useful if you have a limited power connection to your house
+        # and you want to make sure you don't exceed it.
+        #"maxAmpsAllowedFromGrid": 6,
 
 
         # https://teslamotorsclub.com/tmc/threads/model-s-gen2-charger-efficiency-testing.78740/#post-1844789
@@ -333,9 +314,6 @@
       # By default, EMS modules are polled only when the data is needed
       # to track green energy. If you would like to always poll EMS for
       # display purposes, uncomment this.
-      #
-      # This will not work for custom policies which specify their own
-      # background task.
       #"alwaysPollEMS": true,
 
       "engine":{
@@ -349,25 +327,6 @@
         #
         # They should primarily be used to abort charging when necessary.
         "emergency":[
-         { "name": "Charge Now with Grid power limit",
-           "match": [
-               "settings.chargeNowAmps",
-               "settings.chargeNowTimeEnd",
-               "settings.chargeNowTimeEnd",
-           ],
-           "condition": ["gt", "gt", "gt"],
-           "value": [0, 0, "now"],
-           "background_task": "checkMaxPowerFromGrid",
-           "charge_amps": "settings.chargeNowAmps",
-           "charge_limit": "config.chargeNowLimit"},
-
-         { "name": "Scheduled Charging with Grid power limit",
-           "match": [ "checkScheduledCharging()" ],
-           "condition": [ "eq" ],
-           "value": [ 1 ],
-           "background_task": "checkMaxPowerFromGrid",
-           "charge_amps": "settings.scheduledAmpsMax",
-           "charge_limit": "config.scheduledLimit"},
         ],
         # Rules in the before section here are evaluated after the Charge Now rule
         "before":[
@@ -431,8 +390,6 @@
       #   "match": [ "tm_hour", "tm_hour", "settings.hourResumeTrackGreenEnergy" ],
       #   "condition": [ "gte", "lt", "lte" ],
       #   "value": [ 6, 20, "tm_hour" ],
-      #   "charge_amps": "getMaxAmpsToDivideGreenEnergy()",
-      #   "background_task": "checkGreenEnergy",
       #   "charge_limit": "config.greenEnergyLimit" },
 
       # { "name": "Non Scheduled Charging",
