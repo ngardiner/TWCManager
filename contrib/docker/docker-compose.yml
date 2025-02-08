@@ -10,14 +10,13 @@ services:
     ports:
       - 80:80
       - 8080:8080
-#    environment:
+    environment:
 #      - TZ=Australia/Sydney
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket
     volumes:
       - /etc/twcmanager:/etc/twcmanager
       - /etc/localtime:/etc/localtime:ro
       - /run/dbus:/run/dbus:ro
-    environment:
-      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket
     cap_add:
       - CAP_NET_ADMIN  # Required for managing network interfaces (Bluetooth uses these)
       - CAP_NET_RAW    # Required for raw network access (Bluetooth uses this)
