@@ -45,7 +45,10 @@ class TeslaBLE:
 
         # Check that binary exists, otherwise unload
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
-            logger.log(logging.INFO3, "Unable to find tesla-control binary in any of the expected locations. Unloading module.")
+            logger.log(
+                logging.INFO3,
+                "Unable to find tesla-control binary in any of the expected locations. Unloading module.",
+            )
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
 
@@ -113,7 +116,10 @@ class TeslaBLE:
                 stderr=subprocess.PIPE,
             )
         except PermissionError:
-            logger.log(logging.INFO3, "Unable to execute tesla-control binary due to permissions or capabilities not being set. Unloading module.")
+            logger.log(
+                logging.INFO3,
+                "Unable to execute tesla-control binary due to permissions or capabilities not being set. Unloading module.",
+            )
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
 
