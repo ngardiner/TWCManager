@@ -47,7 +47,10 @@ class TeslaBLE:
 
         # Check that binary exists, otherwise unload
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
-            logger.log(logging.INFO3, "Unable to find tesla-control binary in any of the expected locations. Unloading module.")
+            logger.log(
+                logging.INFO3,
+                "Unable to find tesla-control binary in any of the expected locations. Unloading module.",
+            )
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
 
@@ -86,7 +89,8 @@ class TeslaBLE:
         if self.isDocker():
             command_string.insert(0, "nsenter --net=/rootns/net ")
 
-        result = subprocess.run(command_string,
+        result = subprocess.run(
+            command_string,
             stdout=subprocess.PIPE,
         )
         self.closeFile()
@@ -122,7 +126,10 @@ class TeslaBLE:
                 stderr=subprocess.PIPE,
             )
         except PermissionError:
-            logger.log(logging.INFO3, "Unable to execute tesla-control binary due to permissions or capabilities not being set. Unloading module.")
+            logger.log(
+                logging.INFO3,
+                "Unable to execute tesla-control binary due to permissions or capabilities not being set. Unloading module.",
+            )
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
 
@@ -247,6 +254,8 @@ class TeslaBLE:
         if self.isDockerCached is not None:
             return self.isDockerCached
         else:
-            cgroup = Path('/proc/self/cgroup')
-            self.isDockerCached = Path('/.dockerenv').is_file() or (cgroup.is_file() and 'docker' in cgroup.read_text())
+            cgroup = Path("/proc/self/cgroup")
+            self.isDockerCached = Path("/.dockerenv").is_file() or (
+                cgroup.is_file() and "docker" in cgroup.read_text()
+            )
             return self.isDockerCached
