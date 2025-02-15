@@ -5,6 +5,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
 import logging
 import os
+from pathlib import Path
 import shutil
 import subprocess
 from threading import Timer
@@ -18,6 +19,7 @@ class TeslaBLE:
     commandTimeout = 10
     config = None
     configConfig = None
+    isDockerCached = None
     master = None
     pipe = None
     pipeName = "/tmp/ble_data"
@@ -69,18 +71,22 @@ class TeslaBLE:
 
     def peerWithVehicle(self, vin):
         self.sendPublicKey(vin)
-        result = subprocess.run(
-            [
-                self.binaryPath,
-                "-debug",
-                "-ble",
-                "-vin",
-                vin,
-                "add-key-request",
-                self.pipeName,
-                "owner",
-                "cloud_key",
-            ],
+        command_string = [
+            self.binaryPath,
+            "-debug",
+            "-ble",
+            "-vin",
+            vin,
+            "add-key-request",
+            self.pipeName,
+            "owner",
+            "cloud_key",
+        ]
+
+        if self.isDocker():
+            command_string.insert(0, "nsenter --net=/rootns/net ")
+
+        result = subprocess.run(command_string,
             stdout=subprocess.PIPE,
         )
         self.closeFile()
@@ -102,6 +108,9 @@ class TeslaBLE:
             self.pipeName,
             command,
         ]
+        if self.isDocker():
+            command_string.insert(0, "nsenter --net=/rootns/net ")
+
         if args:
             command_string.append(str(args))
 
@@ -233,3 +242,11 @@ class TeslaBLE:
         # Called by TWCMaster when settings are read/updated
         self.scanForVehicles()
         return True
+
+    def isDocker(self):
+        if self.isDockerCached is not None:
+            return self.isDockerCached
+        else:
+            cgroup = Path('/proc/self/cgroup')
+            self.isDockerCached = Path('/.dockerenv').is_file() or (cgroup.is_file() and 'docker' in cgroup.read_text())
+            return self.isDockerCached

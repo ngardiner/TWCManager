@@ -16,7 +16,11 @@ services:
     volumes:
       - /etc/twcmanager:/etc/twcmanager
       - /etc/localtime:/etc/localtime:ro
+      - /proc/1/ns/:/rootns
       - /run/dbus:/run/dbus:ro
+    # Note: I recommend removing the following if there's no chance that
+    # you will need bluetooth (BLE) access
     cap_add:
       - CAP_NET_ADMIN  # Required for managing network interfaces (Bluetooth uses these)
       - CAP_NET_RAW    # Required for raw network access (Bluetooth uses this)
+      - CAP_SYS_ADMIN  # Needed for Bluetooth HCI access
