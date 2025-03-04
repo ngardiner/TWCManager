@@ -38,7 +38,7 @@ class TeslaMateVehicle:
         "time_to_full_charge": ["timeToFullCharge", lambda a: float(a)],
         "charger_pilot_current": ["availableCurrent", lambda a: int(a)],
         "charger_actual_current": ["actualCurrent", lambda a: int(a)],
-        "charger_phases": ["phases", lambda a: int(a)],
+        "charger_phases": ["phases", lambda a: int(a) if a else 0],
         "charger_voltage": ["voltage", lambda a: int(a)],
         "charging_state": ["chargingState", lambda a: str(a)],
     }
