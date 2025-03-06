@@ -629,11 +629,11 @@ class TeslaAPI:
             if not vehicle.ready():
                 continue
 
-            if (
-                vehicle.update_charge()
-                and vehicle.batteryLevel < self.minChargeLevel
-                and not charge
-            ):
+            if not vehicle.update_charge() or not vehicle.update_location():
+                result = "error"
+                continue
+
+            if vehicle.batteryLevel < self.minChargeLevel and not charge:
                 # If the vehicle's charge state is lower than the configured minimum,
                 #   don't stop it from charging, even if we'd otherwise not charge.
                 continue
@@ -644,10 +644,6 @@ class TeslaAPI:
             self.updateLastStartOrStopChargeTime()
 
             # only start/stop charging cars parked at home.
-
-            if vehicle.update_location() is False:
-                result = "error"
-                continue
 
             if not vehicle.atHome:
                 # Vehicle is not at home, so don't change its charge state.
@@ -662,6 +658,27 @@ class TeslaAPI:
                     vehicle.stopAskingToStartCharging = True
                     message += "  Stop asking to start charging."
                 logger.info(message)
+                continue
+
+            if vehicle.chargingState in ["Disconnected", "Complete"]:
+                # Sending a command to a disconnected or complete vehicle is
+                # useless.
+                logger.info(
+                    vehicle.name
+                    + " is not able to charge.  Do not "
+                    + startOrStop
+                    + " charge."
+                )
+                vehicle.stopAskingToStartCharging = True
+                continue
+
+            if vehicle.chargingState == "Charging" and charge:
+                # Don't start charging if car is already charging.
+                logger.info(
+                    vehicle.name
+                    + " is already charging.  Do not start charge."
+                )
+                vehicle.stopAskingToStartCharging = True
                 continue
 
             # If you send charge_start/stop less than 1 second after calling
@@ -940,7 +957,7 @@ class TeslaAPI:
                 # We're removing any applied limit, provided it hasn't been manually changed
                 #
                 # If lastApplied == -1, the manual-change path is always selected.
-                if wasAtHome and vehicle.chargeLimit == lastApplied:
+                if wasAtHome and vehicle.chargeLimit == lastApplied and vehicle.chargeLimit != outside:
                     if vehicle.apply_charge_limit(outside):
                         logger.log(
                             logging.INFO2,

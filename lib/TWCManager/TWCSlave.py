@@ -621,6 +621,15 @@ class TWCSlave:
             self.master.queue_background_task({"cmd": "checkDeparture"}, 20 * 60)
             self.master.queue_background_task({"cmd": "checkDeparture"}, 45 * 60)
 
+            # If the drop-off was an expected completion, don't restart
+            lastVehicle = self.getLastVehicle()
+            if (lastVehicle is not None and
+                lastVehicle.chargingState is "Charging" and
+                lastVehicle.timeToFullCharge * 60 <= 5
+            ):
+                lastVehicle.stopAskingToStartCharging = True
+
+
         # Keep track of the amps the slave is actually using and the last time it
         # changed by more than 0.8A.
         # Also update self.reportedAmpsActualSignificantChangeMonitor if it's
