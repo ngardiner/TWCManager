@@ -675,8 +675,7 @@ class TeslaAPI:
             if vehicle.chargingState == "Charging" and charge:
                 # Don't start charging if car is already charging.
                 logger.info(
-                    vehicle.name
-                    + " is already charging.  Do not start charge."
+                    vehicle.name + " is already charging.  Do not start charge."
                 )
                 vehicle.stopAskingToStartCharging = True
                 continue
@@ -957,7 +956,11 @@ class TeslaAPI:
                 # We're removing any applied limit, provided it hasn't been manually changed
                 #
                 # If lastApplied == -1, the manual-change path is always selected.
-                if wasAtHome and vehicle.chargeLimit == lastApplied and vehicle.chargeLimit != outside:
+                if (
+                    wasAtHome
+                    and vehicle.chargeLimit == lastApplied
+                    and vehicle.chargeLimit != outside
+                ):
                     if vehicle.apply_charge_limit(outside):
                         logger.log(
                             logging.INFO2,
