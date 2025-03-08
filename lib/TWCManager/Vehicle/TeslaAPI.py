@@ -1336,6 +1336,9 @@ class CarApiVehicle:
 
     errorCount = 0
     lastErrorTime = 0
+    lastVehicleStatusTime = 0
+    lastVehicleAwakeTime = 0
+    lastVehicleAwakeState = False
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
     statusDeferral = 0
@@ -1432,14 +1435,20 @@ class CarApiVehicle:
         )
         return False
 
-    # Permits opportunistic API requests
     def is_awake(self):
         if self.syncSource == "TeslaAPI":
+            now = time.time()
+            # Don't check more often than every 2 minutes
+            if now - self.lastVehicleAwakeTime < 120:
+                return self.lastVehicleAwakeState
             url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
             (result, response) = self.get_car_api(
                 url, checkReady=False, provesOnline=False
             )
-            return result and response.get("state", "") == "online"
+            awakeState = result and response.get("state", "") == "online"
+            self.lastVehicleAwakeState = awakeState
+            self.lastVehicleAwakeTime = now
+            return awakeState
         else:
             return (
                 self.syncState == "online"
