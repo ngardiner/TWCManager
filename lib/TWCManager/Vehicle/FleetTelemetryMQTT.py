@@ -52,15 +52,15 @@ class FleetTelemetryMQTT(TelmetryBase):
         if len(topic) > 3 and topic[2] == "v":
             if topic[3] == "Gear":
                 if payload in (
-                    "ShiftStateR",
-                    "ShiftStateN",
-                    "ShiftStateD",
-                    "ShiftStateSNA",
+                    "R",
+                    "N",
+                    "D",
                 ):
                     self.applyDataToVehicle(topic[1], "syncState", "driving")
                 elif syncState == "driving":
                     self.applyDataToVehicle(topic[1], "syncState", "online")
             elif topic[3] == "DetailedChargeState":
+                self.applyDataToVehicle(topic[1], topic[3], payload)
                 if payload == "DetailedChargeStateCharging":
                     self.applyDataToVehicle(topic[1], "syncState", "charging")
                 elif syncState == "charging":
