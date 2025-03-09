@@ -1083,17 +1083,24 @@ class TWCMaster:
         # Removes a module from the modules dict
         # This ensures we do not continue to call the module if it is
         # inoperable
+        deleted = False
         self.releasedModules.append(module)
         if self.modules.get(module, None):
             del self.modules[module]
+            deleted = True
 
+        # Remove from python sys.modules as well
         fullname = path + "." + module
         if modules.get(fullname, None):
             del modules[fullname]
+            deleted = True
 
-        logger.log(
-            logging.INFO7, "Released module %s", module, extra={"colored": "red"}
-        )
+        if deleted:
+            logger.log(
+                logging.INFO7, "Released module %s", module, extra={"colored": "red"}
+            )
+        else:
+            logger.warning("Tried to released module %s that was not loaded", module)
 
     def removeNormalChargeLimit(self, ID):
         if "chargeLimits" in self.settings and str(ID) in self.settings["chargeLimits"]:
