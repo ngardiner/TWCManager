@@ -43,7 +43,7 @@ class TeslaMateVehicle(TelmetryBase):
         self.__db_name = self.configModule.get("db_name", None)
         self.__db_pass = self.configModule.get("db_pass", None)
         self.__db_user = self.configModule.get("db_user", None)
-        self.syncTokens = self.configTeslaMate.get("syncTokens", False)
+        self.syncTokens = self.configModule.get("syncTokens", False)
 
         # If we're set to sync the auth tokens from the database, do this at startup
         if self.syncTokens:
