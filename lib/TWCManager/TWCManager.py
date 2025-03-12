@@ -83,6 +83,7 @@ modules_available = [
     "Vehicle.TeslaAPI",
     "Vehicle.TeslaBLE",
     "Vehicle.TeslaMateVehicle",
+    "Vehicle.FleetTelemetryMQTT",
     "Control.WebIPCControl",
     "Control.HTTPControl",
     "Control.MQTTControl",

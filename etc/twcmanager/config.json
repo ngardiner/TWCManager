@@ -735,6 +735,14 @@
         }
     },
     "vehicle": {
+        "teslaFleetTelemetryMQTT": {
+          "enabled": false,
+          "syncTelemetry": false,
+          "mqtt_host": "192.168.1.1",
+          "mqtt_user": "mqttuser",
+          "mqtt_pass": "mqttpass",
+          "mqtt_prefix": "telemetry"
+        },
         "TeslaMate": {
             "enabled": false,
             "syncTokens": false,
