@@ -1734,7 +1734,14 @@ while True:
                             % (senderID[0], senderID[1])
                         )
                         continue
-
+                    
+                    # Publish Lifetime kWh Value via Status modules
+                    # with this in any scenario ,including fakeMaster = 2, MQTT/HASS will get Status update
+                    for module in master.getModulesByType("Status"):
+                        module["ref"].setStatus(
+                            senderID, "lifetime_kwh", "lifetimekWh", kWhCounter, "kWh"
+                        )
+                    
                     logger.info(
                         "VRS %02X%02X: %dkWh %dV %dV %dV"
                         % (
