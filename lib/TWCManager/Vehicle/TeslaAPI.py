@@ -1434,7 +1434,9 @@ class CarApiVehicle:
 
     # Permits opportunistic API requests
     def is_awake(self):
-        if self.syncSource == "TeslaAPI":
+        if self.syncSource == "TeslaAPI" or self.syncTimestamp < (
+            time.time() - self.syncTimeout / 4
+        ):
             url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
             (result, response) = self.get_car_api(
                 url, checkReady=False, provesOnline=False
