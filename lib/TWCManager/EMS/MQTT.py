@@ -100,11 +100,11 @@ class MQTT:
 
         if message.topic == self.__topicConsumption:
             self.consumedW = payload
-            logger.log(logging.INFO3, "MQTT EMS Consumption Value updated")
+            logger.log(logging.INFO3, f"MQTT EMS Consumption Value updated to {payload}")
 
         if message.topic == self.__topicGeneration:
             self.generatedW = payload
-            logger.log(logging.INFO3, "MQTT EMS Generation Value updated")
+            logger.log(logging.INFO3, f"MQTT EMS Generation Value updated to {payload}")
 
     def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
