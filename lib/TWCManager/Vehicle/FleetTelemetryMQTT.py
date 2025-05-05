@@ -47,24 +47,26 @@ class FleetTelemetryMQTT(TelmetryBase):
             return
 
         syncState = (
-            self.vehicles[topic[1]].syncState if self.vehicles.get(topic[1]) else ""
+            self.vehicles[topic[1]].syncState if self.vehicles.get(topic[1]) else None
         )
+        newSyncState = None
         if len(topic) > 3 and topic[2] == "v":
+            newSyncState = "online"
             if topic[3] == "Gear":
                 if payload in (
                     "R",
                     "N",
                     "D",
                 ):
-                    self.applyDataToVehicle(topic[1], "syncState", "driving")
+                    newSyncState = "driving"
                 elif syncState == "driving":
-                    self.applyDataToVehicle(topic[1], "syncState", "online")
+                    syncState = None
             elif topic[3] == "DetailedChargeState":
                 self.applyDataToVehicle(topic[1], topic[3], payload)
                 if payload == "DetailedChargeStateCharging":
-                    self.applyDataToVehicle(topic[1], "syncState", "charging")
+                    newSyncState = "charging"
                 elif syncState == "charging":
-                    self.applyDataToVehicle(topic[1], "syncState", "online")
+                    syncState = None
             elif topic[3] == "Location" and isinstance(payload, dict):
                 if payload.get("latitude"):
                     self.applyDataToVehicle(topic[1], "latitude", payload["latitude"])
@@ -74,10 +76,13 @@ class FleetTelemetryMQTT(TelmetryBase):
                 self.applyDataToVehicle(topic[1], topic[3], payload)
         elif len(topic) > 2 and topic[2] == "connectivity":
             status = payload.get("Status")
-            if status == "CONNECTED" and syncState not in (
-                "driving",
-                "charging",
-            ):
-                self.applyDataToVehicle(topic[1], "syncState", "online")
+            if status == "CONNECTED":
+                newSyncState = "online"
             elif status == "DISCONNECTED":
-                self.applyDataToVehicle(topic[1], "syncState", "offline")
+                newSyncState = "offline"
+        if (
+            newSyncState
+            and syncState != newSyncState
+            and not (newSyncState == "online" and syncState in ("driving", "charging"))
+        ):
+            self.applyDataToVehicle(topic[1], "syncState", newSyncState)
