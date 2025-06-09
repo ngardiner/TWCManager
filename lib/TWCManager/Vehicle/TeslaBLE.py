@@ -89,7 +89,7 @@ class TeslaBLE:
         if self.isDocker():
             command_string.insert(0, "nsenter --net=/rootns/net ")
 
-        result = subprocess.run(
+        ret = subprocess.run(
             command_string,
             stdout=subprocess.PIPE,
         )
