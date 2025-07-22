@@ -49,6 +49,7 @@ class TeslaAPI:
     params = None
     __password = None
     refreshURL = "https://auth.tesla.com/oauth2/v3/token"
+    fleetRefreshURL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
     __resp = None
     session = None
 
@@ -126,10 +127,15 @@ class TeslaAPI:
             "refresh_token": self.getCarApiRefreshToken(),
             "scope": "offline_access",
         }
+        myRefreshURL = (
+            self.refreshURL
+            if self.refreshClientID == "ownerapi"
+            else self.fleetRefreshURL
+        )
         req = None
         now = time.time()
         try:
-            req = requests.post(self.refreshURL, headers=headers, json=data)
+            req = requests.post(myRefreshURL, headers=headers, json=data)
             logger.log(logging.INFO2, "Car API request" + str(req))
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
