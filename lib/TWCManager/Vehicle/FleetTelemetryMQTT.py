@@ -57,6 +57,9 @@ class FleetTelemetryMQTT(TelmetryBase):
                     "R",
                     "N",
                     "D",
+                    "ShiftStateR",
+                    "ShiftStateN",
+                    "ShiftStateD",
                 ):
                     newSyncState = "driving"
                 elif syncState == "driving":
