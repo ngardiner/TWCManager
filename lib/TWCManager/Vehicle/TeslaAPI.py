@@ -17,8 +17,8 @@ class TeslaAPI:
     __apiChallenge = None
     __apiVerifier = None
     __apiState = None
-    __authURL = "https://auth.tesla.com/oauth2/v3/token"
-    __callbackURL = "https://auth.tesla.com/void/callback"
+    __authURL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
+    __callbackURL = "https://fleet-auth.prd.vn.cloud.tesla.com/void/callback"
     baseURL = ""
     regionURL = {
         "OwnerAPI": "https://owner-api.teslamotors.com/api/1/vehicles",
@@ -48,7 +48,7 @@ class TeslaAPI:
     minChargeLevel = -1
     params = None
     __password = None
-    refreshURL = "https://auth.tesla.com/oauth2/v3/token"
+    refreshURL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
     __resp = None
     session = None
 
