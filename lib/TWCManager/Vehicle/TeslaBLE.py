@@ -94,7 +94,7 @@ class TeslaBLE:
             stdout=subprocess.PIPE,
         )
         self.closeFile()
-        return self.parseCommandOutput(ret)
+        return self.parseCommandOutput(result)
 
     def pingVehicle(self, vin):
         ret = self.sendCommand(vin, "ping")
