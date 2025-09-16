@@ -44,7 +44,7 @@ from enum import Enum
 
 
 logging.addLevelName(19, "INFO2")
-logging.addLevelName(18, "INFO4")
+logging.addLevelName(18, "INFO3")
 logging.addLevelName(17, "INFO4")
 logging.addLevelName(16, "INFO5")
 logging.addLevelName(15, "INFO6")
