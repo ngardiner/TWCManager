@@ -743,6 +743,11 @@
           "mqtt_pass": "mqttpass",
           "mqtt_prefix": "telemetry"
         },
+        # The TeslaMate integration allows TWCManager to fetch API key details directly from
+        # your TeslaMate instance's database. This removes the need to manage multiple sets of API
+        # credentials.
+        # Note that since TeslaMate has added encryption to protect the API credentials, you will
+        # need to provide the encryption key to decrypt the API key
         "TeslaMate": {
             "enabled": false,
             "syncTokens": false,
@@ -750,6 +755,7 @@
             "db_name": "teslamate",
             "db_pass": "teslamate",
             "db_user": "teslamate",
+            "encryption_key": "chanegme",
             "syncTelemetry": false,
             "mqtt_host": "192.168.1.1",
             "mqtt_user": "teslamate",

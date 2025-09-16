@@ -1,3 +1,6 @@
+import base64
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from hashlib import sha256
 import logging
 import psycopg2
 import paho.mqtt.client as mqtt
@@ -44,6 +47,7 @@ class TeslaMateVehicle(TelmetryBase):
         self.__db_pass = self.configModule.get("db_pass", None)
         self.__db_user = self.configModule.get("db_user", None)
         self.syncTokens = self.configModule.get("syncTokens", False)
+        self.encryption_key = self.configModule.get("encryption_key", None)
 
         # If we're set to sync the auth tokens from the database, do this at startup
         if self.syncTokens:
@@ -51,6 +55,34 @@ class TeslaMateVehicle(TelmetryBase):
 
             # After initial sync, set a timer to continue to sync the tokens every hour
             resync = threading.Timer(3600, self.doSyncTokens)
+
+    def decrypt_data(self, encrypted_data):
+        """
+        Decrypts data encrypted by TeslaMate's vault.ex.
+        """
+        if not self.encryption_key:
+            logger.error("TeslaMate encryption key not found in config.json")
+            return None
+
+        try:
+            # 1. Decode from Base64
+            decoded_data = base64.b64decode(encrypted_data)
+
+            # 2. Derive the key by hashing the user-provided key with SHA-256
+            key = sha256(self.encryption_key.encode('utf-8')).digest()
+
+            # 3. Extract the nonce, ciphertext, and tag
+            nonce = decoded_data[:12]
+            ciphertext_and_tag = decoded_data[12:]
+
+            # 4. Decrypt using AES-256-GCM
+            aesgcm = AESGCM(key)
+            decrypted_data = aesgcm.decrypt(nonce, ciphertext_and_tag, None)
+
+            return decrypted_data.decode('utf-8')
+        except Exception as e:
+            logger.error(f"Error decrypting TeslaMate data: {e}")
+            return None
 
     def doSyncTokens(self, firstrun=False):
         # Connect to TeslaMate database and synchronize API tokens
@@ -87,14 +119,23 @@ class TeslaMateVehicle(TelmetryBase):
                 # Fetch result
                 result = cur.fetchone()
 
-                # Set Bearer and Refresh Tokens
-                carapi = self.master.getModuleByName("TeslaAPI")
-                # We don't want to refresh the token - let the source handle that.
-                carapi.setCarApiTokenExpireTime(99999 * 99999 * 99999)
-                carapi.setCarApiBearerToken(result[0])
-                carapi.setCarApiRefreshToken(result[1])
-                self.lastSync = time.time()
+                if result:
+                    encrypted_access_token = result[0]
+                    encrypted_refresh_token = result[1]
 
+                    access_token = self.decrypt_data(encrypted_access_token)
+                    refresh_token = self.decrypt_data(encrypted_refresh_token)
+
+                if access_token and refresh_token:
+                    # Set Bearer and Refresh Tokens
+                    carapi = self.master.getModuleByName("TeslaAPI")
+                    # We don't want to refresh the token - let the source handle that.
+                    carapi.setCarApiTokenExpireTime(99999 * 99999 * 99999)
+                    carapi.setCarApiBearerToken(access_token)
+                    carapi.setCarApiRefreshToken(refresh_token)
+                    self.lastSync = time.time()
+                else:
+                    logger.error("No tokens found in TeslaMate database.")
             else:
                 logger.log(
                     logging.ERROR,
