@@ -69,7 +69,7 @@ class TeslaMateVehicle(TelmetryBase):
             decoded_data = base64.b64decode(encrypted_data)
 
             # 2. Derive the key by hashing the user-provided key with SHA-256
-            key = sha256(self.encryption_key.encode('utf-8')).digest()
+            key = sha256(self.encryption_key.encode("utf-8")).digest()
 
             # 3. Extract the nonce, ciphertext, and tag
             nonce = decoded_data[:12]
@@ -79,7 +79,7 @@ class TeslaMateVehicle(TelmetryBase):
             aesgcm = AESGCM(key)
             decrypted_data = aesgcm.decrypt(nonce, ciphertext_and_tag, None)
 
-            return decrypted_data.decode('utf-8')
+            return decrypted_data.decode("utf-8")
         except Exception as e:
             logger.error(f"Error decrypting TeslaMate data: {e}")
             return None
