@@ -23,6 +23,8 @@ Please note that turning on the Token Sync functionality of this module will hav
    * You will no longer be prompted for your Tesla API login. Even if the TeslaMate tokens are invalid, you will not be prompted.
    * TWCManager will not refresh API tokens, however on refresh of the TeslaMate token, the token will be used by TWCManager.
 
+Please note that since TeslaMate v1.27.0, TeslaMate performs encryption of Tesla API tokens. You will need to specify your encryption key in the configuration to continue to fetch API keys.
+
 #### Configuration
 
 ```
@@ -33,7 +35,8 @@ Please note that turning on the Token Sync functionality of this module will hav
            "db_host": "192.168.1.1",
            "db_name": "teslamate",
            "db_pass": "teslamate",
-           "db_user": "teslamate"
+           "db_user": "teslamate",
+           "encryption_key": "changeme"
        }
    }
 ```

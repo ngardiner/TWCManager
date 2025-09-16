@@ -6,10 +6,17 @@ This document logs the changes per release of TWCManager.
 * Placeholder - TWC abstraction code
 * (@ngardiner) - Initial commit of local Tesla BLE vehicle control module
 * (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
+* (@MikeBishop) - MQTT Improvements
+* (@MikeBishop) - Dampen API calls to reduce unnecessary calls
 * (@RichieB2B) - Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
+* (@RichieB2B) - Add Fleet Telemetry MQTT support
+* (@ngardiner) - Add support for decrypting TeslaMate API credentials using the encryption key
 * Bugfixes
     * (@MikeBishop) - Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
     * (@dtiefnig) - Specify access scope for token refresh
+    * (@evheros) - Fix typo in log levels
+    * (@RichieB2B / @evheros) - Fix incorrect return variable name in BLE Peering code
+    * (@dehsgr) - Fix Makefile issues (alternate HOME support and BLE permissions)
 
 ## v1.3.2 - 2023-03-12
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules
