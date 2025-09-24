@@ -9,6 +9,7 @@ import time
 
 from TWCManager.Vehicle.Telemetry import TelmetryBase
 
+
 def fix_base64_padding(data):
     """Add Base64 padding characters."""
     if not data:
@@ -18,8 +19,9 @@ def fix_base64_padding(data):
     # Add padding if needed
     missing_padding = len(data) % 4
     if missing_padding:
-        data += '=' * (4 - missing_padding)
+        data += "=" * (4 - missing_padding)
     return data
+
 
 logger = logging.getLogger("\U0001f697 TeslaMate")
 
@@ -75,9 +77,11 @@ class TeslaMateVehicle(TelmetryBase):
         if not self.encryption_key:
             logger.error("TeslaMate encryption key not found in config.json")
             return None
-            
+
         if self.encryption_key == "chanegme":
-            logger.error("TeslaMate encryption key is still set to default placeholder 'chanegme'. Please set the correct encryption key.")
+            logger.error(
+                "TeslaMate encryption key is still set to default placeholder 'chanegme'. Please set the correct encryption key."
+            )
 
         if not encrypted_data:
             logger.error("No encrypted data provided for decryption")
@@ -95,12 +99,16 @@ class TeslaMateVehicle(TelmetryBase):
                     decoded_data = base64.b64decode(fixed_data)
                     logger.info("Base64 decode successful after padding fix")
                 except Exception as e2:
-                    logger.error(f"Base64 decode failed even after padding fix: {e2}. Data may be corrupted.")
+                    logger.error(
+                        f"Base64 decode failed even after padding fix: {e2}. Data may be corrupted."
+                    )
                     return None
 
             # Check minimum data length
             if len(decoded_data) < 12:
-                logger.error(f"Decoded data too short: {len(decoded_data)} bytes (minimum 12 required)")
+                logger.error(
+                    f"Decoded data too short: {len(decoded_data)} bytes (minimum 12 required)"
+                )
                 return None
 
             # 2. Derive the key by hashing the user-provided key with SHA-256
@@ -117,7 +125,9 @@ class TeslaMateVehicle(TelmetryBase):
             return decrypted_data.decode("utf-8")
         except Exception as e:
             logger.error(f"Error decrypting TeslaMate data: {e}")
-            logger.error("This usually indicates an incorrect encryption key or corrupted data in TeslaMate database")
+            logger.error(
+                "This usually indicates an incorrect encryption key or corrupted data in TeslaMate database"
+            )
             return None
 
     def doSyncTokens(self, firstrun=False):
@@ -175,15 +185,18 @@ class TeslaMateVehicle(TelmetryBase):
                             carapi.setCarApiBearerToken(access_token)
                             carapi.setCarApiRefreshToken(refresh_token)
                             self.lastSync = time.time()
-                            logger.log(logging.INFO, "Successfully synced tokens from TeslaMate database")
+                            logger.log(
+                                logging.INFO,
+                                "Successfully synced tokens from TeslaMate database",
+                            )
                         else:
                             logger.error("TeslaAPI module not found")
                     else:
                         logger.error("No tokens found in TeslaMate database.")
-                        
+
                 except Exception as e:
                     logger.error(f"Error querying TeslaMate database: {e}")
-                    
+
                 finally:
                     cur.close()
                     conn.close()
