@@ -57,7 +57,13 @@ class TeslaBLE:
     def car_api_charge(self, charge):
         # This is not very well thought out at all - we'll just loop through
         # and ask all cars to charge for now
-        for vehicle in self.master.settings["Vehicles"].keys():
+        
+        vehicles = self.master.settings.get("Vehicles")
+        if not vehicles:
+            logger.info("No Vehicles configuration found. TeslaBLE cannot control charging without vehicle configuration.")
+            return False
+            
+        for vehicle in vehicles.keys():
             if charge:
                 self.startCharging(vehicle)
                 return self.pingVehicle(vehicle)
