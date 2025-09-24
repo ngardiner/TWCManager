@@ -9,6 +9,18 @@ import time
 
 from TWCManager.Vehicle.Telemetry import TelmetryBase
 
+def fix_base64_padding(data):
+    """Add Base64 padding characters."""
+    if not data:
+        return data
+    # Remove any whitespace
+    data = data.strip()
+    # Add padding if needed
+    missing_padding = len(data) % 4
+    if missing_padding:
+        data += '=' * (4 - missing_padding)
+    return data
+
 logger = logging.getLogger("\U0001f697 TeslaMate")
 
 
@@ -63,10 +75,33 @@ class TeslaMateVehicle(TelmetryBase):
         if not self.encryption_key:
             logger.error("TeslaMate encryption key not found in config.json")
             return None
+            
+        if self.encryption_key == "chanegme":
+            logger.error("TeslaMate encryption key is still set to default placeholder 'chanegme'. Please set the correct encryption key.")
+
+        if not encrypted_data:
+            logger.error("No encrypted data provided for decryption")
+            return None
 
         try:
             # 1. Decode from Base64
-            decoded_data = base64.b64decode(encrypted_data)
+            try:
+                decoded_data = base64.b64decode(encrypted_data)
+            except Exception as e:
+                logger.info(f"Base64 decode failed: {e}. Attempting to fix padding...")
+                try:
+                    # Fix Base64 padding
+                    fixed_data = fix_base64_padding(encrypted_data)
+                    decoded_data = base64.b64decode(fixed_data)
+                    logger.info("Base64 decode successful after padding fix")
+                except Exception as e2:
+                    logger.error(f"Base64 decode failed even after padding fix: {e2}. Data may be corrupted.")
+                    return None
+
+            # Check minimum data length
+            if len(decoded_data) < 12:
+                logger.error(f"Decoded data too short: {len(decoded_data)} bytes (minimum 12 required)")
+                return None
 
             # 2. Derive the key by hashing the user-provided key with SHA-256
             key = sha256(self.encryption_key.encode("utf-8")).digest()
@@ -82,6 +117,7 @@ class TeslaMateVehicle(TelmetryBase):
             return decrypted_data.decode("utf-8")
         except Exception as e:
             logger.error(f"Error decrypting TeslaMate data: {e}")
+            logger.error("This usually indicates an incorrect encryption key or corrupted data in TeslaMate database")
             return None
 
     def doSyncTokens(self, firstrun=False):
@@ -89,6 +125,8 @@ class TeslaMateVehicle(TelmetryBase):
 
         if self.__db_host and self.__db_name and self.__db_user and self.__db_pass:
             conn = None
+            access_token = None
+            refresh_token = None
 
             try:
                 conn = psycopg2.connect(
@@ -111,31 +149,44 @@ class TeslaMateVehicle(TelmetryBase):
             if conn:
                 cur = conn.cursor()
 
-                # Query DB for latest access and refresh token
-                cur.execute(
-                    "SELECT access, refresh FROM tokens ORDER BY id DESC LIMIT 1"
-                )
+                try:
+                    # Query DB for latest access and refresh token
+                    cur.execute(
+                        "SELECT access, refresh FROM tokens ORDER BY id DESC LIMIT 1"
+                    )
 
-                # Fetch result
-                result = cur.fetchone()
+                    # Fetch result
+                    result = cur.fetchone()
 
-                if result:
-                    encrypted_access_token = result[0]
-                    encrypted_refresh_token = result[1]
+                    if result:
+                        encrypted_access_token = result[0]
+                        encrypted_refresh_token = result[1]
 
-                    access_token = self.decrypt_data(encrypted_access_token)
-                    refresh_token = self.decrypt_data(encrypted_refresh_token)
+                        if encrypted_access_token and encrypted_refresh_token:
+                            access_token = self.decrypt_data(encrypted_access_token)
+                            refresh_token = self.decrypt_data(encrypted_refresh_token)
 
-                if access_token and refresh_token:
-                    # Set Bearer and Refresh Tokens
-                    carapi = self.master.getModuleByName("TeslaAPI")
-                    # We don't want to refresh the token - let the source handle that.
-                    carapi.setCarApiTokenExpireTime(99999 * 99999 * 99999)
-                    carapi.setCarApiBearerToken(access_token)
-                    carapi.setCarApiRefreshToken(refresh_token)
-                    self.lastSync = time.time()
-                else:
-                    logger.error("No tokens found in TeslaMate database.")
+                    if access_token and refresh_token:
+                        # Set Bearer and Refresh Tokens
+                        carapi = self.master.getModuleByName("TeslaAPI")
+                        if carapi:
+                            # We don't want to refresh the token - let the source handle that.
+                            carapi.setCarApiTokenExpireTime(99999 * 99999 * 99999)
+                            carapi.setCarApiBearerToken(access_token)
+                            carapi.setCarApiRefreshToken(refresh_token)
+                            self.lastSync = time.time()
+                            logger.log(logging.INFO, "Successfully synced tokens from TeslaMate database")
+                        else:
+                            logger.error("TeslaAPI module not found")
+                    else:
+                        logger.error("No tokens found in TeslaMate database.")
+                        
+                except Exception as e:
+                    logger.error(f"Error querying TeslaMate database: {e}")
+                    
+                finally:
+                    cur.close()
+                    conn.close()
             else:
                 logger.log(
                     logging.ERROR,
