@@ -14,18 +14,18 @@ def fix_base64_padding(data):
     """Add Base64 padding characters."""
     if not data:
         return data
-    
+
     # Convert memoryview/bytes to string but preserve the base64 content
     if isinstance(data, memoryview):
         data = data.tobytes()
     if isinstance(data, bytes):
         # Try to decode as UTF-8, but if it fails, it's likely raw base64 bytes
         try:
-            data = data.decode('utf-8')
+            data = data.decode("utf-8")
         except UnicodeDecodeError:
             # It's raw binary data - convert to base64 string
-            data = base64.b64encode(data).decode('ascii')
-    
+            data = base64.b64encode(data).decode("ascii")
+
     # Remove any whitespace
     data = data.strip()
     # Add padding if needed
@@ -125,36 +125,40 @@ class TeslaMateVehicle(TelmetryBase):
 
             # 2. Parse TeslaMate Cloak format: | Type | Length | Key Tag | IV | Ciphertag | Ciphertext |
             if len(decoded_data) < 3:
-                logger.error(f"Data too short for TeslaMate format: {len(decoded_data)} bytes")
+                logger.error(
+                    f"Data too short for TeslaMate format: {len(decoded_data)} bytes"
+                )
                 return None
-                
+
             # Parse the key tag header
             tag_type = decoded_data[0]
             tag_length = decoded_data[1]
-            
+
             if len(decoded_data) < 2 + tag_length + 12 + 16:
                 logger.error("Data too short for complete TeslaMate format")
                 return None
-                
+
             try:
-                key_tag = decoded_data[2:2+tag_length].decode('utf-8')
+                key_tag = decoded_data[2 : 2 + tag_length].decode("utf-8")
             except UnicodeDecodeError:
                 logger.error("Invalid key tag in TeslaMate data")
                 return None
-            
+
             # Extract IV (nonce), ciphertag, and ciphertext
             iv_start = 2 + tag_length
-            iv = decoded_data[iv_start:iv_start+12]
-            ciphertag = decoded_data[iv_start+12:iv_start+12+16]
-            ciphertext = decoded_data[iv_start+12+16:]
-            
+            iv = decoded_data[iv_start : iv_start + 12]
+            ciphertag = decoded_data[iv_start + 12 : iv_start + 12 + 16]
+            ciphertext = decoded_data[iv_start + 12 + 16 :]
+
             # 3. Derive the key by hashing the user-provided key with SHA-256
             key = sha256(self.encryption_key.encode("utf-8")).digest()
 
             # 4. Decrypt using AES-256-GCM with the tag as AAD
             aesgcm = AESGCM(key)
             ciphertext_with_tag = ciphertext + ciphertag
-            decrypted_data = aesgcm.decrypt(iv, ciphertext_with_tag, key_tag.encode('utf-8'))
+            decrypted_data = aesgcm.decrypt(
+                iv, ciphertext_with_tag, key_tag.encode("utf-8")
+            )
 
             return decrypted_data.decode("utf-8")
         except Exception as e:
