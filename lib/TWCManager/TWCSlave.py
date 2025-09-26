@@ -31,7 +31,6 @@ class TWCSlave:
     reportedAmpsMax = 0
     reportedAmpsActual = 0
     reportedState = 0
-    reportedAmpsLast = -1
 
     # history* vars are used to track power usage over time
     historyAvgAmps = 0
@@ -573,18 +572,15 @@ class TWCSlave:
                 )
             )
 
-        if self.reportedAmpsActual != self.reportedAmpsLast:
-            self.reportedAmpsLast = self.reportedAmpsActual
-            for module in self.master.getModulesByType("Status"):
-                module["ref"].setStatus(
-                    self.TWCID, "amps_in_use", "ampsInUse", self.reportedAmpsActual, "A"
-                )
-            self.refreshingChargerLoadStatus()
-            self.master.refreshingTotalAmpsInUseStatus()
+        self.refreshingChargerLoadStatus()
+        self.master.refreshingTotalAmpsInUseStatus()
 
         for module in self.master.getModulesByType("Status"):
             module["ref"].setStatus(
                 self.TWCID, "amps_max", "ampsMax", self.reportedAmpsMax, "A"
+            )
+            module["ref"].setStatus(
+                self.TWCID, "amps_in_use", "ampsInUse", self.reportedAmpsActual, "A"
             )
             module["ref"].setStatus(
                 self.TWCID, "state", "state", self.reportedState, ""
