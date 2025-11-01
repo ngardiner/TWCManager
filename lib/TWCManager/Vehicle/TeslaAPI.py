@@ -309,7 +309,7 @@ class TeslaAPI:
                         )
                         continue
 
-                    if self.getCarApiRetryRemaining():
+                    if self.getCarApiRetryRemaining(vehicle):
                         # It's been under carApiErrorRetryMins minutes since the car
                         # API generated an error on this vehicle. Don't send it more
                         # commands yet.
@@ -461,14 +461,18 @@ class TeslaAPI:
 
                         if state == "error":
                             logger.info(
-                                "Car API wake car failed with unknown response.  "
+                                "Car API wake "
+                                + vehicle.name
+                                + " failed with unknown response.  "
                                 + "Will try again in "
                                 + str(vehicle.delayNextWakeAttempt)
                                 + " seconds."
                             )
                         else:
                             logger.info(
-                                "Car API wake car failed.  State remains: '"
+                                "Car API wake "
+                                + vehicle.name
+                                + " failed.  State remains: '"
                                 + state
                                 + "'.  Will try again in "
                                 + str(vehicle.delayNextWakeAttempt)
@@ -482,7 +486,9 @@ class TeslaAPI:
                         # It should never take over an hour to wake a car.  If it
                         # does, ask user to report an error.
                         logger.info(
-                            "ERROR: We have failed to wake a car from '"
+                            "ERROR: We have failed to wake "
+                            + vehicle.name
+                            + " from '"
                             + state
                             + "' state for %.1f hours.\n"
                             "Please file an issue at https://github.com/ngardiner/TWCManager/. "
@@ -1209,7 +1215,7 @@ class TeslaAPI:
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         # As a fallback to allow initial implementation of the charge rate functionality for single car installs,
-        # If no vehcle is specified, we take the first returned to us.
+        # If no vehicle is specified, we take the first returned to us.
 
         if not vehicle:
             vehicle = self.getCarApiVehicles()[0]
