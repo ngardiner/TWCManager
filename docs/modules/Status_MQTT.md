@@ -23,6 +23,19 @@ The module uses supplied credentials to connect to the MQTT server, and publishe
 | *prefix*/config/maxAmpsForSlaves | Integer: Total number of amps on power circuit to divide amongst Slave TWCs | 32 |
 | *prefix*/config/minAmpsPerTWC    | Integer: Minimum amps to charge per TWC (from config) | 6 |
 
+### HomeAssistant Discovery
+By default, Home Assistant automatic discovery is disabled. To enable it, add the following MQTT Status configuration:
+```
+"status": {
+  "MQTT": {
+    "homeassistantDiscovery": true,
+    "discoveryPrefix": "homeassistant",
+    "deviceNamePrefix": "TWC"
+  }
+}
+```
+This will allow Home Assistant to automatically discover the published MQTT sensors.
+
 ### Rate limiting
 
 By default, the MQTT Status Module will limit one update per topic per 60 seconds. The reason for this is that MQTT publishing is an asynchronous process. Updates are queued and sent in order to the MQTT broker. If there was a delay in publishing and acknowledging the MQTT messages on the broker side, the queue would continue to grow and the message buffer would consume more memory until it eventually ran out of available memory.
