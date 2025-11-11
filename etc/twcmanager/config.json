@@ -731,7 +731,19 @@
        # Username and password are optional. If your broker requires a username and password to authenticate
        # clients, set them here. Otherwise, leave them commented out
           #  "username": "mqttuser",
-          #  "password": "mqttpass"
+          #  "password": "mqttpass",
+
+      # Home Assistant discovery to automatically expose sensors from the MQTT topics
+          # Set to true to enable discovery
+          "homeassistantDiscovery": false,
+
+          # The prefix to use for Home Assistant discovery, defaults to 'homeassistant'
+          "discoveryPrefix": "homeassistant",
+
+          # A prefix to use for each device name, the device in Home Assistant will be called:
+          # Prefix NNNN (the ID of the device)
+          # eg. TWC 1234
+          "deviceNamePrefix": "TWC"
         }
     },
     "vehicle": {

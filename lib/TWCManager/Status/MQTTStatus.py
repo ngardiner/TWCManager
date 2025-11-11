@@ -3,7 +3,7 @@
 
 import logging
 import time
-
+import json
 
 logger = logging.getLogger("\U0001f4ca MQTT")
 
@@ -30,6 +30,11 @@ class MQTTStatus:
     topicPrefix = None
     username = None
 
+    homeassistantDiscovery = False
+    discoveryPrefix = "homeassistant"
+    deviceNamePrefix = "TWC"
+    discoveryPublished = set()
+
     def __init__(self, master):
         self.__config = master.config
         self.__master = master
@@ -48,6 +53,15 @@ class MQTTStatus:
         self.password = self.__configMQTT.get("password", None)
         self.__msgRatePerTopic = int(self.__configMQTT.get("ratelimit", 60))
 
+        self.homeassistantDiscovery = bool(
+            self.__configMQTT.get("homeassistantDiscovery", False)
+        )
+        self.discoveryPrefix = self.__configMQTT.get(
+            "discoveryPrefix", "homeassistant"
+        ).strip("/")
+        self.deviceNamePrefix = self.__configMQTT.get("deviceNamePrefix", "TWC")
+        self.deviceNamePrefixUnderscore = self.deviceNamePrefix.replace(' ', '_')
+
         # Unload if this module is disabled or misconfigured
         if (not self.status) or (not self.brokerIP):
             self.__master.releaseModule("lib.TWCManager.Status", "MQTTStatus")
@@ -59,6 +73,59 @@ class MQTTStatus:
             if str(value) == "0":
                 self.setStatus(twc, "amps_in_use", "ampsInUse", 0, "A")
         self.__carsCharging[twident] = str(value)
+
+    def _determine_classes(self, unit):
+        device_class = None
+        state_class = None
+        if unit in ("W", "kW"):
+            device_class = "power"
+            state_class = "measurement"
+        elif unit in ("Wh", "kWh", "MWh"):
+            device_class = "energy"
+            state_class = "total_increasing"  # change to "total" if not monotonic
+        elif unit == "A":
+            device_class = "current"
+            state_class = "measurement"
+        elif unit == "V":
+            device_class = "voltage"
+            state_class = "measurement"
+        return device_class, state_class
+
+    def _enqueue_discovery_if_needed(
+        self, twident, key_underscore, key_camelcase, unit, state_topic
+    ):
+
+        uid = f"twcmanager_{self.deviceNamePrefixUnderscore}_{twident}_{key_underscore}"
+        if uid in self.discoveryPublished:
+            return
+
+        object_id = f"{twident}_{key_underscore}"
+        node = f"{self.topicPrefix}_{twident}".replace("/", "_")
+        cfg_topic = f"{self.discoveryPrefix}/sensor/{node}/{object_id}/config"
+
+        device_class, state_class = self._determine_classes(unit)
+
+        payload = {
+            "name": key_underscore.replace("_", " ").capitalize(),
+            "unique_id": uid,
+            "state_topic": state_topic,
+            "device": {
+                "identifiers": [f"twcmanager_{self.deviceNamePrefixUnderscore}_{twident}"],
+                "manufacturer": "Open Source",
+                "model": "TWCManager",
+                "name": f"{self.deviceNamePrefix} {twident}",
+            },
+        }
+        if unit:
+            payload["unit_of_measurement"] = unit
+        if device_class:
+            payload["device_class"] = device_class
+        if state_class:
+            payload["state_class"] = state_class
+
+        # Enqueue retained discovery config prior to state publish
+        self.msgQueue.append({"topic": cfg_topic, "payload": json.dumps(payload)})
+        self.discoveryPublished.add(uid)
 
     def setStatus(self, twcid, key_underscore, key_camelcase, value, unit):
         if self.status:
@@ -78,6 +145,15 @@ class MQTTStatus:
             # sensors that should be updated as a result
             if key_camelcase == "carsCharging":
                 self.handleCarsCharging(twcid, twident, value)
+
+            if self.homeassistantDiscovery:
+                self._enqueue_discovery_if_needed(
+                    twident=twident,
+                    key_underscore=key_underscore,
+                    key_camelcase=key_camelcase,
+                    unit=unit,
+                    state_topic=topic,
+                )
 
             # Perform rate limiting first (as there are some very chatty topics).
             # For each message that comes through, we take the topic name and check
