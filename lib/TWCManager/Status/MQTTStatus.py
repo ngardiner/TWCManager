@@ -60,6 +60,7 @@ class MQTTStatus:
             "discoveryPrefix", "homeassistant"
         ).strip("/")
         self.deviceNamePrefix = self.__configMQTT.get("deviceNamePrefix", "TWC")
+        self.deviceNamePrefixUnderscore = self.deviceNamePrefix.replace(' ', '_')
 
         # Unload if this module is disabled or misconfigured
         if (not self.status) or (not self.brokerIP):
@@ -93,7 +94,8 @@ class MQTTStatus:
     def _enqueue_discovery_if_needed(
         self, twident, key_underscore, key_camelcase, unit, state_topic
     ):
-        uid = f"twcmanager_{twident}_{key_underscore}"
+
+        uid = f"twcmanager_{self.deviceNamePrefixUnderscore}_{twident}_{key_underscore}"
         if uid in self.discoveryPublished:
             return
 
@@ -108,7 +110,7 @@ class MQTTStatus:
             "unique_id": uid,
             "state_topic": state_topic,
             "device": {
-                "identifiers": [f"twcmanager_{twident}"],
+                "identifiers": [f"twcmanager_{self.deviceNamePrefixUnderscore}_{twident}"],
                 "manufacturer": "Open Source",
                 "model": "TWCManager",
                 "name": f"{self.deviceNamePrefix} {twident}",
