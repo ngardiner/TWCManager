@@ -15,18 +15,14 @@ class MQTTStatus:
     brokerPort = 1883
     __carsCharging = {}
     __config = None
-    __configConfig = None
     __configMQTT = {}
-    connectionState = 0
+    connectionState = 0  # 0 = disconnected/connecting, 1 = connected
     __master = None
-    msgQueue = []
-    msgQueueBuffer = []
-    msgQueueMax = 16
     __msgRate = {}
     __msgRatePerTopic = 60
     password = None
     status = False
-    serverTLS = False
+    brokerTLS = False
     topicPrefix = None
     username = None
 
@@ -36,22 +32,25 @@ class MQTTStatus:
     deviceNamePrefixUnderscore = "TWC"
     discoveryPublished = set()
 
+    client = None
+    connected = False
+
     def __init__(self, master):
         self.__config = master.config
         self.__master = master
-        try:
-            self.__configConfig = self.__config["config"]
-        except KeyError:
-            self.__configConfig = {}
+
         try:
             self.__configMQTT = self.__config["status"]["MQTT"]
         except KeyError:
             self.__configMQTT = {}
+
         self.status = self.__configMQTT.get("enabled", False)
         self.brokerIP = self.__configMQTT.get("brokerIP", None)
+        self.brokerPort = int(self.__configMQTT.get("brokerPort", 1883))
         self.topicPrefix = self.__configMQTT.get("topicPrefix", None)
         self.username = self.__configMQTT.get("username", None)
         self.password = self.__configMQTT.get("password", None)
+        self.brokerTLS = bool(self.__configMQTT.get("brokerTLS", False))
         self.__msgRatePerTopic = int(self.__configMQTT.get("ratelimit", 60))
 
         self.homeassistantDiscovery = bool(
@@ -64,10 +63,99 @@ class MQTTStatus:
         self.deviceNamePrefixUnderscore = self.deviceNamePrefix.replace(' ', '_')
 
         # Unload if this module is disabled or misconfigured
-        if (not self.status) or (not self.brokerIP):
+        if (not self.status) or (not self.brokerIP) or (not self.topicPrefix):
             self.__master.releaseModule("lib.TWCManager.Status", "MQTTStatus")
+            return
 
-    def handleCarsCharging(self, twc, twident, value):
+        # Create a persistent MQTT client and connect
+        self._init_mqtt_client()
+
+    def _init_mqtt_client(self):
+        """
+        Create a persistent MQTT client, configure it, and start the network loop.
+        Connection (and reconnection) will be handled by connect_async + loop_start.
+        """
+        try:
+            if hasattr(self.mqtt, "CallbackAPIVersion"):
+                client = self.mqtt.Client(
+                    self.mqtt.CallbackAPIVersion.VERSION2,
+                    "MQTTStatus",
+                    protocol=self.mqtt.MQTTv5,
+                )
+            else:
+                client = self.mqtt.Client(client_id="MQTTStatus")
+
+            if self.username and self.password:
+                client.username_pw_set(self.username, self.password)
+
+            if self.brokerTLS:
+                # Basic TLS enablement; details (CA, certs) can be added via config if needed
+                client.tls_set()
+
+            client.on_connect = self.mqttConnected
+            client.on_disconnect = self.mqttDisconnected
+
+            # Optional: configure automatic reconnect delays (backoff)
+            if hasattr(client, "reconnect_delay_set"):
+                client.reconnect_delay_set(min_delay=1, max_delay=120)
+
+            self.client = client
+            self.connectionState = 0
+            self.connected = False
+
+            logger.debug(
+                f"MQTT Status: Connecting to {self.brokerIP}:{self.brokerPort}"
+            )
+            # connect_async + loop_start -> persistent connection with auto reconnect
+            self.client.connect_async(self.brokerIP, port=self.brokerPort, keepalive=30)
+            self.client.loop_start()
+
+        except Exception as e:
+            logger.log(
+                logging.INFO4,
+                "Error initialising MQTT client to publish topic values",
+            )
+            logger.debug(str(e))
+            self.client = None
+            self.connected = False
+            self.connectionState = 0
+
+    def mqttConnected(self, client, userdata, flags, rc, properties=None):
+        """
+        Called when the MQTT client connects (or reconnects) to the broker.
+        """
+        logger.debug("Connected to MQTT Broker with RC: " + str(rc))
+
+        if rc == 0:
+            self.connected = True
+            self.connectionState = 1
+            logger.log(logging.DEBUG2, "MQTT connection established")
+        else:
+            # Non-zero rc means connection was refused.
+            self.connected = False
+            self.connectionState = 0
+            logger.log(
+                logging.INFO4,
+                f"MQTT connection failed with result code {rc}",
+            )
+
+    def mqttDisconnected(self, client, userdata, rc):
+        """
+        Called when the MQTT client disconnects from the broker.
+        connect_async + loop_start will handle reconnection attempts automatically.
+        """
+        self.connected = False
+        self.connectionState = 0
+        if rc != 0:
+            logger.warning(
+                f"Unexpected MQTT disconnect (rc={rc}). Client will attempt to reconnect."
+            )
+        else:
+            logger.debug("MQTT client disconnected cleanly")
+
+    # Internal helpers
+
+    def _handleCarsCharging(self, twc, twident, value):
         # When an update comes in for the carsCharging value, check if it was previously 1 for the
         # given TWC, and if it is now 0. If so, zero out relevant topics related to charge rate
         if self.__carsCharging.get(twident, "0") != str(value):
@@ -92,8 +180,8 @@ class MQTTStatus:
             state_class = "measurement"
         return device_class, state_class
 
-    def _enqueue_discovery_if_needed(
-        self, twident, key_underscore, key_camelcase, unit, state_topic
+    def _publish_discovery_if_needed(
+        self, twident, key_underscore, unit, state_topic
     ):
         """
         Publish Home Assistant discovery config once per sensor, using the
@@ -115,7 +203,9 @@ class MQTTStatus:
             "unique_id": uid,
             "state_topic": state_topic,
             "device": {
-                "identifiers": [f"twcmanager_{self.deviceNamePrefixUnderscore}_{twident}"],
+                "identifiers": [
+                    f"twcmanager_{self.deviceNamePrefixUnderscore}_{twident}"
+                ],
                 "manufacturer": "Open Source",
                 "model": "TWCManager",
                 "name": f"{self.deviceNamePrefix} {twident}",
@@ -128,125 +218,102 @@ class MQTTStatus:
         if state_class:
             payload["state_class"] = state_class
 
-        # Enqueue retained discovery config prior to state publish
-        self.msgQueue.append({"topic": cfg_topic, "payload": json.dumps(payload)})
+        if not self.client:
+            logger.log(
+                logging.INFO4,
+                "MQTT discovery publish requested but MQTT client is not initialised",
+            )
+            return
+
+        try:
+            logger.log(
+                logging.INFO8,
+                f"Publishing MQTT Discovery Topic {cfg_topic} (payload omitted)",
+            )
+            result = self.client.publish(
+                cfg_topic, payload=json.dumps(payload), qos=0, retain=True
+            )
+            if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
+                logger.log(
+                    logging.INFO4,
+                    f"Error publishing MQTT Discovery Topic {cfg_topic}: rc={result.rc}",
+                )
+                return
+        except Exception as e:
+            logger.log(logging.INFO4, "Error publishing MQTT Discovery Topic")
+            logger.debug(str(e))
+            return
+
         self.discoveryPublished.add(uid)
 
     def setStatus(self, twcid, key_underscore, key_camelcase, value, unit):
-        if self.status:
-            # Format TWCID nicely
-            twident = None
-            if len(twcid) == 2:
-                twident = "%02X%02X" % (twcid[0], twcid[1])
-            else:
-                twident = str(twcid.decode("utf-8"))
-            topic = self.topicPrefix + "/" + twident
-            topic = topic + "/" + key_camelcase
+        if not self.status:
+            return
 
-            # We have a special case where we perform extra handling of the carsCharging topic
-            # This is because, once carsCharging goes from 1 to 0 for a given TWC, we no longer
-            # get any status events about charge rate, but it will effectively be 0
-            # So in this case, if we see carsCharging drop from 1 to 0, we publish 0 for the
-            # sensors that should be updated as a result
-            if key_camelcase == "carsCharging":
-                self.handleCarsCharging(twcid, twident, value)
+        if not self.client:
+            # Try to initialise (or re-initialise) client if something went wrong earlier
+            logger.debug("MQTT client not initialised; attempting to re-create")
+            self._init_mqtt_client()
+            if not self.client:
+                # Still no client — give up for now
+                return
 
-            if self.homeassistantDiscovery:
-                self._enqueue_discovery_if_needed(
-                    twident=twident,
-                    key_underscore=key_underscore,
-                    key_camelcase=key_camelcase,
-                    unit=unit,
-                    state_topic=topic,
-                )
+        # Format TWCID nicely
+        if len(twcid) == 2:
+            twident = "%02X%02X" % (twcid[0], twcid[1])
+        else:
+            twident = str(twcid.decode("utf-8"))
 
-            # Perform rate limiting first (as there are some very chatty topics).
-            # For each message that comes through, we take the topic name and check
-            # when we last sent a message. If it was less than msgRatePerTopic
-            # seconds ago, we dampen it.
-            if self.__msgRatePerTopic and topic in self.__msgRate:
-                if (time.time() - self.__msgRate[topic]) < self.__msgRatePerTopic:
-                    return True
-                else:
-                    self.__msgRate[topic] = time.time()
-            else:
-                self.__msgRate[topic] = time.time()
+        topic = self.topicPrefix + "/" + twident + "/" + key_camelcase
 
-            # Now, we push the message that we'd like to send into the
-            # list of messages to be published once a connection is established
-            msg = {"topic": topic, "payload": value}
-            self.msgQueue.append(msg.copy())
+        # We have a special case where we perform extra handling of the carsCharging topic
+        # This is because, once carsCharging goes from 1 to 0 for a given TWC, we no longer
+        # get any status events about charge rate, but it will effectively be 0
+        # So in this case, if we see carsCharging drop from 1 to 0, we publish 0 for the
+        # sensors that should be updated as a result
+        if key_camelcase == "carsCharging":
+            self._handleCarsCharging(twcid, twident, value)
 
-            # If msgQueue size exceeds msgQueueMax, trim the list size
-            # This will discard MQTT messages in environments where the MQTT
-            # broker cannot accept the rate of MQTT messages sent
-            if len(self.msgQueue) > (self.msgQueueMax + 8):
-                del self.msgQueue[: self.msgQueueMax]
+        # Home Assistant discovery (publish once)
+        if self.homeassistantDiscovery:
+            self._publish_discovery_if_needed(
+                twident=twident,
+                key_underscore=key_underscore,
+                unit=unit,
+                state_topic=topic,
+            )
 
-            # Now, we attempt to establish a connection to the MQTT broker
-            if self.connectionState == 0:
-                logger.debug("MQTT Status: Attempting to Connect")
-                try:
-                    if hasattr(self.mqtt, "CallbackAPIVersion"):
-                        client = self.mqtt.Client(
-                            self.mqtt.CallbackAPIVersion.VERSION2,
-                            "MQTTStatus",
-                            protocol=self.mqtt.MQTTv5,
-                        )
-                    else:
-                        client = self.mqtt.Client("MQTTStatus")
-                    if self.username and self.password:
-                        client.username_pw_set(self.username, self.password)
-                    client.on_connect = self.mqttConnected
-                    client.connect_async(
-                        self.brokerIP, port=self.brokerPort, keepalive=30
-                    )
-                    self.connectionState = 1
-                    client.loop_start()
-                except ConnectionRefusedError as e:
-                    logger.log(
-                        logging.INFO4,
-                        "Error connecting to MQTT Broker to publish topic values",
-                    )
-                    logger.debug(str(e))
-                    return False
-                except OSError as e:
-                    logger.log(
-                        logging.INFO4,
-                        "Error connecting to MQTT Broker to publish topic values",
-                    )
-                    logger.debug(str(e))
-                    return False
+        # Perform rate limiting first (as there are some very chatty topics).
+        # For each message that comes through, we take the topic name and check
+        # when we last sent a message. If it was less than msgRatePerTopic
+        # seconds ago, we dampen it.
+        now = time.time()
+        if self.__msgRatePerTopic and topic in self.__msgRate:
+            if (now - self.__msgRate[topic]) < self.__msgRatePerTopic:
+                return True
 
-    def mqttConnected(self, client, userdata, flags, rc, properties=None):
-        # This callback function is called once the MQTT client successfully
-        # connects to the MQTT server. It will then publish all queued messages
-        # to the server, and then disconnect.
+            self.__msgRate[topic] = now
+        else:
+            self.__msgRate[topic] = now
 
-        logger.debug("Connected to MQTT Broker with RC: " + str(rc))
-        logger.log(logging.DEBUG2, "Copy Message Buffer")
-        self.msgQueueBuffer = self.msgQueue.copy()
-        logger.log(logging.DEBUG2, "Clear Message Buffer")
-        self.msgQueue.clear()
-
-        for msg in self.msgQueueBuffer:
+        try:
             logger.log(
                 logging.INFO8,
-                "Publishing MQTT Topic "
-                + str(msg["topic"])
-                + " (value is "
-                + str(msg["payload"])
-                + ")",
+                f"Publishing MQTT Topic {topic} (value is {value})",
             )
-            try:
-                pub = client.publish(
-                    msg["topic"], payload=msg["payload"], qos=0, retain=True
+            result = self.client.publish(topic, payload=value, qos=0, retain=True)
+            if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
+                logger.log(
+                    logging.INFO4,
+                    f"Error publishing MQTT Topic {topic}: rc={result.rc}",
                 )
-            except e:
-                logger.log(logging.INFO4, "Error publishing MQTT Topic Status")
-                logger.debug(str(e))
+                logger.debug(
+                    f"MQTT publish error details: mid={getattr(result, 'mid', None)}"
+                )
+                return False
+        except Exception as e:
+            logger.log(logging.INFO4, "Error publishing MQTT Topic Status")
+            logger.debug(str(e))
+            return False
 
-        client.loop_stop()
-        self.msgQueueBuffer.clear()
-        self.connectionState = 0
-        client.disconnect()
+        return True
