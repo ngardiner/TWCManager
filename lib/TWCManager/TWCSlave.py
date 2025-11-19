@@ -625,7 +625,7 @@ class TWCSlave:
             lastVehicle = self.getLastVehicle()
             if (
                 lastVehicle is not None
-                and lastVehicle.chargingState is "Charging"
+                and lastVehicle.chargingState == "Charging"
                 and lastVehicle.timeToFullCharge * 60 <= 5
             ):
                 lastVehicle.stopAskingToStartCharging = True
