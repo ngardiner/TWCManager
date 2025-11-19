@@ -5,7 +5,7 @@ import logging
 import time
 import json
 
-logger = logging.getLogger("\U0001f4ca MQTT")
+logger = logging.getLogger("\U0001f4ca MQTTStatus")
 
 
 class MQTTStatus:
