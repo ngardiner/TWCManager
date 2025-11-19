@@ -1146,13 +1146,15 @@ class TWCSlave:
                 self.timeLastAmpsOfferedChanged = time.time()
         return self.lastAmpsOffered
 
-    def setLifetimekWh(self, kwh):
-        self.lifetimekWh = kwh
-        # Publish Lifetime kWh Value via Status modules
+    def _publishStatus(self, key_underscore, key_camelcase, value, unit):
         for module in self.master.getModulesByType("Status"):
             module["ref"].setStatus(
-                self.TWCID, "lifetime_kwh", "lifetimekWh", self.lifetimekWh, "kWh"
+                self.TWCID, key_underscore, key_camelcase, value, unit
             )
+
+    def setLifetimekWh(self, kwh):
+        self.lifetimekWh = kwh
+        self._publishStatus("lifetime_kwh", "lifetimekWh", self.lifetimekWh, "kWh")
 
     def setVoltage(self, pa, pb, pc):
         self.voltsPhaseA = pa
@@ -1160,25 +1162,21 @@ class TWCSlave:
         self.voltsPhaseC = pc
         # Publish phase 1, 2 and 3 values via Status modules
         for phase in ("A", "B", "C"):
-            for module in self.master.getModulesByType("Status"):
-                module["ref"].setStatus(
-                    self.TWCID,
-                    "voltage_phase_" + phase.lower(),
-                    "voltagePhase" + phase,
-                    getattr(self, "voltsPhase" + phase, 0),
-                    "V",
-                )
+            self._publishStatus(
+                "voltage_phase_" + phase.lower(),
+                "voltagePhase" + phase,
+                getattr(self, "voltsPhase" + phase, 0),
+                "V",
+            )
         self.refreshingChargerLoadStatus()
 
     def refreshingChargerLoadStatus(self):
-        for module in self.master.getModulesByType("Status"):
-            module["ref"].setStatus(
-                self.TWCID,
-                "charger_load_w",
-                "chargerLoadInW",
-                int(self.getCurrentChargerLoad()),
-                "W",
-            )
+        self._publishStatus(
+            "charger_load_w",
+            "chargerLoadInW",
+            int(self.getCurrentChargerLoad()),
+            "W",
+        )
 
     def getCurrentChargerLoad(self):
         return self.master.convertAmpsToWatts(
