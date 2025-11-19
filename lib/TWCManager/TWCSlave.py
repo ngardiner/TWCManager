@@ -1144,6 +1144,10 @@ class TWCSlave:
 
             if self.lastAmpsOffered != oldLastAmpsOffered:
                 self.timeLastAmpsOfferedChanged = time.time()
+
+        self._publishStatus("amps_offered", "ampsOffered", self.lastAmpsOffered, "A")
+        self._publishStatus("amps_desired", "ampsDesired", desiredAmpsOffered, "A")
+
         return self.lastAmpsOffered
 
     def _publishStatus(self, key_underscore, key_camelcase, value, unit):
