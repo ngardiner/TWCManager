@@ -32,6 +32,7 @@ class MQTTControl:
 
         brokerIP = self.configMQTT.get("brokerIP", None)
         brokerPort = self.configMQTT.get("brokerPort", 1883)
+        brokerTLS = self.configMQTT.get("brokerTLS", False)
         username = self.configMQTT.get("username", None)
         password = self.configMQTT.get("password", None)
 
@@ -55,6 +56,11 @@ class MQTTControl:
                     self.__client = self.mqtt.Client("MQTTCtrl")
                 if username and password:
                     self.__client.username_pw_set(username, password)
+
+                # Todo: Support certificates
+                if brokerTLS:
+                    self.__client.tls_set()
+
                 self.__client.on_connect = self.mqttConnect
                 self.__client.on_message = self.mqttMessage
                 self.__client.on_subscribe = self.mqttSubscribe
