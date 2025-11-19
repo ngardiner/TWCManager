@@ -139,13 +139,26 @@ class MQTTStatus:
                 f"MQTT connection failed with result code {rc}",
             )
 
-    def mqttDisconnected(self, client, userdata, rc):
+    def mqttDisconnected(self, client, userdata, *extra):
         """
         Called when the MQTT client disconnects from the broker.
-        connect_async + loop_start will handle reconnection attempts automatically.
+
+        Supports both:
+        - Paho 1.x: on_disconnect(client, userdata, rc)
+        - Paho 2.x: on_disconnect(client, userdata, flags, rc, properties)
         """
+        # Determine rc from the extra args
+        # old API: extra == (rc,)
+        # new API: extra == (flags, rc, properties)
+        rc = 0
+        if len(extra) == 1:
+            rc = extra[0]
+        elif len(extra) >= 2:
+            rc = extra[1]
+
         self.connected = False
         self.connectionState = 0
+
         if rc != 0:
             logger.warning(
                 f"Unexpected MQTT disconnect (rc={rc}). Client will attempt to reconnect."
