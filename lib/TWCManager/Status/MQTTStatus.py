@@ -4,6 +4,7 @@
 import logging
 import time
 import json
+import os
 
 logger = logging.getLogger("\U0001f4ca MQTTStatus")
 
@@ -77,9 +78,12 @@ class MQTTStatus:
         """
         try:
             if hasattr(self.mqtt, "CallbackAPIVersion"):
+                pid = os.getpid()
+                client_id = f"MQTTStatus_{pid}"
+
                 client = self.mqtt.Client(
                     self.mqtt.CallbackAPIVersion.VERSION2,
-                    "MQTTStatus",
+                    client_id,
                     protocol=self.mqtt.MQTTv5,
                 )
             else:

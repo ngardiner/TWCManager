@@ -1,4 +1,5 @@
 import logging
+import os
 
 logger = logging.getLogger("\U0001f3ae MQTT")
 
@@ -46,10 +47,13 @@ class MQTTControl:
             # to determine if they represent control messages
             logger.debug("Attempting to Connect")
             if brokerIP:
+                pid = os.getpid()
+                client_id = f"MQTTCtrl_{pid}"
+
                 if hasattr(self.mqtt, "CallbackAPIVersion"):
                     self.__client = self.mqtt.Client(
                         self.mqtt.CallbackAPIVersion.VERSION2,
-                        "MQTTCtrl",
+                        client_id,
                         protocol=self.mqtt.MQTTv5,
                     )
                 else:
