@@ -22,6 +22,7 @@ class TeslaBLE:
     isDockerCached = None
     master = None
     pipe = None
+    enabled = True
     pipeName = "/tmp/ble_data"
 
     def __init__(self, master):
@@ -31,6 +32,8 @@ class TeslaBLE:
         except KeyError:
             pass
         self.configConfig = self.config.get("config", {})
+        cfg = self.config.get("vehicle", {}).get("teslaBLE", {}) or {}
+        self.enabled = cfg.get("enabled", True)
 
         # Determine best binary location
         self.binaryPath = self.configConfig.get(

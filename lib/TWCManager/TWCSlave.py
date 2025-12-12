@@ -70,6 +70,8 @@ class TWCSlave:
     currentVIN = ""
     lastVIN = ""
 
+    vehicleModule = None
+
     def __init__(self, TWCID, maxAmps, config, master):
         self.config = config
         self.configConfig = self.config.get("config", {})

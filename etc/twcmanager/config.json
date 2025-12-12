@@ -747,6 +747,12 @@
         }
     },
     "vehicle": {
+        "teslaAPI": {
+          "enabled": true,
+        },
+        "teslaBLE": {
+          "enabled": false,
+        },
         "teslaFleetTelemetryMQTT": {
           "enabled": false,
           "syncTelemetry": false,

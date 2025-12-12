@@ -348,11 +348,20 @@ class TWCMaster:
             return 0
 
     def getModuleByName(self, name):
-        module = self.modules.get(name, None)
-        if module:
-            return module["ref"]
-        else:
+        module = self.modules.get(name)
+        if not module:
             return None
+
+        ref = module.get("ref")
+
+        enabled_fn = getattr(ref, "enabled", None)
+
+        if callable(enabled_fn):
+            if not enabled_fn():
+                return None
+
+        # If no enabled() method, assume module is usable
+        return ref
 
     def getModulesByType(self, type):
         matched = []
