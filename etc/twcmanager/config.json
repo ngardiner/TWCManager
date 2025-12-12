@@ -761,6 +761,15 @@
           "mqtt_pass": "mqttpass",
           "mqtt_prefix": "telemetry"
         },
+
+        # Control Tesla charging via the Home Assistant Tesla Fleet Integration
+        # See docs/Vehicle_HomeAssistant.md for more details
+        "HomeAssistant": {
+          "enabled": false,
+          "url": "http://homeautomation.lan:8123",
+          "longLivedToken": "abcdef123456-your-ha-token-here"
+        }
+
         # The TeslaMate integration allows TWCManager to fetch API key details directly from
         # your TeslaMate instance's database. This removes the need to manage multiple sets of API
         # credentials.
