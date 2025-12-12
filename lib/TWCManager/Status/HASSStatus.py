@@ -58,6 +58,7 @@ class HASSStatus:
         ):
             self.master.releaseModule("lib.TWCManager.Status", "HASSStatus")
         else:
+            logger.warning(f"HassStatus is depracated, and may be removed in future releases. Please migrate to MQTT Status with Home Assistant autodiscovery.")
             self.backgroundTasksThread = self.threading.Thread(
                 target=self.background_task_thread, args=()
             )

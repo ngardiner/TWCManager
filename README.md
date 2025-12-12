@@ -97,7 +97,7 @@ Status interfaces publish TWCManager status information to external systems. Cur
 
 | Platform                                     | Details                 |
 | -------------------------------------------- | ----------------------- |
-| [HomeAssistant](docs/modules/Status_HASS.md) | Provides HASS sensors to monitor TWCManager State |
+| [HomeAssistant] | Deprecated, please use the MQTT status with Home Assistant autodiscovery |
 | [MQTT](docs/modules/Status_MQTT.md)          | Publishes MQTT topics to monitor TWCManager State |
 
 ### Vehicle Interfaces
