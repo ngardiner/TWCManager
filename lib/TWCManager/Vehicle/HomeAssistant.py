@@ -346,6 +346,16 @@ class HomeAssistant:
             elif domain == "number" and ent_l.endswith(f"{slug}_charge_limit"):
                 result["charge_limit_number"] = entity_id
 
+        # Log which entities were found/missing for debugging
+        missing = [k for k, v in result.items() if v is None]
+        if missing:
+            logger.debug(
+                "Vehicle '%s' (slug=%s): missing entities: %s. Expected patterns: "
+                "sensor.%s_battery_level, sensor.%s_charging, switch.%s_charge, "
+                "number.%s_charge_current, number.%s_charge_limit, device_tracker.%s_location",
+                name, slug, missing, slug, slug, slug, slug, slug, slug
+            )
+
         return result
 
     # ------------------------------------------------------------------
