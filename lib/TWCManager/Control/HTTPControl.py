@@ -764,9 +764,8 @@ def CreateHTTPHandlerClass(master):
 
                 # Set some values that we use within the template
                 # Check if we're able to access the Tesla API
-                self.apiAvailable = master.getModuleByName(
-                    "TeslaAPI"
-                ).car_api_available()
+                teslaapi = master.getModuleByName("TeslaAPI")
+                self.apiAvailable = teslaapi.car_api_available() if teslaapi else False
                 self.scheduledAmpsMax = master.getScheduledAmpsMax()
 
                 self.activeAction = master.getModuleByName(

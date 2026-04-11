@@ -13,17 +13,35 @@ class VehiclePriority:
 
     def __getattr__(self, name):
         def method(*args, **kwargs):
-
             ret = False
             priority = 100
-            while ret == False and priority > 0:
+            module_name = None
+            module_ref = None
+            
+            # Try each module in priority order
+            while priority > 0:
                 module_name, module_ref, priority = self.master.getModuleByPriority("Vehicle", priority)
-                module_method = getattr(module_ref, name)
-                ret = module_method(*args, **kwargs)
-                if ret:
-                    self.master.stats["moduleSuccess"][module_name] = (self.master.stats["moduleSuccess"].get(module_name,0) + 1)
-                else:
-                    self.master.stats["moduleFailures"][module_name] = (self.master.stats["moduleFailures"].get(module_name,0) + 1)
+                
+                # If no module found at this priority level, we've exhausted all options
+                if not module_ref or not module_name:
+                    break
+                
+                try:
+                    # Check if module has the requested method
+                    if hasattr(module_ref, name):
+                        module_method = getattr(module_ref, name)
+                        ret = module_method(*args, **kwargs)
+                        
+                        # Track success/failure
+                        if ret:
+                            self.master.stats["moduleSuccess"][module_name] = (self.master.stats["moduleSuccess"].get(module_name, 0) + 1)
+                            return ret  # Success, return immediately
+                        else:
+                            self.master.stats["moduleFailures"][module_name] = (self.master.stats["moduleFailures"].get(module_name, 0) + 1)
+                except Exception as e:
+                    # Log failure and continue to next module
+                    self.master.stats["moduleFailures"][module_name] = (self.master.stats["moduleFailures"].get(module_name, 0) + 1)
+                    continue
 
             return ret
         return method

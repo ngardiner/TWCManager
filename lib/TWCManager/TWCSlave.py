@@ -86,6 +86,12 @@ class TWCSlave:
         self.vehicleModule = self.get_vehicle_module()
 
     def get_vehicle_module(self):
+        # Try to use VehiclePriority proxy for fallback logic
+        vehiclePriority = self.master.getModuleByName("VehiclePriority")
+        if vehiclePriority:
+            return vehiclePriority
+
+        # Fallback to direct module selection if VehiclePriority not available
         carHass = self.master.getModuleByName("HomeAssistant")
         if carHass:
             return carHass
