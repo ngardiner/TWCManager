@@ -308,6 +308,10 @@ class HomeAssistant:
             if dev_id:
                 ents_by_device.setdefault(dev_id, []).append(e)
 
+        logger.debug(
+            "Processing %d devices from Home Assistant registry", len(devices)
+        )
+        
         for d in devices:
             manufacturer = (
                 d.get("manufacturer") or d.get("default_manufacturer") or ""
@@ -317,6 +321,11 @@ class HomeAssistant:
 
             model = d.get("model") or d.get("default_model") or ""
             if model and model not in TESLA_MODELS:
+                logger.debug(
+                    "Device '%s' has unsupported model '%s'",
+                    d.get("name") or d.get("id"),
+                    model,
+                )
                 continue
 
             vin = (
@@ -325,6 +334,11 @@ class HomeAssistant:
                 or ""
             )
             if not VIN_REGEX.fullmatch(vin):
+                logger.debug(
+                    "Device '%s' has invalid VIN: %s",
+                    d.get("name") or d.get("id"),
+                    vin,
+                )
                 continue
 
             name = (
@@ -334,8 +348,14 @@ class HomeAssistant:
             entity_ids = self._map_tesla_entities(name, dev_entities)
 
             if not entity_ids.get("battery_level_sensor"):
+                logger.debug(
+                    "Device '%s' missing battery_level_sensor entity", name
+                )
                 continue
             if not entity_ids.get("charge_switch"):
+                logger.debug(
+                    "Device '%s' missing charge_switch entity", name
+                )
                 continue
 
             self.carApiVehicles.append(HaVehicle(name, vin, d.get("id"), entity_ids))
