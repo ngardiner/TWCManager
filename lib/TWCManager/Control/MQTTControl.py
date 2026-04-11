@@ -30,16 +30,15 @@ class MQTTControl:
         self.status = self.configMQTT.get("enabled", False)
         self.master = master
         self.topicPrefix = self.configMQTT.get("topicPrefix", None)
-
-         brokerIP = self.configMQTT.get("brokerIP", None)
-         brokerTLS = self.configMQTT.get("brokerTLS", False)
-         # Default to 8883 for TLS, 1883 for plain MQTT
-         brokerPort = self.configMQTT.get("brokerPort", 8883 if brokerTLS else 1883)
-        username = self.configMQTT.get("username", None)
-        password = self.configMQTT.get("password", None)
+        self.brokerIP = self.configMQTT.get("brokerIP", None)
+        brokerTLS = self.configMQTT.get("brokerTLS", False)
+        # Default to 8883 for TLS, 1883 for plain MQTT
+        self.brokerPort = self.configMQTT.get("brokerPort", 8883 if brokerTLS else 1883)
+        self.username = self.configMQTT.get("username", None)
+        self.password = self.configMQTT.get("password", None)
 
         # Unload if this module is disabled or misconfigured
-        if (not self.status) or (not brokerIP):
+        if (not self.status) or (not self.brokerIP):
             self.master.releaseModule("lib.TWCManager.Control", "MQTTControl")
             return None
 
@@ -47,30 +46,25 @@ class MQTTControl:
             # Subscribe to the specified topic prefix, and process incoming messages
             # to determine if they represent control messages
             logger.debug("Attempting to Connect")
-            if brokerIP:
-                pid = os.getpid()
-                client_id = f"MQTTCtrl_{pid}"
-
+            if self.brokerIP:
                 if hasattr(self.mqtt, "CallbackAPIVersion"):
                     self.__client = self.mqtt.Client(
                         self.mqtt.CallbackAPIVersion.VERSION2,
-                        client_id,
+                        "MQTTCtrl",
                         protocol=self.mqtt.MQTTv5,
                     )
                 else:
                     self.__client = self.mqtt.Client("MQTTCtrl")
-                if username and password:
-                    self.__client.username_pw_set(username, password)
-
-                # Todo: Support certificates
-                if brokerTLS:
-                    self.__client.tls_set()
+                if self.username and self.password:
+                    self.__client.username_pw_set(self.username, self.password)
 
                 self.__client.on_connect = self.mqttConnect
                 self.__client.on_message = self.mqttMessage
                 self.__client.on_subscribe = self.mqttSubscribe
                 try:
-                    self.__client.connect_async(brokerIP, port=brokerPort, keepalive=30)
+                    self.__client.connect_async(
+                        self.brokerIP, port=self.brokerPort, keepalive=30
+                    )
                 except ConnectionRefusedError as e:
                     logger.log(logging.INFO4, "Error connecting to MQTT Broker")
                     logger.debug(str(e))
