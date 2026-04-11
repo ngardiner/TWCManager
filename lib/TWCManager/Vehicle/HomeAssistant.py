@@ -144,6 +144,8 @@ class HomeAssistant:
     carApiLastStartOrStopChargeTime = 0
     lastChargeLimitApplied = -1
     minChargeLevel = -1
+    lastStateRefreshTime = 0
+    stateRefreshInterval = 30  # Minimum seconds between state refreshes per vehicle
 
     def __init__(self, master):
         self.master = master
