@@ -245,15 +245,16 @@ class MQTTStatus:
         try:
             logger.log(
                 logging.INFO8,
-                f"Publishing MQTT Discovery Topic {cfg_topic} (payload omitted)",
+                f"Publishing MQTT Discovery Topic {cfg_topic} for {key_underscore}",
             )
             result = self.client.publish(
                 cfg_topic, payload=json.dumps(payload), qos=0, retain=True
             )
             if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
+                error_msg = self._get_mqtt_error_message(result.rc)
                 logger.log(
                     logging.INFO4,
-                    f"Error publishing MQTT Discovery Topic {cfg_topic}: rc={result.rc}",
+                    f"Error publishing MQTT Discovery Topic {cfg_topic}: {error_msg} (rc={result.rc})",
                 )
                 return
         except Exception as e:
@@ -261,6 +262,7 @@ class MQTTStatus:
             logger.debug(str(e))
             return
 
+        logger.debug(f"MQTT Discovery published for {uid}")
         self.discoveryPublished.add(uid)
 
     def setStatus(self, twcid, key_underscore, key_camelcase, value, unit):
