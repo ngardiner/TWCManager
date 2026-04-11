@@ -558,13 +558,16 @@ class HomeAssistant:
             return "error"
 
         if not self.car_api_available():
+            logger.debug("Home Assistant API not available for charge limit")
             return "error"
 
         result = "success"
+        vehicles_processed = 0
 
         for v in self.carApiVehicles:
             v.refresh_from_home_assistant(self)
             if not v.at_home:
+                logger.debug("%s not at home; skipping charge limit", v.name)
                 continue
 
             ent = v.entity_ids.get("charge_limit_number")
@@ -594,6 +597,11 @@ class HomeAssistant:
             )
             if not ok:
                 result = "error"
+            else:
+                vehicles_processed += 1
+
+        if vehicles_processed == 0 and result == "success":
+            logger.info("No vehicles processed for charge limit %d%% command", limit)
 
         return result
 
