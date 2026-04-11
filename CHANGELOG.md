@@ -3,6 +3,8 @@
 This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
+* (@deece) - Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
+* (@ngardiner) - Post-merge improvements: input validation, error handling, comprehensive logging, rate limiting, and thread safety for MQTT and Home Assistant modules
 * Placeholder - TWC abstraction code
 * (@ngardiner) - Initial commit of local Tesla BLE vehicle control module
 * (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
