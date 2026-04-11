@@ -79,6 +79,7 @@ modules_available = [
     "Interface.RS485",
     "Interface.TCP",
     "Policy.Policy",
+    "Vehicle.VehiclePriority",
     "Vehicle.TeslaAPI",
     "Vehicle.TeslaBLE",
     "Vehicle.TeslaMateVehicle",
@@ -268,40 +269,42 @@ def get_vehicle_module():
 
 
 def background_tasks_thread(master):
-    carble = master.getModuleByName("TeslaBLE")
-
     while True:
         try:
             task = master.getBackgroundTask()
-            carapi = get_vehicle_module()
+            vehicleModule = master.getModuleByName("VehiclePriority")
+            if not vehicleModule:
+                # Fallback to direct API if VehiclePriority not available
+                vehicleModule = get_vehicle_module()
 
             if "cmd" in task:
                 if task["cmd"] == "applyChargeLimit":
-                    carapi.applyChargeLimit(limit=task["limit"])
+                    vehicleModule.applyChargeLimit(limit=task["limit"])
                 elif task["cmd"] == "charge":
-                    # car_api_charge does nothing if it's been under 60 secs since it
-                    # was last used so we shouldn't have to worry about calling this
-                    # too frequently.
-
-                    # In the new world, we try the BLE command first, and if
-                    # that fails, we try the API
-                    if not carble or not carble.car_api_charge(task["charge"]):
-                        carapi.car_api_charge(task["charge"])
+                    vehicleModule.car_api_charge(task)
                 elif task["cmd"] == "carApiEmailPassword":
-                    carapi.resetCarApiLastErrorTime()
-                    carapi.car_api_available(task["email"], task["password"])
+                    # For credential updates, use TeslaAPI directly
+                    carapi = master.getModuleByName("TeslaAPI")
+                    if carapi:
+                        carapi.resetCarApiLastErrorTime()
+                        carapi.car_api_available(task["email"], task["password"])
                 elif task["cmd"] == "checkArrival":
+                    # Get lastChargeLimitApplied from TeslaAPI
+                    carapi = master.getModuleByName("TeslaAPI")
                     limit = (
                         carapi.lastChargeLimitApplied
-                        if carapi.lastChargeLimitApplied != 0
+                        if carapi and carapi.lastChargeLimitApplied != 0
                         else -1
                     )
-                    carapi.applyChargeLimit(limit=limit, checkArrival=True)
+                    vehicleModule.applyChargeLimit(limit=limit, checkArrival=True)
                 elif task["cmd"] == "checkCharge":
-                    carapi.updateChargeAtHome()
+                    vehicleModule.updateChargeAtHome()
                 elif task["cmd"] == "checkDeparture":
-                    carapi.applyChargeLimit(
-                        limit=carapi.lastChargeLimitApplied, checkDeparture=True
+                    # Get lastChargeLimitApplied from TeslaAPI
+                    carapi = master.getModuleByName("TeslaAPI")
+                    limit = carapi.lastChargeLimitApplied if carapi else 0
+                    vehicleModule.applyChargeLimit(
+                        limit=limit, checkDeparture=True
                     )
                 elif task["cmd"] == "checkGreenEnergy":
                     check_green_energy()

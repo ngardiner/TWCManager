@@ -605,9 +605,13 @@ class TeslaAPI:
     def is_far_from_home(self, lat, lon):
         return not self.is_location_within_radius(lat, lon, 1.4)
 
-    def car_api_charge(self, charge):
+    def car_api_charge(self, task):
         # Do not call this function directly.  Call by using background thread:
         # queue_background_task({'cmd':'charge', 'charge':<True/False>})
+
+        charge = None
+        if task:
+            charge = task.get("charge", None)
 
         now = time.time()
         apiResponseDict = {}
