@@ -163,6 +163,15 @@ class HomeAssistant:
             self.enabled = False
             return
 
+        # Validate token format (should be at least 20 chars, typically much longer)
+        if len(self.token) < 20:
+            logger.error(
+                "HomeAssistant longLivedToken appears invalid (too short). "
+                "Generate a new token in Home Assistant: Profile → Long-Lived Access Tokens"
+            )
+            self.enabled = False
+            return
+
         self.rest_base = f"{self.url}/api"
         self.ws_url = f"{self.url}/api/websocket"
 
@@ -178,6 +187,36 @@ class HomeAssistant:
         self._rest_lock = threading.Lock()
 
         logger.info("HomeAssistant vehicle module initialising, URL=%s", self.url)
+
+        # Test connectivity before attempting discovery
+        try:
+            resp = self._session.get(f"{self.rest_base}/config", timeout=5)
+            resp.raise_for_status()
+            logger.debug("HomeAssistant connectivity verified")
+        except requests.exceptions.ConnectionError:
+            logger.error(
+                "Cannot connect to Home Assistant at %s. Check URL and network connectivity.",
+                self.url,
+            )
+            self.enabled = False
+            return
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                logger.error(
+                    "HomeAssistant authentication failed (401). "
+                    "Check that longLivedToken is valid and has not expired."
+                )
+            else:
+                logger.error(
+                    "HomeAssistant returned HTTP %d. Check URL and token.",
+                    e.response.status_code,
+                )
+            self.enabled = False
+            return
+        except Exception as e:
+            logger.error("Failed to verify HomeAssistant connectivity: %s", str(e))
+            self.enabled = False
+            return
 
         try:
             self._discover_vehicles()
