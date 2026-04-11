@@ -783,7 +783,7 @@ class TWCMaster:
         # Step 1 - Load settings from JSON file
         fileName = self.config["config"]["settingsPath"] + "/settings.json"
         backupFileName = fileName + ".backup"
-        
+
         if not os.path.exists(fileName):
             self.settings = {}
             return
@@ -796,8 +796,7 @@ class TWCMaster:
                 loadSuccess = True
             except Exception as e:
                 logger.info(
-                    "There was an exception whilst loading settings file "
-                    + fileName
+                    "There was an exception whilst loading settings file " + fileName
                 )
                 logger.log(logging.DEBUG2, str(e))
 
@@ -814,14 +813,15 @@ class TWCMaster:
                 # Restore the backup to the main file
                 try:
                     import shutil
+
                     shutil.copy2(backupFileName, fileName)
                     logger.info("Restored backup to main settings file")
                 except Exception as restore_error:
-                    logger.info(f"Could not restore backup to main file: {restore_error}")
+                    logger.info(
+                        f"Could not restore backup to main file: {restore_error}"
+                    )
             except Exception as backup_error:
-                logger.info(
-                    "Failed to load backup settings file: " + str(backup_error)
-                )
+                logger.info("Failed to load backup settings file: " + str(backup_error))
 
         # If both files failed, show helpful message
         if not loadSuccess:
