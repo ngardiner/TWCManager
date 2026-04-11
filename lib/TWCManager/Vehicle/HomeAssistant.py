@@ -529,7 +529,17 @@ class HomeAssistant:
         return result
 
     def applyChargeLimit(self, limit: int, *args, **kwargs):
+        # Validate limit
+        try:
+            limit = int(limit)
+        except (ValueError, TypeError):
+            logger.warning("Invalid charge limit value: %s", limit)
+            return "error"
+
         if limit != -1 and not (50 <= limit <= 100):
+            logger.warning(
+                "Charge limit %d%% out of valid range [50, 100]", limit
+            )
             return "error"
 
         if not self.car_api_available():
@@ -544,6 +554,9 @@ class HomeAssistant:
 
             ent = v.entity_ids.get("charge_limit_number")
             if not ent:
+                logger.debug(
+                    "%s: charge_limit_number entity not available", v.name
+                )
                 continue
 
             if not self._is_vehicle_connected(v):
