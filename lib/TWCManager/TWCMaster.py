@@ -781,31 +781,59 @@ class TWCMaster:
         # API credentials, etc) from a JSON file
 
         # Step 1 - Load settings from JSON file
-        if not os.path.exists(self.config["config"]["settingsPath"] + "/settings.json"):
+        fileName = self.config["config"]["settingsPath"] + "/settings.json"
+        backupFileName = fileName + ".backup"
+        
+        if not os.path.exists(fileName):
             self.settings = {}
             return
 
-        with open(
-            self.config["config"]["settingsPath"] + "/settings.json", "r"
-        ) as inconfig:
+        # Try to load the main settings file
+        loadSuccess = False
+        with open(fileName, "r") as inconfig:
             try:
                 self.settings = json.load(inconfig)
+                loadSuccess = True
             except Exception as e:
                 logger.info(
                     "There was an exception whilst loading settings file "
-                    + self.config["config"]["settingsPath"]
-                    + "/settings.json"
-                )
-                logger.info(
-                    "Some data may have been loaded. This may be because the file is being created for the first time."
-                )
-                logger.info(
-                    "It may also be because you are upgrading from a TWCManager version prior to v1.1.4, which used the old settings file format."
-                )
-                logger.info(
-                    "If this is the case, you may need to locate the old config file and migrate some settings manually."
+                    + fileName
                 )
                 logger.log(logging.DEBUG2, str(e))
+
+        # If main file failed to load, try the backup
+        if not loadSuccess and os.path.exists(backupFileName):
+            logger.info(
+                "Attempting to restore settings from backup file: " + backupFileName
+            )
+            try:
+                with open(backupFileName, "r") as inconfig:
+                    self.settings = json.load(inconfig)
+                    loadSuccess = True
+                logger.info("Successfully restored settings from backup file")
+                # Restore the backup to the main file
+                try:
+                    import shutil
+                    shutil.copy2(backupFileName, fileName)
+                    logger.info("Restored backup to main settings file")
+                except Exception as restore_error:
+                    logger.info(f"Could not restore backup to main file: {restore_error}")
+            except Exception as backup_error:
+                logger.info(
+                    "Failed to load backup settings file: " + str(backup_error)
+                )
+
+        # If both files failed, show helpful message
+        if not loadSuccess:
+            logger.info(
+                "Some data may have been loaded. This may be because the file is being created for the first time."
+            )
+            logger.info(
+                "It may also be because you are upgrading from a TWCManager version prior to v1.1.4, which used the old settings file format."
+            )
+            logger.info(
+                "If this is the case, you may need to locate the old config file and migrate some settings manually."
+            )
 
         # Step 2 - Send settings to other modules
         carapi = self.getModuleByName("TeslaAPI")
@@ -1157,6 +1185,8 @@ class TWCMaster:
         # Saves the volatile application settings (such as charger timings,
         # API credentials, etc) to a JSON file
         fileName = self.config["config"]["settingsPath"] + "/settings.json"
+        tempFileName = fileName + ".tmp"
+        backupFileName = fileName + ".backup"
 
         # Step 1 - Merge any config from other modules
         carapi = self.getModuleByName("TeslaAPI")
@@ -1164,20 +1194,46 @@ class TWCMaster:
         self.settings["carApiRefreshToken"] = carapi.getCarApiRefreshToken()
         self.settings["carApiTokenExpireTime"] = carapi.getCarApiTokenExpireTime()
 
-        # Step 2 - Write the settings dict to a JSON file
+        # Step 2 - Write the settings dict to a JSON file atomically
+        # Use temp file + rename to ensure atomic write and prevent corruption
         try:
-            with open(fileName, "w") as outconfig:
+            # Write to temp file first
+            with open(tempFileName, "w") as outconfig:
                 json.dump(self.settings, outconfig)
+
+            # Create backup of existing file if it exists
+            if os.path.exists(fileName):
+                try:
+                    os.replace(fileName, backupFileName)
+                except OSError:
+                    # If backup creation fails, continue anyway
+                    pass
+
+            # Atomically move temp to final location
+            os.replace(tempFileName, fileName)
+
             self.lastSaveFailed = 0
         except PermissionError as e:
             logger.info(
                 "Permission Denied trying to save to settings.json. Please check the permissions of the file and try again."
             )
             self.lastSaveFailed = 1
-        except TypeError as e:
+            # Clean up temp file if it exists
+            if os.path.exists(tempFileName):
+                try:
+                    os.remove(tempFileName)
+                except:
+                    pass
+        except (TypeError, OSError, IOError) as e:
             logger.info("Exception raised while attempting to save settings file:")
             logger.info(str(e))
             self.lastSaveFailed = 1
+            # Clean up temp file if it exists
+            if os.path.exists(tempFileName):
+                try:
+                    os.remove(tempFileName)
+                except:
+                    pass
 
     def send_master_linkready1(self):
         logger.log(logging.INFO8, "Send master linkready1")
