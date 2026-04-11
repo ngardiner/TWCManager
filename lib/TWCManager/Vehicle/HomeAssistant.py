@@ -580,8 +580,20 @@ class HomeAssistant:
         if not vehicle.has_charge_current_number:
             return False
 
+        # Validate and clamp amps to reasonable range
+        try:
+            amps = float(amps)
+        except (ValueError, TypeError):
+            logger.warning("Invalid amps value: %s", amps)
+            return False
+
+        # Clamp to 1-32A range (typical Tesla charger limits)
         if amps < 1:
+            logger.debug("Amps %.1f below minimum (1A), clamping to 1A", amps)
             amps = 1
+        elif amps > 32:
+            logger.warning("Amps %.1f exceeds typical maximum (32A), clamping to 32A", amps)
+            amps = 32
 
         # Pull latest charge_current_number state
         vehicle.refresh_from_home_assistant(self)
