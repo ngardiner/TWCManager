@@ -100,7 +100,7 @@ class MQTTControl:
                 try:
                     amps = int(plsplit[0])
                     seconds = int(plsplit[1])
-                    
+
                     # Validate amps: must be between 1 and maxAmpsPerTWC
                     maxAmps = self.configConfig.get("maxAmpsPerTWC", 32)
                     if amps < 1 or amps > maxAmps:
@@ -108,14 +108,14 @@ class MQTTControl:
                             f"MQTT chargeNow rejected: amps {amps} out of valid range [1, {maxAmps}]"
                         )
                         return
-                    
+
                     # Validate seconds: must be positive
                     if seconds < 0:
                         logger.warning(
                             f"MQTT chargeNow rejected: seconds {seconds} must be non-negative"
                         )
                         return
-                    
+
                     self.master.setChargeNowAmps(amps)
                     self.master.setChargeNowTimeEnd(seconds)
                     self.master.getModuleByName("Policy").applyPolicyImmediately()

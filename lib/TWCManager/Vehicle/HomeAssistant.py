@@ -274,12 +274,16 @@ class HomeAssistant:
                 logger.info("Home Assistant WebSocket authenticated.")
 
                 # Request device registry
-                await ws.send(json.dumps({"id": 1, "type": "config/device_registry/list"}))
+                await ws.send(
+                    json.dumps({"id": 1, "type": "config/device_registry/list"})
+                )
                 dev_msg = await self._await_result(ws, 1)
                 devices = dev_msg.get("result") or []
 
                 # Request entity registry
-                await ws.send(json.dumps({"id": 2, "type": "config/entity_registry/list"}))
+                await ws.send(
+                    json.dumps({"id": 2, "type": "config/entity_registry/list"})
+                )
                 ent_msg = await self._await_result(ws, 2)
                 entities = ent_msg.get("result") or []
 
@@ -308,10 +312,8 @@ class HomeAssistant:
             if dev_id:
                 ents_by_device.setdefault(dev_id, []).append(e)
 
-        logger.debug(
-            "Processing %d devices from Home Assistant registry", len(devices)
-        )
-        
+        logger.debug("Processing %d devices from Home Assistant registry", len(devices))
+
         for d in devices:
             manufacturer = (
                 d.get("manufacturer") or d.get("default_manufacturer") or ""
@@ -348,14 +350,10 @@ class HomeAssistant:
             entity_ids = self._map_tesla_entities(name, dev_entities)
 
             if not entity_ids.get("battery_level_sensor"):
-                logger.debug(
-                    "Device '%s' missing battery_level_sensor entity", name
-                )
+                logger.debug("Device '%s' missing battery_level_sensor entity", name)
                 continue
             if not entity_ids.get("charge_switch"):
-                logger.debug(
-                    "Device '%s' missing charge_switch entity", name
-                )
+                logger.debug("Device '%s' missing charge_switch entity", name)
                 continue
 
             self.carApiVehicles.append(HaVehicle(name, vin, d.get("id"), entity_ids))
@@ -414,7 +412,15 @@ class HomeAssistant:
                 "Vehicle '%s' (slug=%s): missing entities: %s. Expected patterns: "
                 "sensor.%s_battery_level, sensor.%s_charging, switch.%s_charge, "
                 "number.%s_charge_current, number.%s_charge_limit, device_tracker.%s_location",
-                name, slug, missing, slug, slug, slug, slug, slug, slug
+                name,
+                slug,
+                missing,
+                slug,
+                slug,
+                slug,
+                slug,
+                slug,
+                slug,
             )
 
         return result
@@ -438,7 +444,9 @@ class HomeAssistant:
                     logger.debug("HA: entity not found: %s", entity_id)
                 else:
                     logger.warning(
-                        "HA: HTTP %d reading state %s", e.response.status_code, entity_id
+                        "HA: HTTP %d reading state %s",
+                        e.response.status_code,
+                        entity_id,
                     )
                 return None
             except Exception as exc:
@@ -454,9 +462,7 @@ class HomeAssistant:
                 logger.debug("HA: service call %s.%s succeeded", domain, service)
                 return True
             except requests.exceptions.Timeout:
-                logger.warning(
-                    "HA: timeout calling %s.%s (10s)", domain, service
-                )
+                logger.warning("HA: timeout calling %s.%s (10s)", domain, service)
                 return False
             except requests.exceptions.HTTPError as e:
                 logger.warning(
@@ -468,9 +474,7 @@ class HomeAssistant:
                 )
                 return False
             except Exception as exc:
-                logger.warning(
-                    "HA: failed calling %s.%s: %s", domain, service, exc
-                )
+                logger.warning("HA: failed calling %s.%s: %s", domain, service, exc)
                 return False
 
     def _is_vehicle_connected(self, vehicle: HaVehicle) -> bool:
@@ -507,9 +511,7 @@ class HomeAssistant:
     def car_api_charge(self, charge: bool) -> str:
         now = time.time()
         if now - self.carApiLastStartOrStopChargeTime < 10:
-            logger.debug(
-                "Charge command rate limited (10s minimum between commands)"
-            )
+            logger.debug("Charge command rate limited (10s minimum between commands)")
             return "error"
 
         if not self.car_api_available():
@@ -572,9 +574,7 @@ class HomeAssistant:
             return "error"
 
         if limit != -1 and not (50 <= limit <= 100):
-            logger.warning(
-                "Charge limit %d%% out of valid range [50, 100]", limit
-            )
+            logger.warning("Charge limit %d%% out of valid range [50, 100]", limit)
             return "error"
 
         if not self.car_api_available():
@@ -592,9 +592,7 @@ class HomeAssistant:
 
             ent = v.entity_ids.get("charge_limit_number")
             if not ent:
-                logger.debug(
-                    "%s: charge_limit_number entity not available", v.name
-                )
+                logger.debug("%s: charge_limit_number entity not available", v.name)
                 continue
 
             if not self._is_vehicle_connected(v):
@@ -635,9 +633,7 @@ class HomeAssistant:
         vehicle = vehicle or self.carApiVehicles[0]
 
         if not vehicle.has_charge_current_number:
-            logger.debug(
-                "%s: charge_current_number entity not available", vehicle.name
-            )
+            logger.debug("%s: charge_current_number entity not available", vehicle.name)
             return False
 
         # Validate and clamp amps to reasonable range
@@ -652,7 +648,9 @@ class HomeAssistant:
             logger.debug("Amps %.1f below minimum (1A), clamping to 1A", amps)
             amps = 1
         elif amps > 32:
-            logger.warning("Amps %.1f exceeds typical maximum (32A), clamping to 32A", amps)
+            logger.warning(
+                "Amps %.1f exceeds typical maximum (32A), clamping to 32A", amps
+            )
             amps = 32
 
         # Pull latest charge_current_number state
@@ -679,10 +677,10 @@ class HomeAssistant:
             "set_value",
             {"entity_id": ent, "value": float(amps)},
         )
-        
+
         if not ok:
             logger.warning("Failed to set charge rate for %s", vehicle.name)
-        
+
         return ok
 
     # ------------------------------------------------------------------

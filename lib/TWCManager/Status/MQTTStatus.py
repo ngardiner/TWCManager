@@ -281,7 +281,7 @@ class MQTTStatus:
                 if not self.client:
                     logger.debug("MQTT client not initialised; attempting to re-create")
                     self._init_mqtt_client()
-            
+
             if not self.client:
                 # Still no client — give up for now
                 return
@@ -313,9 +313,7 @@ class MQTTStatus:
 
         # Check connection state before attempting to publish
         if not self.connected:
-            logger.debug(
-                f"MQTT not connected; skipping publish to {topic}"
-            )
+            logger.debug(f"MQTT not connected; skipping publish to {topic}")
             return False
 
         # Perform rate limiting first (as there are some very chatty topics).
