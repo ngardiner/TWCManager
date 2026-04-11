@@ -4,7 +4,6 @@ import logging
 import sys
 from termcolor import colored
 
-
 logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 

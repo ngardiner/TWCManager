@@ -69,9 +69,7 @@ class MQTTControl:
                 self.__client.on_message = self.mqttMessage
                 self.__client.on_subscribe = self.mqttSubscribe
                 try:
-                    self.__client.connect_async(
-                        brokerIP, port=brokerPort, keepalive=30
-                    )
+                    self.__client.connect_async(brokerIP, port=brokerPort, keepalive=30)
                 except ConnectionRefusedError as e:
                     logger.log(logging.INFO4, "Error connecting to MQTT Broker")
                     logger.debug(str(e))

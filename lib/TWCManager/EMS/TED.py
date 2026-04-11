@@ -4,7 +4,6 @@ import re
 import requests
 import time
 
-
 logger = logging.getLogger("\U000026c5 TED")
 
 

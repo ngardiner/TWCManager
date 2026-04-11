@@ -42,7 +42,6 @@ from TWCManager.TWCMaster import TWCMaster
 import requests
 from enum import Enum
 
-
 logging.addLevelName(19, "INFO2")
 logging.addLevelName(18, "INFO3")
 logging.addLevelName(17, "INFO4")
@@ -266,6 +265,7 @@ def get_vehicle_module():
 
     logger.error("No vehicle module enabled")
     return None
+
 
 def background_tasks_thread(master):
     carble = master.getModuleByName("TeslaBLE")

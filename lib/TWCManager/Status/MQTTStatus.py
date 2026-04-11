@@ -61,7 +61,7 @@ class MQTTStatus:
             "discoveryPrefix", "homeassistant"
         ).strip("/")
         self.deviceNamePrefix = self.__configMQTT.get("deviceNamePrefix", "TWC")
-        self.deviceNamePrefixUnderscore = self.deviceNamePrefix.replace(' ', '_')
+        self.deviceNamePrefixUnderscore = self.deviceNamePrefix.replace(" ", "_")
 
         # Unload if this module is disabled or misconfigured
         if (not self.status) or (not self.brokerIP) or (not self.topicPrefix):
@@ -197,9 +197,7 @@ class MQTTStatus:
             state_class = "measurement"
         return device_class, state_class
 
-    def _publish_discovery_if_needed(
-        self, twident, key_underscore, unit, state_topic
-    ):
+    def _publish_discovery_if_needed(self, twident, key_underscore, unit, state_topic):
         """
         Publish Home Assistant discovery config once per sensor, using the
         persistent MQTT connection. Messages are retained.

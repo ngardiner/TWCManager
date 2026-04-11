@@ -249,11 +249,11 @@ class TWCMaster:
                 return 0
 
     def convertAmpsToWatts(self, amps):
-        (voltage, phases) = self.getVoltageMeasurement()
+        voltage, phases = self.getVoltageMeasurement()
         return phases * voltage * amps
 
     def convertWattsToAmps(self, watts):
-        (voltage, phases) = self.getVoltageMeasurement()
+        voltage, phases = self.getVoltageMeasurement()
         return watts / (phases * voltage)
 
     def countSlaveTWC(self):

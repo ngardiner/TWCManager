@@ -187,7 +187,7 @@ class TeslaPowerwall2:
         return float(self.generatedW)
 
     def getPWJson(self, path):
-        (lastTime, lastData) = (
+        lastTime, lastData = (
             self.lastFetch[path] if path in self.lastFetch else (0, dict())
         )
 
@@ -242,7 +242,7 @@ class TeslaPowerwall2:
         now = time.time()
         key = "CLOUD/live_status"
 
-        (lastTime, lastData) = (
+        lastTime, lastData = (
             self.lastFetch[key] if key in self.lastFetch else (0, dict())
         )
 
@@ -273,7 +273,7 @@ class TeslaPowerwall2:
                         pass
 
                     if len(products) == 1:
-                        (site, name) = products[0]
+                        site, name = products[0]
                         self.cloudID = site
                     elif len(products) > 1:
                         logger.info(

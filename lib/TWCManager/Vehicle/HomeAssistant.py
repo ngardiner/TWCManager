@@ -47,7 +47,9 @@ def _slugify_name(name: str) -> str:
 class HaVehicle:
     """Represents a Tesla vehicle mirrored from Home Assistant."""
 
-    def __init__(self, name: str, vin: str, device_id: str, entity_ids: Dict[str, Optional[str]]):
+    def __init__(
+        self, name: str, vin: str, device_id: str, entity_ids: Dict[str, Optional[str]]
+    ):
         self.name = name
         self.vin = vin
         self.device_id = device_id
@@ -165,10 +167,12 @@ class HomeAssistant:
         self.ws_url = f"{self.url}/api/websocket"
 
         self._session = requests.Session()
-        self._session.headers.update({
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-        })
+        self._session.headers.update(
+            {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+            }
+        )
 
         self.carApiVehicles: List[HaVehicle] = []
         self._rest_lock = threading.Lock()
@@ -253,7 +257,9 @@ class HomeAssistant:
                 ents_by_device.setdefault(dev_id, []).append(e)
 
         for d in devices:
-            manufacturer = (d.get("manufacturer") or d.get("default_manufacturer") or "").lower()
+            manufacturer = (
+                d.get("manufacturer") or d.get("default_manufacturer") or ""
+            ).lower()
             if "tesla" not in manufacturer:
                 continue
 
@@ -269,7 +275,9 @@ class HomeAssistant:
             if not VIN_REGEX.fullmatch(vin):
                 continue
 
-            name = d.get("name_by_user") or d.get("name") or d.get("default_name") or vin
+            name = (
+                d.get("name_by_user") or d.get("name") or d.get("default_name") or vin
+            )
             dev_entities = ents_by_device.get(d.get("id"), [])
             entity_ids = self._map_tesla_entities(name, dev_entities)
 
@@ -352,7 +360,9 @@ class HomeAssistant:
                 resp.raise_for_status()
                 return True
             except Exception as exc:
-                logger.warning("HA: failed calling %s.%s(%s): %s", domain, service, data, exc)
+                logger.warning(
+                    "HA: failed calling %s.%s(%s): %s", domain, service, data, exc
+                )
                 return False
 
     def _is_vehicle_connected(self, vehicle: HaVehicle) -> bool:
@@ -418,7 +428,8 @@ class HomeAssistant:
             if v.charging == desired:
                 logger.info(
                     "Skipping %s: already %s charging",
-                    v.name, "enabled" if desired else "disabled"
+                    v.name,
+                    "enabled" if desired else "disabled",
                 )
                 continue
 
@@ -472,7 +483,9 @@ class HomeAssistant:
 
         return result
 
-    def setChargeRate(self, amps: float, vehicle: Optional[HaVehicle] = None, *args, **kwargs):
+    def setChargeRate(
+        self, amps: float, vehicle: Optional[HaVehicle] = None, *args, **kwargs
+    ):
         if not self.carApiVehicles:
             return False
 
@@ -492,11 +505,12 @@ class HomeAssistant:
             return True
 
         # Skip if current value already matches (rounded to 1 decimal)
-        if (
-            vehicle.available_current is not None and
-            round(float(vehicle.available_current), 1) == round(float(amps), 1)
-        ):
-            logger.info("Skipping %s: charge current already %.1f A", vehicle.name, amps)
+        if vehicle.available_current is not None and round(
+            float(vehicle.available_current), 1
+        ) == round(float(amps), 1):
+            logger.info(
+                "Skipping %s: charge current already %.1f A", vehicle.name, amps
+            )
             return True
 
         ent = vehicle.entity_ids["charge_current_number"]
@@ -546,7 +560,11 @@ class HomeAssistant:
     @property
     def minBatteryLevelAtHome(self):
         self.updateChargeAtHome()
-        levels = [v.battery_level for v in self.carApiVehicles if v.at_home and v.battery_level is not None]
+        levels = [
+            v.battery_level
+            for v in self.carApiVehicles
+            if v.at_home and v.battery_level is not None
+        ]
         return min(levels) if levels else 10000.0
 
     def updateSettings(self):

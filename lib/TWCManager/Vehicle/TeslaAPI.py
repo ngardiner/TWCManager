@@ -896,7 +896,7 @@ class TeslaAPI:
         # continuous API poll.
         needToWake = False
         for vehicle in self.carApiVehicles:
-            (wasAtHome, outside, lastApplied) = self.master.getNormalChargeLimit(
+            wasAtHome, outside, lastApplied = self.master.getNormalChargeLimit(
                 vehicle.ID
             )
             # Don't wake cars to tell them about reduced limits;
@@ -944,7 +944,7 @@ class TeslaAPI:
             if vehicle.stopTryingToApplyLimit or not vehicle.ready():
                 continue
 
-            (wasAtHome, outside, lastApplied) = self.master.getNormalChargeLimit(
+            wasAtHome, outside, lastApplied = self.master.getNormalChargeLimit(
                 vehicle.ID
             )
             forgetVehicle = False
@@ -1452,7 +1452,7 @@ class CarApiVehicle:
             time.time() - self.syncTimeout / 4
         ):
             url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
-            (result, response) = self.get_car_api(
+            result, response = self.get_car_api(
                 url, checkReady=False, provesOnline=False
             )
             return result and response.get("state", "") == "online"
@@ -1560,7 +1560,7 @@ class CarApiVehicle:
             return True
 
         try:
-            (result, response) = self.get_car_api(url)
+            result, response = self.get_car_api(url)
         except TypeError:
             logger.log(logging.error, "Got None response from get_car_api()")
             return False

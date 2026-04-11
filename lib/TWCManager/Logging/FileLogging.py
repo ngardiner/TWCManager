@@ -6,7 +6,6 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import re
 
-
 logger = logging.getLogger(__name__.rsplit(".")[-1])
 
 

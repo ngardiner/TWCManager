@@ -3,7 +3,6 @@ import logging
 import re
 import time
 
-
 logger = logging.getLogger("\u26fd Slave")
 
 
@@ -102,7 +101,6 @@ class TWCSlave:
 
         logger.error("No vehicle module enabled")
         return None
-
 
     def print_status(self, heartbeatData):
         try:
@@ -869,7 +867,9 @@ class TWCSlave:
             # If we just switched from API to TWC make sure the car is set to a
             # high enough charge rate so it is not limiting the TWC control
             if chargeRateControl == 3 and self.APIcontrol:
-                self.vehicleModule.setChargeRate(self.wiringMaxAmps, self.getLastVehicle())
+                self.vehicleModule.setChargeRate(
+                    self.wiringMaxAmps, self.getLastVehicle()
+                )
                 self.APIcontrol = False
 
             # We can tell the TWC how much power to use in 0.01A increments, but

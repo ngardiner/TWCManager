@@ -2,7 +2,6 @@ import logging
 import growattServer
 import datetime
 
-
 logger = logging.getLogger("\U000026c5 Growatt")
 
 
