@@ -408,6 +408,17 @@ class HomeAssistant:
                 resp = self._session.get(url, timeout=5)
                 resp.raise_for_status()
                 return resp.json()
+            except requests.exceptions.Timeout:
+                logger.debug("HA: timeout reading state %s (5s)", entity_id)
+                return None
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 404:
+                    logger.debug("HA: entity not found: %s", entity_id)
+                else:
+                    logger.warning(
+                        "HA: HTTP %d reading state %s", e.response.status_code, entity_id
+                    )
+                return None
             except Exception as exc:
                 logger.warning("HA: failed reading state %s: %s", entity_id, exc)
                 return None
@@ -418,10 +429,25 @@ class HomeAssistant:
             try:
                 resp = self._session.post(url, json=data, timeout=10)
                 resp.raise_for_status()
+                logger.debug("HA: service call %s.%s succeeded", domain, service)
                 return True
+            except requests.exceptions.Timeout:
+                logger.warning(
+                    "HA: timeout calling %s.%s (10s)", domain, service
+                )
+                return False
+            except requests.exceptions.HTTPError as e:
+                logger.warning(
+                    "HA: HTTP %d calling %s.%s: %s",
+                    e.response.status_code,
+                    domain,
+                    service,
+                    e.response.text[:200],
+                )
+                return False
             except Exception as exc:
                 logger.warning(
-                    "HA: failed calling %s.%s(%s): %s", domain, service, data, exc
+                    "HA: failed calling %s.%s: %s", domain, service, exc
                 )
                 return False
 
