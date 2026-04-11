@@ -40,6 +40,7 @@ class TeslaAPI:
     lastChargeCheck = 0
     chargeUpdateInterval = 1800
     carApiVehicles = []
+    enabled = True
     config = None
     master = None
     __email = None
@@ -70,8 +71,12 @@ class TeslaAPI:
 
     def __init__(self, master):
         self.master = master
+
         try:
             self.config = master.config
+            cfg = self.config.get("vehicle", {}).get("teslaAPI", {}) or {}
+            self.enabled = cfg.get("enabled", True)
+
             proxyURL = self.config["config"].get("teslaProxy", "")
             if proxyURL:
                 self.baseURL = proxyURL + "/api/1/vehicles"
@@ -87,6 +92,9 @@ class TeslaAPI:
             pass
 
         self.generateChallenge()
+
+    def enabled(self) -> bool:
+        return self.enabled
 
     def addVehicle(self, json):
         if "vin" in json:

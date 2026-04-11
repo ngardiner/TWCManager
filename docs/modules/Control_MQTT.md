@@ -20,6 +20,8 @@ The following table shows the available configuration parameters for the MQTT Co
 | ----------- | ------------- |
 | enabled     | *required* Boolean value, ```true``` or ```false```. Determines whether we will enable MQTT control. |
 | brokerIP    | *required* The IP address of the MQTT broker. We subscribe to control topics under this MQTT broker. |
+| brokerPort  | *optional* The port of the MQTT broker. Defaults to 1883, or 8883 for TLS. |
+| brokerTLS   | *optional* Set to true to use SSL/TLS encrpytion, defaults to false. |
 | topicPrefix | *required* MQTT topic prefix for control topics. |
 | username    | *optional* Username for connecting to MQTT server (if authentication is required). |
 | password    | *optional* Password for connecting to MQTT broker (if authentication is required). |

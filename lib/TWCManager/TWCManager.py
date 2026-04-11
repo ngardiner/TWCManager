@@ -84,6 +84,7 @@ modules_available = [
     "Vehicle.TeslaBLE",
     "Vehicle.TeslaMateVehicle",
     "Vehicle.FleetTelemetryMQTT",
+    "Vehicle.HomeAssistant",
     "Control.WebIPCControl",
     "Control.HTTPControl",
     "Control.MQTTControl",
@@ -254,13 +255,25 @@ def unescape_msg(inmsg: bytearray, msgLen):
     return msg
 
 
-def background_tasks_thread(master):
+def get_vehicle_module():
+    carHass = master.getModuleByName("HomeAssistant")
+    if carHass:
+        return carHass
+
     carapi = master.getModuleByName("TeslaAPI")
+    if carapi:
+        return carapi
+
+    logger.error("No vehicle module enabled")
+    return None
+
+def background_tasks_thread(master):
     carble = master.getModuleByName("TeslaBLE")
 
     while True:
         try:
             task = master.getBackgroundTask()
+            carapi = get_vehicle_module()
 
             if "cmd" in task:
                 if task["cmd"] == "applyChargeLimit":

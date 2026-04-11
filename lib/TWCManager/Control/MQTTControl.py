@@ -1,4 +1,5 @@
 import logging
+import os
 
 logger = logging.getLogger("\U0001f3ae MQTT")
 
@@ -7,19 +8,14 @@ class MQTTControl:
     import paho.mqtt.client as mqtt
     import _thread
 
-    brokerIP = None
-    brokerPort = 1883
     __client = None
     config = None
     configConfig = None
     configMQTT = None
     connectionState = 0
     master = None
-    password = None
     status = False
-    serverTLS = False
     topicPrefix = None
-    username = None
 
     def __init__(self, master):
         self.config = master.config
@@ -32,14 +28,17 @@ class MQTTControl:
         except KeyError:
             self.configMQTT = {}
         self.status = self.configMQTT.get("enabled", False)
-        self.brokerIP = self.configMQTT.get("brokerIP", None)
         self.master = master
         self.topicPrefix = self.configMQTT.get("topicPrefix", None)
-        self.username = self.configMQTT.get("username", None)
-        self.password = self.configMQTT.get("password", None)
+
+        brokerIP = self.configMQTT.get("brokerIP", None)
+        brokerPort = self.configMQTT.get("brokerPort", 1883)
+        brokerTLS = self.configMQTT.get("brokerTLS", False)
+        username = self.configMQTT.get("username", None)
+        password = self.configMQTT.get("password", None)
 
         # Unload if this module is disabled or misconfigured
-        if (not self.status) or (not self.brokerIP):
+        if (not self.status) or (not brokerIP):
             self.master.releaseModule("lib.TWCManager.Control", "MQTTControl")
             return None
 
@@ -47,23 +46,31 @@ class MQTTControl:
             # Subscribe to the specified topic prefix, and process incoming messages
             # to determine if they represent control messages
             logger.debug("Attempting to Connect")
-            if self.brokerIP:
+            if brokerIP:
+                pid = os.getpid()
+                client_id = f"MQTTCtrl_{pid}"
+
                 if hasattr(self.mqtt, "CallbackAPIVersion"):
                     self.__client = self.mqtt.Client(
                         self.mqtt.CallbackAPIVersion.VERSION2,
-                        "MQTTCtrl",
+                        client_id,
                         protocol=self.mqtt.MQTTv5,
                     )
                 else:
                     self.__client = self.mqtt.Client("MQTTCtrl")
-                if self.username and self.password:
-                    self.__client.username_pw_set(self.username, self.password)
+                if username and password:
+                    self.__client.username_pw_set(username, password)
+
+                # Todo: Support certificates
+                if brokerTLS:
+                    self.__client.tls_set()
+
                 self.__client.on_connect = self.mqttConnect
                 self.__client.on_message = self.mqttMessage
                 self.__client.on_subscribe = self.mqttSubscribe
                 try:
                     self.__client.connect_async(
-                        self.brokerIP, port=self.brokerPort, keepalive=30
+                        brokerIP, port=brokerPort, keepalive=30
                     )
                 except ConnectionRefusedError as e:
                     logger.log(logging.INFO4, "Error connecting to MQTT Broker")
