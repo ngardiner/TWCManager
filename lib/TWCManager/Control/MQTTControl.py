@@ -31,9 +31,10 @@ class MQTTControl:
         self.master = master
         self.topicPrefix = self.configMQTT.get("topicPrefix", None)
 
-        brokerIP = self.configMQTT.get("brokerIP", None)
-        brokerPort = self.configMQTT.get("brokerPort", 1883)
-        brokerTLS = self.configMQTT.get("brokerTLS", False)
+         brokerIP = self.configMQTT.get("brokerIP", None)
+         brokerTLS = self.configMQTT.get("brokerTLS", False)
+         # Default to 8883 for TLS, 1883 for plain MQTT
+         brokerPort = self.configMQTT.get("brokerPort", 8883 if brokerTLS else 1883)
         username = self.configMQTT.get("username", None)
         password = self.configMQTT.get("password", None)
 
@@ -102,10 +103,33 @@ class MQTTControl:
             )
             plsplit = payload.split(",", 1)
             if len(plsplit) == 2:
-                self.master.setChargeNowAmps(int(plsplit[0]))
-                self.master.setChargeNowTimeEnd(int(plsplit[1]))
-                self.master.getModuleByName("Policy").applyPolicyImmediately()
-                self.master.queue_background_task({"cmd": "saveSettings"})
+                try:
+                    amps = int(plsplit[0])
+                    seconds = int(plsplit[1])
+                    
+                    # Validate amps: must be between 1 and maxAmpsPerTWC
+                    maxAmps = self.configConfig.get("maxAmpsPerTWC", 32)
+                    if amps < 1 or amps > maxAmps:
+                        logger.warning(
+                            f"MQTT chargeNow rejected: amps {amps} out of valid range [1, {maxAmps}]"
+                        )
+                        return
+                    
+                    # Validate seconds: must be positive
+                    if seconds < 0:
+                        logger.warning(
+                            f"MQTT chargeNow rejected: seconds {seconds} must be non-negative"
+                        )
+                        return
+                    
+                    self.master.setChargeNowAmps(amps)
+                    self.master.setChargeNowTimeEnd(seconds)
+                    self.master.getModuleByName("Policy").applyPolicyImmediately()
+                    self.master.queue_background_task({"cmd": "saveSettings"})
+                except ValueError as e:
+                    logger.warning(
+                        f"MQTT chargeNow command failed: invalid format - {str(e)}"
+                    )
             else:
                 logger.info(
                     "MQTT chargeNow command failed: Expecting comma seperated string in format amps,seconds"

@@ -298,6 +298,13 @@ class MQTTStatus:
                 state_topic=topic,
             )
 
+        # Check connection state before attempting to publish
+        if not self.connected:
+            logger.debug(
+                f"MQTT not connected; skipping publish to {topic}"
+            )
+            return False
+
         # Perform rate limiting first (as there are some very chatty topics).
         # For each message that comes through, we take the topic name and check
         # when we last sent a message. If it was less than msgRatePerTopic
