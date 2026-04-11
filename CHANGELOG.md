@@ -19,6 +19,7 @@ This document logs the changes per release of TWCManager.
     * (@evheros) - Fix typo in log levels
     * (@RichieB2B / @evheros) - Fix incorrect return variable name in BLE Peering code
     * (@dehsgr) - Fix Makefile issues (alternate HOME support and BLE permissions)
+    * (@RichieB2B) - Avoid wake up loop during battery health check by applying per-vehicle retry backoff
 
 ## v1.3.2 - 2023-03-12
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules
