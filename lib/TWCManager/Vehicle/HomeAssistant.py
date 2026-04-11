@@ -609,11 +609,15 @@ class HomeAssistant:
         self, amps: float, vehicle: Optional[HaVehicle] = None, *args, **kwargs
     ):
         if not self.carApiVehicles:
+            logger.debug("No vehicles available for charge rate setting")
             return False
 
         vehicle = vehicle or self.carApiVehicles[0]
 
         if not vehicle.has_charge_current_number:
+            logger.debug(
+                "%s: charge_current_number entity not available", vehicle.name
+            )
             return False
 
         # Validate and clamp amps to reasonable range
@@ -650,11 +654,16 @@ class HomeAssistant:
         ent = vehicle.entity_ids["charge_current_number"]
         logger.info("Setting %s charge current to %.1f A", vehicle.name, amps)
 
-        return self._call_service(
+        ok = self._call_service(
             "number",
             "set_value",
             {"entity_id": ent, "value": float(amps)},
         )
+        
+        if not ok:
+            logger.warning("Failed to set charge rate for %s", vehicle.name)
+        
+        return ok
 
     # ------------------------------------------------------------------
     # Home/Location helpers
