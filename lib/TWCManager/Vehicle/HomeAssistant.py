@@ -487,24 +487,32 @@ class HomeAssistant:
     def car_api_charge(self, charge: bool) -> str:
         now = time.time()
         if now - self.carApiLastStartOrStopChargeTime < 10:
+            logger.debug(
+                "Charge command rate limited (10s minimum between commands)"
+            )
             return "error"
 
         if not self.car_api_available():
+            logger.debug("Home Assistant API not available for charge command")
             return "error"
 
         desired = charge  # True = start, False = stop
         svc = "turn_on" if desired else "turn_off"
+        action = "start" if desired else "stop"
 
         self.carApiLastStartOrStopChargeTime = now
         result = "success"
+        vehicles_processed = 0
 
         for v in self.carApiVehicles:
             v.refresh_from_home_assistant(self)
 
             if not v.at_home:
+                logger.debug("%s not at home; skipping charge %s", v.name, action)
                 continue
 
             if not v.has_charge_switch:
+                logger.warning("%s: charge_switch entity not available", v.name)
                 result = "error"
                 continue
 
@@ -522,11 +530,16 @@ class HomeAssistant:
                 continue
 
             ent = v.entity_ids["charge_switch"]
-            logger.info("Calling switch.%s on %s", svc, ent)
+            logger.info("Calling switch.%s on %s to %s charging", svc, ent, action)
 
             ok = self._call_service("switch", svc, {"entity_id": ent})
             if not ok:
                 result = "error"
+            else:
+                vehicles_processed += 1
+
+        if vehicles_processed == 0 and result == "success":
+            logger.info("No vehicles processed for charge %s command", action)
 
         return result
 
