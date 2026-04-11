@@ -214,33 +214,44 @@ class HomeAssistant:
         ws_url = self.ws_url.replace("http://", "ws://").replace("https://", "wss://")
         ssl_ctx = ssl.create_default_context() if ws_url.startswith("wss://") else None
 
-        async with websockets.connect(
-            ws_url,
-            ssl=ssl_ctx,
-            max_size=20 * 1024 * 1024,  # 20 MB
-        ) as ws:
-            msg = json.loads(await ws.recv())
-            if msg.get("type") != "auth_required":
-                raise RuntimeError(f"Unexpected: {msg}")
+        try:
+            async with websockets.connect(
+                ws_url,
+                ssl=ssl_ctx,
+                max_size=20 * 1024 * 1024,  # 20 MB
+                close_timeout=10,
+            ) as ws:
+                msg = json.loads(await ws.recv())
+                if msg.get("type") != "auth_required":
+                    raise RuntimeError(f"Unexpected: {msg}")
 
-            await ws.send(json.dumps({"type": "auth", "access_token": self.token}))
-            msg = json.loads(await ws.recv())
-            if msg.get("type") != "auth_ok":
-                raise RuntimeError(f"Auth failed: {msg}")
+                await ws.send(json.dumps({"type": "auth", "access_token": self.token}))
+                msg = json.loads(await ws.recv())
+                if msg.get("type") != "auth_ok":
+                    raise RuntimeError(f"Auth failed: {msg}")
 
-            logger.info("Home Assistant WebSocket authenticated.")
+                logger.info("Home Assistant WebSocket authenticated.")
 
-            # Request device registry
-            await ws.send(json.dumps({"id": 1, "type": "config/device_registry/list"}))
-            dev_msg = await self._await_result(ws, 1)
-            devices = dev_msg.get("result") or []
+                # Request device registry
+                await ws.send(json.dumps({"id": 1, "type": "config/device_registry/list"}))
+                dev_msg = await self._await_result(ws, 1)
+                devices = dev_msg.get("result") or []
 
-            # Request entity registry
-            await ws.send(json.dumps({"id": 2, "type": "config/entity_registry/list"}))
-            ent_msg = await self._await_result(ws, 2)
-            entities = ent_msg.get("result") or []
+                # Request entity registry
+                await ws.send(json.dumps({"id": 2, "type": "config/entity_registry/list"}))
+                ent_msg = await self._await_result(ws, 2)
+                entities = ent_msg.get("result") or []
 
-            self._build_vehicles_from_registry(devices, entities)
+                self._build_vehicles_from_registry(devices, entities)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Timeout connecting to Home Assistant WebSocket at %s. Check URL and network connectivity.",
+                self.ws_url,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to discover vehicles via Home Assistant WebSocket: %s", str(e)
+            )
 
     @staticmethod
     async def _await_result(ws, req_id: int) -> dict:
