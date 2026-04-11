@@ -5,6 +5,7 @@ import logging
 import time
 import json
 import os
+import threading
 
 logger = logging.getLogger("\U0001f4ca MQTTStatus")
 
@@ -35,6 +36,7 @@ class MQTTStatus:
 
     client = None
     connected = False
+    __client_lock = threading.Lock()
 
     def __init__(self, master):
         self.__config = master.config
@@ -267,8 +269,13 @@ class MQTTStatus:
 
         if not self.client:
             # Try to initialise (or re-initialise) client if something went wrong earlier
-            logger.debug("MQTT client not initialised; attempting to re-create")
-            self._init_mqtt_client()
+            # Use lock to prevent concurrent reinitialization attempts
+            with self.__client_lock:
+                # Double-check after acquiring lock
+                if not self.client:
+                    logger.debug("MQTT client not initialised; attempting to re-create")
+                    self._init_mqtt_client()
+            
             if not self.client:
                 # Still no client — give up for now
                 return
