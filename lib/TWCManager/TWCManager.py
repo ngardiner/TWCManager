@@ -303,9 +303,7 @@ def background_tasks_thread(master):
                     # Get lastChargeLimitApplied from TeslaAPI
                     carapi = master.getModuleByName("TeslaAPI")
                     limit = carapi.lastChargeLimitApplied if carapi else 0
-                    vehicleModule.applyChargeLimit(
-                        limit=limit, checkDeparture=True
-                    )
+                    vehicleModule.applyChargeLimit(limit=limit, checkDeparture=True)
                 elif task["cmd"] == "checkGreenEnergy":
                     check_green_energy()
                 elif task["cmd"] == "checkVINEntitlement":

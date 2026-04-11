@@ -62,11 +62,7 @@ class TWCMaster:
     )
     slaveTWCs = {}
     slaveTWCRoundRobin = []
-    stats = {
-      "moduleDispatch": {},
-      "moduleFailures": {},
-      "moduleSuccess": {}
-    }
+    stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
     stopTimeout = datetime.max
     spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
@@ -127,6 +123,7 @@ class TWCMaster:
                 return 10
         else:
             return 0
+
     def cancelStopCarsCharging(self):
         self.delete_background_task({"cmd": "charge", "charge": False})
 
@@ -387,12 +384,18 @@ class TWCMaster:
         high_name = ""
 
         for module in modules_matched:
-            if module["priority"] and module["priority"] < priority and module["priority"] > high_pri:
+            if (
+                module["priority"]
+                and module["priority"] < priority
+                and module["priority"] > high_pri
+            ):
                 high_pri = module["priority"]
                 high_ref = module["ref"]
                 high_name = module["name"]
 
-        self.stats["moduleDispatch"][high_name] = (self.stats["moduleDispatch"].get(high_name,0) + 1)
+        self.stats["moduleDispatch"][high_name] = (
+            self.stats["moduleDispatch"].get(high_name, 0) + 1
+        )
         return high_name, high_ref, high_pri
 
     def getModulesByType(self, type):
@@ -400,7 +403,13 @@ class TWCMaster:
         for module in self.modules:
             modinfo = self.modules[module]
             if modinfo["type"] == type:
-                matched.append({"name": module, "ref": modinfo["ref"], "priority": modinfo["priority"]})
+                matched.append(
+                    {
+                        "name": module,
+                        "ref": modinfo["ref"],
+                        "priority": modinfo["priority"],
+                    }
+                )
         return matched
 
     def getInterfaceModule(self):
@@ -1053,7 +1062,9 @@ class TWCMaster:
                     # Assign a module priority where a module meets certain criteria
                     # The intention of this is to allow us to prioritise local vehicle control
                     # over API control going forward, with a uniform interface to do os
-                    self.modules[module["name"]]["priority"] = self.calculateModulePriority(module["type"], module["name"])
+                    self.modules[module["name"]]["priority"] = (
+                        self.calculateModulePriority(module["type"], module["name"])
+                    )
             else:
                 logger.log(
                     logging.INFO7,
@@ -1555,7 +1566,7 @@ class TWCMaster:
             ]
             self.queue_background_task({"cmd": "saveSettings"})
 
-    def startCarsCharging(self, vin = None):
+    def startCarsCharging(self, vin=None):
         # This function is the opposite functionality to the stopCarsCharging function
         # below
         stopMode = int(self.settings.get("chargeStopMode", 1))
@@ -1567,7 +1578,7 @@ class TWCMaster:
         elif stopMode == 3:
             self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
 
-    def stopCarsCharging(self, vin = None):
+    def stopCarsCharging(self, vin=None):
         # This is called by components (mainly TWCSlave) who want to signal to us to
         # call our configured routine for stopping vehicles from charging.
         # The default setting is to use the Tesla API. Some people may not want to do
