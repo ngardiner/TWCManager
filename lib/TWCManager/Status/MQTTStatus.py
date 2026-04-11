@@ -130,19 +130,21 @@ class MQTTStatus:
         """
         Called when the MQTT client connects (or reconnects) to the broker.
         """
-        logger.debug("Connected to MQTT Broker with RC: " + str(rc))
-
         if rc == 0:
             self.connected = True
             self.connectionState = 1
-            logger.log(logging.DEBUG2, "MQTT connection established")
+            logger.log(
+                logging.DEBUG2,
+                f"MQTT connection established to {self.brokerIP}:{self.brokerPort}",
+            )
         else:
             # Non-zero rc means connection was refused.
             self.connected = False
             self.connectionState = 0
+            error_msg = self._get_mqtt_error_message(rc)
             logger.log(
                 logging.INFO4,
-                f"MQTT connection failed with result code {rc}",
+                f"MQTT connection failed: {error_msg} (rc={rc})",
             )
 
     def mqttDisconnected(self, client, userdata, *extra):
@@ -166,8 +168,10 @@ class MQTTStatus:
         self.connectionState = 0
 
         if rc != 0:
+            error_msg = self._get_mqtt_error_message(rc)
             logger.warning(
-                f"Unexpected MQTT disconnect (rc={rc}). Client will attempt to reconnect."
+                f"MQTT disconnected unexpectedly: {error_msg} (rc={rc}). "
+                "Client will attempt to reconnect."
             )
         else:
             logger.debug("MQTT client disconnected cleanly")
