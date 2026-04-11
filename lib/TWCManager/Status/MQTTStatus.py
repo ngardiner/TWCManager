@@ -332,9 +332,10 @@ class MQTTStatus:
             )
             result = self.client.publish(topic, payload=value, qos=0, retain=True)
             if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
+                error_msg = self._get_mqtt_error_message(result.rc)
                 logger.log(
                     logging.INFO4,
-                    f"Error publishing MQTT Topic {topic}: rc={result.rc}",
+                    f"Error publishing MQTT Topic {topic}: {error_msg} (rc={result.rc})",
                 )
                 logger.debug(
                     f"MQTT publish error details: mid={getattr(result, 'mid', None)}"
@@ -346,3 +347,26 @@ class MQTTStatus:
             return False
 
         return True
+
+    @staticmethod
+    def _get_mqtt_error_message(rc: int) -> str:
+        """Map MQTT error codes to human-readable messages."""
+        error_map = {
+            0: "Success",
+            1: "Connection refused - unacceptable protocol version",
+            2: "Connection refused - identifier rejected",
+            3: "Connection refused - server unavailable",
+            4: "Connection refused - bad user name or password",
+            5: "Connection refused - not authorised",
+            6: "Connection refused - unknown reason",
+            7: "Connection refused - not authorised",
+            8: "Connection refused - server unavailable",
+            9: "Connection refused - server unavailable",
+            10: "Connection refused - broker unavailable",
+            11: "Connection refused - unknown reason",
+            12: "Connection refused - unknown reason",
+            13: "Connection refused - unknown reason",
+            14: "Connection refused - unknown reason",
+            15: "Connection refused - unknown reason",
+        }
+        return error_map.get(rc, f"Unknown error code {rc}")
