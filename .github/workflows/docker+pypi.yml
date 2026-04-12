@@ -45,7 +45,7 @@ jobs:
 
     steps:
     - name: Check out Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         path: ./pypi-dev
 
@@ -99,7 +99,7 @@ jobs:
 
     steps:
     - name: Check out Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         path: ./pypi
 
@@ -138,7 +138,7 @@ jobs:
 
     steps:
     - name: Check out Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         path: ./docker-latest
 
@@ -173,7 +173,7 @@ jobs:
 
     steps:
     - name: Check out Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         path: ./docker-release
 
@@ -207,7 +207,7 @@ jobs:
 
     steps:
     - name: Check out Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v1
