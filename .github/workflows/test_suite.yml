@@ -42,52 +42,55 @@ jobs:
         python-version: ['3.8', '3.9', '3.10', '3.11']
     
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+       - name: Checkout Repository
+         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+       - name: Set up Python ${{ matrix.python-version }}
+         uses: actions/setup-python@v4
+         with:
+           python-version: ${{ matrix.python-version }}
+           cache: 'pip'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-test.txt
+       - name: Install dependencies
+         run: |
+           python -m pip install --upgrade pip
+           pip install -r requirements.txt
+           pip install -r requirements-test.txt
 
-      - name: Start TWCManager
-        run: |
-          python -m TWCManager &
-          sleep 5
-        env:
-          PYTHONIOENCODING: UTF-8
+       - name: Start TWCManager
+         run: |
+           mkdir -p /tmp/twcmanager
+           cp etc/twcmanager/.testconfig.json /tmp/twcmanager/config.json
+           cd /tmp/twcmanager
+           python -m TWCManager &
+           sleep 5
+         env:
+           PYTHONIOENCODING: UTF-8
 
-      - name: Run integration tests
-        run: |
-          pytest tests/integration/ \
-            -v \
-            --tb=short \
-            --junit-xml=test-results/junit-integration.xml \
-            --cov=lib/TWCManager \
-            --cov-report=xml:test-results/coverage.xml \
-            --cov-report=term-missing
+       - name: Run integration tests
+         run: |
+           pytest tests/integration/ \
+             -v \
+             --tb=short \
+             --junit-xml=test-results/junit-integration.xml \
+             --cov=lib/TWCManager \
+             --cov-report=xml:test-results/coverage.xml \
+             --cov-report=term-missing
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ matrix.python-version }}
-          path: test-results/
+       - name: Upload test results
+         if: always()
+         uses: actions/upload-artifact@v4
+         with:
+           name: test-results-${{ matrix.python-version }}
+           path: test-results/
 
-      - name: Upload coverage to Codecov
-        if: always()
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./test-results/coverage.xml
-          flags: integration
-          name: integration-py${{ matrix.python-version }}
+       - name: Upload coverage to Codecov
+         if: always()
+         uses: codecov/codecov-action@v3
+         with:
+           files: ./test-results/coverage.xml
+           flags: integration
+           name: integration-py${{ matrix.python-version }}
 
   unit-tests:
     name: Unit Tests - Python ${{ matrix.python-version }}
