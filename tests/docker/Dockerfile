@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     mosquitto \
     mosquitto-clients \
-    mysql-server \
+    mariadb-server \
     sqlite3 \
     build-essential \
     git \
@@ -20,7 +20,7 @@ RUN mkdir -p /var/log/mosquitto /var/lib/mosquitto && \
 
 COPY tests/docker/mosquitto.conf /etc/mosquitto/mosquitto.conf
 
-# Configure MySQL for testing
+# Configure MariaDB for testing
 RUN mkdir -p /var/run/mysqld && \
     chown mysql:mysql /var/run/mysqld
 
