@@ -5,13 +5,16 @@ This document logs the changes per release of TWCManager.
 ## v1.4.0 - Upcoming Development release
 * (@deece) - Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
 * (@ngardiner) - Post-merge improvements: input validation, error handling, comprehensive logging, rate limiting, and thread safety for MQTT and Home Assistant modules
+* (@ngardiner) - Centralized LoggerFactory for configurable logging prefixes
+* (@ngardiner) - Vehicle priority abstraction proxy for module fallback with retry multiplier logic
 * (@RichieB2B) - Add Fleet Telemetry MQTT support with typed updates and online state tracking
-* (@ngardiner) - Initial commit of local Tesla BLE vehicle control module
+* (@ngardiner) - Initial commit of local Tesla BLE vehicle control module with stability improvements
 * (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
 * (@MikeBishop) - Dampen API calls to reduce unnecessary calls
 * (@RichieB2B) - Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
 * (@ngardiner) - Add support for decrypting TeslaMate API credentials using the encryption key
 * (@ngardiner) - Refactor maxAmpsToDivideFromGrid to global configuration parameter
+* (@VIDGuide) - Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
     * (@MikeBishop) - Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
     * (@dtiefnig) - Specify access scope for token refresh
@@ -21,6 +24,9 @@ This document logs the changes per release of TWCManager.
     * (@RichieB2B) - Avoid wake up loop during battery health check by applying per-vehicle retry backoff
     * (@RichieB2B) - Cache vehicle.is_awake() state for 2 minutes to reduce Tesla Fleet API calls
     * (@RichieB2B) - Fix NameError in BLE Peering code
+    * (@ngardiner) - Atomic writes for settings file to avoid data loss
+    * (@ngardiner) - BLE pipe management with state tracking and cleanup
+    * (@ngardiner) - Subprocess timeout handling with graceful shutdown
 
 ## v1.3.2 - 2023-03-12
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules
