@@ -59,8 +59,8 @@ class LoggerFactory:
             # Fallback if master not initialized - use icons by default
             use_icons = True
         else:
-            use_icons = (
-                LoggerFactory.master.config.get("logging", {}).get("use_icons", True)
+            use_icons = LoggerFactory.master.config.get("logging", {}).get(
+                "use_icons", True
             )
 
         # Get the appropriate prefix based on configuration
