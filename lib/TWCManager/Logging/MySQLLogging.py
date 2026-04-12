@@ -1,8 +1,9 @@
 # MySQLLogging module. Provides output to a MySQL Server for regular statistics
 # recording.
 import logging
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = LoggerFactory.get_logger("MySQLLogging", "Logging")
 
 
 class MySQLHandler(logging.Handler):

@@ -1,7 +1,8 @@
 import logging
 import os
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f3ae MQTT")
+logger = LoggerFactory.get_logger("MQTT", "Control")
 
 
 class MQTTControl:

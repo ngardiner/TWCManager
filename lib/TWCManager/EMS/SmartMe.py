@@ -1,6 +1,7 @@
 import logging
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026a1 SmartMe")
+logger = LoggerFactory.get_logger("SmartMe", "EMS")
 
 
 class SmartMe:

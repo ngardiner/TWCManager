@@ -9,8 +9,9 @@ from threading import Thread
 import time
 from urllib.parse import parse_qs
 import jwt
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f697 TeslaAPI")
+logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
 
 class TeslaAPI:

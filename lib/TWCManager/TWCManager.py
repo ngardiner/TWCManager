@@ -41,6 +41,7 @@ import threading
 from TWCManager.TWCMaster import TWCMaster
 import requests
 from enum import Enum
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logging.addLevelName(19, "INFO2")
 logging.addLevelName(18, "INFO3")
@@ -62,7 +63,7 @@ logging.INFO9 = 12
 logging.DEBUG2 = 9
 
 
-logger = logging.getLogger("\u26fd Manager")
+logger = LoggerFactory.get_logger("Manager", "Manager")
 
 # Define available modules for the instantiator
 # All listed modules will be loaded at boot time
@@ -617,6 +618,9 @@ timeToRaise2A = 0
 
 # Instantiate necessary classes
 master = TWCMaster(fakeTWCID, config)
+
+# Update LoggerFactory with the actual master instance
+LoggerFactory.set_master(master)
 
 # Instantiate all modules in the modules_available list automatically
 for module in modules_available:

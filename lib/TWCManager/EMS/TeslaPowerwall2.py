@@ -1,8 +1,9 @@
 # Tesla Powerwall 2 EMS Module
 import logging
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 TeslaPwl")
+logger = LoggerFactory.get_logger("TeslaPwl", "EMS")
 
 
 class TeslaPowerwall2:

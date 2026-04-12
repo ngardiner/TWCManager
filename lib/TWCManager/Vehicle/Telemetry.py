@@ -2,8 +2,9 @@ import logging
 import paho.mqtt.client as mqtt
 import threading
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f697 Telemetry")
+logger = LoggerFactory.get_logger("Telemetry", "Vehicle")
 
 
 class TelmetryBase:

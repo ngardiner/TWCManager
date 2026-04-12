@@ -1,7 +1,8 @@
 # SQLiteLogging module. Provides output to SQLite Database for regular stats
 import logging
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = LoggerFactory.get_logger("SQLiteLogging", "Logging")
 
 
 class SQLiteHandler(logging.Handler):

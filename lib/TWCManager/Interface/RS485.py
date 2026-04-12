@@ -1,7 +1,8 @@
 import logging
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f50c RS485")
+logger = LoggerFactory.get_logger("RS485", "Interface")
 
 
 class RS485:

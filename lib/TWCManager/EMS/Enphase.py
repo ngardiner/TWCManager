@@ -1,8 +1,9 @@
 # Enphase Monitoring Portal Integration
 import logging
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 Enphase")
+logger = LoggerFactory.get_logger("Enphase", "EMS")
 
 
 class Enphase:

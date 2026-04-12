@@ -1,7 +1,8 @@
 import logging
 import re
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = LoggerFactory.get_logger("TWCProtocol", "Protocol")
 
 
 class TWCProtocol:

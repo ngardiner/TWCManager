@@ -13,8 +13,9 @@ import math
 import random
 import requests
 import bisect
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\u26fd Master")
+logger = LoggerFactory.get_logger("Master", "Master")
 
 
 class TWCMaster:

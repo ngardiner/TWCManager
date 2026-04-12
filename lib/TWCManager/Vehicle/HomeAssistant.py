@@ -2,7 +2,7 @@
 """
 Home Assistant vehicle integration for TWCManager.
 
-Replaces direct Tesla API usage by consuming Home Assistant’s tesla_fleet
+Replaces direct Tesla API usage by consuming Home Assistant's tesla_fleet
 integration via WebSocket discovery + REST-state queries.
 
 Expected TWCManager config:
@@ -28,8 +28,9 @@ from typing import Dict, List, Optional
 
 import requests
 import websockets
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U00002302 V_HASS")
+logger = LoggerFactory.get_logger("V_HASS", "Vehicle")
 
 # VIN: 17 chars excluding I,O,Q
 VIN_REGEX = re.compile(r"[A-HJ-NPR-Z0-9]{17}")

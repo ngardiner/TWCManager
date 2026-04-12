@@ -2,8 +2,9 @@
 import logging
 import requests
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 Fronius")
+logger = LoggerFactory.get_logger("Fronius", "EMS")
 
 
 class Fronius:

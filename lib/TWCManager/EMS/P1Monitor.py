@@ -7,8 +7,9 @@ import logging
 import array
 import scipy.stats
 import json
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026a1 P1Monitr")
+logger = LoggerFactory.get_logger("P1Monitr", "EMS")
 
 
 class P1Monitor:

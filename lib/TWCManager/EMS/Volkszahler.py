@@ -2,8 +2,9 @@ import logging
 import requests
 import time
 import re
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 Volkszlr")
+logger = LoggerFactory.get_logger("Volkszlr", "EMS")
 
 
 class Volkszahler:

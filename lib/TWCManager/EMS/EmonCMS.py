@@ -1,6 +1,7 @@
 import logging
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026a1 EmonCMS")
+logger = LoggerFactory.get_logger("EmonCMS", "EMS")
 
 
 class EmonCMS:

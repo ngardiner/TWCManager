@@ -5,8 +5,9 @@
 # Retry Logic: For every 10 priority points, we get 1 retry before falling back.
 # Example: Priority 20 (TeslaBLE) = 2 retries, Priority 10 (TeslaAPI) = 1 retry
 import logging
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f697 VehiclePriority")
+logger = LoggerFactory.get_logger("VehiclePriority", "Vehicle")
 
 
 class VehiclePriority:
