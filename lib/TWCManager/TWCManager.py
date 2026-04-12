@@ -975,20 +975,20 @@ while True:
                 # end of the string (even without the re.MULTILINE option), and
                 # sometimes our strings do end with a newline character that is
                 # actually the CRC byte with a value of 0A or 0D.
-                msgMatch = re.search(b"^\xfd\xb1(..)\x00\x00.+\Z", msg, re.DOTALL)
+                msgMatch = re.search(rb"^\xfd\xb1(..)\x00\x00.+\Z", msg, re.DOTALL)
                 if msgMatch and foundMsgMatch == False:
                     # Handle acknowledgement of Start command
                     foundMsgMatch = True
                     senderID = msgMatch.group(1)
 
-                msgMatch = re.search(b"^\xfd\xb2(..)\x00\x00.+\Z", msg, re.DOTALL)
+                msgMatch = re.search(rb"^\xfd\xb2(..)\x00\x00.+\Z", msg, re.DOTALL)
                 if msgMatch and foundMsgMatch == False:
                     # Handle acknowledgement of Stop command
                     foundMsgMatch = True
                     senderID = msgMatch.group(1)
 
                 msgMatch = re.search(
-                    b"^\xfd\xe2(..)(.)(..)\x00\x00\x00\x00\x00\x00.+\Z", msg, re.DOTALL
+                    rb"^\xfd\xe2(..)(.)(..)\x00\x00\x00\x00\x00\x00.+\Z", msg, re.DOTALL
                 )
                 if msgMatch and foundMsgMatch == False:
                     # Handle linkready message from slave.
@@ -1096,7 +1096,7 @@ while True:
                     slaveTWC.send_master_heartbeat()
                 else:
                     msgMatch = re.search(
-                        b"\A\xfd\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
+                        rb"\A\xfd\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
                     )
                 if msgMatch and foundMsgMatch == False:
                     # Handle heartbeat message from slave.
@@ -1149,7 +1149,7 @@ while True:
                         )
                 else:
                     msgMatch = re.search(
-                        b"\A\xfd\xeb(..)(....)(..)(..)(..)(.+?).\Z", msg, re.DOTALL
+                        rb"\A\xfd\xeb(..)(....)(..)(..)(..)(.+?).\Z", msg, re.DOTALL
                     )
                 if msgMatch and foundMsgMatch == False:
                     # Handle kWh total and voltage message from slave.
@@ -1226,7 +1226,7 @@ while True:
 
                 else:
                     msgMatch = re.search(
-                        b"\A\xfd(\xee|\xef|\xf1)(..)(.+?).\Z", msg, re.DOTALL
+                        rb"\A\xfd(\xee|\xef|\xf1)(..)(.+?).\Z", msg, re.DOTALL
                     )
                 if msgMatch and foundMsgMatch == False:
                     # Get 7 characters of VIN from slave. (XE is first 7, XF second 7)
@@ -1394,7 +1394,7 @@ while True:
 
                 else:
                     msgMatch = re.search(
-                        b"\A\xfc(\xe1|\xe2)(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00.+\Z",
+                        rb"\A\xfc(\xe1|\xe2)(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00.+\Z",
                         msg,
                         re.DOTALL,
                     )
@@ -1418,7 +1418,7 @@ while True:
 
                 foundMsgMatch = False
                 msgMatch = re.search(
-                    b"\A\xfc\xe1(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00+?.\Z",
+                    rb"\A\xfc\xe1(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00+?.\Z",
                     msg,
                     re.DOTALL,
                 )
@@ -1448,7 +1448,7 @@ while True:
 
                 else:
                     msgMatch = re.search(
-                        b"\A\xfb\xe2(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00+?.\Z",
+                        rb"\A\xfb\xe2(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00+?.\Z",
                         msg,
                         re.DOTALL,
                     )
@@ -1473,7 +1473,7 @@ while True:
                         master.master_id_conflict()
                 else:
                     msgMatch = re.search(
-                        b"\A\xfb\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
+                        rb"\A\xfb\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
                     )
                 if msgMatch and foundMsgMatch == False:
                     # Handle heartbeat message from Master.
@@ -1589,7 +1589,7 @@ while True:
                     slaveTWC.print_status(master.slaveHeartbeatData)
                 else:
                     msgMatch = re.search(
-                        b"\A\xfc\x1d\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00+?.\Z",
+                        rb"\A\xfc\x1d\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00+?.\Z",
                         msg,
                         re.DOTALL,
                     )
@@ -1613,7 +1613,7 @@ while True:
                     logger.info("Received 2-hour idle message from Master.")
                 else:
                     msgMatch = re.search(
-                        b"\A\xfd\xe2(..)(.)(..)\x00\x00\x00\x00\x00\x00.+\Z",
+                        rb"\A\xfd\xe2(..)(.)(..)\x00\x00\x00\x00\x00\x00.+\Z",
                         msg,
                         re.DOTALL,
                     )
@@ -1639,7 +1639,7 @@ while True:
                     master.newSlave(senderID, maxAmps)
                 else:
                     msgMatch = re.search(
-                        b"\A\xfd\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
+                        rb"\A\xfd\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
                     )
                 if msgMatch and foundMsgMatch == False:
                     # Handle heartbeat message from slave on network that
@@ -1668,7 +1668,7 @@ while True:
                     slaveTWC.print_status(heartbeatData)
                 else:
                     msgMatch = re.search(
-                        b"\A\xfb\xeb(..)(..)(\x00\x00\x00\x00\x00\x00\x00\x00\x00+?).\Z",
+                        rb"\A\xfb\xeb(..)(..)(\x00\x00\x00\x00\x00\x00\x00\x00\x00+?).\Z",
                         msg,
                         re.DOTALL,
                     )
@@ -1723,7 +1723,7 @@ while True:
                         )
                 else:
                     msgMatch = re.search(
-                        b"\A\xfd\xeb(..)(.........+?).\Z", msg, re.DOTALL
+                        rb"\A\xfd\xeb(..)(.........+?).\Z", msg, re.DOTALL
                     )
                 if msgMatch and foundMsgMatch == False:
                     # Handle voltage response message.

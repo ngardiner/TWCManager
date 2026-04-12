@@ -50,7 +50,7 @@ def api_client():
     
     # Add retry logic
     from requests.adapters import HTTPAdapter
-    from requests.packages.urllib3.util.retry import Retry
+    from urllib3.util.retry import Retry
     
     retry_strategy = Retry(
         total=3,
@@ -70,6 +70,7 @@ def wait_for_twcmanager(api_client):
     Wait for TWCManager to be ready before running tests.
     
     This replaces the 120-second sleep with intelligent health checking.
+    Assumes TWCManager is already running (e.g., in a Docker container).
     """
     max_wait = 60  # Maximum 60 seconds
     start_time = time.time()
