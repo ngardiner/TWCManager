@@ -68,9 +68,7 @@ class ScenarioEMS:
         self._timeline = self._scenario.get("timeline", [])
 
         # Seed initial EMS values from initial_conditions if present
-        initial_ems = (
-            self._scenario.get("initial_conditions", {}).get("ems", {})
-        )
+        initial_ems = self._scenario.get("initial_conditions", {}).get("ems", {})
         self.generationWatts = initial_ems.get("generation_watts", 0)
         self.consumptionWatts = initial_ems.get("consumption_watts", 0)
 

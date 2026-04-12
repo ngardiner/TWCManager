@@ -326,15 +326,17 @@ class Dummy:
         state_code, actual_raw = self._get_slave_response(slave, commanded_amps_raw)
         max_raw = int(slave.get("maxAmps", 32) * 100)
 
-        heartbeat_response = bytearray([
-            state_code,
-            (max_raw >> 8) & 0xFF,
-            max_raw & 0xFF,
-            (actual_raw >> 8) & 0xFF,
-            actual_raw & 0xFF,
-            0x00,
-            0x00,
-        ])
+        heartbeat_response = bytearray(
+            [
+                state_code,
+                (max_raw >> 8) & 0xFF,
+                max_raw & 0xFF,
+                (actual_raw >> 8) & 0xFF,
+                actual_raw & 0xFF,
+                0x00,
+                0x00,
+            ]
+        )
         if self.master.protocolVersion == 2:
             heartbeat_response += bytearray(b"\x00\x00")
 
