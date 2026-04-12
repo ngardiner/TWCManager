@@ -6,9 +6,9 @@ from cryptography.hazmat.primitives import hashes
 import logging
 import os
 from pathlib import Path
+import signal
 import shutil
 import subprocess
-from threading import Timer
 import time
 
 logger = logging.getLogger("\U0001f697 TeslaBLE")
@@ -249,15 +249,19 @@ class TeslaBLE:
             if self.isDocker():
                 command_string.insert(0, "nsenter --net=/rootns/net ")
 
-            result = subprocess.run(
+            # Use improved timeout handling (pairing takes longer)
+            stdout, stderr, return_code = self._run_command_with_timeout(
                 command_string,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30  # Pairing can take longer than normal commands
+                timeout=30,  # Pairing can take longer
+                use_process_group=True
             )
 
+            if stdout is None and stderr is None:
+                logger.error(f"BLE pairing with {vin} timed out or failed")
+                return False
+
             # Check both stdout and stderr for pairing result
-            output = result.stderr.decode("utf-8") + result.stdout.decode("utf-8")
+            output = (stderr.decode("utf-8") if stderr else "") + (stdout.decode("utf-8") if stdout else "")
             success = self.parseCommandOutput(output)
 
             logger.info(f"BLE pairing with {vin}: {'success' if success else 'failed'}")
@@ -266,9 +270,6 @@ class TeslaBLE:
 
             return success
 
-        except subprocess.TimeoutExpired:
-            logger.error(f"BLE pairing with {vin} timed out after 30 seconds")
-            return False
         except Exception as e:
             logger.error(f"peerWithVehicle exception for {vin}: {e}")
             return False
@@ -339,19 +340,16 @@ class TeslaBLE:
             if args:
                 command_string.append(str(args))
 
-            result = subprocess.Popen(
+            # Use improved timeout handling with process group management
+            stdout, stderr, return_code = self._run_command_with_timeout(
                 command_string,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                timeout=self.commandTimeout,
+                use_process_group=True
             )
 
-            timer = Timer(self.commandTimeout, result.kill)
-            try:
-                timer.start()
-                stdout, stderr = result.communicate()
-                return_code = result.returncode
-            finally:
-                timer.cancel()
+            if stdout is None and stderr is None:
+                logger.error(f"BLE command '{command}' timed out or failed")
+                return None
 
             # Check if process was killed due to timeout
             if return_code == -9:  # SIGKILL
@@ -360,7 +358,7 @@ class TeslaBLE:
             elif return_code != 0:
                 logger.warning(f"BLE command '{command}' failed with return code {return_code}")
 
-            output = stderr.decode("utf-8")
+            output = stderr.decode("utf-8") if stderr else ""
             logger.debug(f"BLE command output: {output[:200]}..." if len(output) > 200 else output)
             return output
 
@@ -537,7 +535,122 @@ class TeslaBLE:
             logger.error(f"wakeVehicle exception for {vin}: {e}")
             return False
 
-    def _cleanup_stale_pipe(self):
+    def _kill_process_group(self, pid, timeout=1.0):
+        """
+        Kill a process and its entire process group gracefully.
+        First tries SIGTERM, then SIGKILL if process doesn't die.
+        
+        Args:
+            pid: Process ID to kill
+            timeout: Time to wait between SIGTERM and SIGKILL
+            
+        Returns:
+            True if process was killed, False if already dead
+        """
+        try:
+            # Check if process is still alive
+            if os.waitpid(pid, os.WNOHANG)[0] == 0:
+                # Process is still running, try graceful shutdown first
+                try:
+                    # Get process group ID
+                    pgid = os.getpgid(pid)
+                    
+                    # Try SIGTERM first (graceful)
+                    logger.debug(f"Sending SIGTERM to process group {pgid}")
+                    os.killpg(pgid, signal.SIGTERM)
+                    
+                    # Wait for graceful shutdown
+                    time.sleep(timeout)
+                    
+                    # Check if process is still alive
+                    if os.waitpid(pid, os.WNOHANG)[0] == 0:
+                        # Still alive, use SIGKILL (brutal)
+                        logger.warning(f"Process {pid} didn't respond to SIGTERM, sending SIGKILL")
+                        os.killpg(pgid, signal.SIGKILL)
+                        time.sleep(0.1)
+                    
+                    logger.debug(f"Process group {pgid} terminated")
+                    return True
+                except ProcessLookupError:
+                    # Process already dead
+                    logger.debug(f"Process {pid} already terminated")
+                    return False
+            else:
+                logger.debug(f"Process {pid} already dead")
+                return False
+        except Exception as e:
+            logger.warning(f"Error killing process group: {e}")
+            return False
+
+    def _run_command_with_timeout(self, command_string, timeout, use_process_group=True):
+        """
+        Run a command with proper timeout handling and process group management.
+        
+        Args:
+            command_string: List of command arguments
+            timeout: Timeout in seconds
+            use_process_group: Whether to use process groups (for Docker compatibility)
+            
+        Returns:
+            Tuple of (stdout, stderr, return_code) or (None, None, None) on timeout
+        """
+        try:
+            # Prepare preexec_fn for process group creation
+            preexec_fn = None
+            if use_process_group and not self.isDocker():
+                # Create new process group (only works on Unix, not in Docker)
+                preexec_fn = os.setsid
+            
+            logger.debug(f"Running command with {timeout}s timeout: {' '.join(command_string[:3])}...")
+            
+            result = subprocess.Popen(
+                command_string,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=preexec_fn
+            )
+            
+            try:
+                # Use communicate with timeout
+                stdout, stderr = result.communicate(timeout=timeout)
+                return_code = result.returncode
+                
+                logger.debug(f"Command completed with return code {return_code}")
+                return stdout, stderr, return_code
+                
+            except subprocess.TimeoutExpired:
+                # Process timed out, kill it
+                logger.warning(f"Command timed out after {timeout}s, terminating process {result.pid}")
+                
+                try:
+                    # Try to kill the process group
+                    if use_process_group:
+                        pgid = os.getpgid(result.pid)
+                        logger.debug(f"Killing process group {pgid}")
+                        os.killpg(pgid, signal.SIGTERM)
+                        time.sleep(0.5)
+                        
+                        # Check if still alive
+                        if result.poll() is None:
+                            logger.warning(f"Process group {pgid} didn't respond to SIGTERM, using SIGKILL")
+                            os.killpg(pgid, signal.SIGKILL)
+                    else:
+                        # Fallback: kill just the process
+                        result.terminate()
+                        time.sleep(0.5)
+                        if result.poll() is None:
+                            result.kill()
+                    
+                    # Wait for process to actually die
+                    result.wait(timeout=1.0)
+                except Exception as e:
+                    logger.error(f"Error terminating process: {e}")
+                
+                return None, None, None
+                
+        except Exception as e:
+            logger.error(f"Error running command: {e}")
+            return None, None, None
         """Clean up any stale pipe file from previous crashes."""
         try:
             if os.path.exists(self.pipeName):
