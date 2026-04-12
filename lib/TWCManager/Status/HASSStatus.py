@@ -3,8 +3,9 @@
 
 import logging
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f4ca HASS")
+logger = LoggerFactory.get_logger("HASS", "Status")
 
 
 class HASSStatus:

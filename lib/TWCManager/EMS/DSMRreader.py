@@ -1,7 +1,8 @@
 import logging
 import json
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026a1 DSMRread")
+logger = LoggerFactory.get_logger("DSMRread", "EMS")
 
 
 class DSMRreader:

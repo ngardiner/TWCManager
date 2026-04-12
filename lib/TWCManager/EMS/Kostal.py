@@ -17,12 +17,13 @@ import logging
 import time
 from pyModbusTCP.client import ModbusClient
 from pyModbusTCP import utils
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 MIN_CACHE_SECONDS = 10
 ENDIAN_BIG = 0x01  # big endian (ABCD) Sunspec
 ENDIAN_LITTLE = 0x00  # little endian (CDAB) Standard Modbus
 
-logger = logging.getLogger("\U000026c5 Kostal")
+logger = LoggerFactory.get_logger("Kostal", "EMS")
 
 
 #

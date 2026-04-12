@@ -2,8 +2,9 @@
 import logging
 import requests
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 OpenWthr")
+logger = LoggerFactory.get_logger("OpenWthr", "EMS")
 
 
 class OpenWeatherMap:

@@ -5,8 +5,9 @@ from sys import modules
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import re
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = LoggerFactory.get_logger("FileLogging", "Logging")
 
 
 class FileLogging:

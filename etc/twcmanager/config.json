@@ -407,6 +407,11 @@
         # not to file. Consider what logging to file may mean if you're using
         # a pi, it may mean considering alternatives such as a remote database
         # to reduce write cycles.
+        
+        # Set use_icons to true (default) to use emoji icons for module categories,
+        # or false to use text labels like [EMS], [Status], [Vehicle], etc.
+        "use_icons": true,
+        
         "Console": {
             "enabled": true,
             # simple logging format omits timestamp and colorization

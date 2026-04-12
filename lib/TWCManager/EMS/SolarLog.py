@@ -1,7 +1,8 @@
 import logging
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 SolarLog")
+logger = LoggerFactory.get_logger("SolarLog", "EMS")
 
 
 class SolarLog:

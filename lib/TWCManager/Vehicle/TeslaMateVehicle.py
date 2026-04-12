@@ -8,6 +8,7 @@ import threading
 import time
 
 from TWCManager.Vehicle.Telemetry import TelmetryBase
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 
 def fix_base64_padding(data):
@@ -35,7 +36,7 @@ def fix_base64_padding(data):
     return data
 
 
-logger = logging.getLogger("\U0001f697 TeslaMate")
+logger = LoggerFactory.get_logger("TeslaMate", "Vehicle")
 
 
 class TeslaMateVehicle(TelmetryBase):

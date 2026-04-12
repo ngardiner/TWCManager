@@ -1,6 +1,7 @@
 import logging
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026a1 HASS")
+logger = LoggerFactory.get_logger("HASS", "EMS")
 
 
 class HASS:

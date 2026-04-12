@@ -4,8 +4,9 @@ import struct
 import sysv_ipc
 import time
 import math
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = LoggerFactory.get_logger("WebIPCControl", "Control")
 
 
 class WebIPCControl:

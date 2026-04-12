@@ -10,8 +10,9 @@ import signal
 import shutil
 import subprocess
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f697 TeslaBLE")
+logger = LoggerFactory.get_logger("TeslaBLE", "Vehicle")
 
 
 class BLECircuitBreaker:

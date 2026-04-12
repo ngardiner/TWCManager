@@ -2,8 +2,9 @@ from datetime import datetime
 import logging
 import re
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\u26fd Slave")
+logger = LoggerFactory.get_logger("Slave", "Slave")
 
 
 class TWCSlave:

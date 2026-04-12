@@ -1,8 +1,9 @@
 import logging
 import requests
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026a1 OpenHab")
+logger = LoggerFactory.get_logger("OpenHab", "EMS")
 
 
 class OpenHab:

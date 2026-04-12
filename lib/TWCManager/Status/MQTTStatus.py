@@ -6,8 +6,9 @@ import time
 import json
 import os
 import threading
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f4ca MQTTStatus")
+logger = LoggerFactory.get_logger("MQTTStatus", "Status")
 
 
 class MQTTStatus:

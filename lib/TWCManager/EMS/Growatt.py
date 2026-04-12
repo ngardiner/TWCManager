@@ -1,8 +1,9 @@
 import logging
 import growattServer
 import datetime
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 Growatt")
+logger = LoggerFactory.get_logger("Growatt", "EMS")
 
 
 class Growatt:

@@ -3,8 +3,9 @@ import logging
 
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger(__name__.rsplit(".")[-1])
+logger = LoggerFactory.get_logger("SentryLogging", "Logging")
 
 
 class SentryLogging:

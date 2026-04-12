@@ -15,8 +15,9 @@ import threading
 import time
 import urllib.parse
 import uuid
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f3ae HTTP")
+logger = LoggerFactory.get_logger("HTTP", "Control")
 
 
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):

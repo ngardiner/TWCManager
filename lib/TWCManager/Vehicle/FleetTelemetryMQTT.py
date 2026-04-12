@@ -6,8 +6,9 @@ import time
 import json
 
 from TWCManager.Vehicle.Telemetry import TelmetryBase
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U0001f697 FleetTLM")
+logger = LoggerFactory.get_logger("FleetTLM", "Vehicle")
 
 
 class FleetTelemetryMQTT(TelmetryBase):

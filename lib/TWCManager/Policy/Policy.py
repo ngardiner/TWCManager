@@ -1,7 +1,8 @@
 import logging
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\u26fd Policy")
+logger = LoggerFactory.get_logger("Policy", "Policy")
 
 
 class Policy:

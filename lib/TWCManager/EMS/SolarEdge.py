@@ -2,8 +2,9 @@
 import logging
 import time
 import solaredge_modbus
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 SolarEdg")
+logger = LoggerFactory.get_logger("SolarEdg", "EMS")
 
 
 class SolarEdge:

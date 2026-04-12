@@ -1,6 +1,7 @@
 import logging
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 IotaWatt")
+logger = LoggerFactory.get_logger("IotaWatt", "EMS")
 
 
 class IotaWatt:

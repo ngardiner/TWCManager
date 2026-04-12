@@ -3,8 +3,9 @@ import logging
 import re
 import requests
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026c5 TED")
+logger = LoggerFactory.get_logger("TED", "EMS")
 
 
 class TED:

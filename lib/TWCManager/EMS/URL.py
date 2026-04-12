@@ -1,8 +1,9 @@
 import logging
 import requests
 import time
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026a1 URL")
+logger = LoggerFactory.get_logger("URL", "EMS")
 
 
 class URL:

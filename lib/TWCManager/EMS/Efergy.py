@@ -1,8 +1,9 @@
 # Efergy
 import time
 import logging
+from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = logging.getLogger("\U000026a1 Efergy")
+logger = LoggerFactory.get_logger("Efergy", "EMS")
 
 
 class Efergy:
