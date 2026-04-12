@@ -110,6 +110,7 @@ modules_available = [
     "EMS.TeslaPowerwall2",
     "EMS.TED",
     "EMS.Volkszahler",
+    "EMS.ScenarioEMS",
     "EMS.URL",
     "Status.HASSStatus",
     "Status.MQTTStatus",

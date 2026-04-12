@@ -12,6 +12,9 @@ import subprocess
 import time
 from pathlib import Path
 
+# Scenario runner fixtures — imported so pytest auto-discovers them
+from tests.scenario_runner import run_scenario  # noqa: F401
+
 
 # Test configuration
 TEST_API_BASE_URL = "http://127.0.0.1:8088/api"

@@ -435,6 +435,14 @@
         }
     },
     "sources":{
+        # ScenarioEMS is a test-only EMS module that injects generation and
+        # consumption values from a scenario file.  It is enabled here so that
+        # the test suite can activate it via TWCM_SCENARIO_FILE env var.
+        # It self-unloads when the env var is absent, so it is safe to leave
+        # enabled in the test config.
+        "ScenarioEMS": {
+            "enabled": true
+        },
         # This section is where we configure the various sources that we retrieve our generation and consumption
         # values for our solar system from.
         # To use a particular interface, set the enabled flag to true (or it will be ignored) and fill in the

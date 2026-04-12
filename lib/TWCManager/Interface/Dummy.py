@@ -293,32 +293,74 @@ class Dummy:
             )
             self._send_internal(response)
 
-    def _handle_heartbeat(self, packet, slave_id):
-        """Handle MasterHeartbeat message - respond with SlaveHeartbeat."""
-        if slave_id not in self.slaves:
-            return
+     def _handle_heartbeat(self, packet, slave_id):
+         """Handle MasterHeartbeat message - respond with SlaveHeartbeat."""
+         if slave_id not in self.slaves:
+             return
+ 
+         slave = self.slaves[slave_id]
+ 
+         if slave["behavior"] == self.BEHAVIOR_INTERMITTENT:
+             if random.random() < slave["dropRate"]:
+                 return
+ 
+         if slave["responseDelay"] > 0:
+             time.sleep(slave["responseDelay"])
+ 
+         self._update_slave_state(slave)
+ 
+         # Extract the amps TWCMaster commanded in this heartbeat.
+         # MasterHeartbeat HeartbeatData bytes [1:3] are the commanded amps
+         # encoded as (value * 100) big-endian — e.g. 32.00A → 0x0C80.
+         heartbeat_data = packet.get("HeartbeatData", bytearray(9))
+         if len(heartbeat_data) >= 3:
+             commanded_amps_raw = (heartbeat_data[1] << 8) | heartbeat_data[2]
+         else:
+             commanded_amps_raw = 0
+ 
+         # Build response heartbeat data:
+         #   byte 0    : state code
+         #   bytes 1-2 : reportedAmpsMax  (slave's physical max * 100)
+         #   bytes 3-4 : reportedAmpsActual (what slave is actually drawing * 100)
+         #   bytes 5-6 : padding zeros
+         state_code, actual_raw = self._get_slave_response(slave, commanded_amps_raw)
+         max_raw = int(slave.get("maxAmps", 32) * 100)
+ 
+         heartbeat_response = bytearray([
+             state_code,
+             (max_raw >> 8) & 0xFF,
+             max_raw & 0xFF,
+             (actual_raw >> 8) & 0xFF,
+             actual_raw & 0xFF,
+             0x00,
+             0x00,
+         ])
+         if self.master.protocolVersion == 2:
+             heartbeat_response += bytearray(b"\x00\x00")
+ 
+         response = (
+             bytearray(b"\xfd\xe0")
+             + bytearray(slave_id.encode())
+             + packet["SenderID"]
+             + heartbeat_response
+         )
+         self._send_internal(response)
+         slave["lastHeartbeatTime"] = time.time()
 
-        slave = self.slaves[slave_id]
-
-        if slave["behavior"] == self.BEHAVIOR_INTERMITTENT:
-            if random.random() < slave["dropRate"]:
-                return
-
-        if slave["responseDelay"] > 0:
-            time.sleep(slave["responseDelay"])
-
-        self._update_slave_state(slave)
-
-        response = self.proto.createMessage(
-            {
-                "Command": "SlaveHeartbeat",
-                "SenderID": bytearray(slave_id.encode()),
-                "RecieverID": packet["SenderID"],
-            }
-        )
-
-        self._send_internal(response)
-        slave["lastHeartbeatTime"] = time.time()
+    def _get_slave_response(self, slave, commanded_amps_raw):
+        """Return (state_code, actual_amps_raw) based on slave behavior and commanded amps."""
+        behavior = slave["behavior"]
+        if behavior == self.BEHAVIOR_CHARGING and commanded_amps_raw > 0:
+            # Slave is charging — echo back whatever master commanded
+            return 0x01, commanded_amps_raw
+        elif behavior == self.BEHAVIOR_CAR_PLUGGED:
+            # Car plugged but not yet charging
+            return 0x04, 0
+        elif behavior == self.BEHAVIOR_ERROR:
+            return 0x02, 0
+        else:
+            # Normal/idle — unplugged or not charging
+            return 0x00, 0
 
     def sendInternal(self, msg):
         # The sendInternal function takes a message that we would like to send

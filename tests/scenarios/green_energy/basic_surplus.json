@@ -1,0 +1,98 @@
+{
+  "metadata": {
+    "id": "green_energy_basic_surplus",
+    "title": "Basic solar surplus drives charging",
+    "description": "With a stable solar surplus above the minimum charging threshold, TWCManager should command the slave to charge at the available green rate and the slave should report actual amps back.",
+    "tags": ["green_energy", "policy", "happy_path"]
+  },
+
+  "initial_conditions": {
+    "config_overrides": {
+      "minAmpsPerTWC": 6,
+      "wiringMaxAmpsAllTWCs": 48,
+      "numberOfPhases": 1,
+      "defaultVoltage": 240
+    },
+    "policy": "green_energy",
+    "slaves": [
+      { "id": "AB", "maxAmps": 32, "behavior": "charging" }
+    ]
+  },
+
+  "timeline": [
+    {
+      "step": 0,
+      "label": "Stable solar surplus — 4kW net available",
+      "ems": {
+        "generation_watts": 5000,
+        "consumption_watts": 1000
+      }
+    },
+    {
+      "step": 1,
+      "label": "Surplus increases — 6kW net available",
+      "ems": {
+        "generation_watts": 7000,
+        "consumption_watts": 1000
+      }
+    },
+    {
+      "step": 2,
+      "label": "Surplus decreases — back to 4kW net",
+      "ems": {
+        "generation_watts": 5000,
+        "consumption_watts": 1000
+      }
+    }
+  ],
+
+  "assertions": [
+    {
+      "after_step": 0,
+      "description": "Slave should be commanded to charge at surplus amps",
+      "timeout_seconds": 15,
+      "checks": [
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "gte",
+          "value": 6,
+          "description": "Commanded amps must be at or above minimum"
+        },
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "lte",
+          "value": 48,
+          "description": "Commanded amps must not exceed wiring limit"
+        }
+      ]
+    },
+    {
+      "after_step": 1,
+      "description": "Commanded amps should rise with increased surplus",
+      "timeout_seconds": 15,
+      "checks": [
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "gte",
+          "value": 6
+        }
+      ]
+    },
+    {
+      "after_step": 2,
+      "description": "Commanded amps should adjust to reduced surplus",
+      "timeout_seconds": 15,
+      "checks": [
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "gte",
+          "value": 6
+        }
+      ]
+    }
+  ]
+}

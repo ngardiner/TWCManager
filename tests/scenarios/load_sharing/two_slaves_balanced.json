@@ -1,0 +1,91 @@
+{
+  "metadata": {
+    "id": "load_sharing_two_slaves_balanced",
+    "title": "Two slaves share available amps proportionally",
+    "description": "With two slaves and a fixed available amp budget, TWCManager should distribute amps across both slaves without exceeding wiringMaxAmpsAllTWCs in total. When one slave disconnects, the other should receive the full budget.",
+    "tags": ["load_sharing", "multi_slave", "happy_path"]
+  },
+
+  "initial_conditions": {
+    "config_overrides": {
+      "minAmpsPerTWC": 6,
+      "wiringMaxAmpsAllTWCs": 48,
+      "numberOfPhases": 1,
+      "defaultVoltage": 240
+    },
+    "policy": "green_energy",
+    "slaves": [
+      { "id": "AB", "maxAmps": 32, "behavior": "charging" },
+      { "id": "CD", "maxAmps": 32, "behavior": "charging" }
+    ]
+  },
+
+  "timeline": [
+    {
+      "step": 0,
+      "label": "Both slaves present — 10kW surplus (≈41.7A)",
+      "ems": {
+        "generation_watts": 11000,
+        "consumption_watts": 1000
+      }
+    },
+    {
+      "step": 1,
+      "label": "Surplus drops — now only enough for ~15A total",
+      "ems": {
+        "generation_watts": 4600,
+        "consumption_watts": 1000
+      }
+    }
+  ],
+
+  "assertions": [
+    {
+      "after_step": 0,
+      "description": "Total amps across all slaves must not exceed wiring limit",
+      "timeout_seconds": 15,
+      "checks": [
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "gte",
+          "value": 6,
+          "description": "First slave must receive at least minimum amps"
+        },
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[1].lastAmpsOffered",
+          "op": "gte",
+          "value": 6,
+          "description": "Second slave must receive at least minimum amps"
+        },
+        {
+          "api_endpoint": "/getStatus",
+          "path": "maxAmpsToDivideAmongSlaves",
+          "op": "lte",
+          "value": 48,
+          "description": "Total amps to divide must not exceed wiring maximum"
+        }
+      ]
+    },
+    {
+      "after_step": 1,
+      "description": "Both slaves still receive valid amps within reduced budget",
+      "timeout_seconds": 15,
+      "checks": [
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "gte",
+          "value": 6
+        },
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[1].lastAmpsOffered",
+          "op": "gte",
+          "value": 6
+        }
+      ]
+    }
+  ]
+}

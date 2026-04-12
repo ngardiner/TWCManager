@@ -1,0 +1,93 @@
+{
+  "metadata": {
+    "id": "green_energy_surplus_drops_below_minimum",
+    "title": "Charging stops cleanly when surplus falls below minimum threshold",
+    "description": "When solar generation drops such that the available surplus amps would be below minAmpsPerTWC, TWCManager must stop charging entirely rather than command an illegal sub-minimum current. After surplus recovers, charging should resume.",
+    "tags": ["green_energy", "policy", "min_amps", "edge_case"]
+  },
+
+  "initial_conditions": {
+    "config_overrides": {
+      "minAmpsPerTWC": 6,
+      "wiringMaxAmpsAllTWCs": 48,
+      "numberOfPhases": 1,
+      "defaultVoltage": 240
+    },
+    "policy": "green_energy",
+    "slaves": [
+      { "id": "AB", "maxAmps": 32, "behavior": "charging" }
+    ]
+  },
+
+  "timeline": [
+    {
+      "step": 0,
+      "label": "Good surplus — 4kW net (≈16.7A at 240V)",
+      "ems": {
+        "generation_watts": 5000,
+        "consumption_watts": 1000
+      }
+    },
+    {
+      "step": 1,
+      "label": "Cloud cover — surplus collapses to 500W net (≈2.1A — below minimum 6A)",
+      "ems": {
+        "generation_watts": 1500,
+        "consumption_watts": 1000
+      }
+    },
+    {
+      "step": 2,
+      "label": "Sun returns — surplus recovers to 3.5kW net",
+      "ems": {
+        "generation_watts": 4500,
+        "consumption_watts": 1000
+      }
+    }
+  ],
+
+  "assertions": [
+    {
+      "after_step": 0,
+      "description": "System should be charging above minimum amps",
+      "timeout_seconds": 15,
+      "checks": [
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "gte",
+          "value": 6,
+          "description": "Must charge at or above minAmpsPerTWC"
+        }
+      ]
+    },
+    {
+      "after_step": 1,
+      "description": "System must stop charging — never command below minimum",
+      "timeout_seconds": 20,
+      "checks": [
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "eq",
+          "value": 0,
+          "description": "Commanded amps must be 0 when surplus is below minimum threshold"
+        }
+      ]
+    },
+    {
+      "after_step": 2,
+      "description": "Charging should resume when surplus recovers above minimum",
+      "timeout_seconds": 20,
+      "checks": [
+        {
+          "api_endpoint": "/getSlaveTWCs",
+          "path": "[0].lastAmpsOffered",
+          "op": "gte",
+          "value": 6,
+          "description": "Must resume charging once surplus is sufficient"
+        }
+      ]
+    }
+  ]
+}
