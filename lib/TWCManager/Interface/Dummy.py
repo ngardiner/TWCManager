@@ -15,13 +15,13 @@ class Dummy:
     proto = None
     twcID = bytearray(b"\x12\x34")
     timeLastTx = 0
-    
+
     # Advanced scenario support
     slaves = {}
     scenario = None
     scenario_start_time = None
     use_scenarios = False
-    
+
     # Behavior constants
     BEHAVIOR_NORMAL = "normal"
     BEHAVIOR_CHARGING = "charging"
@@ -52,13 +52,16 @@ class Dummy:
 
         # Instantiate protocol module for sending/recieving TWC protocol
         self.proto = self.master.getModuleByName("TWCProtocol")
-        
+
         # Load scenario configuration if available
         self._load_scenario()
         if self.scenario:
             self.use_scenarios = True
             self._initialize_slaves()
-            logger.log(logging.INFO4, f"Dummy initialized with scenario: {len(self.slaves)} slave(s)")
+            logger.log(
+                logging.INFO4,
+                f"Dummy initialized with scenario: {len(self.slaves)} slave(s)",
+            )
 
     def close(self):
         # NOOP - No need to close anything
@@ -66,29 +69,38 @@ class Dummy:
 
     def _load_scenario(self):
         """Load TWC scenario configuration from file if available."""
-        scenario_file = Path(__file__).parent.parent.parent.parent / "tests" / "fixtures" / "twc_scenarios.json"
-        
+        scenario_file = (
+            Path(__file__).parent.parent.parent.parent
+            / "tests"
+            / "fixtures"
+            / "twc_scenarios.json"
+        )
+
         if not scenario_file.exists():
             return
-        
+
         try:
-            with open(scenario_file, 'r') as f:
+            with open(scenario_file, "r") as f:
                 scenarios = json.load(f)
-            
+
             # Get scenario name from config or use default
-            scenario_name = self.master.config.get("interface", {}).get("Dummy", {}).get("scenario", None)
-            
+            scenario_name = (
+                self.master.config.get("interface", {})
+                .get("Dummy", {})
+                .get("scenario", None)
+            )
+
             if scenario_name and scenario_name in scenarios.get("scenarios", {}):
                 self.scenario = scenarios["scenarios"][scenario_name]
                 logger.log(logging.INFO4, f"Loaded scenario: {scenario_name}")
         except Exception as e:
             logger.log(logging.INFO4, f"Error loading scenario: {e}")
-    
+
     def _initialize_slaves(self):
         """Initialize slave TWCs from scenario."""
         if not self.scenario or "slaves" not in self.scenario:
             return
-        
+
         for slave_config in self.scenario["slaves"]:
             slave_id = slave_config.get("id", "AB")
             self.slaves[slave_id] = {
@@ -105,18 +117,18 @@ class Dummy:
                 "lastHeartbeatTime": time.time(),
                 "state": "idle",
             }
-    
+
     def _check_dynamic_slaves(self):
         """Check if any dynamic slaves should be added."""
         if not self.scenario or "dynamicSlaves" not in self.scenario:
             return
-        
+
         elapsed = time.time() - self.scenario_start_time
-        
+
         for dynamic_slave in self.scenario.get("dynamicSlaves", []):
             join_after = dynamic_slave.get("joinAfter", 0)
             slave_id = dynamic_slave.get("id", "CD")
-            
+
             if elapsed >= join_after and slave_id not in self.slaves:
                 self.slaves[slave_id] = {
                     "id": slave_id,
@@ -133,11 +145,11 @@ class Dummy:
                     "state": "idle",
                 }
                 logger.log(logging.INFO4, f"Dynamic slave {slave_id} joined")
-    
+
     def _update_slave_state(self, slave):
         """Update slave state based on behavior configuration."""
         behavior = slave["behavior"]
-        
+
         if behavior == self.BEHAVIOR_NORMAL:
             slave["state"] = "idle"
             slave["requestedAmps"] = 0
@@ -161,9 +173,9 @@ class Dummy:
         checksum = 0
         for i in range(1, len(msg)):
             checksum += msg[i]
-        
+
         msg.append(checksum & 0xFF)
-        
+
         # SLIP encoding: escape special characters
         i = 0
         while i < len(msg):
@@ -174,10 +186,10 @@ class Dummy:
                 msg[i : i + 1] = b"\xdb\xdd"
                 i = i + 1
             i = i + 1
-        
+
         msg = bytearray(b"\xc0" + msg + b"\xc0\xfe")
         logger.log(logging.INFO9, f"TxInt@: {self.master.hex_str(msg)}")
-        
+
         self.msgBuffer = msg
 
     def getBufferLen(self):
@@ -203,7 +215,7 @@ class Dummy:
             return self._send_scenario_mode(msg)
         else:
             return self._send_simple_mode(msg)
-    
+
     def _send_simple_mode(self, msg):
         """Original simple mode - single slave, basic responses."""
         packet = self.proto.parseMessage(msg)
@@ -232,71 +244,79 @@ class Dummy:
         logger.log(logging.INFO9, "Tx@: " + self.master.hex_str(msg))
         self.timeLastTx = time.time()
         return 0
-    
+
     def _send_scenario_mode(self, msg):
         """Scenario mode - multi-slave with configurable behaviors."""
         try:
             packet = self.proto.parseMessage(msg)
             command = packet.get("Command", "")
             receiver_id = packet.get("RecieverID", bytearray(b""))
-            
-            receiver_id_str = receiver_id.decode('utf-8', errors='ignore') if isinstance(receiver_id, bytes) else str(receiver_id)
-            
+
+            receiver_id_str = (
+                receiver_id.decode("utf-8", errors="ignore")
+                if isinstance(receiver_id, bytes)
+                else str(receiver_id)
+            )
+
             self._check_dynamic_slaves()
-            
+
             if command == "MasterLinkready2":
                 self._handle_linkready(packet)
             elif command == "MasterHeartbeat" and receiver_id_str in self.slaves:
                 self._handle_heartbeat(packet, receiver_id_str)
-            
+
             logger.log(logging.INFO9, f"Tx@: {self.master.hex_str(msg)}")
             self.timeLastTx = time.time()
-            
+
         except Exception as e:
             logger.log(logging.INFO4, f"Error processing message: {e}")
-        
+
         return 0
-    
+
     def _handle_linkready(self, packet):
         """Handle MasterLinkready2 message - respond with SlaveLinkready from all slaves."""
         for slave_id, slave in self.slaves.items():
             if slave["behavior"] == self.BEHAVIOR_INTERMITTENT:
                 if random.random() < slave["dropRate"]:
                     continue
-            
+
             if slave["responseDelay"] > 0:
                 time.sleep(slave["responseDelay"])
-            
-            response = self.proto.createMessage({
-                "Command": "SlaveLinkready",
-                "SenderID": bytearray(slave_id.encode()),
-                "Sign": self.master.getSlaveSign(),
-                "Amps": bytearray(b"\x1f\x40"),
-            })
+
+            response = self.proto.createMessage(
+                {
+                    "Command": "SlaveLinkready",
+                    "SenderID": bytearray(slave_id.encode()),
+                    "Sign": self.master.getSlaveSign(),
+                    "Amps": bytearray(b"\x1f\x40"),
+                }
+            )
             self._send_internal(response)
-    
+
     def _handle_heartbeat(self, packet, slave_id):
         """Handle MasterHeartbeat message - respond with SlaveHeartbeat."""
         if slave_id not in self.slaves:
             return
-        
+
         slave = self.slaves[slave_id]
-        
+
         if slave["behavior"] == self.BEHAVIOR_INTERMITTENT:
             if random.random() < slave["dropRate"]:
                 return
-        
+
         if slave["responseDelay"] > 0:
             time.sleep(slave["responseDelay"])
-        
+
         self._update_slave_state(slave)
-        
-        response = self.proto.createMessage({
-            "Command": "SlaveHeartbeat",
-            "SenderID": bytearray(slave_id.encode()),
-            "RecieverID": packet["SenderID"],
-        })
-        
+
+        response = self.proto.createMessage(
+            {
+                "Command": "SlaveHeartbeat",
+                "SenderID": bytearray(slave_id.encode()),
+                "RecieverID": packet["SenderID"],
+            }
+        )
+
         self._send_internal(response)
         slave["lastHeartbeatTime"] = time.time()
 
