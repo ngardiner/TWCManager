@@ -6,6 +6,7 @@ logger = LoggerFactory.get_logger("MQTT", "Control")
 
 
 class MQTTControl:
+
     import paho.mqtt.client as mqtt
     import _thread
 
