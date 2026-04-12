@@ -1,0 +1,10 @@
+# Test Requirements
+# Additional dependencies needed for testing
+
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-timeout>=2.1.0
+pytest-xdist>=3.3.0  # For parallel test execution
+pytest-mock>=3.11.0
+requests-mock>=1.11.0
+coverage>=7.2.0

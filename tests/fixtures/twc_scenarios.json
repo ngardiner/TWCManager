@@ -1,0 +1,188 @@
+# TWC Scenario Configuration Schema
+# This file defines test scenarios for the enhanced Dummy interface
+
+{
+  "scenarios": {
+    "single_slave_normal": {
+      "description": "Single TWC slave with normal operation",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "normal",
+          "protocolVersion": 2,
+          "firmwareVersion": "4.5.3"
+        }
+      ]
+    },
+    
+    "multi_slave_balanced": {
+      "description": "Two TWC slaves with balanced load sharing",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "normal",
+          "protocolVersion": 2
+        },
+        {
+          "id": "CD",
+          "maxAmps": 40,
+          "behavior": "normal",
+          "protocolVersion": 2
+        }
+      ]
+    },
+    
+    "slave_with_car_plugged": {
+      "description": "Single slave with car plugged in and requesting charge",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "car_plugged",
+          "requestedAmps": 32,
+          "actualAmps": 0,
+          "protocolVersion": 2
+        }
+      ]
+    },
+    
+    "slave_actively_charging": {
+      "description": "Single slave actively charging a vehicle",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "charging",
+          "requestedAmps": 32,
+          "actualAmps": 32,
+          "protocolVersion": 2
+        }
+      ]
+    },
+    
+    "intermittent_communication": {
+      "description": "Slave with intermittent communication issues",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "intermittent",
+          "dropRate": 0.1,
+          "protocolVersion": 2
+        }
+      ]
+    },
+    
+    "slow_response": {
+      "description": "Slave that responds slowly to commands",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "slow",
+          "responseDelay": 2.0,
+          "protocolVersion": 2
+        }
+      ]
+    },
+    
+    "protocol_v1_slave": {
+      "description": "Older TWC using protocol version 1",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "normal",
+          "protocolVersion": 1,
+          "firmwareVersion": "3.2.1"
+        }
+      ]
+    },
+    
+    "error_state": {
+      "description": "Slave reporting error condition",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "error",
+          "errorCode": "GFCI_FAULT",
+          "protocolVersion": 2
+        }
+      ]
+    },
+    
+    "dynamic_slave_addition": {
+      "description": "Scenario where a second slave joins mid-session",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "normal",
+          "protocolVersion": 2
+        }
+      ],
+      "dynamicSlaves": [
+        {
+          "id": "CD",
+          "maxAmps": 40,
+          "behavior": "normal",
+          "protocolVersion": 2,
+          "joinAfter": 30
+        }
+      ]
+    },
+    
+    "mixed_protocol_versions": {
+      "description": "Multiple slaves with different protocol versions",
+      "slaves": [
+        {
+          "id": "AB",
+          "maxAmps": 80,
+          "behavior": "normal",
+          "protocolVersion": 2
+        },
+        {
+          "id": "CD",
+          "maxAmps": 40,
+          "behavior": "normal",
+          "protocolVersion": 1
+        }
+      ]
+    }
+  },
+  
+  "behaviors": {
+    "normal": {
+      "description": "Standard TWC operation with reliable communication"
+    },
+    "car_plugged": {
+      "description": "Car is plugged in but not yet charging"
+    },
+    "charging": {
+      "description": "Actively charging a vehicle"
+    },
+    "intermittent": {
+      "description": "Randomly drops messages to simulate poor connection",
+      "parameters": ["dropRate"]
+    },
+    "slow": {
+      "description": "Responds to commands with artificial delay",
+      "parameters": ["responseDelay"]
+    },
+    "error": {
+      "description": "Reports error condition in status",
+      "parameters": ["errorCode"]
+    }
+  },
+  
+  "errorCodes": [
+    "GFCI_FAULT",
+    "OVER_TEMPERATURE",
+    "RELAY_FAULT",
+    "COMMUNICATION_ERROR",
+    "GROUND_FAULT"
+  ]
+}
