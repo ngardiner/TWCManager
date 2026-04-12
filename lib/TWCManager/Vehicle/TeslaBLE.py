@@ -24,6 +24,7 @@ class TeslaBLE:
     pipe = None
     enabled = True
     pipeName = "/tmp/ble_data"
+    pipeOpen = False  # Track pipe state
 
     def __init__(self, master):
         self.master = master
@@ -47,6 +48,9 @@ class TeslaBLE:
         self.statsReporting = ble_config.get("statsReporting", True)
 
         logger.info(f"BLE module initialized with timeout={self.commandTimeout}s, retries={self.maxRetries}")
+
+        # Clean up any stale pipe file from previous crashes
+        self._cleanup_stale_pipe()
 
         # Determine best binary location
         self.binaryPath = self.configConfig.get(
@@ -225,7 +229,11 @@ class TeslaBLE:
                 logger.error("tesla-control binary not available for pairing")
                 return False
 
-            self.sendPublicKey(vin)
+            # Send public key before pairing
+            if not self.sendPublicKey(vin):
+                logger.error(f"Failed to send public key for pairing with {vin}")
+                return False
+
             command_string = [
                 self.binaryPath,
                 "-debug",
@@ -247,7 +255,6 @@ class TeslaBLE:
                 stderr=subprocess.PIPE,
                 timeout=30  # Pairing can take longer than normal commands
             )
-            self.closeFile()
 
             # Check both stdout and stderr for pairing result
             output = result.stderr.decode("utf-8") + result.stdout.decode("utf-8")
@@ -261,18 +268,13 @@ class TeslaBLE:
 
         except subprocess.TimeoutExpired:
             logger.error(f"BLE pairing with {vin} timed out after 30 seconds")
-            try:
-                self.closeFile()
-            except:
-                pass
             return False
         except Exception as e:
             logger.error(f"peerWithVehicle exception for {vin}: {e}")
-            try:
-                self.closeFile()
-            except:
-                pass
             return False
+        finally:
+            # Always ensure pipe is closed after pairing attempt
+            self._ensure_pipe_closed()
 
     def pingVehicle(self, vin):
         """
@@ -317,7 +319,10 @@ class TeslaBLE:
 
             logger.debug(f"BLE sendCommand: {command} to {vin}" + (f" with args {args}" if args else ""))
 
-            self.sendPrivateKey(vin)
+            # Send private key before command
+            if not self.sendPrivateKey(vin):
+                logger.warning(f"Failed to send private key for {vin}, proceeding anyway")
+
             command_string = [
                 self.binaryPath,
                 "-debug",
@@ -348,8 +353,6 @@ class TeslaBLE:
             finally:
                 timer.cancel()
 
-            self.closeFile()
-
             # Check if process was killed due to timeout
             if return_code == -9:  # SIGKILL
                 logger.warning(f"BLE command '{command}' timed out after {self.commandTimeout}s")
@@ -363,11 +366,10 @@ class TeslaBLE:
 
         except Exception as e:
             logger.error(f"sendCommand exception: {e}")
-            try:
-                self.closeFile()
-            except:
-                pass
             return None
+        finally:
+            # Always ensure pipe is closed after command
+            self._ensure_pipe_closed()
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         """
@@ -535,30 +537,107 @@ class TeslaBLE:
             logger.error(f"wakeVehicle exception for {vin}: {e}")
             return False
 
-    def closeFile(self):
-        self.pipe.close()
+    def _cleanup_stale_pipe(self):
+        """Clean up any stale pipe file from previous crashes."""
         try:
-            os.unlink(self.pipeName)
-        except FileNotFoundError:
-            pass
+            if os.path.exists(self.pipeName):
+                os.unlink(self.pipeName)
+                logger.debug(f"Cleaned up stale pipe file: {self.pipeName}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up stale pipe file: {e}")
+
+    def _ensure_pipe_closed(self):
+        """Safely close pipe if it's open, tracking state."""
+        if self.pipeOpen and self.pipe is not None:
+            try:
+                self.pipe.close()
+                self.pipeOpen = False
+                logger.debug("Pipe closed successfully")
+            except Exception as e:
+                logger.warning(f"Error closing pipe: {e}")
+                self.pipeOpen = False
+        
+        # Always try to clean up the file
+        try:
+            if os.path.exists(self.pipeName):
+                os.unlink(self.pipeName)
+        except Exception as e:
+            logger.debug(f"Could not remove pipe file: {e}")
+
+    def closeFile(self):
+        """Close pipe file with proper error handling and state tracking."""
+        self._ensure_pipe_closed()
 
     def openFile(self):
-        # Open output file for passing data to tesla-control
-        self.pipe = open(self.pipeName, "wb", 0)
+        """Open output file for passing data to tesla-control with error handling."""
+        try:
+            # Ensure any previous pipe is closed
+            if self.pipeOpen:
+                self._ensure_pipe_closed()
+            
+            # Open new pipe file with buffering disabled
+            self.pipe = open(self.pipeName, "wb", 0)
+            self.pipeOpen = True
+            logger.debug(f"Pipe opened successfully: {self.pipeName}")
+        except Exception as e:
+            logger.error(f"Failed to open pipe file: {e}")
+            self.pipe = None
+            self.pipeOpen = False
+            raise
 
     def sendPublicKey(self, vin):
-        self.openFile()
-        self.pipe.write(
-            base64.b64decode(self.master.settings["Vehicles"][vin]["pubKeyPEM"]),
-        )
+        """Send public key to vehicle via pipe with error handling."""
+        try:
+            if vin not in self.master.settings.get("Vehicles", {}):
+                logger.error(f"Vehicle {vin} not found in settings")
+                return False
+            
+            if "pubKeyPEM" not in self.master.settings["Vehicles"][vin]:
+                logger.error(f"Vehicle {vin} has no pubKeyPEM defined")
+                return False
+            
+            self.openFile()
+            if not self.pipeOpen or self.pipe is None:
+                logger.error("Failed to open pipe for public key transmission")
+                return False
+            
+            self.pipe.write(
+                base64.b64decode(self.master.settings["Vehicles"][vin]["pubKeyPEM"]),
+            )
+            logger.debug(f"Public key sent for vehicle {vin}")
+            return True
+        except Exception as e:
+            logger.error(f"Error sending public key for {vin}: {e}")
+            return False
+        finally:
+            self._ensure_pipe_closed()
 
     def sendPrivateKey(self, vin):
-        if vin in self.master.settings["Vehicles"]:
-            if "privKey" in self.master.settings["Vehicles"][vin]:
-                self.openFile()
-                self.pipe.write(
-                    base64.b64decode(self.master.settings["Vehicles"][vin]["privKey"]),
-                )
+        """Send private key to vehicle via pipe with error handling."""
+        try:
+            if vin not in self.master.settings.get("Vehicles", {}):
+                logger.error(f"Vehicle {vin} not found in settings")
+                return False
+            
+            if "privKey" not in self.master.settings["Vehicles"][vin]:
+                logger.debug(f"Vehicle {vin} has no privKey defined, skipping")
+                return True  # Not an error, just skip
+            
+            self.openFile()
+            if not self.pipeOpen or self.pipe is None:
+                logger.error("Failed to open pipe for private key transmission")
+                return False
+            
+            self.pipe.write(
+                base64.b64decode(self.master.settings["Vehicles"][vin]["privKey"]),
+            )
+            logger.debug(f"Private key sent for vehicle {vin}")
+            return True
+        except Exception as e:
+            logger.error(f"Error sending private key for {vin}: {e}")
+            return False
+        finally:
+            self._ensure_pipe_closed()
 
     def updateSettings(self):
         # Called by TWCMaster when settings are read/updated
