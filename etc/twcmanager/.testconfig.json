@@ -364,8 +364,8 @@
         "Console": {
             "enabled": true
         },
-        "FileLogger": {
-          "enabled": true,
+         "FileLogger": {
+           "enabled": false,
           # The path under which the various log files will be stored.
           # Make sure the user which runs the TWCManager process can write to
           # this directory.
@@ -402,8 +402,8 @@
               "DebugLogLevelGreaterThan": 1
           }
         },
-        "CSV": {
-            "enabled": true,
+         "CSV": {
+             "enabled": false,
             # The path under which the various csv files will be stored.
             # Make sure the user which runs the TWCManager process can write to
             # this directory.
@@ -429,7 +429,7 @@
         },
         # SQLite is only in prototype phase at this point. More work required
          "SQLite": {
-             "enabled": true,
+             "enabled": false,
              "path": "/tmp/twcmanager/twcmanager.sqlite"
          }
     },
