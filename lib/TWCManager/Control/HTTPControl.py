@@ -268,9 +268,23 @@ def CreateHTTPHandlerClass(master):
                 json_data = json.dumps(master.getModuleByName("Policy").charge_policy)
                 self.wfile.write(json_data.encode("utf-8"))
 
+            elif self.url.path == "/api/getPricing":
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+
+                json_data = json.dumps(
+                    {
+                        "export": master.getExportPrice(),
+                        "import": master.getImportPrice(),
+                    }
+                )
+                self.wfile.write(json_data.encode("utf-8"))
+
             elif self.url.path == "/api/getSlaveTWCs":
                 data = {}
                 totals = {
+                    "carsCharging": 0,
                     "lastAmpsOffered": 0,
                     "lifetimekWh": 0,
                     "maxAmps": 0,
@@ -313,12 +327,14 @@ def CreateHTTPHandlerClass(master):
                         data[TWCID]["lastAtHome"] = vehicle.atHome
                         data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
 
+                    totals["carsCharging"] += slaveTWC.isCharging
                     totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
                     totals["maxAmps"] += slaveTWC.maxAmps
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
 
                 data["total"] = {
+                    "carsCharging": totals["carsCharging"],
                     "lastAmpsOffered": round(totals["lastAmpsOffered"], 2),
                     "lifetimekWh": totals["lifetimekWh"],
                     "maxAmps": totals["maxAmps"],

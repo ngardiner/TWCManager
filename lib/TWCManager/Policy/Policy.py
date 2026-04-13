@@ -237,6 +237,10 @@ class Policy:
             limit = -1
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
 
+        # If at least one pricing module is active, fetch current pricing
+        if len(self.master.getModulesByType("Pricing")) > 0:
+            self.master.queue_background_task({"cmd": "getPricing"})
+
         # Report current policy via Status modules
         for module in self.master.getModulesByType("Status"):
             module["ref"].setStatus(
@@ -308,6 +312,10 @@ class Policy:
             return self.master.getMaxAmpsForTargetGridUsage()
         elif value == "checkScheduledCharging()":
             return self.master.checkScheduledCharging()
+        elif value == "getImportPrice()":
+            return self.master.getImportPrice()
+        elif value == "getExportPrice()":
+            return self.master.getExportPrice()
 
         # If value is tiered, split it up
         if value.find(".") != -1:
