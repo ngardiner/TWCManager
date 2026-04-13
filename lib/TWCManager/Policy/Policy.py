@@ -218,7 +218,7 @@ class Policy:
 
         # If we are not checking green energy already but we need to, queue that
         # as well.
-        if bgt is not "checkGreenEnergy":
+        if bgt != "checkGreenEnergy":
             alwaysPoll = self.config.get("policy", {}).get("alwaysPollEMS", False)
             maxAmps = self.config.get("config", {}).get("maxAmpsAllowedFromGrid", None)
             if alwaysPoll or maxAmps or self.policyIsGreen():
