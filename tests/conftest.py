@@ -70,24 +70,48 @@ def wait_for_twcmanager(api_client):
     """
     Wait for TWCManager to be ready before running tests.
 
-    This replaces the 120-second sleep with intelligent health checking.
-    Assumes TWCManager is already running (e.g., in a Docker container).
+    Polls the /api/getStatus endpoint with exponential backoff.
+    Provides detailed diagnostics on failure.
     """
-    max_wait = 120  # Maximum 120 seconds
+    max_wait = 120
     start_time = time.time()
+    attempt = 0
+    last_error = None
 
     while time.time() - start_time < max_wait:
+        attempt += 1
+        elapsed = time.time() - start_time
+        
         try:
             response = api_client.get(f"{TEST_API_BASE_URL}/getStatus", timeout=5)
             if response.status_code == 200:
                 print(
-                    f"\nTWCManager ready after {time.time() - start_time:.1f} seconds"
+                    f"\n✓ TWCManager ready after {elapsed:.1f}s (attempt {attempt})"
                 )
                 return True
-        except (requests.ConnectionError, requests.Timeout):
-            time.sleep(1)
+            else:
+                last_error = f"HTTP {response.status_code}"
+        except requests.ConnectionError as e:
+            last_error = f"Connection refused: {str(e)[:50]}"
+        except requests.Timeout:
+            last_error = "Request timeout"
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {str(e)[:50]}"
+        
+        # Log progress every 10 attempts
+        if attempt % 10 == 0:
+            print(f"  Waiting... {elapsed:.1f}s elapsed, last error: {last_error}")
+        
+        time.sleep(1)
 
-    pytest.fail(f"TWCManager did not become ready within {max_wait} seconds")
+    # Provide detailed failure diagnostics
+    elapsed = time.time() - start_time
+    error_msg = (
+        f"TWCManager did not become ready within {max_wait}s "
+        f"({attempt} attempts, last error: {last_error})\n"
+        f"Ensure TWCManager is running and listening on {TEST_API_BASE_URL}"
+    )
+    pytest.fail(error_msg)
 
 
 @pytest.fixture
