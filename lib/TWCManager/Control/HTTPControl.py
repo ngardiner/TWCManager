@@ -268,63 +268,71 @@ def CreateHTTPHandlerClass(master):
                 json_data = json.dumps(master.getModuleByName("Policy").charge_policy)
                 self.wfile.write(json_data.encode("utf-8"))
 
-            elif self.url.path == "/api/getSlaveTWCs":
-                data = {}
-                totals = {
-                    "lastAmpsOffered": 0,
-                    "lifetimekWh": 0,
-                    "maxAmps": 0,
-                    "reportedAmpsActual": 0,
-                }
-                for slaveTWC in master.getSlaveTWCs():
-                    TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
-                    data[TWCID] = {
-                        "currentVIN": slaveTWC.currentVIN,
-                        "lastAmpsOffered": round(slaveTWC.lastAmpsOffered, 2),
-                        "lastHeartbeat": round(time.time() - slaveTWC.timeLastRx, 2),
-                        "carsCharging": slaveTWC.isCharging,
-                        "lastVIN": slaveTWC.lastVIN,
-                        "lifetimekWh": slaveTWC.lifetimekWh,
-                        "maxAmps": float(slaveTWC.maxAmps),
-                        "reportedAmpsActual": float(slaveTWC.reportedAmpsActual),
-                        "chargerLoadInW": round(slaveTWC.getCurrentChargerLoad()),
-                        "state": slaveTWC.reportedState,
-                        "version": slaveTWC.protocolVersion,
-                        "voltsPhaseA": slaveTWC.voltsPhaseA,
-                        "voltsPhaseB": slaveTWC.voltsPhaseB,
-                        "voltsPhaseC": slaveTWC.voltsPhaseC,
-                        "TWCID": "%s" % TWCID,
-                    }
+             elif self.url.path == "/api/getSlaveTWCs":
+                 data = {}
+                 totals = {
+                     "carsCharging": 0,
+                     "lastAmpsOffered": 0,
+                     "lifetimekWh": 0,
+                     "maxAmps": 0,
+                     "reportedAmpsActual": 0,
+                 }
+                 for slaveTWC in master.getSlaveTWCs():
+                     TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+                     data[TWCID] = {
+                         "carsCharging": slaveTWC.isCharging,
+                         "chargerLoadInW": round(slaveTWC.getCurrentChargerLoad()),
+                         "currentVIN": slaveTWC.currentVIN,
+                         "lastAmpsOffered": round(slaveTWC.lastAmpsOffered, 2),
+                         "lastHeartbeat": round(time.time() - slaveTWC.timeLastRx, 2),
+                         "lastVIN": slaveTWC.lastVIN,
+                         "lifetimekWh": slaveTWC.lifetimekWh,
+                         "maxAmps": float(slaveTWC.maxAmps),
+                         "reportedAmpsActual": float(slaveTWC.reportedAmpsActual),
+                         "state": slaveTWC.reportedState,
+                         "version": slaveTWC.protocolVersion,
+                         "voltsPhaseA": slaveTWC.voltsPhaseA,
+                         "voltsPhaseB": slaveTWC.voltsPhaseB,
+                         "voltsPhaseC": slaveTWC.voltsPhaseC,
+                         "TWCID": "%s" % TWCID,
+                     }
 
-                    if slaveTWC.lastChargingStart > 0:
-                        data[TWCID]["chargeTime"] = str(
-                            timedelta(
-                                seconds=(time.time() - slaveTWC.lastChargingStart)
-                            )
-                        ).split(".")[0]
-                    else:
-                        data[TWCID]["chargeTime"] = "--:--:--"
+                     if slaveTWC.lastChargingStart > 0:
+                         data[TWCID]["chargeTime"] = str(
+                             timedelta(
+                                 seconds=(time.time() - slaveTWC.lastChargingStart)
+                             )
+                         ).split(".")[0]
+                     else:
+                         data[TWCID]["chargeTime"] = "--:--:--"
 
-                    # Adding some vehicle data
-                    vehicle = slaveTWC.getLastVehicle()
-                    if vehicle != None:
-                        data[TWCID]["lastBatterySOC"] = vehicle.batteryLevel
-                        data[TWCID]["lastChargeLimit"] = vehicle.chargeLimit
-                        data[TWCID]["lastAtHome"] = vehicle.atHome
-                        data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
+                     # Adding some vehicle data
+                     vehicle = slaveTWC.getLastVehicle()
+                     if vehicle is not None:
+                         data[TWCID]["lastAtHome"] = vehicle.atHome
+                         data[TWCID]["lastBatterySOC"] = vehicle.batteryLevel
+                         data[TWCID]["lastChargeLimit"] = vehicle.chargeLimit
+                         data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
 
-                    totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
-                    totals["lifetimekWh"] += slaveTWC.lifetimekWh
-                    totals["maxAmps"] += slaveTWC.maxAmps
-                    totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
+                     totals["carsCharging"] += slaveTWC.isCharging
+                     totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
+                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
+                     # maxAmps should be the minimum across all TWCs (bottleneck), not sum
+                     totals["maxAmps"] = (
+                         slaveTWC.maxAmps
+                         if totals["maxAmps"] == 0
+                         else min(totals["maxAmps"], slaveTWC.maxAmps)
+                     )
+                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
 
-                data["total"] = {
-                    "lastAmpsOffered": round(totals["lastAmpsOffered"], 2),
-                    "lifetimekWh": totals["lifetimekWh"],
-                    "maxAmps": totals["maxAmps"],
-                    "reportedAmpsActual": round(totals["reportedAmpsActual"], 2),
-                    "TWCID": "total",
-                }
+                 data["total"] = {
+                     "carsCharging": totals["carsCharging"],
+                     "lastAmpsOffered": round(totals["lastAmpsOffered"], 2),
+                     "lifetimekWh": totals["lifetimekWh"],
+                     "maxAmps": totals["maxAmps"],
+                     "reportedAmpsActual": round(totals["reportedAmpsActual"], 2),
+                     "TWCID": "total",
+                 }
 
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")

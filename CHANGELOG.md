@@ -3,6 +3,8 @@
 This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
+
+## v1.3.3 - 2026-04-13
 * (@MikeBishop) - Improve home location detection when vehicle is charging via TWC
 * (@ngardiner) - Add aWATTar pricing module with dynamic rate-based charging optimization
 * (@deece) - Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
