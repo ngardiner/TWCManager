@@ -820,7 +820,7 @@
         # "add"   - sum prices from all active modules
         # "first" - use the first non-zero price found
         "policy": {
-            "multiPrice": "add"
+            "multiPrice": "first"
         },
 
         # Static Pricing: configure fixed import/export prices when no dynamic

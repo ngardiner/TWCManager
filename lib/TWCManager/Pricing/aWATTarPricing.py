@@ -98,6 +98,10 @@ class aWATTarPricing:
                 self.fetchFailed = True
                 return False
 
+            # Update lastFetch regardless of parse outcome so we respect the
+            # 15-minute rate limit even when the response is unexpected.
+            self.lastFetch = int(self.time.time())
+
             try:
                 r.raise_for_status()
             except self.requests.exceptions.HTTPError as e:
