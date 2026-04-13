@@ -41,23 +41,6 @@ jobs:
        matrix:
          python-version: ['3.8', '3.9', '3.10', '3.11']
      
-     services:
-       mariadb:
-         image: mariadb:latest
-         env:
-           MYSQL_ROOT_PASSWORD: root
-           MYSQL_DATABASE: twcmanager
-           MYSQL_USER: twcmanager
-           MYSQL_PASSWORD: twcmanager
-         options: >-
-           --health-cmd="mysqladmin ping -h localhost"
-           --health-interval=5s
-           --health-timeout=10s
-           --health-retries=10
-           --health-start-period=30s
-         ports:
-           - 3306:3306
-     
      steps:
        - name: Checkout Repository
          uses: actions/checkout@v4
