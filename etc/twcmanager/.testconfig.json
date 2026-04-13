@@ -2,7 +2,7 @@
     "config": {
         # The settings path will store the dynamic settings which are defined via the web
         # interface
-        "settingsPath": "/etc/twcmanager",
+        "settingsPath": "/tmp/twcmanager",
 
         # Set wiringMaxAmpsAllTWCs to the maximum number of amps your charger wiring
         # can handle. I default this to a low 6A which should be safe with the minimum
@@ -369,7 +369,7 @@
           # The path under which the various log files will be stored.
           # Make sure the user which runs the TWCManager process can write to
           # this directory.
-          "path": "/etc/twcmanager/log",
+          "path": "/tmp/twcmanager/log",
           # The mute parameter allows turning specific logging on or off.
           # In the example below, charge sessions are logged, but not the
           # regular charger status messages. These are valid under any of the
@@ -407,7 +407,7 @@
             # The path under which the various csv files will be stored.
             # Make sure the user which runs the TWCManager process can write to
             # this directory.
-            "path": "/etc/twcmanager/csv",
+            "path": "/tmp/twcmanager/csv",
             # The mute parameter allows turning specific logging on or off.
             # In the example below, charge sessions are logged, but not the
             # regular charger status messages. These are valid under any of the
@@ -428,11 +428,10 @@
             "password": "twcmanager"
         },
         # SQLite is only in prototype phase at this point. More work required
-        # before this will be a working logging target
-        "SQLite": {
-            "enabled": true,
-            "path": "/etc/twcmanager/twcmanager.sqlite"
-        }
+         "SQLite": {
+             "enabled": true,
+             "path": "/tmp/twcmanager/twcmanager.sqlite"
+         }
     },
     "sources":{
         # ScenarioEMS is a test-only EMS module that injects generation and

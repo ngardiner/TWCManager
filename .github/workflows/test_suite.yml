@@ -59,7 +59,7 @@ jobs:
 
        - name: Start TWCManager
          run: |
-           sudo mkdir -p /etc/twcmanager
+           mkdir -p /tmp/twcmanager
            cp etc/twcmanager/.testconfig.json config.json
            python -m TWCManager &
          env:
