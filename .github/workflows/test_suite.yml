@@ -59,7 +59,8 @@ jobs:
 
        - name: Start TWCManager
          run: |
-           mkdir -p /tmp/twcmanager
+           mkdir -p /tmp/twcmanager/log
+           mkdir -p /tmp/twcmanager/csv
            cp etc/twcmanager/.testconfig.json config.json
            python -m TWCManager &
          env:
