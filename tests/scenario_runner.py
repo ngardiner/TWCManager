@@ -24,7 +24,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import pytest
 import requests
@@ -158,7 +158,7 @@ def _resolve_path(data: Any, path: str) -> Any:
     return current
 
 
-def _evaluate_check(check: dict, api_responses: dict, api_get_fn) -> tuple[bool, str]:
+def _evaluate_check(check: dict, api_responses: dict, api_get_fn) -> Tuple[bool, str]:
     """
     Evaluate a single check dict.  Returns (passed, detail_string).
 
@@ -213,7 +213,7 @@ def _evaluate_check(check: dict, api_responses: dict, api_get_fn) -> tuple[bool,
     return passed, detail
 
 
-def _wait_for_assertion(assertion: dict, api_get_fn, timeout: float) -> tuple[bool, str, dict]:
+def _wait_for_assertion(assertion: dict, api_get_fn, timeout: float) -> Tuple[bool, str, dict]:
     """
     Poll the API until all checks in the assertion pass or timeout expires.
     Returns (passed, detail, api_responses_snapshot).
