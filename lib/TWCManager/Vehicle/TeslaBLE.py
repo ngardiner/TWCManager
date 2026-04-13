@@ -958,6 +958,8 @@ class TeslaBLE:
         except Exception as e:
             logger.error(f"Error running command: {e}")
             return None, None, None
+
+    def _cleanup_stale_pipe(self):
         """Clean up any stale pipe file from previous crashes."""
         try:
             if os.path.exists(self.pipeName):
