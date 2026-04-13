@@ -5,9 +5,7 @@ class aWATTarPricing:
 
     # aWATTar asks us to limit queries to once every 15 minutes
     cacheTime = 900
-    capabilities = {
-        "AdvancePricing": True
-    }
+    capabilities = {"AdvancePricing": True}
     config = None
     configConfig = None
     configAwattar = None
@@ -111,9 +109,7 @@ class aWATTarPricing:
 
             if r.json():
                 try:
-                    self.importPrice = float(
-                        r.json()["data"][0]["marketprice"]
-                    )
+                    self.importPrice = float(r.json()["data"][0]["marketprice"])
                     if r.json()["data"][0]["unit"] == "Eur/MWh":
                         # Convert MWh price to KWh
                         self.importPrice = self.importPrice / 1000
