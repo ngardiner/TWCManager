@@ -237,6 +237,10 @@ class Policy:
             limit = -1
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
 
+        # If at least one pricing module is active, fetch current pricing
+        if len(self.master.getModulesByType("Pricing")) > 0:
+            self.master.queue_background_task({"cmd": "getPricing"})
+
         # Report current policy via Status modules
         for module in self.master.getModulesByType("Status"):
             module["ref"].setStatus(

@@ -28,7 +28,9 @@ class TWCMaster:
     consumptionValues = {}
     consumptionAmpsValues = {}
     debugOutputToFile = False
+    exportPricingValues = {}
     generationValues = {}
+    importPricingValues = {}
     lastkWhMessage = time.time()
     lastkWhPoll = 0
     lastSaveFailed = 0
@@ -415,6 +417,55 @@ class TWCMaster:
 
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]
+
+    def getPricing(self):
+        for module in self.getModulesByType("Pricing"):
+            self.exportPricingValues[module["name"]] = module["ref"].getExportPrice()
+            self.importPricingValues[module["name"]] = module["ref"].getImportPrice()
+
+    def getExportPrice(self):
+        price = 0
+        multiPrice = ""
+
+        # The policy for how we should deal with multiple export
+        # prices (multiple concurrent modules) is defined in the config
+        # file in config->pricing->policy->multiPrice
+        try:
+            multiPrice = self.config["config"]["pricing"]["policy"]["multiPrice"]
+        except KeyError:
+            multiPrice = "add"
+
+        # Iterate through values and apply multiPrice policy
+        for key in self.exportPricingValues:
+            if multiPrice == "add":
+                price += float(self.exportPricingValues[key])
+            elif multiPrice == "first":
+                if price == 0 and self.exportPricingValues[key] > 0:
+                    price = float(self.exportPricingValues[key])
+
+        return float(price)
+
+    def getImportPrice(self):
+        price = 0
+        multiPrice = ""
+
+        # The policy for how we should deal with multiple import
+        # prices (multiple concurrent modules) is defined in the config
+        # file in config->pricing->policy->multiPrice
+        try:
+            multiPrice = self.config["config"]["pricing"]["policy"]["multiPrice"]
+        except KeyError:
+            multiPrice = "add"
+
+        # Iterate through values and apply multiPrice policy
+        for key in self.importPricingValues:
+            if multiPrice == "add":
+                price += float(self.importPricingValues[key])
+            elif multiPrice == "first":
+                if price == 0 and self.importPricingValues[key] > 0:
+                    price = float(self.importPricingValues[key])
+
+        return float(price)
 
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
