@@ -670,20 +670,24 @@ class TeslaAPI:
 
             # only start/stop charging cars parked at home.
 
+            if vehicle.update_location(3600) is False:
+                 result = "error"
+                 continue
+
             if not vehicle.atHome:
-                # Vehicle is not at home, so don't change its charge state.
-                message = (
-                    vehicle.name
-                    + " is not at home.  Do not "
-                    + startOrStop
-                    + " charge."
-                )
-                # Stop asking to start charging when not at home.
-                if startOrStop == "start":
-                    vehicle.stopAskingToStartCharging = True
-                    message += "  Stop asking to start charging."
-                logger.info(message)
-                continue
+                 # Vehicle is not at home, so don't change its charge state.
+                 message = (
+                     vehicle.name
+                     + " is not at home.  Do not "
+                     + startOrStop
+                     + " charge."
+                 )
+                 # Stop asking to start charging when not at home.
+                 if startOrStop == "start":
+                     vehicle.stopAskingToStartCharging = True
+                     message += "  Stop asking to start charging."
+                 logger.info(message)
+                 continue
 
             if vehicle.chargingState in ["Disconnected", "Complete"]:
                 # Sending a command to a disconnected or complete vehicle is
@@ -1295,6 +1299,32 @@ class TeslaAPI:
             if car.atHome:
                 car.update_charge()
         self.lastChargeCheck = time.time()
+
+    def vehicleIsDefinitelyHome(self, vin):
+        for car in self.carApiVehicles:
+            if car.VIN == vin:
+                if not car.atHome:
+                    updated = car.update_location(0)
+                    if updated and not car.atHome:
+                        logger.log(
+                            logging.INFO2,
+                            car.name
+                            + " was connected to a TWC, so is definitely home.",
+                        )
+                        logger.log(
+                            logging.INFO2,
+                            "Resetting home location to ("
+                            + str(car.lat)
+                            + ", "
+                            + str(car.lon)
+                            + ")",
+                        )
+                        self.master.setHomeLat(car.lat)
+                        self.master.setHomeLon(car.lon)
+                        self.master.queue_background_task({"cmd": "sunrise"})
+                        self.master.queue_background_task({"cmd": "saveSettings"})
+                        car.atHome = True
+                return
 
     def wakeVehicle(self, vehicle):
         apiResponseDict = None
