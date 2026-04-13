@@ -62,7 +62,7 @@ jobs:
            mkdir -p /tmp/twcmanager/log
            mkdir -p /tmp/twcmanager/csv
            cp etc/twcmanager/.testconfig.json config.json
-           python -m TWCManager &
+            python -m TWCManager > /tmp/twcmanager/twcmanager.log 2>&1 &
          env:
            PYTHONIOENCODING: UTF-8
 
