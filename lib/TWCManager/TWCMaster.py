@@ -433,7 +433,7 @@ class TWCMaster:
         try:
             multiPrice = self.config["config"]["pricing"]["policy"]["multiPrice"]
         except KeyError:
-            multiPrice = "add"
+            multiPrice = "first"
 
         # Iterate through values and apply multiPrice policy
         for key in self.exportPricingValues:
@@ -455,7 +455,7 @@ class TWCMaster:
         try:
             multiPrice = self.config["config"]["pricing"]["policy"]["multiPrice"]
         except KeyError:
-            multiPrice = "add"
+            multiPrice = "first"
 
         # Iterate through values and apply multiPrice policy
         for key in self.importPricingValues:

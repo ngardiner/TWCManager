@@ -8,8 +8,7 @@ class PVPCesPricing:
     import time
 
     # https://www.esios.ree.es/es/pvpc publishes at 20:30CET eveyday the prices for next day
-    # There is no limitation to fetch prices as it's updated onces a day
-    cacheTime = 1
+    # Prices are fetched once per day; the cache expires at midnight (detected via lastFetch.hour)
     capabilities = {
         "AdvancePricing": True
     }
