@@ -77,10 +77,16 @@ jobs:
               --cov-report=xml:test-results/coverage.xml \
               --cov-report=term-missing
 
-        - name: Capture TWCManager logs on failure
+        - name: Capture diagnostics on failure
           if: failure()
           run: |
-            echo "=== TWCManager Startup Log ===" && cat /tmp/twcmanager/twcmanager.log || echo "Log file not found"
+            echo "=== TWCManager Startup Log ===" && cat /tmp/twcmanager/twcmanager.log 2>/dev/null || echo "Log file not found"
+            echo ""
+            echo "=== Process Status ===" && ps aux | grep -i twcmanager | grep -v grep || echo "No TWCManager process found"
+            echo ""
+            echo "=== Port Status ===" && netstat -tlnp 2>/dev/null | grep 8088 || echo "Port 8088 not listening"
+            echo ""
+            echo "=== Directory Contents ===" && ls -la /tmp/twcmanager/ 2>/dev/null || echo "Directory not found"
 
         - name: Upload test results
           if: always()
