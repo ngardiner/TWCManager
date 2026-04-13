@@ -59,6 +59,25 @@ $(document).ready(function() {
     requestSlaves();
 });
 
+// AJAJ refresh for getPricing API call (poll every 30s - pricing updates infrequently)
+$(document).ready(function() {
+    function requestPricing() {
+        $.ajax({
+            url: "/api/getPricing",
+            dataType: "text",
+            cache: false,
+            success: function(data) {
+                var json = $.parseJSON(data);
+                $('#importPrice').html(json['import']);
+                $('#exportPrice').html(json['export']);
+            }
+        });
+        setTimeout(requestPricing, 30000);
+    }
+
+    requestPricing();
+});
+
 $(document).ready(function() {
   $("#start_chargenow").click(function(e) {
     e.preventDefault();

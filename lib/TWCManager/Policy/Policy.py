@@ -312,6 +312,10 @@ class Policy:
             return self.master.getMaxAmpsForTargetGridUsage()
         elif value == "checkScheduledCharging()":
             return self.master.checkScheduledCharging()
+        elif value == "getImportPrice()":
+            return self.master.getImportPrice()
+        elif value == "getExportPrice()":
+            return self.master.getExportPrice()
 
         # If value is tiered, split it up
         if value.find(".") != -1:

@@ -176,6 +176,11 @@
         #"scheduledLimit": 50,
         #"nonScheduledLimit": -1,
 
+        # Maximum import price (per kWh) above which charging will be stopped.
+        # Used with the emergency policy examples in the policy section below.
+        # Requires a Pricing module to be configured.
+        #"maxImportPrice": 0.30,
+
         # Deprecated, use logLevel instead
         # Choose how much debugging info to output.
         # 0 is no output other than errors.
@@ -327,6 +332,21 @@
         #
         # They should primarily be used to abort charging when necessary.
         "emergency":[
+          # Stop charging if import price exceeds the configured maximum.
+          # Requires a Pricing module and "maxImportPrice" set in config above.
+          #{ "name": "Import Price Too High",
+          #  "match": [ "getImportPrice()" ],
+          #  "condition": [ "gt" ],
+          #  "value": [ "config.maxImportPrice" ],
+          #  "charge_amps": 0 },
+
+          # Stop charging if export price exceeds import price (sell back to grid instead).
+          # Requires a Pricing module that provides both import and export prices.
+          #{ "name": "Export Price Favourable",
+          #  "match": [ "getExportPrice()" ],
+          #  "condition": [ "gt" ],
+          #  "value": [ "getImportPrice()" ],
+          #  "charge_amps": 0 },
         ],
         # Rules in the before section here are evaluated after the Charge Now rule
         "before":[
@@ -794,5 +814,37 @@
             "mqtt_pass": "teslamate",
             "mqtt_prefix": "teslamate"
         }
+    },
+    "pricing": {
+        # Policy for combining prices when multiple pricing modules are active.
+        # "add"   - sum prices from all active modules
+        # "first" - use the first non-zero price found
+        "policy": {
+            "multiPrice": "add"
+        },
+
+        # Static Pricing: configure fixed import/export prices when no dynamic
+        # pricing API is available.
+        #"Static": {
+        #    "enabled": false,
+        #    "peak": {
+        #        "import": 0.25,
+        #        "export": 0.10
+        #    }
+        #},
+
+        # aWATTar: Austrian/German day-ahead spot market pricing.
+        # Queries https://api.awattar.at/v1/marketdata (rate-limited to once per 15 min).
+        #"aWATTar": {
+        #    "enabled": false
+        #},
+
+        # PVPCes: Spanish PVPC regulated small-consumer tariff.
+        # Prices are published daily at 20:30 CET by REE (api.esios.ree.es).
+        # Requires an API token from https://www.esios.ree.es/en/
+        #"PVPCes": {
+        #    "enabled": false,
+        #    "token": "your-esios-api-token-here"
+        #}
     }
 }

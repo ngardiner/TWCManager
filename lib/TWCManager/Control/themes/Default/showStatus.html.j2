@@ -20,7 +20,16 @@
           <th>Current Charger Load</th>
           <td><div id="chargerLoadWatts"></div></td><td>watts</td>
         </tr>
-
+{% if master.getModulesByType("Pricing") %}
+        <tr>
+          <th>Import Price</th>
+          <td><div id='importPrice'></div></td><td>per kWh</td>
+        </tr>
+        <tr>
+          <th>Export Price</th>
+          <td><div id='exportPrice'></div></td><td>per kWh</td>
+        </tr>
+{% endif %}
         <tr>
           <th>Number of Cars Charging</th>
           <td>
