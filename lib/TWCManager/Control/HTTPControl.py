@@ -331,8 +331,8 @@ def CreateHTTPHandlerClass(master):
                     "lifetimekWh": totals["lifetimekWh"],
                     "maxAmps": totals["maxAmps"],
                     "reportedAmpsActual": round(totals["reportedAmpsActual"], 2),
-                     "TWCID": "total",
-                 }
+                    "TWCID": "total",
+                }
 
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")

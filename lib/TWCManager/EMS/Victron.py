@@ -155,10 +155,10 @@ class Victron:
     def __readRegisters(self, registers):
         """
         Read multiple registers and sum their values
-        
+
         Args:
             registers: List of tuples (register_address, unit_id)
-            
+
         Returns:
             Sum of all register values in watts
         """
@@ -190,9 +190,7 @@ class Victron:
                 power_value = int(result[0])
                 total_power += power_value
 
-                logger.debug(
-                    f"Register {reg_address} (unit {unit_id}): {power_value}W"
-                )
+                logger.debug(f"Register {reg_address} (unit {unit_id}): {power_value}W")
 
             except Exception as e:
                 logger.log(
