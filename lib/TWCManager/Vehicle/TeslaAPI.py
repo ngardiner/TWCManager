@@ -671,23 +671,23 @@ class TeslaAPI:
             # only start/stop charging cars parked at home.
 
             if vehicle.update_location(3600) is False:
-                 result = "error"
-                 continue
+                result = "error"
+                continue
 
             if not vehicle.atHome:
-                 # Vehicle is not at home, so don't change its charge state.
-                 message = (
-                     vehicle.name
-                     + " is not at home.  Do not "
-                     + startOrStop
-                     + " charge."
-                 )
-                 # Stop asking to start charging when not at home.
-                 if startOrStop == "start":
-                     vehicle.stopAskingToStartCharging = True
-                     message += "  Stop asking to start charging."
-                 logger.info(message)
-                 continue
+                # Vehicle is not at home, so don't change its charge state.
+                message = (
+                    vehicle.name
+                    + " is not at home.  Do not "
+                    + startOrStop
+                    + " charge."
+                )
+                # Stop asking to start charging when not at home.
+                if startOrStop == "start":
+                    vehicle.stopAskingToStartCharging = True
+                    message += "  Stop asking to start charging."
+                logger.info(message)
+                continue
 
             if vehicle.chargingState in ["Disconnected", "Complete"]:
                 # Sending a command to a disconnected or complete vehicle is
