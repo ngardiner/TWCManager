@@ -72,7 +72,7 @@ def wait_for_twcmanager(api_client):
     This replaces the 120-second sleep with intelligent health checking.
     Assumes TWCManager is already running (e.g., in a Docker container).
     """
-    max_wait = 60  # Maximum 60 seconds
+    max_wait = 120  # Maximum 120 seconds
     start_time = time.time()
     
     while time.time() - start_time < max_wait:

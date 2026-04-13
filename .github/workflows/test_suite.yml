@@ -59,11 +59,8 @@ jobs:
 
        - name: Start TWCManager
          run: |
-           mkdir -p /tmp/twcmanager
-           cp etc/twcmanager/.testconfig.json /tmp/twcmanager/config.json
-           cd /tmp/twcmanager
+           cp etc/twcmanager/.testconfig.json config.json
            python -m TWCManager &
-           sleep 5
          env:
            PYTHONIOENCODING: UTF-8
 
