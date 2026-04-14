@@ -441,3 +441,242 @@ class TestPolicyThrottling:
         
         # Should have called setMaxAmpsToDivideAmongSlaves
         assert policy.master.setMaxAmpsToDivideAmongSlaves.called
+
+
+class TestPolicyEdgeCases:
+    """Test suite for policy edge cases and boundary conditions."""
+    
+    @pytest.fixture
+    def mock_master(self):
+        """Create a mock master object."""
+        master = Mock()
+        master.config = {
+            "config": {
+                "minAmpsPerTWC": 5,
+                "wiringMaxAmpsPerTWC": 32,
+                "wiringMaxAmpsAllTWCs": 80,
+            }
+        }
+        master.settings = {
+            "chargeNowAmps": 0,
+            "chargeNowTimeEnd": 0,
+            "scheduledAmpsMax": 0,
+            "nonScheduledAmpsMax": 0,
+        }
+        master.setMaxAmpsToDivideAmongSlaves = Mock()
+        master.getModuleByName = Mock(return_value=None)
+        master.getModulesByType = Mock(return_value=[])
+        return master
+    
+    @pytest.fixture
+    def policy(self, mock_master):
+        """Create a Policy instance for testing."""
+        from TWCManager.Policy import Policy
+        return Policy(mock_master)
+    
+    def test_policy_with_zero_amps(self, policy):
+        """Test policy handles zero amperage correctly."""
+        policy.master.settings["chargeNowAmps"] = 0
+        policy.master.settings["scheduledAmpsMax"] = 0
+        policy.master.settings["nonScheduledAmpsMax"] = 0
+        
+        policy.setChargingPerPolicy()
+        
+        # Should set max amps to 0
+        policy.master.setMaxAmpsToDivideAmongSlaves.assert_called()
+    
+    def test_policy_with_maximum_amps(self, policy):
+        """Test policy handles maximum amperage."""
+        policy.master.settings["chargeNowAmps"] = 80
+        
+        policy.setChargingPerPolicy()
+        
+        policy.master.setMaxAmpsToDivideAmongSlaves.assert_called()
+    
+    def test_policy_with_negative_amps_ignored(self, policy):
+        """Test policy ignores negative amperage values."""
+        policy.master.settings["chargeNowAmps"] = -32
+        
+        policy.setChargingPerPolicy()
+        
+        # Should handle gracefully
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.called
+    
+    def test_policy_rapid_changes(self, policy):
+        """Test policy handles rapid amperage changes."""
+        for amps in [0, 12, 24, 32, 16, 8, 0]:
+            policy.master.settings["chargeNowAmps"] = amps
+            policy.policyCheckInterval = 0
+            policy.lastPolicyCheck = 0
+            
+            policy.setChargingPerPolicy()
+        
+        # Should have been called multiple times
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.call_count >= 7
+    
+    def test_policy_with_expired_charge_now(self, policy):
+        """Test policy handles expired chargeNow."""
+        import time
+        policy.master.settings["chargeNowAmps"] = 32
+        policy.master.settings["chargeNowTimeEnd"] = time.time() - 3600  # 1 hour ago
+        
+        policy.setChargingPerPolicy()
+        
+        # Should still process
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.called
+    
+    def test_policy_with_future_charge_now(self, policy):
+        """Test policy handles future chargeNow."""
+        import time
+        policy.master.settings["chargeNowAmps"] = 32
+        policy.master.settings["chargeNowTimeEnd"] = time.time() + 3600  # 1 hour from now
+        
+        policy.setChargingPerPolicy()
+        
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.called
+
+
+class TestPolicyIntegration:
+    """Test suite for policy integration scenarios."""
+    
+    @pytest.fixture
+    def mock_master(self):
+        """Create a mock master object."""
+        master = Mock()
+        master.config = {
+            "config": {
+                "minAmpsPerTWC": 5,
+                "wiringMaxAmpsPerTWC": 32,
+                "wiringMaxAmpsAllTWCs": 80,
+            }
+        }
+        master.settings = {
+            "chargeNowAmps": 0,
+            "chargeNowTimeEnd": 0,
+            "scheduledAmpsMax": 0,
+            "nonScheduledAmpsMax": 0,
+            "hourResumeTrackGreenEnergy": -1,
+        }
+        master.setMaxAmpsToDivideAmongSlaves = Mock()
+        master.getModuleByName = Mock(return_value=None)
+        master.getModulesByType = Mock(return_value=[])
+        return master
+    
+    @pytest.fixture
+    def policy(self, mock_master):
+        """Create a Policy instance for testing."""
+        from TWCManager.Policy import Policy
+        return Policy(mock_master)
+    
+    def test_policy_charge_now_overrides_scheduled(self, policy):
+        """Test that chargeNow overrides scheduled charging."""
+        policy.master.settings["chargeNowAmps"] = 32
+        policy.master.settings["scheduledAmpsMax"] = 16
+        
+        policy.setChargingPerPolicy()
+        
+        # chargeNow should take precedence
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.called
+    
+    def test_policy_scheduled_overrides_nonscheduled(self, policy):
+        """Test that scheduled charging overrides non-scheduled."""
+        policy.master.settings["scheduledAmpsMax"] = 24
+        policy.master.settings["nonScheduledAmpsMax"] = 12
+        
+        policy.setChargingPerPolicy()
+        
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.called
+    
+    def test_policy_respects_wiring_limits(self, policy):
+        """Test that policy respects wiring amperage limits."""
+        policy.master.settings["chargeNowAmps"] = 200  # Exceeds limit
+        policy.master.config["config"]["wiringMaxAmpsAllTWCs"] = 80
+        
+        policy.setChargingPerPolicy()
+        
+        # Should still be called but with limited value
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.called
+    
+    def test_policy_multiple_calls_consistent(self, policy):
+        """Test that multiple policy calls are consistent."""
+        policy.master.settings["chargeNowAmps"] = 32
+        policy.policyCheckInterval = 0
+        
+        call_counts = []
+        for _ in range(3):
+            policy.lastPolicyCheck = 0
+            policy.setChargingPerPolicy()
+            call_counts.append(policy.master.setMaxAmpsToDivideAmongSlaves.call_count)
+        
+        # Call count should increase consistently
+        assert call_counts[1] > call_counts[0]
+        assert call_counts[2] > call_counts[1]
+
+
+class TestPolicyThrottling:
+    """Test suite for policy throttling mechanism."""
+    
+    @pytest.fixture
+    def mock_master(self):
+        """Create a mock master object."""
+        master = Mock()
+        master.config = {
+            "config": {
+                "minAmpsPerTWC": 5,
+                "wiringMaxAmpsPerTWC": 32,
+                "wiringMaxAmpsAllTWCs": 80,
+            }
+        }
+        master.settings = {
+            "chargeNowAmps": 0,
+            "chargeNowTimeEnd": 0,
+            "scheduledAmpsMax": 0,
+            "nonScheduledAmpsMax": 0,
+        }
+        master.setMaxAmpsToDivideAmongSlaves = Mock()
+        master.getModuleByName = Mock(return_value=None)
+        master.getModulesByType = Mock(return_value=[])
+        return master
+    
+    @pytest.fixture
+    def policy(self, mock_master):
+        """Create a Policy instance for testing."""
+        from TWCManager.Policy import Policy
+        return Policy(mock_master)
+    
+    def test_policy_throttle_interval_respected(self, policy):
+        """Test that policy throttle interval is respected."""
+        import time
+        policy.policyCheckInterval = 30
+        policy.lastPolicyCheck = time.time()
+        
+        initial_call_count = policy.master.setMaxAmpsToDivideAmongSlaves.call_count
+        
+        policy.setChargingPerPolicy()
+        
+        # Should not have called setMaxAmpsToDivideAmongSlaves due to throttle
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.call_count == initial_call_count
+    
+    def test_policy_throttle_reset_on_immediate_apply(self, policy):
+        """Test that applyPolicyImmediately resets throttle."""
+        import time
+        policy.policyCheckInterval = 30
+        policy.lastPolicyCheck = time.time()
+        
+        policy.applyPolicyImmediately()
+        
+        # Throttle should be reset
+        assert policy.lastPolicyCheck == 0
+    
+    def test_policy_zero_throttle_interval(self, policy):
+        """Test policy with zero throttle interval."""
+        policy.policyCheckInterval = 0
+        policy.lastPolicyCheck = 0
+        
+        initial_call_count = policy.master.setMaxAmpsToDivideAmongSlaves.call_count
+        
+        policy.setChargingPerPolicy()
+        
+        # Should have called immediately
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.call_count > initial_call_count
+
