@@ -505,6 +505,9 @@ class TWCMaster:
     def getSlaveSign(self):
         return self.slaveSign
 
+    def getMasterSign(self):
+        return self.masterSign
+
     def getStatus(self):
         chargerLoad = float(self.getChargerLoad())
         data = {
