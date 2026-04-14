@@ -1000,6 +1000,9 @@ class TWCMaster:
         carsCharging = 0
         for slaveTWC in self.getSlaveTWCs():
             if slaveTWC.reportedAmpsActual >= 1.0:
+                # Amps are flowing — cancel any pending session-end debounce
+                slaveTWC.chargingDroppedBelowThresholdTime = 0
+
                 if slaveTWC.isCharging == 0:
                     # We have detected that a vehicle has started charging on this Slave TWC
                     # Attempt to request the vehicle's VIN
@@ -1021,23 +1024,32 @@ class TWCMaster:
                     self.recordVehicleSessionStart(slaveTWC)
             else:
                 if slaveTWC.isCharging == 1:
-                    # A vehicle was previously charging and is no longer charging
-                    # Clear the VIN details for this slave and move the last
-                    # vehicle's VIN to lastVIN
-                    slaveTWC.VINData = ["", "", ""]
-                    if slaveTWC.currentVIN:
-                        slaveTWC.lastVIN = slaveTWC.currentVIN
-                    slaveTWC.currentVIN = ""
-                    self.updateVINStatus()
+                    # Amps have dropped below threshold. Start debounce timer to
+                    # avoid bouncing session events during charge negotiation at
+                    # startup (car can briefly drop to 0A before settling).
+                    if slaveTWC.chargingDroppedBelowThresholdTime == 0:
+                        slaveTWC.chargingDroppedBelowThresholdTime = time.time()
 
-                    # Stop querying for Vehicle VIN
-                    slaveTWC.lastVINQuery = 0
-                    slaveTWC.vinQueryAttempt = 0
+                    if time.time() - slaveTWC.chargingDroppedBelowThresholdTime >= 5:
+                        # Amps have been below threshold for 5+ seconds — confirmed stop
+                        slaveTWC.chargingDroppedBelowThresholdTime = 0
 
-                    # Close off the current charging session
-                    self.recordVehicleSessionEnd(slaveTWC)
-                slaveTWC.isCharging = 0
-                slaveTWC.lastChargingStart = 0
+                        # Clear the VIN details for this slave and move the last
+                        # vehicle's VIN to lastVIN
+                        slaveTWC.VINData = ["", "", ""]
+                        if slaveTWC.currentVIN:
+                            slaveTWC.lastVIN = slaveTWC.currentVIN
+                        slaveTWC.currentVIN = ""
+                        self.updateVINStatus()
+
+                        # Stop querying for Vehicle VIN
+                        slaveTWC.lastVINQuery = 0
+                        slaveTWC.vinQueryAttempt = 0
+
+                        # Close off the current charging session
+                        self.recordVehicleSessionEnd(slaveTWC)
+                        slaveTWC.isCharging = 0
+                        slaveTWC.lastChargingStart = 0
             carsCharging += slaveTWC.isCharging
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
