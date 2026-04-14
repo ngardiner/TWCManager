@@ -170,6 +170,46 @@ class MySQLHandler(logging.Handler):
                 logger.info("Error updating MySQL database. Rows = %d" % rows)
                 self.db.rollback()
             cur.close()
+        elif log_type == "slave_status":
+            # Ensure database connection is alive, or reconnect if not
+            try:
+                self.db.ping(reconnect=True)
+            except pymysql.err.OperationalError as e:
+                logger.info("Error connecting to MySQL database. %s", str(e))
+                return
+
+            twcid = "%02X%02X" % (
+                getattr(record, "TWCID")[0],
+                getattr(record, "TWCID")[1],
+            )
+            volts = getattr(record, "voltsPerPhase", [0, 0, 0])
+            query = """
+                INSERT INTO slave_status (slaveTWC, time, kWh, voltsPhaseA,
+                voltsPhaseB, voltsPhaseC)
+                VALUES (%s, now(), %s, %s, %s, %s)
+            """
+
+            cur = self.db.cursor()
+            rows = 0
+            try:
+                rows = cur.execute(
+                    query,
+                    (
+                        twcid,
+                        getattr(record, "kWh", 0),
+                        volts[0] if len(volts) > 0 else 0,
+                        volts[1] if len(volts) > 1 else 0,
+                        volts[2] if len(volts) > 2 else 0,
+                    ),
+                )
+            except Exception as e:
+                logger.error("Error updating MySQL database: %s", e)
+            if rows:
+                self.db.commit()
+            else:
+                logger.info("Error updating MySQL database. Rows = %d" % rows)
+                self.db.rollback()
+            cur.close()
 
 
 class MySQLLogging:

@@ -141,6 +141,39 @@ class SQLiteHandler(logging.Handler):
                     # Issue, log message and rollback
                     logger.info("Error updating SQLite database. Rows = %d" % rows)
                     conn.rollback()
+        elif log_type == "slave_status":
+            twcid = "%02X%02X" % (
+                getattr(record, "TWCID")[0],
+                getattr(record, "TWCID")[1],
+            )
+            volts = getattr(record, "voltsPerPhase", [0, 0, 0])
+            query = """
+                INSERT INTO slave_status (slaveTWC, time, kWh, voltsPhaseA,
+                voltsPhaseB, voltsPhaseC)
+                VALUES (?, datetime('now'), ?, ?, ?, ?)
+            """
+
+            rows = 0
+            try:
+                conn = sqlite3.connect(self.db, uri=True)
+                rows = conn.execute(
+                    query,
+                    (
+                        twcid,
+                        getattr(record, "kWh", 0),
+                        volts[0] if len(volts) > 0 else 0,
+                        volts[1] if len(volts) > 1 else 0,
+                        volts[2] if len(volts) > 2 else 0,
+                    ),
+                )
+            except Exception as e:
+                logger.info("Error updating SQLite database: %s", e)
+            else:
+                if rows:
+                    conn.commit()
+                else:
+                    logger.info("Error updating SQLite database. Rows = %d" % rows)
+                    conn.rollback()
 
 
 class SQLiteLogging:
