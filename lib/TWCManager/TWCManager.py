@@ -624,6 +624,13 @@ master = TWCMaster(fakeTWCID, config)
 LoggerFactory.set_master(master)
 
 # Instantiate all modules in the modules_available list automatically
+logger.info("=" * 70)
+logger.info("Starting module initialization")
+logger.info("=" * 70)
+modules_loaded = 0
+modules_skipped = 0
+modules_failed = 0
+
 for module in modules_available:
     modulename = []
     if str(module).find(".") != -1:
@@ -638,10 +645,14 @@ for module in modules_available:
             .get("enabled", 1)
         ):
             # We can see that this module is explicitly disabled in config, skip it
+            logger.info("SKIP: %s (disabled in config)", module)
+            modules_skipped += 1
             continue
 
+        logger.info("LOAD: %s (importing...)", module)
         moduleref = importlib.import_module("TWCManager." + module)
         modclassref = getattr(moduleref, modulename[1])
+        logger.info("LOAD: %s (instantiating...)", module)
         modinstance = modclassref(master)
 
         # Register the new module with master class, so every other module can
@@ -649,24 +660,39 @@ for module in modules_available:
         master.registerModule(
             {"name": modulename[1], "ref": modinstance, "type": modulename[0]}
         )
+        logger.info("LOAD: %s ✓ SUCCESS", module)
+        modules_loaded += 1
     except ImportError as e:
         logger.error(
-            "%s: " + str(e) + ", when importing %s, not using %s",
-            "ImportError",
+            "FAIL: %s - ImportError: %s",
             module,
-            module,
+            str(e),
             extra={"colored": "red"},
         )
+        modules_failed += 1
     except ModuleNotFoundError as e:
         logger.info(
-            "%s: " + str(e) + ", when importing %s, not using %s",
-            "ModuleNotFoundError",
+            "FAIL: %s - ModuleNotFoundError: %s",
             module,
-            module,
+            str(e),
             extra={"colored": "red"},
         )
-    except:
+        modules_failed += 1
+    except Exception as e:
+        logger.error(
+            "FAIL: %s - %s: %s",
+            module,
+            type(e).__name__,
+            str(e),
+            extra={"colored": "red"},
+        )
+        modules_failed += 1
         raise
+
+logger.info("=" * 70)
+logger.info("Module initialization complete: %d loaded, %d skipped, %d failed",
+            modules_loaded, modules_skipped, modules_failed)
+logger.info("=" * 70)
 
 
 # Load settings from file
