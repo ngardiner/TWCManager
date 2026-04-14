@@ -15,4 +15,5 @@ if str(lib_path) not in sys.path:
 
 # Initialize custom logging levels
 from TWCManager.LoggingLevels import initialize_logging_levels
+
 initialize_logging_levels()
