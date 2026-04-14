@@ -16,6 +16,7 @@ import time
 import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Control.APIValidator import APIValidator
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
 
@@ -455,17 +456,12 @@ def CreateHTTPHandlerClass(master):
             self.debugLogAPI("Starting API POST")
 
             if self.url.path == "/api/addConsumptionOffset":
-                data = {}
-                try:
-                    data = json.loads(self.post_data.decode("UTF-8"))
-                except (ValueError, UnicodeDecodeError):
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
                     self.send_response(400)
                     self.end_headers()
                     self.wfile.write("".encode("utf-8"))
-                except json.decoder.JSONDecodeError:
-                    self.send_response(400)
-                    self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    return
                 name = str(data.get("offsetName", None))
                 value = float(data.get("offsetValue", 0))
                 unit = str(data.get("offsetUnit", ""))
@@ -494,14 +490,12 @@ def CreateHTTPHandlerClass(master):
                     self.wfile.write("".encode("utf-8"))
 
             elif self.url.path == "/api/chargeNow":
-                data = {}
-                try:
-                    data = json.loads(self.post_data.decode("UTF-8"))
-                except (ValueError, UnicodeDecodeError, json.decoder.JSONDecodeError):
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
                     self.send_response(400)
                     self.end_headers()
                     self.wfile.write(
-                        json.dumps({"error": "Invalid JSON"}).encode("utf-8")
+                        json.dumps({"error": error_msg}).encode("utf-8")
                     )
                     return
 
@@ -555,20 +549,34 @@ def CreateHTTPHandlerClass(master):
                 self.wfile.write("".encode("utf-8"))
 
             elif self.url.path == "/api/deleteConsumptionOffset":
-                data = json.loads(self.post_data.decode("UTF-8"))
-                name = str(data.get("offsetName", None))
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                    return
+                
+                offset_name = data.get("offsetName", None)
+                if not offset_name or not isinstance(offset_name, str):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "offsetName is required and must be a string"}).encode("utf-8"))
+                    return
 
                 if master.settings.get("consumptionOffset", None):
-                    del master.settings["consumptionOffset"][name]
-
-                    self.send_response(204)
-                    self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
-
+                    if offset_name in master.settings["consumptionOffset"]:
+                        del master.settings["consumptionOffset"][offset_name]
+                        master.queue_background_task({"cmd": "saveSettings"})
+                        self.send_response(204)
+                        self.end_headers()
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "Offset not found"}).encode("utf-8"))
                 else:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    self.wfile.write(json.dumps({"error": "No consumption offsets configured"}).encode("utf-8"))
 
             elif self.url.path == "/api/saveSettings":
                 master.queue_background_task({"cmd": "saveSettings"})
@@ -576,10 +584,30 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
 
             elif self.url.path == "/api/sendDebugCommand":
-                data = json.loads(self.post_data.decode("UTF-8"))
-                packet = {"Command": data.get("commandName", "")}
-                if data.get("commandName", "") == "Custom":
-                    packet["CustomCommand"] = data.get("customCommand", "")
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                    return
+                
+                # Validate required field
+                command_name = data.get("commandName", "")
+                if not command_name or not isinstance(command_name, str):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "commandName is required and must be a string"}).encode("utf-8"))
+                    return
+                
+                packet = {"Command": command_name}
+                if command_name == "Custom":
+                    custom_cmd = data.get("customCommand", "")
+                    if not custom_cmd or not isinstance(custom_cmd, str):
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "customCommand is required when Command is Custom"}).encode("utf-8"))
+                        return
+                    packet["CustomCommand"] = custom_cmd
 
                 # Clear last TWC response, so we can grab the next response
                 master.lastTWCResponseMsg = bytearray()
@@ -603,7 +631,11 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
 
             elif self.url.path == "/api/sendTeslaAPICommand":
-                data = json.loads(self.post_data.decode("UTF-8"))
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
                 command = str(data.get("commandName", None))
                 vehicle = str(data.get("vehicleID", None))
                 params = str(data.get("parameters", None))
@@ -619,7 +651,11 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
 
             elif self.url.path == "/api/setSetting":
-                data = json.loads(self.post_data.decode("UTF-8"))
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
                 setting = str(data.get("setting", None))
                 value = str(data.get("value", None))
 
@@ -634,7 +670,11 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
 
             elif self.url.path == "/api/setScheduledChargingSettings":
-                data = json.loads(self.post_data.decode("UTF-8"))
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
                 enabled = bool(data.get("enabled", False))
                 startingMinute = int(data.get("startingMinute", -1))
                 endingMinute = int(data.get("endingMinute", -1))
@@ -684,10 +724,8 @@ def CreateHTTPHandlerClass(master):
                 self.wfile.write("".encode("utf-8"))
 
             elif self.url.path == "/api/setLatLon":
-                data = {}
-                try:
-                    data = json.loads(self.post_data.decode("UTF-8"))
-                except (ValueError, UnicodeDecodeError, json.decoder.JSONDecodeError):
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
                     self.send_response(400)
                     self.end_headers()
                     self.wfile.write("".encode("utf-8"))
@@ -722,33 +760,32 @@ def CreateHTTPHandlerClass(master):
                     self.wfile.write("".encode("utf-8"))
 
             elif self.url.path == "/api/setConsumptionOffset":
-                data = {}
-                try:
-                    data = json.loads(self.post_data.decode("UTF-8"))
-                except (ValueError, UnicodeDecodeError, json.decoder.JSONDecodeError):
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
                     return
 
                 offset = data.get("offset", None)
 
                 if offset is not None:
-                    try:
-                        offset = float(offset)
-                        master.settings["greenEnergyAmpsOffset"] = offset
-                        master.queue_background_task({"cmd": "saveSettings"})
-                        self.send_response(204)
-                        self.end_headers()
-                        self.wfile.write("".encode("utf-8"))
-                    except (ValueError, TypeError):
+                    success, offset_val, error_msg = APIValidator.validate_float(offset)
+                    if not success:
                         self.send_response(400)
                         self.end_headers()
-                        self.wfile.write("".encode("utf-8"))
+                        self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                        return
+                    
+                    master.settings["greenEnergyAmpsOffset"] = offset_val
+                    master.queue_background_task({"cmd": "saveSettings"})
+                    self.send_response(204)
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
                 else:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    self.wfile.write(json.dumps({"error": "offset is required"}).encode("utf-8"))
 
             else:
                 # All other routes missed, return 404
