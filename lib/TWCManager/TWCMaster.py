@@ -1317,6 +1317,8 @@ class TWCMaster:
             # Write to temp file first
             with open(tempFileName, "w") as outconfig:
                 json.dump(self.settings, outconfig)
+                outconfig.flush()
+                os.fsync(outconfig.fileno())
 
             # Create backup of existing file if it exists
             if os.path.exists(fileName):
