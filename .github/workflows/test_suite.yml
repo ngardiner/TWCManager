@@ -62,8 +62,8 @@ jobs:
             mkdir -p /tmp/twcmanager/log
             mkdir -p /tmp/twcmanager/csv
             cp etc/twcmanager/.testconfig.json config.json
-            python -m TWCManager > /tmp/twcmanager/twcmanager.log 2>&1 &
-            sleep 2
+            python -c "import sys; sys.path.insert(0, 'lib'); from TWCManager.TWCManager import *" > /tmp/twcmanager/twcmanager.log 2>&1 &
+            sleep 3
           env:
             PYTHONIOENCODING: UTF-8
 
