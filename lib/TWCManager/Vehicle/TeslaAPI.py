@@ -76,7 +76,7 @@ class TeslaAPI:
         try:
             self.config = master.config
             cfg = self.config.get("vehicle", {}).get("teslaAPI", {}) or {}
-            self.enabled = cfg.get("enabled", True)
+            self._enabled = cfg.get("enabled", True)
 
             proxyURL = self.config["config"].get("teslaProxy", "")
             if proxyURL:
@@ -95,7 +95,7 @@ class TeslaAPI:
         self.generateChallenge()
 
     def enabled(self) -> bool:
-        return self.enabled
+        return self._enabled
 
     def addVehicle(self, json):
         if "vin" in json:

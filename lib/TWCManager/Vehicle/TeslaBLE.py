@@ -83,7 +83,7 @@ class TeslaBLE:
             self.config = {}
         self.configConfig = self.config.get("config", {})
         cfg = self.config.get("vehicle", {}).get("teslaBLE", {}) or {}
-        self.enabled = cfg.get("enabled", True)
+        self._enabled = cfg.get("enabled", True)
 
         # Load BLE-specific configuration with enhanced defaults
         ble_config = self.configConfig.get("moduleConfiguration", {}).get(
@@ -1081,6 +1081,9 @@ class TeslaBLE:
             return False
         finally:
             self._ensure_pipe_closed()
+
+    def enabled(self) -> bool:
+        return self._enabled
 
     def updateSettings(self):
         # Called by TWCMaster when settings are read/updated
