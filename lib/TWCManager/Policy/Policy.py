@@ -353,7 +353,7 @@ class Policy:
         def to_number(val):
             if isinstance(val, str):
                 try:
-                    return float(val) if '.' in val else int(val)
+                    return float(val) if "." in val else int(val)
                 except (ValueError, TypeError):
                     return val
             return val

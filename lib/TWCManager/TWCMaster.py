@@ -1339,11 +1339,11 @@ class TWCMaster:
 
     def getSetting(self, key, default=None):
         """Get a setting value by key.
-        
+
         Args:
             key: The setting key to retrieve
             default: Default value if key doesn't exist
-            
+
         Returns:
             The setting value or default if not found
         """
@@ -1351,7 +1351,7 @@ class TWCMaster:
 
     def setSetting(self, key, value):
         """Set a setting value by key.
-        
+
         Args:
             key: The setting key to set
             value: The value to set
