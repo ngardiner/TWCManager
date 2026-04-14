@@ -717,6 +717,12 @@ logger.info(
     )
 )
 
+logger.info("=" * 70)
+logger.info("✓ TWCManager initialization complete and ready")
+logger.info("=" * 70)
+logger.info("Starting main event loop...")
+logger.info("=" * 70)
+
 while True:
     try:
         # In this area, we always send a linkready message when we first start.
