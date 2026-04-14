@@ -502,7 +502,7 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
                     self.wfile.write("".encode("utf-8"))
                     return
-                
+
                 try:
                     rate = int(data.get("chargeNowRate", 0))
                     durn = int(data.get("chargeNowDuration", 0))
