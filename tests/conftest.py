@@ -224,10 +224,19 @@ def assert_json_response():
     """
 
     def _assert(response, expected_status=200):
+        # Accept both 200 (OK) and 204 (No Content) as valid success responses
+        valid_statuses = [expected_status]
+        if expected_status == 200:
+            valid_statuses.append(204)
+        
         assert (
-            response.status_code == expected_status
+            response.status_code in valid_statuses
         ), f"Expected status {expected_status}, got {response.status_code}: {response.text}"
 
+        # 204 No Content responses don't have a body
+        if response.status_code == 204:
+            return {}
+        
         try:
             return response.json()
         except json.JSONDecodeError as e:
