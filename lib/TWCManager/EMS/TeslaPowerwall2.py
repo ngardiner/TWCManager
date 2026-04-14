@@ -298,7 +298,7 @@ class TeslaPowerwall2:
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
                     except:
-                        if r.status_code is 403:
+                        if r.status_code == 403:
                             logger.warn(
                                 "Error fetching Powerwall cloud data; does your API token have energy_device_data scope?"
                             )

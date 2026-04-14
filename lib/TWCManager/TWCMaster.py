@@ -835,7 +835,23 @@ class TWCMaster:
         backupFileName = fileName + ".backup"
 
         if not os.path.exists(fileName):
-            self.settings = {}
+            # Initialize with class defaults if file doesn't exist
+            self.settings = {
+                "chargeNowAmps": 0,
+                "chargeStopMode": "1",
+                "chargeNowTimeEnd": 0,
+                "homeLat": 10000,
+                "homeLon": 10000,
+                "hourResumeTrackGreenEnergy": -1,
+                "kWhDelivered": 119,
+                "nonScheduledAmpsMax": 0,
+                "respondToSlaves": 1,
+                "scheduledAmpsDaysBitmap": 0x7F,
+                "scheduledAmpsEndHour": -1,
+                "scheduledAmpsMax": 0,
+                "scheduledAmpsStartHour": -1,
+                "sendServerTime": 0,
+            }
             return
 
         # Try to load the main settings file
@@ -884,6 +900,27 @@ class TWCMaster:
             logger.info(
                 "If this is the case, you may need to locate the old config file and migrate some settings manually."
             )
+
+        # Step 1b - Merge loaded settings with defaults to ensure all required keys exist
+        defaults = {
+            "chargeNowAmps": 0,
+            "chargeStopMode": "1",
+            "chargeNowTimeEnd": 0,
+            "homeLat": 10000,
+            "homeLon": 10000,
+            "hourResumeTrackGreenEnergy": -1,
+            "kWhDelivered": 119,
+            "nonScheduledAmpsMax": 0,
+            "respondToSlaves": 1,
+            "scheduledAmpsDaysBitmap": 0x7F,
+            "scheduledAmpsEndHour": -1,
+            "scheduledAmpsMax": 0,
+            "scheduledAmpsStartHour": -1,
+            "sendServerTime": 0,
+        }
+        for key, value in defaults.items():
+            if key not in self.settings:
+                self.settings[key] = value
 
         # Step 2 - Send settings to other modules
         carapi = self.getModuleByName("TeslaAPI")
