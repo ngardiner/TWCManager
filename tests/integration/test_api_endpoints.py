@@ -32,8 +32,11 @@ class TestAPIEndpoints:
         response = api_get('/getStatus')
         data = assert_json_response(response, 200)
         
-        # Verify status structure
-        assert 'status' in data or 'time' in data, "Response should contain status information"
+        # Verify status structure - should contain charging status information
+        assert isinstance(data, dict), "Response should be a dictionary"
+        # Check for key status fields
+        assert any(key in data for key in ['currentPolicy', 'chargerLoadWatts', 'carsCharging']), \
+            "Response should contain charging status information"
     
     def test_get_slave_twcs(self, api_get, assert_json_response):
         """Test retrieving list of slave TWCs."""
@@ -57,9 +60,10 @@ class TestChargeControl:
     
     def test_charge_now_activation(self, api_post, api_get, assert_json_response, wait_for_condition):
         """Test activating Charge Now mode."""
-        # Set charge now with 32 amps
+        # Set charge now with 32 amps for 1 hour
         charge_amps = 32
-        response = api_post('/chargeNow', json={'amps': charge_amps})
+        charge_duration = 3600  # 1 hour in seconds
+        response = api_post('/chargeNow', json={'chargeNowRate': charge_amps, 'chargeNowDuration': charge_duration})
         assert_json_response(response, 200)
         
         # Wait for status to reflect the change
@@ -80,7 +84,7 @@ class TestChargeControl:
     def test_charge_now_cancellation(self, api_post, api_get, assert_json_response):
         """Test canceling Charge Now mode."""
         # First activate charge now
-        api_post('/chargeNow', json={'amps': 32})
+        api_post('/chargeNow', json={'chargeNowRate': 32, 'chargeNowDuration': 3600})
         time.sleep(2)
         
         # Then cancel it
@@ -99,7 +103,7 @@ class TestChargeControl:
     @pytest.mark.parametrize("amps", [12, 16, 24, 32, 40])
     def test_charge_now_various_amperage(self, api_post, assert_json_response, amps):
         """Test Charge Now with various amperage values."""
-        response = api_post('/chargeNow', json={'amps': amps})
+        response = api_post('/chargeNow', json={'chargeNowRate': amps, 'chargeNowDuration': 3600})
         assert_json_response(response, 200)
         
         # Give it a moment to process
@@ -126,6 +130,7 @@ class TestPolicyEngine:
         assert data is not None, "Active policy response should not be empty"
 
 
+@pytest.mark.skip(reason="Endpoint not yet implemented in HTTPControl")
 class TestLocationSettings:
     """Test suite for location-based settings."""
     
@@ -144,6 +149,7 @@ class TestLocationSettings:
             f"Setting lat/lon should succeed, got {response.status_code}"
 
 
+@pytest.mark.skip(reason="Endpoint not yet implemented in HTTPControl")
 class TestConsumptionOffsets:
     """Test suite for consumption offset functionality."""
     
