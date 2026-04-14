@@ -497,16 +497,20 @@ def CreateHTTPHandlerClass(master):
                 data = {}
                 try:
                     data = json.loads(self.post_data.decode("UTF-8"))
-                except (ValueError, UnicodeDecodeError):
+                except (ValueError, UnicodeDecodeError, json.decoder.JSONDecodeError):
                     self.send_response(400)
                     self.end_headers()
                     self.wfile.write("".encode("utf-8"))
-                except json.decoder.JSONDecodeError:
+                    return
+                
+                try:
+                    rate = int(data.get("chargeNowRate", 0))
+                    durn = int(data.get("chargeNowDuration", 0))
+                except (ValueError, TypeError):
                     self.send_response(400)
                     self.end_headers()
                     self.wfile.write("".encode("utf-8"))
-                rate = int(data.get("chargeNowRate", 0))
-                durn = int(data.get("chargeNowDuration", 0))
+                    return
 
                 if rate <= 0 or durn <= 0:
                     self.send_response(400)
@@ -522,7 +526,7 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
                     self.wfile.write("".encode("utf-8"))
 
-             elif self.url.path == "/api/cancelChargeNow":
+            elif self.url.path == "/api/cancelChargeNow":
                 master.resetChargeNowAmps()
                 master.queue_background_task({"cmd": "saveSettings"})
                 master.getModuleByName("Policy").applyPolicyImmediately()
@@ -580,12 +584,12 @@ def CreateHTTPHandlerClass(master):
                 self.send_response(204)
                 self.end_headers()
 
-             elif self.url.path == "/api/sendStartCommand":
+            elif self.url.path == "/api/sendStartCommand":
                 master.sendStartCommand()
                 self.send_response(200)
                 self.end_headers()
 
-             elif self.url.path == "/api/sendStopCommand":
+            elif self.url.path == "/api/sendStopCommand":
                 master.sendStopCommand()
                 self.send_response(200)
                 self.end_headers()
