@@ -494,9 +494,7 @@ def CreateHTTPHandlerClass(master):
                 if not success:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(
-                        json.dumps({"error": error_msg}).encode("utf-8")
-                    )
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
                     return
 
                 try:
@@ -555,12 +553,16 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
                     self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
                     return
-                
+
                 offset_name = data.get("offsetName", None)
                 if not offset_name or not isinstance(offset_name, str):
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "offsetName is required and must be a string"}).encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": "offsetName is required and must be a string"}
+                        ).encode("utf-8")
+                    )
                     return
 
                 if master.settings.get("consumptionOffset", None):
@@ -572,11 +574,17 @@ def CreateHTTPHandlerClass(master):
                     else:
                         self.send_response(404)
                         self.end_headers()
-                        self.wfile.write(json.dumps({"error": "Offset not found"}).encode("utf-8"))
+                        self.wfile.write(
+                            json.dumps({"error": "Offset not found"}).encode("utf-8")
+                        )
                 else:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "No consumption offsets configured"}).encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": "No consumption offsets configured"}
+                        ).encode("utf-8")
+                    )
 
             elif self.url.path == "/api/saveSettings":
                 master.queue_background_task({"cmd": "saveSettings"})
@@ -590,22 +598,32 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
                     self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
                     return
-                
+
                 # Validate required field
                 command_name = data.get("commandName", "")
                 if not command_name or not isinstance(command_name, str):
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "commandName is required and must be a string"}).encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": "commandName is required and must be a string"}
+                        ).encode("utf-8")
+                    )
                     return
-                
+
                 packet = {"Command": command_name}
                 if command_name == "Custom":
                     custom_cmd = data.get("customCommand", "")
                     if not custom_cmd or not isinstance(custom_cmd, str):
                         self.send_response(400)
                         self.end_headers()
-                        self.wfile.write(json.dumps({"error": "customCommand is required when Command is Custom"}).encode("utf-8"))
+                        self.wfile.write(
+                            json.dumps(
+                                {
+                                    "error": "customCommand is required when Command is Custom"
+                                }
+                            ).encode("utf-8")
+                        )
                         return
                     packet["CustomCommand"] = custom_cmd
 
@@ -774,9 +792,11 @@ def CreateHTTPHandlerClass(master):
                     if not success:
                         self.send_response(400)
                         self.end_headers()
-                        self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                        self.wfile.write(
+                            json.dumps({"error": error_msg}).encode("utf-8")
+                        )
                         return
-                    
+
                     master.settings["greenEnergyAmpsOffset"] = offset_val
                     master.queue_background_task({"cmd": "saveSettings"})
                     self.send_response(204)
@@ -785,7 +805,9 @@ def CreateHTTPHandlerClass(master):
                 else:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "offset is required"}).encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps({"error": "offset is required"}).encode("utf-8")
+                    )
 
             else:
                 # All other routes missed, return 404
