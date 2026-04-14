@@ -234,11 +234,13 @@ class MySQLLogging:
         except pymysql.err.OperationalError as e:
             logger.error("MySQLLogging: ✗ Failed to connect to MySQL database")
             logger.error("MySQLLogging: Error details: %s", str(e))
+            self.master.releaseModule("lib.TWCManager.Logging", "MySQLLogging")
             return None
         except Exception as e:
             logger.error(
                 "MySQLLogging: ✗ Unexpected error connecting to MySQL: %s", str(e)
             )
+            self.master.releaseModule("lib.TWCManager.Logging", "MySQLLogging")
             return None
 
         try:
@@ -280,6 +282,10 @@ class MySQLLogging:
         if self.configLogging["mute"].get("GreenEnergy", 0):
             return None
 
+        if not self.db:
+            logger.error("MySQLLogging: queryGreenEnergy called but database is not connected")
+            return None
+
         # Ensure database connection is alive, or reconnect if not
         try:
             self.db.ping(reconnect=True)
@@ -312,6 +318,10 @@ class MySQLLogging:
     def slaveStatus(self, data):
         # Check if this status is muted
         if self.configLogging["mute"].get("SlaveStatus", 0):
+            return None
+
+        if not self.db:
+            logger.error("MySQLLogging: slaveStatus called but database is not connected")
             return None
 
         # Ensure database connection is alive, or reconnect if not
