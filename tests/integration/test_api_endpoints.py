@@ -199,8 +199,6 @@ class TestStartStopCommands:
         assert response.status_code in [200, 201, 204]
 
 
-# Example of how to use scenario fixtures (for future enhancement)
-@pytest.mark.skip(reason="Requires enhanced Dummy interface implementation")
 class TestMultiSlaveScenarios:
     """Test suite for multi-slave TWC scenarios."""
     
@@ -214,6 +212,7 @@ class TestMultiSlaveScenarios:
         
         assert len(data) == 2, "Should detect two TWC slaves"
     
+    @pytest.mark.slow
     def test_dynamic_slave_addition(self, dummy_twc_scenario, api_get, wait_for_condition):
         """Test adding a slave dynamically during operation."""
         scenario = dummy_twc_scenario('dynamic_slave_addition')
