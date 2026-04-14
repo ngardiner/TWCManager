@@ -97,7 +97,7 @@ class Victron:
 
         except (ConnectionError, OSError, ValueError) as e:
             logger.log(
-                logging.INFO1,
+                logging.INFO2,
                 f"Error connecting to Victron device: {e}",
             )
             logger.debug(str(e))

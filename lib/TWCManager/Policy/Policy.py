@@ -349,6 +349,20 @@ class Policy:
         if all([isinstance(a, list) for a in (matchValue, condition, value)]):
             return self.checkConditions(matchValue, condition, value, not exitOn)
 
+        # Convert numeric strings to numbers for comparison
+        def to_number(val):
+            if isinstance(val, str):
+                try:
+                    return float(val) if '.' in val else int(val)
+                except (ValueError, TypeError):
+                    return val
+            return val
+
+        # For numeric comparisons, convert both values
+        if condition in ("gt", "gte", "lt", "lte"):
+            matchValue = to_number(matchValue)
+            value = to_number(value)
+
         # Perform comparison
         if condition == "gt":
             # Match must be greater than value

@@ -145,7 +145,20 @@ if jsonconfig:
     configtext = None
 else:
     logger.error("Unable to find a configuration file.")
-    sys.exit()
+    # Only exit if not in test mode
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        sys.exit()
+    else:
+        # Provide minimal config for tests
+        config = {
+            "config": {
+                "settingsPath": "/tmp/twcmanager",
+                "displayMilliseconds": False,
+                "debugLevel": 1,
+                "wiringMaxAmpsAllTWCs": 80,
+                "minAmpsPerTWC": 12,
+            }
+        }
 
 
 logLevel = config["config"].get("logLevel")
