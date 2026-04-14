@@ -500,7 +500,9 @@ def CreateHTTPHandlerClass(master):
                 except (ValueError, UnicodeDecodeError, json.decoder.JSONDecodeError):
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps({"error": "Invalid JSON"}).encode("utf-8")
+                    )
                     return
 
                 try:
@@ -509,13 +511,21 @@ def CreateHTTPHandlerClass(master):
                 except (ValueError, TypeError):
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Invalid rate or duration"}).encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps({"error": "Invalid rate or duration"}).encode(
+                            "utf-8"
+                        )
+                    )
                     return
 
                 if rate <= 0 or durn <= 0:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Rate and duration must be positive"}).encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": "Rate and duration must be positive"}
+                        ).encode("utf-8")
+                    )
 
                 else:
                     master.setChargeNowAmps(rate)
