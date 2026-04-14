@@ -1337,6 +1337,27 @@ class TWCMaster:
                 except:
                     pass
 
+    def getSetting(self, key, default=None):
+        """Get a setting value by key.
+        
+        Args:
+            key: The setting key to retrieve
+            default: Default value if key doesn't exist
+            
+        Returns:
+            The setting value or default if not found
+        """
+        return self.settings.get(key, default)
+
+    def setSetting(self, key, value):
+        """Set a setting value by key.
+        
+        Args:
+            key: The setting key to set
+            value: The value to set
+        """
+        self.settings[key] = value
+
     def send_master_linkready1(self):
         logger.log(logging.INFO8, "Send master linkready1")
 
