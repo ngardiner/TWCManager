@@ -44,14 +44,18 @@ class HTTPControl:
         self.httpPort = self.configHTTP.get("listenPort", 8080)
         self.status = self.configHTTP.get("enabled", False)
 
-        logger.info("HTTPControl: Initializing (enabled=%s, port=%s)", self.status, self.httpPort)
+        logger.info(
+            "HTTPControl: Initializing (enabled=%s, port=%s)",
+            self.status,
+            self.httpPort,
+        )
 
         # Unload if this module is disabled or misconfigured
         if not self.status:
             logger.info("HTTPControl: Disabled in config, unloading")
             self.master.releaseModule("lib.TWCManager.Control", self.__class__.__name__)
             return None
-        
+
         if int(self.httpPort) < 1:
             logger.error("HTTPControl: Invalid port %s, unloading", self.httpPort)
             self.master.releaseModule("lib.TWCManager.Control", self.__class__.__name__)
@@ -64,16 +68,24 @@ class HTTPControl:
             httpd = ThreadingSimpleServer(("", self.httpPort), HTTPHandler)
             logger.info("HTTPControl: HTTP server created successfully")
         except OSError as e:
-            logger.error("HTTPControl: Unable to start HTTP Server on port %s: %s", 
-                        self.httpPort, str(e))
+            logger.error(
+                "HTTPControl: Unable to start HTTP Server on port %s: %s",
+                self.httpPort,
+                str(e),
+            )
             self.master.releaseModule("lib.TWCManager.Control", self.__class__.__name__)
             return None
 
         if httpd:
-            logger.info("HTTPControl: Starting daemon thread to serve on port %s", self.httpPort)
+            logger.info(
+                "HTTPControl: Starting daemon thread to serve on port %s", self.httpPort
+            )
             server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             server_thread.start()
-            logger.info("HTTPControl: ✓ HTTP server is now serving at http://0.0.0.0:%s", self.httpPort)
+            logger.info(
+                "HTTPControl: ✓ HTTP server is now serving at http://0.0.0.0:%s",
+                self.httpPort,
+            )
         else:
             logger.error("HTTPControl: Failed to create HTTP server, unloading")
             self.master.releaseModule("lib.TWCManager.Control", self.__class__.__name__)

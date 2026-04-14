@@ -26,8 +26,8 @@ print("[conftest] Custom logging levels initialized")
 # Configure verbose logging for tests
 logging.basicConfig(
     level=logging.DEBUG,
-    format='[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s',
-    datefmt='%H:%M:%S'
+    format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
 )
 
 print("[conftest] Test environment initialized successfully")

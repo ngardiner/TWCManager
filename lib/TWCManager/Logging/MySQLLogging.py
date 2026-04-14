@@ -200,7 +200,7 @@ class MySQLLogging:
             logger.info("MySQLLogging: Disabled in config, unloading")
             self.master.releaseModule("lib.TWCManager.Logging", "MySQLLogging")
             return None
-        
+
         if not self.configLogging.get("host", None):
             logger.error("MySQLLogging: No host configured, unloading")
             self.master.releaseModule("lib.TWCManager.Logging", "MySQLLogging")
@@ -214,12 +214,14 @@ class MySQLLogging:
         global pymysql
         import pymysql
 
-        logger.info("MySQLLogging: Attempting connection to %s:%s@%s/%s",
-                   self.configLogging.get("username", ""),
-                   "***",
-                   self.configLogging.get("host", ""),
-                   self.configLogging.get("database", ""))
-        
+        logger.info(
+            "MySQLLogging: Attempting connection to %s:%s@%s/%s",
+            self.configLogging.get("username", ""),
+            "***",
+            self.configLogging.get("host", ""),
+            self.configLogging.get("database", ""),
+        )
+
         try:
             self.db = pymysql.connect(
                 host=self.configLogging.get("host", ""),
@@ -234,16 +236,20 @@ class MySQLLogging:
             logger.error("MySQLLogging: Error details: %s", str(e))
             return None
         except Exception as e:
-            logger.error("MySQLLogging: ✗ Unexpected error connecting to MySQL: %s", str(e))
+            logger.error(
+                "MySQLLogging: ✗ Unexpected error connecting to MySQL: %s", str(e)
+            )
             return None
-        
+
         try:
             mysql_handler = MySQLHandler(db=self.db)
             mysql_handler.addFilter(self.mysql_filter)
             logging.getLogger("").addHandler(mysql_handler)
             logger.info("MySQLLogging: ✓ MySQL logging handler installed")
         except Exception as e:
-            logger.error("MySQLLogging: ✗ Failed to install MySQL logging handler: %s", str(e))
+            logger.error(
+                "MySQLLogging: ✗ Failed to install MySQL logging handler: %s", str(e)
+            )
             return None
 
     def getCapabilities(self, capability):

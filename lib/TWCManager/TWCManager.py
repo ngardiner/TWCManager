@@ -690,8 +690,12 @@ for module in modules_available:
         raise
 
 logger.info("=" * 70)
-logger.info("Module initialization complete: %d loaded, %d skipped, %d failed",
-            modules_loaded, modules_skipped, modules_failed)
+logger.info(
+    "Module initialization complete: %d loaded, %d skipped, %d failed",
+    modules_loaded,
+    modules_skipped,
+    modules_failed,
+)
 logger.info("=" * 70)
 
 
