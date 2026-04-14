@@ -70,13 +70,18 @@ def wait_for_twcmanager(api_client):
     """
     Wait for TWCManager to be ready before running tests.
 
-    Polls the /api/getStatus endpoint with exponential backoff.
-    Provides detailed diagnostics on failure.
+    Polls the /api/getStatus endpoint with detailed logging.
+    Provides comprehensive diagnostics on failure.
     """
     max_wait = 120
     start_time = time.time()
     attempt = 0
     last_error = None
+    last_response = None
+
+    print(f"\n{'='*70}")
+    print(f"Health Check: Waiting for TWCManager at {TEST_API_BASE_URL}")
+    print(f"{'='*70}")
 
     while time.time() - start_time < max_wait:
         attempt += 1
@@ -84,32 +89,67 @@ def wait_for_twcmanager(api_client):
         
         try:
             response = api_client.get(f"{TEST_API_BASE_URL}/getStatus", timeout=5)
+            last_response = response
+            
             if response.status_code == 200:
-                print(
-                    f"\n✓ TWCManager ready after {elapsed:.1f}s (attempt {attempt})"
-                )
+                print(f"\n✓ SUCCESS: TWCManager ready after {elapsed:.1f}s (attempt {attempt})")
+                print(f"Response preview: {str(response.json())[:100]}...")
+                print(f"{'='*70}\n")
                 return True
             else:
                 last_error = f"HTTP {response.status_code}"
+                if attempt % 5 == 0:
+                    print(f"  [{elapsed:6.1f}s] Attempt {attempt:3d}: {last_error}")
+                    
         except requests.ConnectionError as e:
-            last_error = f"Connection refused: {str(e)[:50]}"
+            last_error = f"Connection refused"
+            if attempt % 5 == 0:
+                print(f"  [{elapsed:6.1f}s] Attempt {attempt:3d}: {last_error} - {str(e)[:40]}")
+                
         except requests.Timeout:
-            last_error = "Request timeout"
+            last_error = "Request timeout (5s)"
+            if attempt % 5 == 0:
+                print(f"  [{elapsed:6.1f}s] Attempt {attempt:3d}: {last_error}")
+                
         except Exception as e:
-            last_error = f"{type(e).__name__}: {str(e)[:50]}"
+            last_error = f"{type(e).__name__}: {str(e)[:40]}"
+            if attempt % 5 == 0:
+                print(f"  [{elapsed:6.1f}s] Attempt {attempt:3d}: {last_error}")
         
-        # Log progress every 10 attempts
+        # Log progress every 10 attempts with system state
         if attempt % 10 == 0:
-            print(f"  Waiting... {elapsed:.1f}s elapsed, last error: {last_error}")
+            print(f"  [{elapsed:6.1f}s] Attempt {attempt:3d}: Still waiting... (last error: {last_error})")
+            import subprocess
+            try:
+                result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=2)
+                twcm_lines = [l for l in result.stdout.split('\n') if 'twcmanager' in l.lower() or 'python' in l.lower()]
+                if twcm_lines:
+                    print(f"             Processes: {len(twcm_lines)} matching processes found")
+                else:
+                    print(f"             Processes: NO matching processes found!")
+            except Exception as e:
+                print(f"             Processes: Could not check - {e}")
         
         time.sleep(1)
 
     # Provide detailed failure diagnostics
     elapsed = time.time() - start_time
     error_msg = (
-        f"TWCManager did not become ready within {max_wait}s "
-        f"({attempt} attempts, last error: {last_error})\n"
-        f"Ensure TWCManager is running and listening on {TEST_API_BASE_URL}"
+        f"\n{'='*70}\n"
+        f"FAILURE: TWCManager did not become ready within {max_wait}s\n"
+        f"{'='*70}\n"
+        f"Total attempts: {attempt}\n"
+        f"Elapsed time: {elapsed:.1f}s\n"
+        f"Last error: {last_error}\n"
+        f"Last response status: {last_response.status_code if last_response else 'None'}\n"
+        f"Endpoint: {TEST_API_BASE_URL}\n"
+        f"\nDiagnostics:\n"
+        f"  - Check if TWCManager process is running\n"
+        f"  - Check if port 8088 is listening\n"
+        f"  - Check TWCManager startup logs in /tmp/twcmanager/twcmanager.log\n"
+        f"  - Check if MariaDB is running on port 3306\n"
+        f"  - Check if all required modules loaded successfully\n"
+        f"{'='*70}\n"
     )
     pytest.fail(error_msg)
 

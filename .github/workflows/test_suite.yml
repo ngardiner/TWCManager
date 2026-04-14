@@ -74,15 +74,90 @@ jobs:
             pip install -r requirements.txt
             pip install -r requirements-test.txt
 
-        - name: Start TWCManager
+        - name: Pre-flight check - Verify MariaDB is ready
+          run: |
+            echo "Waiting for MariaDB to be ready..."
+            for i in {1..60}; do
+              if mysql -h 127.0.0.1 -u twcmanager -ptwcmanager -e "SELECT 1" 2>/dev/null; then
+                echo "✓ MariaDB is ready after $i attempts"
+                mysql -h 127.0.0.1 -u twcmanager -ptwcmanager -e "SHOW DATABASES;"
+                exit 0
+              fi
+              echo "  Attempt $i/60: MariaDB not ready yet..."
+              sleep 1
+            done
+            echo "✗ MariaDB failed to start after 60 seconds"
+            exit 1
+
+        - name: Start TWCManager with verbose logging
           run: |
             mkdir -p /tmp/twcmanager/log
             mkdir -p /tmp/twcmanager/csv
             cp etc/twcmanager/.testconfig.json config.json
-            python -c "import sys; sys.path.insert(0, 'lib'); from TWCManager.TWCManager import *" > /tmp/twcmanager/twcmanager.log 2>&1 &
+            
+            echo "=== Starting TWCManager at $(date) ==="
+            echo "Config file:"
+            head -20 config.json
+            echo ""
+            echo "=== TWCManager startup output ==="
+            
+            # Start TWCManager and capture both stdout and stderr with timestamps
+            python -c "import sys; sys.path.insert(0, 'lib'); from TWCManager.TWCManager import *" 2>&1 | while IFS= read -r line; do
+              echo "[$(date '+%H:%M:%S.%3N')] $line"
+            done > /tmp/twcmanager/twcmanager.log 2>&1 &
+            
+            TWCM_PID=$!
+            echo "TWCManager PID: $TWCM_PID"
+            
+            # Give it time to start
             sleep 3
+            
+            # Check if process is still running
+            if kill -0 $TWCM_PID 2>/dev/null; then
+              echo "✓ TWCManager process is running"
+            else
+              echo "✗ TWCManager process exited"
+              echo "Exit code: $?"
+              echo "Log contents:"
+              cat /tmp/twcmanager/twcmanager.log
+              exit 1
+            fi
           env:
             PYTHONIOENCODING: UTF-8
+
+        - name: Health check - Wait for TWCManager API
+          run: |
+            echo "=== Waiting for TWCManager API to be ready ==="
+            for i in {1..120}; do
+              if curl -s http://127.0.0.1:8088/api/getStatus > /dev/null 2>&1; then
+                echo "✓ TWCManager API is ready after $i seconds"
+                curl -s http://127.0.0.1:8088/api/getStatus | head -20
+                exit 0
+              fi
+              
+              if [ $((i % 10)) -eq 0 ]; then
+                echo "  Attempt $i/120: API not ready yet..."
+                echo "  Current processes:"
+                ps aux | grep -i twcmanager | grep -v grep || echo "    No TWCManager process found"
+                echo "  Port 8088 status:"
+                netstat -tlnp 2>/dev/null | grep 8088 || echo "    Port 8088 not listening"
+              fi
+              
+              sleep 1
+            done
+            
+            echo "✗ TWCManager API failed to start after 120 seconds"
+            echo ""
+            echo "=== Final diagnostics ==="
+            echo "Processes:"
+            ps aux | grep -i twcmanager | grep -v grep || echo "No TWCManager process"
+            echo ""
+            echo "Port status:"
+            netstat -tlnp 2>/dev/null | grep -E '8088|3306' || echo "Ports not listening"
+            echo ""
+            echo "TWCManager log (last 100 lines):"
+            tail -100 /tmp/twcmanager/twcmanager.log
+            exit 1
 
         - name: Run integration tests
           run: |
@@ -94,20 +169,34 @@ jobs:
               --cov-report=xml:test-results/coverage.xml \
               --cov-report=term-missing
 
-        - name: Capture diagnostics on failure
+        - name: Capture full diagnostics on failure
           if: failure()
           run: |
-            echo "=== TWCManager Startup Log ===" && cat /tmp/twcmanager/twcmanager.log 2>/dev/null || echo "Log file not found"
+            echo "=== FAILURE DIAGNOSTICS at $(date) ==="
             echo ""
-            echo "=== Process Status ===" && ps aux | grep -i twcmanager | grep -v grep || echo "No TWCManager process found"
+            echo "=== TWCManager Full Log ==="
+            cat /tmp/twcmanager/twcmanager.log
             echo ""
-            echo "=== Port Status ===" && netstat -tlnp 2>/dev/null | grep 8088 || echo "Port 8088 not listening"
+            echo "=== Process Status ==="
+            ps aux | grep -E 'twcmanager|python|mariadb' | grep -v grep
             echo ""
-            echo "=== MariaDB Status ===" && netstat -tlnp 2>/dev/null | grep 3306 || echo "Port 3306 not listening"
+            echo "=== Network Status ==="
+            netstat -tlnp 2>/dev/null | grep -E '8088|3306'
             echo ""
-            echo "=== MariaDB Connection Test ===" && mysql -h 127.0.0.1 -u twcmanager -ptwcmanager -e "SELECT 1" 2>&1 || echo "MariaDB connection failed"
+            echo "=== MariaDB Connection Test ==="
+            mysql -h 127.0.0.1 -u twcmanager -ptwcmanager -e "SELECT VERSION(); SHOW DATABASES;" 2>&1 || echo "Connection failed"
             echo ""
-            echo "=== Directory Contents ===" && ls -la /tmp/twcmanager/ 2>/dev/null || echo "Directory not found"
+            echo "=== Directory Contents ==="
+            ls -lah /tmp/twcmanager/
+            echo ""
+            echo "=== Config File ==="
+            cat config.json | head -50
+            echo ""
+            echo "=== Python Version ==="
+            python --version
+            echo ""
+            echo "=== Installed Packages ==="
+            pip list | grep -E 'mysql|mariadb|paho|pytest'
 
         - name: Upload test results
           if: always()
