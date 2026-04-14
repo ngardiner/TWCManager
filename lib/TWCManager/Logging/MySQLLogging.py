@@ -283,7 +283,9 @@ class MySQLLogging:
             return None
 
         if not self.db:
-            logger.error("MySQLLogging: queryGreenEnergy called but database is not connected")
+            logger.error(
+                "MySQLLogging: queryGreenEnergy called but database is not connected"
+            )
             return None
 
         # Ensure database connection is alive, or reconnect if not
@@ -321,7 +323,9 @@ class MySQLLogging:
             return None
 
         if not self.db:
-            logger.error("MySQLLogging: slaveStatus called but database is not connected")
+            logger.error(
+                "MySQLLogging: slaveStatus called but database is not connected"
+            )
             return None
 
         # Ensure database connection is alive, or reconnect if not

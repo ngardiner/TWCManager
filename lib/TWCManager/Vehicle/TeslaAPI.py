@@ -1648,15 +1648,21 @@ class CarApiVehicle:
 
             self.chargeLimit = charge.get("charge_limit_soc", self.chargeLimit)
             self.batteryLevel = charge.get("battery_level", self.batteryLevel)
-            self.timeToFullCharge = charge.get("time_to_full_charge", self.timeToFullCharge)
+            self.timeToFullCharge = charge.get(
+                "time_to_full_charge", self.timeToFullCharge
+            )
 
             try:
                 self.name = response["vehicle_state"]["vehicle_name"] or self.name
             except (KeyError, TypeError):
                 pass
 
-            self.availableCurrent = charge.get("charger_pilot_current", self.availableCurrent)
-            self.actualCurrent = charge.get("charger_actual_current", self.actualCurrent)
+            self.availableCurrent = charge.get(
+                "charger_pilot_current", self.availableCurrent
+            )
+            self.actualCurrent = charge.get(
+                "charger_actual_current", self.actualCurrent
+            )
             self.phases = charge.get("charger_phases", self.phases)
             self.voltage = charge.get("charger_voltage", self.voltage)
             self.chargingState = charge.get("charging_state", self.chargingState)
@@ -1666,7 +1672,9 @@ class CarApiVehicle:
                     # Car is further from home than can be driven in an
                     # hour; no point re-checking sooner than that.
                     self.statusDeferral = now + 3600
-                elif drive.get("shift_state") == "P" or drive.get("shift_state") is None:
+                elif (
+                    drive.get("shift_state") == "P" or drive.get("shift_state") is None
+                ):
                     # Car is not driving, so we can check infrequently. May
                     # be able to sleep.
                     self.statusDeferral = now + 1800
