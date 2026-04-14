@@ -419,8 +419,8 @@
                 "SlaveStatus": false
             }
         },
-         "MySQL": {
-             "enabled": false,
+        "MySQL": {
+            "enabled": true,
             "host": "127.0.0.1",
             "port": 3306,
             "database": "twcmanager",
