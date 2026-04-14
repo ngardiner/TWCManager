@@ -674,14 +674,14 @@ for module in modules_available:
             .get("enabled", 1)
         ):
             # We can see that this module is explicitly disabled in config, skip it
-            logger.info("SKIP: %s (disabled in config)", module)
+            logger.debug("SKIP: %s (disabled in config)", module)
             modules_skipped += 1
             continue
 
-        logger.info("LOAD: %s (importing...)", module)
+        logger.debug("LOAD: %s (importing...)", module)
         moduleref = importlib.import_module("TWCManager." + module)
         modclassref = getattr(moduleref, modulename[1])
-        logger.info("LOAD: %s (instantiating...)", module)
+        logger.debug("LOAD: %s (instantiating...)", module)
         modinstance = modclassref(master)
 
         # Register the new module with master class, so every other module can
@@ -689,7 +689,7 @@ for module in modules_available:
         master.registerModule(
             {"name": modulename[1], "ref": modinstance, "type": modulename[0]}
         )
-        logger.info("LOAD: %s ✓ SUCCESS", module)
+        logger.debug("LOAD: %s ✓ SUCCESS", module)
         modules_loaded += 1
     except ImportError as e:
         logger.error(
