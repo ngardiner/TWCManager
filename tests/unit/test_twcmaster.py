@@ -394,3 +394,222 @@ class TestTWCMasterHistory:
         master.advanceHistorySnap()
         
         assert master.nextHistorySnap > datetime.now().astimezone()
+
+
+class TestSettingsInitialization:
+    """Test suite for settings initialization and persistence."""
+    
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock configuration."""
+        return {
+            "config": {
+                "debugOutputToFile": False,
+                "subtractChargerLoad": False,
+                "treatGenerationAsGridDelivery": False,
+                "wiringMaxAmpsAllTWCs": 80,
+                "settingsPath": "/tmp/test_settings",
+            }
+        }
+    
+    @pytest.fixture
+    def master(self, mock_config):
+        """Create a TWCMaster instance for testing."""
+        from TWCManager.TWCMaster import TWCMaster
+        master = TWCMaster("AB", mock_config)
+        master.registerModule = Mock()
+        master.getModuleByName = Mock(return_value=Mock())
+        master.getModulesByType = Mock(return_value=[])
+        return master
+    
+    def test_settings_has_default_values(self, master):
+        """Test that settings contain all default values."""
+        required_defaults = [
+            "chargeNowAmps",
+            "chargeStopMode",
+            "chargeNowTimeEnd",
+            "homeLat",
+            "homeLon",
+            "hourResumeTrackGreenEnergy",
+            "kWhDelivered",
+            "nonScheduledAmpsMax",
+            "respondToSlaves",
+            "scheduledAmpsDaysBitmap",
+            "scheduledAmpsEndHour",
+            "scheduledAmpsMax",
+            "scheduledAmpsStartHour",
+            "sendServerTime",
+        ]
+        
+        for key in required_defaults:
+            assert key in master.settings, f"Settings should contain {key}"
+    
+    def test_settings_default_values_correct(self, master):
+        """Test that default settings have correct values."""
+        assert master.settings["chargeNowAmps"] == 0
+        assert master.settings["chargeStopMode"] == "1"
+        assert master.settings["chargeNowTimeEnd"] == 0
+        assert master.settings["homeLat"] == 10000
+        assert master.settings["homeLon"] == 10000
+        assert master.settings["hourResumeTrackGreenEnergy"] == -1
+        assert master.settings["kWhDelivered"] == 119
+        assert master.settings["nonScheduledAmpsMax"] == 0
+        assert master.settings["respondToSlaves"] == 1
+        assert master.settings["scheduledAmpsDaysBitmap"] == 0x7F
+        assert master.settings["scheduledAmpsEndHour"] == -1
+        assert master.settings["scheduledAmpsMax"] == 0
+        assert master.settings["scheduledAmpsStartHour"] == -1
+        assert master.settings["sendServerTime"] == 0
+    
+    def test_load_settings_with_missing_file(self, master, tmp_path):
+        """Test loadSettings when settings file doesn't exist."""
+        # Update config to use temp directory
+        master.config["config"]["settingsPath"] = str(tmp_path)
+        
+        # Call loadSettings
+        master.loadSettings()
+        
+        # Should have default settings
+        assert master.settings["chargeNowAmps"] == 0
+        assert master.settings["chargeNowTimeEnd"] == 0
+        assert "chargeStopMode" in master.settings
+    
+    def test_load_settings_merges_with_defaults(self, master, tmp_path):
+        """Test that loaded settings are merged with defaults."""
+        import json
+        import os
+        
+        # Create a settings file with partial data
+        settings_dir = tmp_path / "settings"
+        settings_dir.mkdir()
+        settings_file = settings_dir / "settings.json"
+        
+        partial_settings = {
+            "chargeNowAmps": 32,
+            "customField": "custom_value"
+        }
+        
+        with open(settings_file, "w") as f:
+            json.dump(partial_settings, f)
+        
+        # Update config
+        master.config["config"]["settingsPath"] = str(settings_dir)
+        
+        # Load settings
+        master.loadSettings()
+        
+        # Should have loaded value
+        assert master.settings["chargeNowAmps"] == 32
+        # Should have custom field
+        assert master.settings.get("customField") == "custom_value"
+        # Should have defaults for missing keys
+        assert master.settings["chargeNowTimeEnd"] == 0
+        assert master.settings["chargeStopMode"] == "1"
+    
+    def test_get_status_with_charge_now_active(self, master):
+        """Test getStatus when chargeNow is active."""
+        master.settings["chargeNowAmps"] = 32
+        master.settings["chargeNowTimeEnd"] = int(time.time()) + 3600
+        
+        # Mock required methods
+        master.getScheduledAmpsBatterySize = Mock(return_value=100)
+        master.getInterfaceModule = Mock(return_value=Mock(timeLastTx=time.time()))
+        
+        status = master.getStatus()
+        
+        assert status["chargeNowAmps"] == 32
+        assert "chargeNowTimeEnd" in status
+    
+    def test_get_status_without_charge_now(self, master):
+        """Test getStatus when chargeNow is not active."""
+        master.settings["chargeNowAmps"] = 0
+        master.settings["chargeNowTimeEnd"] = 0
+        
+        # Mock required methods
+        master.getScheduledAmpsBatterySize = Mock(return_value=100)
+        master.getInterfaceModule = Mock(return_value=Mock(timeLastTx=time.time()))
+        
+        status = master.getStatus()
+        
+        assert status.get("chargeNowAmps", 0) == 0
+        assert "chargeNowTimeEnd" not in status or status.get("chargeNowTimeEnd", 0) == 0
+    
+    def test_charge_now_sets_correct_values(self, master):
+        """Test that chargeNow sets correct settings values."""
+        master.chargeNow(32, 3600)
+        
+        assert master.settings["chargeNowAmps"] == 32
+        assert master.settings["chargeNowTimeEnd"] > time.time()
+    
+    def test_cancel_charge_now_clears_values(self, master):
+        """Test that cancelChargeNow clears settings."""
+        # First set charge now
+        master.chargeNow(32, 3600)
+        assert master.settings["chargeNowAmps"] == 32
+        
+        # Then cancel
+        master.cancelChargeNow()
+        
+        assert master.settings["chargeNowAmps"] == 0
+        assert master.settings["chargeNowTimeEnd"] == 0
+
+
+class TestSettingsEdgeCases:
+    """Test edge cases in settings handling."""
+    
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock configuration."""
+        return {
+            "config": {
+                "debugOutputToFile": False,
+                "subtractChargerLoad": False,
+                "treatGenerationAsGridDelivery": False,
+                "wiringMaxAmpsAllTWCs": 80,
+                "settingsPath": "/tmp/test_settings",
+            }
+        }
+    
+    @pytest.fixture
+    def master(self, mock_config):
+        """Create a TWCMaster instance for testing."""
+        from TWCManager.TWCMaster import TWCMaster
+        master = TWCMaster("AB", mock_config)
+        master.registerModule = Mock()
+        master.getModuleByName = Mock(return_value=Mock())
+        master.getModulesByType = Mock(return_value=[])
+        return master
+    
+    def test_charge_now_with_very_high_amps(self, master):
+        """Test chargeNow with very high amperage."""
+        master.chargeNow(200, 3600)
+        assert master.settings["chargeNowAmps"] == 200
+    
+    def test_charge_now_with_very_long_duration(self, master):
+        """Test chargeNow with very long duration."""
+        master.chargeNow(32, 86400 * 7)  # 7 days
+        assert master.settings["chargeNowTimeEnd"] > time.time() + 86400 * 6
+    
+    def test_charge_now_with_minimum_amps(self, master):
+        """Test chargeNow with minimum amperage."""
+        master.chargeNow(1, 3600)
+        assert master.settings["chargeNowAmps"] == 1
+    
+    def test_charge_now_with_minimum_duration(self, master):
+        """Test chargeNow with minimum duration."""
+        master.chargeNow(32, 60)  # 1 minute
+        assert master.settings["chargeNowTimeEnd"] > time.time()
+    
+    def test_multiple_charge_now_calls_override(self, master):
+        """Test that multiple chargeNow calls override previous values."""
+        master.chargeNow(32, 3600)
+        first_end_time = master.settings["chargeNowTimeEnd"]
+        
+        time.sleep(0.1)
+        
+        master.chargeNow(24, 7200)
+        second_end_time = master.settings["chargeNowTimeEnd"]
+        
+        assert master.settings["chargeNowAmps"] == 24
+        assert second_end_time > first_end_time
+
