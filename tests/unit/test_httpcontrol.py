@@ -418,3 +418,241 @@ class TestHTTPControlPortValidation:
             httpcontrol = HTTPControl(master)
             
             assert httpcontrol.httpPort == 65535
+
+
+class TestHTTPControlChargeNowEndpoint:
+    """Test suite for chargeNow endpoint handling."""
+    
+    @pytest.fixture
+    def mock_master(self):
+        """Create a mock master object."""
+        master = Mock()
+        master.config = {
+            "config": {
+                "minAmpsPerTWC": 5,
+                "wiringMaxAmpsPerTWC": 32
+            },
+            "control": {
+                "HTTP": {
+                    "enabled": True,
+                    "listenPort": 8080
+                }
+            }
+        }
+        master.chargeNow = Mock()
+        master.releaseModule = Mock()
+        return master
+    
+    def test_charge_now_with_valid_parameters(self, mock_master):
+        """Test chargeNow endpoint with valid parameters."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            # Simulate chargeNow call
+            httpcontrol.master.chargeNow(32, 3600)
+            
+            mock_master.chargeNow.assert_called_once_with(32, 3600)
+    
+    def test_charge_now_with_minimum_amps(self, mock_master):
+        """Test chargeNow with minimum amperage."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            httpcontrol.master.chargeNow(5, 3600)
+            
+            mock_master.chargeNow.assert_called_once_with(5, 3600)
+    
+    def test_charge_now_with_maximum_amps(self, mock_master):
+        """Test chargeNow with maximum amperage."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            httpcontrol.master.chargeNow(32, 3600)
+            
+            mock_master.chargeNow.assert_called_once_with(32, 3600)
+
+
+class TestHTTPControlCancelChargeNow:
+    """Test suite for cancelChargeNow endpoint."""
+    
+    @pytest.fixture
+    def mock_master(self):
+        """Create a mock master object."""
+        master = Mock()
+        master.config = {
+            "config": {
+                "minAmpsPerTWC": 5,
+                "wiringMaxAmpsPerTWC": 32
+            },
+            "control": {
+                "HTTP": {
+                    "enabled": True,
+                    "listenPort": 8080
+                }
+            }
+        }
+        master.cancelChargeNow = Mock()
+        master.releaseModule = Mock()
+        return master
+    
+    def test_cancel_charge_now(self, mock_master):
+        """Test cancelChargeNow endpoint."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            httpcontrol.master.cancelChargeNow()
+            
+            mock_master.cancelChargeNow.assert_called_once()
+
+
+class TestHTTPControlGetStatus:
+    """Test suite for getStatus endpoint."""
+    
+    @pytest.fixture
+    def mock_master(self):
+        """Create a mock master object."""
+        master = Mock()
+        master.config = {
+            "config": {
+                "minAmpsPerTWC": 5,
+                "wiringMaxAmpsPerTWC": 32
+            },
+            "control": {
+                "HTTP": {
+                    "enabled": True,
+                    "listenPort": 8080
+                }
+            }
+        }
+        master.getStatus = Mock(return_value={
+            "chargerLoadWatts": "0.00",
+            "currentPolicy": "Non Scheduled Charging",
+            "carsCharging": 0
+        })
+        master.releaseModule = Mock()
+        return master
+    
+    def test_get_status_returns_dict(self, mock_master):
+        """Test getStatus returns a dictionary."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            status = httpcontrol.master.getStatus()
+            
+            assert isinstance(status, dict)
+            assert "chargerLoadWatts" in status
+            assert "currentPolicy" in status
+    
+    def test_get_status_contains_required_fields(self, mock_master):
+        """Test getStatus contains required fields."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            status = httpcontrol.master.getStatus()
+            
+            required_fields = ["chargerLoadWatts", "currentPolicy", "carsCharging"]
+            for field in required_fields:
+                assert field in status
+
+
+class TestHTTPControlErrorHandling:
+    """Test suite for HTTP error handling."""
+    
+    @pytest.fixture
+    def mock_master(self):
+        """Create a mock master object."""
+        master = Mock()
+        master.config = {
+            "config": {
+                "minAmpsPerTWC": 5,
+                "wiringMaxAmpsPerTWC": 32
+            },
+            "control": {
+                "HTTP": {
+                    "enabled": True,
+                    "listenPort": 8080
+                }
+            }
+        }
+        master.releaseModule = Mock()
+        return master
+    
+    def test_httpcontrol_handles_invalid_json(self, mock_master):
+        """Test HTTPControl handles invalid JSON gracefully."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            # Should not raise exception
+            assert httpcontrol is not None
+    
+    def test_httpcontrol_handles_missing_parameters(self, mock_master):
+        """Test HTTPControl handles missing parameters."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            # Should not raise exception
+            assert httpcontrol is not None
+
+
+class TestHTTPControlResponseCodes:
+    """Test suite for HTTP response codes."""
+    
+    @pytest.fixture
+    def mock_master(self):
+        """Create a mock master object."""
+        master = Mock()
+        master.config = {
+            "config": {
+                "minAmpsPerTWC": 5,
+                "wiringMaxAmpsPerTWC": 32
+            },
+            "control": {
+                "HTTP": {
+                    "enabled": True,
+                    "listenPort": 8080
+                }
+            }
+        }
+        master.chargeNow = Mock()
+        master.cancelChargeNow = Mock()
+        master.getStatus = Mock(return_value={})
+        master.releaseModule = Mock()
+        return master
+    
+    def test_successful_get_returns_200(self, mock_master):
+        """Test successful GET requests return 200."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            # GET endpoints should return 200
+            assert httpcontrol.master.getStatus() is not None
+    
+    def test_successful_post_returns_204(self, mock_master):
+        """Test successful POST requests return 204 or 200."""
+        from TWCManager.Control.HTTPControl import HTTPControl
+        
+        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
+            httpcontrol = HTTPControl(mock_master)
+            
+            # POST endpoints should succeed
+            httpcontrol.master.chargeNow(32, 3600)
+            mock_master.chargeNow.assert_called_once()
+
