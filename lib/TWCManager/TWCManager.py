@@ -500,7 +500,10 @@ def update_statuses():
             nominalOffer = master.convertWattsToAmps(
                 genwatts
                 + (chgwatts if (subtractChargerLoad and conwatts == 0) else 0)
-                - (conwatts - (chgwatts if (subtractChargerLoad and conwatts > 0) else 0))
+                - (
+                    conwatts
+                    - (chgwatts if (subtractChargerLoad and conwatts > 0) else 0)
+                )
             )
         if abs(maxamps - nominalOffer) > 0.005:
             nominalOfferDisplay = f"{nominalOffer:.2f}A"
