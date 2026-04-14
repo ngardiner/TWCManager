@@ -106,7 +106,7 @@ class TWCProtocol:
         packet = {"Command": None, "Errors": [], "SenderID": None, "Match": False}
 
         msgMatch = re.search(
-            b"\xfc\xe1(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00+?.*\Z",
+            rb"\xfc\xe1(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00+?.*\Z",
             msg,
             re.DOTALL,
         )
@@ -139,7 +139,7 @@ class TWCProtocol:
 
         else:
             msgMatch = re.search(
-                b"\xfb\xe2(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00+?.*\Z",
+                rb"\xfb\xe2(..)(.)\x00\x00\x00\x00\x00\x00\x00\x00+?.*\Z",
                 msg,
                 re.DOTALL,
             )
@@ -167,7 +167,7 @@ class TWCProtocol:
 
             else:
                 msgMatch = re.search(
-                    b"\A\xfb\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
+                    rb"\A\xfb\xe0(..)(..)(.......+?).\Z", msg, re.DOTALL
                 )
             if msgMatch and packet["Match"] == False:
                 # Handle heartbeat message from Master.
