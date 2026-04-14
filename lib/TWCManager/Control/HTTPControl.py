@@ -480,9 +480,12 @@ def CreateHTTPHandlerClass(master):
                     master.settings["consumptionOffset"][name]["unit"] = unit
                     master.queue_background_task({"cmd": "saveSettings"})
 
-                    self.send_response(204)
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps({"status": "success", "offsetName": name, "offsetValue": value, "offsetUnit": unit}).encode("utf-8")
+                    )
 
                 else:
                     self.send_response(400)
@@ -524,15 +527,23 @@ def CreateHTTPHandlerClass(master):
                     master.setChargeNowTimeEnd(durn)
                     master.queue_background_task({"cmd": "saveSettings"})
                     master.getModuleByName("Policy").applyPolicyImmediately()
-                    self.send_response(204)
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
                     self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"status": "success", "rate": rate, "duration": durn}).encode("utf-8")
+                    )
 
             elif self.url.path == "/api/cancelChargeNow":
                 master.resetChargeNowAmps()
                 master.queue_background_task({"cmd": "saveSettings"})
                 master.getModuleByName("Policy").applyPolicyImmediately()
-                self.send_response(204)
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
                 self.end_headers()
+                self.wfile.write(
+                    json.dumps({"status": "success"}).encode("utf-8")
+                )
 
             elif self.url.path == "/api/checkArrival":
                 master.queue_background_task({"cmd": "checkArrival"})
@@ -569,8 +580,12 @@ def CreateHTTPHandlerClass(master):
                     if offset_name in master.settings["consumptionOffset"]:
                         del master.settings["consumptionOffset"][offset_name]
                         master.queue_background_task({"cmd": "saveSettings"})
-                        self.send_response(204)
+                        self.send_response(200)
+                        self.send_header("Content-type", "application/json")
                         self.end_headers()
+                        self.wfile.write(
+                            json.dumps({"status": "success", "offsetName": offset_name}).encode("utf-8")
+                        )
                     else:
                         self.send_response(404)
                         self.end_headers()
@@ -578,7 +593,7 @@ def CreateHTTPHandlerClass(master):
                             json.dumps({"error": "Offset not found"}).encode("utf-8")
                         )
                 else:
-                    self.send_response(400)
+                    self.send_response(404)
                     self.end_headers()
                     self.wfile.write(
                         json.dumps(
@@ -590,6 +605,63 @@ def CreateHTTPHandlerClass(master):
                 master.queue_background_task({"cmd": "saveSettings"})
                 self.send_response(204)
                 self.end_headers()
+
+            elif self.url.path == "/api/setPolicy":
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                    return
+
+                policy_name = data.get("policy", None)
+                
+                # Validate policy field exists and is a string
+                if policy_name is None:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": "policy field is required"}).encode("utf-8")
+                    )
+                    return
+                
+                if not isinstance(policy_name, str):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": "policy must be a string"}).encode("utf-8")
+                    )
+                    return
+                
+                if not policy_name or len(policy_name.strip()) == 0:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": "policy cannot be empty"}).encode("utf-8")
+                    )
+                    return
+                
+                # Check if policy exists
+                policy_module = master.getModuleByName("Policy")
+                if policy_module.getPolicyByName(policy_name) is None:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": f"Policy '{policy_name}' not found"}).encode("utf-8")
+                    )
+                    return
+                
+                # Set the policy
+                policy_module.active_policy = policy_name
+                master.queue_background_task({"cmd": "saveSettings"})
+                policy_module.applyPolicyImmediately()
+                
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps({"status": "success", "policy": policy_name}).encode("utf-8")
+                )
 
             elif self.url.path == "/api/sendDebugCommand":
                 success, data, error_msg = APIValidator.validate_json(self.post_data)
