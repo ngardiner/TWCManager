@@ -1123,17 +1123,23 @@ class TeslaAPI:
         # Extract code from url
         if isinstance(url, bytes):
             url = url.decode("UTF-8")
-        code = re.search(r"code=(.+)&state=(.+)", url)
+        qs = parse_qs(url.split("?", 1)[-1])
+        auth_code = qs.get("code", [None])[0]
+        auth_state = qs.get("state", [None])[0]
 
-        logger.log(logging.INFO2, "Code: " + code.group(1))
-        logger.log(logging.INFO2, "State: " + code.group(2))
+        if not auth_code:
+            logger.error("saveApiToken: no 'code' parameter found in URL")
+            return "error"
+
+        logger.log(logging.INFO2, "Code: " + auth_code)
+        logger.log(logging.INFO2, "State: " + str(auth_state))
 
         # Exchange auth code for bearer token
         headers = {"accept": "application/json", "Content-Type": "application/json"}
         data = {
             "client_id": "ownerapi",
             "grant_type": "authorization_code",
-            "code": str(code.group(1)),
+            "code": auth_code,
             "code_verifier": self.__apiVerifier.decode("UTF-8"),
             "redirect_uri": self.__callbackURL,
         }
