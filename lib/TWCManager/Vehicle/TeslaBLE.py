@@ -320,8 +320,8 @@ class TeslaBLE:
         try:
             logger.info(f"Initiating BLE pairing with vehicle {vin}")
 
-            if not self.binaryPath or not os.path.isfile(self.binaryPath):
-                logger.error("tesla-control binary not available for pairing")
+            if not self.binaryPath or not os.path.isfile(self.binaryPath) or not os.access(self.binaryPath, os.X_OK):
+                logger.error("tesla-control binary not available or not executable for pairing")
                 return False
 
             # Send public key before pairing
@@ -413,8 +413,8 @@ class TeslaBLE:
                 logger.error("sendCommand called with invalid vin or command")
                 return None
 
-            if not self.binaryPath or not os.path.isfile(self.binaryPath):
-                logger.error("tesla-control binary not available")
+            if not self.binaryPath or not os.path.isfile(self.binaryPath) or not os.access(self.binaryPath, os.X_OK):
+                logger.error("tesla-control binary not available or not executable")
                 return None
 
             # Check if vehicle exists in settings
