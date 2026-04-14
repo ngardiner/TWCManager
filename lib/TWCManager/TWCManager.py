@@ -492,11 +492,16 @@ def update_statuses():
                 extra=logExtra,
             )
 
-        nominalOffer = master.convertWattsToAmps(
-            genwatts
-            + (chgwatts if (subtractChargerLoad and conwatts == 0) else 0)
-            - (conwatts - (chgwatts if (subtractChargerLoad and conwatts > 0) else 0))
-        )
+        if treatGenerationAsGridDelivery:
+            # genwatts was already adjusted to include charger load; no further
+            # subtractChargerLoad correction needed (would double-count chgwatts)
+            nominalOffer = master.convertWattsToAmps(genwatts)
+        else:
+            nominalOffer = master.convertWattsToAmps(
+                genwatts
+                + (chgwatts if (subtractChargerLoad and conwatts == 0) else 0)
+                - (conwatts - (chgwatts if (subtractChargerLoad and conwatts > 0) else 0))
+            )
         if abs(maxamps - nominalOffer) > 0.005:
             nominalOfferDisplay = f"{nominalOffer:.2f}A"
             logger.debug(
