@@ -1616,29 +1616,57 @@ class CarApiVehicle:
             return False
 
         if result:
-            drive = response["drive_state"]
-            self.lat = drive["latitude"]
-            self.lon = drive["longitude"]
+            try:
+                drive = response["drive_state"]
+            except (KeyError, TypeError):
+                logger.error(
+                    "update_vehicle_data: drive_state missing from API response for %s"
+                    % self.VIN
+                )
+                return False
+
+            try:
+                charge = response["charge_state"]
+            except (KeyError, TypeError):
+                logger.error(
+                    "update_vehicle_data: charge_state missing from API response for %s"
+                    % self.VIN
+                )
+                return False
+
+            try:
+                self.lat = drive["latitude"]
+                self.lon = drive["longitude"]
+            except (KeyError, TypeError):
+                logger.error(
+                    "update_vehicle_data: latitude/longitude missing from drive_state for %s"
+                    % self.VIN
+                )
+                return False
+
             self.atHome = self.carapi.is_location_home(self.lat, self.lon)
 
-            charge = response["charge_state"]
-            self.chargeLimit = charge["charge_limit_soc"]
-            self.batteryLevel = charge["battery_level"]
-            self.timeToFullCharge = charge["time_to_full_charge"]
+            self.chargeLimit = charge.get("charge_limit_soc", self.chargeLimit)
+            self.batteryLevel = charge.get("battery_level", self.batteryLevel)
+            self.timeToFullCharge = charge.get("time_to_full_charge", self.timeToFullCharge)
 
-            self.name = response["vehicle_state"]["vehicle_name"] or self.name
-            self.availableCurrent = charge["charger_pilot_current"]
-            self.actualCurrent = charge["charger_actual_current"]
-            self.phases = charge["charger_phases"]
-            self.voltage = charge["charger_voltage"]
-            self.chargingState = charge["charging_state"]
+            try:
+                self.name = response["vehicle_state"]["vehicle_name"] or self.name
+            except (KeyError, TypeError):
+                pass
+
+            self.availableCurrent = charge.get("charger_pilot_current", self.availableCurrent)
+            self.actualCurrent = charge.get("charger_actual_current", self.actualCurrent)
+            self.phases = charge.get("charger_phases", self.phases)
+            self.voltage = charge.get("charger_voltage", self.voltage)
+            self.chargingState = charge.get("charging_state", self.chargingState)
 
             if not self.atHome:
                 if self.carapi.is_far_from_home(self.lat, self.lon):
                     # Car is further from home than can be driven in an
                     # hour; no point re-checking sooner than that.
                     self.statusDeferral = now + 3600
-                elif drive["shift_state"] == "P" or drive["shift_state"] is None:
+                elif drive.get("shift_state") == "P" or drive.get("shift_state") is None:
                     # Car is not driving, so we can check infrequently. May
                     # be able to sleep.
                     self.statusDeferral = now + 1800
