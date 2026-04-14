@@ -50,7 +50,7 @@ jobs:
             MYSQL_USER: twcmanager
             MYSQL_PASSWORD: twcmanager
           options: >-
-            --health-cmd="mysqladmin ping -u root -proot"
+            --health-cmd="healthcheck.sh --connect --innodb_initialized"
             --health-interval=5s
             --health-timeout=10s
             --health-retries=10
