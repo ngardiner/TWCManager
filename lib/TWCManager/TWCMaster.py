@@ -1483,7 +1483,7 @@ class TWCMaster:
                 )
 
     def setAllowedFlex(self, amps):
-        self.allowedFlex = amps if amps >= 0 else 0
+        self.allowed_flex = amps if amps >= 0 else 0
 
     def setChargeNowAmps(self, amps):
         # Accepts a number of amps to define the amperage at which we
