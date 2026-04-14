@@ -129,9 +129,20 @@ class TeslaBLE:
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
             self.binaryPath = "/home/twcmanager/gobin/tesla-control"
 
-        # Check that binary exists, otherwise unload
+        # Check that binary exists and is executable, otherwise unload
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
-            logger.error("tesla-control binary not found - BLE module will be disabled")
+            logger.error(
+                "tesla-control binary not found - BLE module will be disabled. "
+                "Set vehicle.teslaBLE.enabled=false in config to suppress this module."
+            )
+            self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
+            return
+        elif not os.access(self.binaryPath, os.X_OK):
+            logger.error(
+                f"tesla-control binary at {self.binaryPath} is not executable - "
+                "BLE module will be disabled. Check file permissions or set "
+                "vehicle.teslaBLE.enabled=false in config to suppress this module."
+            )
             self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
             return
         else:
