@@ -103,6 +103,10 @@ jobs:
             echo ""
             echo "=== Port Status ===" && netstat -tlnp 2>/dev/null | grep 8088 || echo "Port 8088 not listening"
             echo ""
+            echo "=== MariaDB Status ===" && netstat -tlnp 2>/dev/null | grep 3306 || echo "Port 3306 not listening"
+            echo ""
+            echo "=== MariaDB Connection Test ===" && mysql -h 127.0.0.1 -u twcmanager -ptwcmanager -e "SELECT 1" 2>&1 || echo "MariaDB connection failed"
+            echo ""
             echo "=== Directory Contents ===" && ls -la /tmp/twcmanager/ 2>/dev/null || echo "Directory not found"
 
         - name: Upload test results
