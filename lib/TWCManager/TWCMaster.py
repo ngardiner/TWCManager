@@ -291,7 +291,7 @@ class TWCMaster:
         self.backgroundTasksQueue.task_done()
 
     def getAllowedFlex(self):
-        return self.allowedFlex
+        return self.allowed_flex
 
     def getBackgroundTask(self):
         result = None

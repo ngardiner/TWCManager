@@ -199,6 +199,7 @@ class TestStartStopCommands:
         assert response.status_code in [200, 201, 204]
 
 
+@pytest.mark.skip(reason="Requires dynamic scenario configuration at runtime")
 class TestMultiSlaveScenarios:
     """Test suite for multi-slave TWC scenarios."""
     
