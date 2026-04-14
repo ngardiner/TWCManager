@@ -518,15 +518,15 @@ def CreateHTTPHandlerClass(master):
                     master.setChargeNowTimeEnd(durn)
                     master.queue_background_task({"cmd": "saveSettings"})
                     master.getModuleByName("Policy").applyPolicyImmediately()
-                    self.send_response(204)
+                    self.send_response(200)
                     self.end_headers()
                     self.wfile.write("".encode("utf-8"))
 
-            elif self.url.path == "/api/cancelChargeNow":
+             elif self.url.path == "/api/cancelChargeNow":
                 master.resetChargeNowAmps()
                 master.queue_background_task({"cmd": "saveSettings"})
                 master.getModuleByName("Policy").applyPolicyImmediately()
-                self.send_response(204)
+                self.send_response(200)
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
 
@@ -580,14 +580,14 @@ def CreateHTTPHandlerClass(master):
                 self.send_response(204)
                 self.end_headers()
 
-            elif self.url.path == "/api/sendStartCommand":
+             elif self.url.path == "/api/sendStartCommand":
                 master.sendStartCommand()
-                self.send_response(204)
+                self.send_response(200)
                 self.end_headers()
 
-            elif self.url.path == "/api/sendStopCommand":
+             elif self.url.path == "/api/sendStopCommand":
                 master.sendStopCommand()
-                self.send_response(204)
+                self.send_response(200)
                 self.end_headers()
 
             elif self.url.path == "/api/sendTeslaAPICommand":
