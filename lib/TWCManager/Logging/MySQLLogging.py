@@ -193,8 +193,16 @@ class MySQLLogging:
             self.configLogging = {}
         self.status = self.configLogging.get("enabled", False)
 
+        logger.info("MySQLLogging: Initializing (enabled=%s)", self.status)
+
         # Unload if this module is disabled or misconfigured
-        if not self.status or not self.configLogging.get("host", None):
+        if not self.status:
+            logger.info("MySQLLogging: Disabled in config, unloading")
+            self.master.releaseModule("lib.TWCManager.Logging", "MySQLLogging")
+            return None
+        
+        if not self.configLogging.get("host", None):
+            logger.error("MySQLLogging: No host configured, unloading")
             self.master.releaseModule("lib.TWCManager.Logging", "MySQLLogging")
             return None
 
@@ -206,6 +214,12 @@ class MySQLLogging:
         global pymysql
         import pymysql
 
+        logger.info("MySQLLogging: Attempting connection to %s:%s@%s/%s",
+                   self.configLogging.get("username", ""),
+                   "***",
+                   self.configLogging.get("host", ""),
+                   self.configLogging.get("database", ""))
+        
         try:
             self.db = pymysql.connect(
                 host=self.configLogging.get("host", ""),
@@ -214,13 +228,23 @@ class MySQLLogging:
                 password=self.configLogging.get("password", ""),
                 database=self.configLogging.get("database", ""),
             )
+            logger.info("MySQLLogging: ✓ Successfully connected to MySQL database")
         except pymysql.err.OperationalError as e:
-            logger.info("Error connecting to MySQL database")
-            logger.info(str(e))
-        else:
+            logger.error("MySQLLogging: ✗ Failed to connect to MySQL database")
+            logger.error("MySQLLogging: Error details: %s", str(e))
+            return None
+        except Exception as e:
+            logger.error("MySQLLogging: ✗ Unexpected error connecting to MySQL: %s", str(e))
+            return None
+        
+        try:
             mysql_handler = MySQLHandler(db=self.db)
             mysql_handler.addFilter(self.mysql_filter)
             logging.getLogger("").addHandler(mysql_handler)
+            logger.info("MySQLLogging: ✓ MySQL logging handler installed")
+        except Exception as e:
+            logger.error("MySQLLogging: ✗ Failed to install MySQL logging handler: %s", str(e))
+            return None
 
     def getCapabilities(self, capability):
         # Allows query of module capabilities when deciding which Logging module to use
