@@ -4,10 +4,27 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
 
-## v1.3.4 - 2026-04-14
+## v1.3.4 - 2026-04-15
+* Features
+    * Implement missing API endpoints: `setPolicy`, `setLatLon`, `setConsumptionOffset`
+    * Add centralized API input validation (`APIValidator`) across all endpoints
 * Bugfixes
     * Fix SyntaxWarning (`is` with literal) in TeslaPowerwall2 cloud data fetch
     * Fix invalid escape sequence (`\Z`) in TWCProtocol regex byte string (Python 3.12 compatibility)
+    * Fix HTTP status codes in API endpoints (correct 200/400/404 responses)
+    * Fix `/api/chargeNow` and `/api/cancelChargeNow` to return proper HTTP responses
+    * Fix `'bool' object is not callable` in `VehiclePriority.enabled()` — instance attribute was shadowing the method in TeslaBLE, TeslaAPI, and HomeAssistant vehicle modules
+    * Add `fsync` before atomic rename in `saveSettings()` to prevent partial writes surviving a power loss
+    * Reduce module loading log noise (INFO → DEBUG level)
+    * Fix: Debounce charge session end to avoid false stops on startup (closes #156)
+    * Fix: Avoid double-counting charger watts in `nominalOffer` when `treatGenerationAsGridDelivery` is set (closes #523)
+    * Fix: Use `parse_qs` instead of regex for OAuth callback URL parsing (closes #566)
+    * Fix: Add `slave_status` logging to MySQL and SQLite emit handlers (closes #539)
+    * Fix: Unload MySQLLogging module on connection failure to prevent cascading errors (closes #579)
+    * Fix: Guard against missing `drive_state`/`charge_state` keys in TeslaAPI vehicle response (closes #537)
+    * Fix: Disable TeslaBLE module when `tesla-control` binary is not executable (closes #610)
+    * Fix: Protocol module type handling for `CustomCommand`
+    * Update Docker documentation for Compose V2 and modern Raspberry Pi OS
 
 ## v1.3.3 - 2026-04-13
 * (@MikeBishop) - Improve home location detection when vehicle is charging via TWC
