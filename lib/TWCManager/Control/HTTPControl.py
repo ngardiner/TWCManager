@@ -671,6 +671,73 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
 
+            elif self.url.path == "/api/setLatLon":
+                data = {}
+                try:
+                    data = json.loads(self.post_data.decode("UTF-8"))
+                except (ValueError, UnicodeDecodeError, json.decoder.JSONDecodeError):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
+                    return
+
+                lat = data.get("lat", None)
+                lon = data.get("lon", None)
+
+                if lat is not None and lon is not None:
+                    try:
+                        lat = float(lat)
+                        lon = float(lon)
+                        # Validate latitude and longitude ranges
+                        if -90 <= lat <= 90 and -180 <= lon <= 180:
+                            master.settings["homeLat"] = lat
+                            master.settings["homeLon"] = lon
+                            master.queue_background_task({"cmd": "saveSettings"})
+                            self.send_response(204)
+                            self.end_headers()
+                            self.wfile.write("".encode("utf-8"))
+                        else:
+                            self.send_response(400)
+                            self.end_headers()
+                            self.wfile.write("".encode("utf-8"))
+                    except (ValueError, TypeError):
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write("".encode("utf-8"))
+                else:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
+
+            elif self.url.path == "/api/setConsumptionOffset":
+                data = {}
+                try:
+                    data = json.loads(self.post_data.decode("UTF-8"))
+                except (ValueError, UnicodeDecodeError, json.decoder.JSONDecodeError):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
+                    return
+
+                offset = data.get("offset", None)
+
+                if offset is not None:
+                    try:
+                        offset = float(offset)
+                        master.settings["greenEnergyAmpsOffset"] = offset
+                        master.queue_background_task({"cmd": "saveSettings"})
+                        self.send_response(204)
+                        self.end_headers()
+                        self.wfile.write("".encode("utf-8"))
+                    except (ValueError, TypeError):
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write("".encode("utf-8"))
+                else:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
+
             else:
                 # All other routes missed, return 404
                 self.send_response(404)

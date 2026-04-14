@@ -130,7 +130,6 @@ class TestPolicyEngine:
         assert data is not None, "Active policy response should not be empty"
 
 
-@pytest.mark.skip(reason="Endpoint not yet implemented in HTTPControl")
 class TestLocationSettings:
     """Test suite for location-based settings."""
     
@@ -149,7 +148,6 @@ class TestLocationSettings:
             f"Setting lat/lon should succeed, got {response.status_code}"
 
 
-@pytest.mark.skip(reason="Endpoint not yet implemented in HTTPControl")
 class TestConsumptionOffsets:
     """Test suite for consumption offset functionality."""
     
