@@ -39,15 +39,20 @@ class TWCProtocol:
             # Send a custom command. This can be dangerous!
 
             # Let's first check if any dangerous command is sent
-            if packet["CustomCommand"].lower().startswith("fc19") or packet[
-                "CustomCommand"
-            ].lower().startswith("fc1a"):
+            # Convert CustomCommand to string for comparison if it's bytes
+            custom_cmd = packet["CustomCommand"]
+            if isinstance(custom_cmd, bytearray):
+                custom_cmd = custom_cmd.decode("utf-8", errors="ignore")
+            
+            custom_cmd_lower = custom_cmd.lower()
+            
+            if custom_cmd_lower.startswith("fc19") or custom_cmd_lower.startswith("fc1a"):
                 self.master.lastTWCResponseMsg = bytearray(
                     b"Command blocked as it may cause your TWC to be permanently disabled!"
                 )
                 return
 
-            if packet["CustomCommand"].lower().startswith("fbe8"):
+            if custom_cmd_lower.startswith("fbe8"):
                 self.master.lastTWCResponseMsg = bytearray(
                     b"Command blocked as it may cause your TWC to crash!"
                 )
