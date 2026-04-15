@@ -902,6 +902,36 @@ class TeslaBLE:
             logger.warning(f"Error killing process group: {e}")
             return False
 
+    def _get_dbus_session_pids(self):
+        """Return the set of dbus-daemon --session PIDs owned by this process's UID."""
+        pids = set()
+        uid = os.getuid()
+        try:
+            for entry in os.scandir("/proc"):
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    if os.stat(f"/proc/{entry.name}/status").st_uid != uid:
+                        continue
+                    with open(f"/proc/{entry.name}/cmdline", "rb") as f:
+                        cmdline = f.read().decode("utf-8", errors="replace")
+                    if "dbus-daemon" in cmdline and "--session" in cmdline:
+                        pids.add(int(entry.name))
+                except (FileNotFoundError, PermissionError, ValueError):
+                    continue
+        except Exception:
+            pass
+        return pids
+
+    def _kill_dbus_orphans(self, pids_before):
+        """Kill any dbus-daemon --session processes spawned since pids_before was taken."""
+        for pid in self._get_dbus_session_pids() - pids_before:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                logger.debug(f"Killed orphaned dbus-daemon PID {pid}")
+            except (ProcessLookupError, PermissionError):
+                pass
+
     def _run_command_with_timeout(
         self, command_string, timeout, use_process_group=True
     ):
@@ -927,6 +957,11 @@ class TeslaBLE:
                 f"Running command with {timeout}s timeout: {' '.join(command_string[:3])}..."
             )
 
+            # Snapshot dbus-daemon sessions before launch so we can clean up
+            # any that tesla-control spawns via dbus-launch (they daemonize and
+            # outlive the tesla-control process otherwise).
+            dbus_pids_before = self._get_dbus_session_pids()
+
             result = subprocess.Popen(
                 command_string,
                 stdout=subprocess.PIPE,
@@ -940,6 +975,7 @@ class TeslaBLE:
                 return_code = result.returncode
 
                 logger.debug(f"Command completed with return code {return_code}")
+                self._kill_dbus_orphans(dbus_pids_before)
                 return stdout, stderr, return_code
 
             except subprocess.TimeoutExpired:
@@ -974,6 +1010,7 @@ class TeslaBLE:
                 except Exception as e:
                     logger.error(f"Error terminating process: {e}")
 
+                self._kill_dbus_orphans(dbus_pids_before)
                 return None, None, None
 
         except Exception as e:
