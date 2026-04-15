@@ -108,6 +108,15 @@ class TeslaBLE:
         # Retry statistics tracking
         self.retry_stats = {}
 
+        # Persistent D-Bus session daemon shared across all tesla-control calls.
+        # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
+        # absent from the environment. By starting one daemon here and passing its
+        # address to every subprocess, we prevent tesla-control's internal
+        # dbus-launch from spawning a new daemon on each invocation.
+        self._dbus_session_address = None
+        self._dbus_session_pid = None
+        self._start_dbus_session()
+
         logger.info(
             f"BLE module initialized with timeout={self.commandTimeout}s, retries={self.maxRetries}, "
             f"circuit_breaker_threshold={circuit_breaker_threshold}"
@@ -902,35 +911,54 @@ class TeslaBLE:
             logger.warning(f"Error killing process group: {e}")
             return False
 
-    def _get_dbus_session_pids(self):
-        """Return the set of dbus-daemon --session PIDs owned by this process's UID."""
-        pids = set()
-        uid = os.getuid()
-        try:
-            for entry in os.scandir("/proc"):
-                if not entry.name.isdigit():
-                    continue
-                try:
-                    if os.stat(f"/proc/{entry.name}/status").st_uid != uid:
-                        continue
-                    with open(f"/proc/{entry.name}/cmdline", "rb") as f:
-                        cmdline = f.read().decode("utf-8", errors="replace")
-                    if "dbus-daemon" in cmdline and "--session" in cmdline:
-                        pids.add(int(entry.name))
-                except (FileNotFoundError, PermissionError, ValueError):
-                    continue
-        except Exception:
-            pass
-        return pids
+    def _start_dbus_session(self):
+        """Start a single persistent D-Bus session daemon for this module instance.
 
-    def _kill_dbus_orphans(self, pids_before):
-        """Kill any dbus-daemon --session processes spawned since pids_before was taken."""
-        for pid in self._get_dbus_session_pids() - pids_before:
+        Parses the output of dbus-launch --sh-syntax to obtain the bus address
+        and daemon PID, then stores them for use by all subprocess invocations.
+        If dbus-launch is unavailable the module continues without a managed
+        session (tesla-control will still work, but may still accumulate daemons).
+        """
+        dbus_launch = shutil.which("dbus-launch")
+        if not dbus_launch:
+            logger.debug("dbus-launch not found; skipping persistent D-Bus session setup")
+            return
+        try:
+            result = subprocess.run(
+                [dbus_launch, "--sh-syntax"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            )
+            for line in result.stdout.decode(errors="replace").splitlines():
+                line = line.strip().rstrip(";")
+                if line.startswith("DBUS_SESSION_BUS_ADDRESS="):
+                    self._dbus_session_address = line.split("=", 1)[1].strip("'\"")
+                elif line.startswith("DBUS_SESSION_BUS_PID="):
+                    try:
+                        self._dbus_session_pid = int(line.split("=", 1)[1].strip("'\""))
+                    except ValueError:
+                        pass
+            if self._dbus_session_address:
+                logger.debug(
+                    f"D-Bus session started (PID {self._dbus_session_pid}): "
+                    f"{self._dbus_session_address}"
+                )
+            else:
+                logger.warning("dbus-launch ran but produced no DBUS_SESSION_BUS_ADDRESS")
+        except Exception as e:
+            logger.warning(f"Could not start persistent D-Bus session: {e}")
+
+    def _stop_dbus_session(self):
+        """Terminate the persistent D-Bus session daemon started by this module."""
+        if self._dbus_session_pid:
             try:
-                os.kill(pid, signal.SIGTERM)
-                logger.debug(f"Killed orphaned dbus-daemon PID {pid}")
+                os.kill(self._dbus_session_pid, signal.SIGTERM)
+                logger.debug(f"Terminated D-Bus session daemon PID {self._dbus_session_pid}")
             except (ProcessLookupError, PermissionError):
                 pass
+            self._dbus_session_pid = None
+            self._dbus_session_address = None
 
     def _run_command_with_timeout(
         self, command_string, timeout, use_process_group=True
@@ -957,16 +985,19 @@ class TeslaBLE:
                 f"Running command with {timeout}s timeout: {' '.join(command_string[:3])}..."
             )
 
-            # Snapshot dbus-daemon sessions before launch so we can clean up
-            # any that tesla-control spawns via dbus-launch (they daemonize and
-            # outlive the tesla-control process otherwise).
-            dbus_pids_before = self._get_dbus_session_pids()
+            # Pass the persistent D-Bus session address so that tesla-control's
+            # internal dbus-launch sees DBUS_SESSION_BUS_ADDRESS already set and
+            # skips spawning a new daemon.
+            env = os.environ.copy()
+            if self._dbus_session_address:
+                env["DBUS_SESSION_BUS_ADDRESS"] = self._dbus_session_address
 
             result = subprocess.Popen(
                 command_string,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 preexec_fn=preexec_fn,
+                env=env,
             )
 
             try:
@@ -975,7 +1006,6 @@ class TeslaBLE:
                 return_code = result.returncode
 
                 logger.debug(f"Command completed with return code {return_code}")
-                self._kill_dbus_orphans(dbus_pids_before)
                 return stdout, stderr, return_code
 
             except subprocess.TimeoutExpired:
@@ -1010,7 +1040,6 @@ class TeslaBLE:
                 except Exception as e:
                     logger.error(f"Error terminating process: {e}")
 
-                self._kill_dbus_orphans(dbus_pids_before)
                 return None, None, None
 
         except Exception as e:
@@ -1126,6 +1155,9 @@ class TeslaBLE:
         # Called by TWCMaster when settings are read/updated
         self.scanForVehicles()
         return True
+
+    def __del__(self):
+        self._stop_dbus_session()
 
     def isDocker(self):
         if self.isDockerCached is not None:
