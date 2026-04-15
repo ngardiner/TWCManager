@@ -921,7 +921,9 @@ class TeslaBLE:
         """
         dbus_launch = shutil.which("dbus-launch")
         if not dbus_launch:
-            logger.debug("dbus-launch not found; skipping persistent D-Bus session setup")
+            logger.debug(
+                "dbus-launch not found; skipping persistent D-Bus session setup"
+            )
             return
         try:
             result = subprocess.run(
@@ -945,7 +947,9 @@ class TeslaBLE:
                     f"{self._dbus_session_address}"
                 )
             else:
-                logger.warning("dbus-launch ran but produced no DBUS_SESSION_BUS_ADDRESS")
+                logger.warning(
+                    "dbus-launch ran but produced no DBUS_SESSION_BUS_ADDRESS"
+                )
         except Exception as e:
             logger.warning(f"Could not start persistent D-Bus session: {e}")
 
@@ -954,7 +958,9 @@ class TeslaBLE:
         if self._dbus_session_pid:
             try:
                 os.kill(self._dbus_session_pid, signal.SIGTERM)
-                logger.debug(f"Terminated D-Bus session daemon PID {self._dbus_session_pid}")
+                logger.debug(
+                    f"Terminated D-Bus session daemon PID {self._dbus_session_pid}"
+                )
             except (ProcessLookupError, PermissionError):
                 pass
             self._dbus_session_pid = None
