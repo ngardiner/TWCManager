@@ -4,6 +4,14 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming
 
+* Architecture
+    * **TWC abstraction layer** — EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
+        * `EVSEController` / `EVSEInstance` abstract base classes define the charging-point contract
+        * `Gen2TWC` extends `TWCSlave` with the `EVSEInstance` interface; `Gen2TWCs` wraps the slave registry as an `EVSEController`
+        * `TeslaAPIController` / `TeslaAPIEVSE` expose API-accessible vehicles through the same interface; instances cached by VIN (fixes object-recreation bug in original PR)
+        * `MergedEVSE` deduplicates vehicles visible through multiple controllers (e.g. plugged into a TWC *and* reachable via API); fixes zip-on-empty-list edge case from original PR
+        * Centralized watt-based power distribution (`TWCMaster.distributeEVSEPower`) replaces per-slave fair-share amps calculation when `TeslaAPIController` is active; falls back to existing heartbeat distribution for Gen2-only deployments
+
 ## v1.3.4 - 2026-04-15
 * Features
     * Implement missing API endpoints: `setPolicy`, `setLatLon`, `setConsumptionOffset`
