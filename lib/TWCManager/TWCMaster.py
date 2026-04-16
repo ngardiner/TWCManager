@@ -1,6 +1,6 @@
 #! /usr/bin/python3
 
-from TWCManager.TWCSlave import TWCSlave
+from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
 from datetime import datetime, timedelta
 import json
 import logging
