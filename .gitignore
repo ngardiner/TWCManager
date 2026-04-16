@@ -6,6 +6,8 @@ TWCManager.egg-info/
 .idea/
 venv/
 .DS_Store
-CLAUDE.md
+# Root-level markdown files (scratch notes, plans, CLAUDE.md, etc.)
+# Does not affect docs/ or any subdirectory
+/*.md
 .coverage
 test-results/
