@@ -106,7 +106,9 @@ class TeslaAPIEVSE(EVSEInstance):
 
     @property
     def maxPower(self) -> float:
-        return self.convertAmpsToWatts(self.vehicle.availableCurrent, self.currentVoltage)
+        return self.convertAmpsToWatts(
+            self.vehicle.availableCurrent, self.currentVoltage
+        )
 
     # ------------------------------------------------------------------
     # EVSEInstance: optional properties

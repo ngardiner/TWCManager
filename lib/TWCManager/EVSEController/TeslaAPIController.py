@@ -67,9 +67,7 @@ class TeslaAPIController(EVSEController):
         # Add newly arrived vehicles to cache
         for vehicle in vehicles_at_home:
             if vehicle.VIN not in self._evse_cache:
-                self._evse_cache[vehicle.VIN] = TeslaAPIEVSE(
-                    vehicle, self, self.master
-                )
+                self._evse_cache[vehicle.VIN] = TeslaAPIEVSE(vehicle, self, self.master)
 
         return list(self._evse_cache.values())
 
