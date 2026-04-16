@@ -1,5 +1,6 @@
 #! /usr/bin/python3
 
+from TWCManager.EVSEController.Gen2TWCs import Gen2TWCs
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
 from datetime import datetime, timedelta
 import json
@@ -98,6 +99,12 @@ class TWCMaster:
 
         # Register ourself as a module, allows lookups via the Module architecture
         self.registerModule({"name": "master", "ref": self, "type": "Master"})
+
+        # Register the Gen2TWCs EVSEController so power distribution can
+        # discover RS485 slaves through the unified EVSEController interface
+        self.registerModule(
+            {"name": "Gen2TWCs", "ref": Gen2TWCs(self), "type": "EVSEController"}
+        )
 
     def addkWhDelivered(self, kWh):
         self.settings["kWhDelivered"] = self.settings.get("kWhDelivered", 0) + kWh
@@ -412,6 +419,43 @@ class TWCMaster:
                     }
                 )
         return matched
+
+    def getAllEVSEs(self) -> list:
+        """Return all EVSEInstance objects from every registered EVSEController."""
+        evses = []
+        for module in self.getModulesByType("EVSEController"):
+            evses.extend(module["ref"].allEVSEs)
+        return evses
+
+    def getDedupedEVSEs(self) -> list:
+        """Return EVSEInstances deduplicated by VIN.
+
+        When the same vehicle appears in multiple controllers (e.g. plugged into
+        a Gen2 TWC *and* accessible via the Tesla API), a MergedEVSE proxy is
+        returned in place of the individual instances so the power distribution
+        loop allocates power to the vehicle exactly once.
+        """
+        from TWCManager.EVSEInstance.MergedEVSE import MergedEVSE
+
+        all_evses = self.getAllEVSEs()
+        by_vin: dict = {}
+        no_vin: list = []
+
+        for evse in all_evses:
+            vin = evse.currentVIN
+            if vin:
+                by_vin.setdefault(vin, []).append(evse)
+            else:
+                no_vin.append(evse)
+
+        result = []
+        for evses in by_vin.values():
+            if len(evses) == 1:
+                result.append(evses[0])
+            else:
+                result.append(MergedEVSE(self, *evses))
+        result.extend(no_vin)
+        return result
 
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]
