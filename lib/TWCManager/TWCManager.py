@@ -727,6 +727,24 @@ logger.info(
 )
 logger.info("=" * 70)
 
+# Auto-register TeslaAPIController when TeslaAPI is available.
+# This enables the centralized watt-based power distribution across both
+# Gen2 TWC slaves and Tesla API vehicles (Phase 4, ported from #483).
+if master.getModuleByName("TeslaAPI") is not None:
+    try:
+        from TWCManager.EVSEController.TeslaAPIController import TeslaAPIController
+
+        master.registerModule(
+            {
+                "name": "TeslaAPIController",
+                "ref": TeslaAPIController(master),
+                "type": "EVSEController",
+            }
+        )
+        logger.info("Registered TeslaAPIController EVSEController")
+    except Exception as _e:
+        logger.warning("Could not register TeslaAPIController: %s", _e)
+
 
 # Load settings from file
 master.loadSettings()
@@ -796,6 +814,11 @@ while True:
                 if time.time() - master.getTimeLastTx() >= 1.0:
                     # It's been about a second since our last heartbeat.
                     if master.countSlaveTWC() > 0:
+                        # Run centralized EVSE power distribution once per
+                        # full round-robin cycle (when index wraps to 0).
+                        if idxSlaveToSendNextHeartbeat == 0:
+                            master.distributeEVSEPower()
+
                         slaveTWC = master.getSlaveTWC(idxSlaveToSendNextHeartbeat)
                         if time.time() - slaveTWC.timeLastRx > config.get(
                             "interfaces", {}

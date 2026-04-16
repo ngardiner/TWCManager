@@ -457,6 +457,98 @@ class TWCMaster:
         result.extend(no_vin)
         return result
 
+    def distributeEVSEPower(self) -> None:
+        """Centralized watt-based power distribution across all EVSE types.
+
+        Replaces the per-slave fair-share amps calculation in send_master_heartbeat
+        with a controller-agnostic algorithm that treats Gen2 TWC devices and
+        Tesla API vehicles uniformly.  After this method runs:
+        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it.
+        - TeslaAPIEVSE.setTargetPower() has been called (→ setChargeRate API call).
+
+        Only runs when at least one EVSEController is registered (i.e. the new
+        infrastructure is active).  Falls back gracefully to the existing per-slave
+        heartbeat distribution when no controllers other than Gen2TWCs are registered.
+
+        Ported from ngardiner/TWCManager#483 (MikeBishop).
+        """
+        controllers = self.getModulesByType("EVSEController")
+        if not controllers:
+            return
+
+        # Only activate the centralized distributor when TeslaAPIController is
+        # present — otherwise the existing per-slave heartbeat logic is sufficient
+        # and more battle-tested for pure Gen2 deployments.
+        non_gen2 = [c for c in controllers if c["name"] != "Gen2TWCs"]
+        if not non_gen2:
+            return
+
+        evses = self.getDedupedEVSEs()
+        wants_power = [e for e in evses if e.wantsToCharge and not e.isReadOnly]
+
+        if not wants_power:
+            for evse in evses:
+                if not evse.isReadOnly:
+                    evse.setTargetPower(0)
+            return
+
+        # Total watts available from EMS/policy
+        cfg = self.config["config"]
+        voltage = cfg.get("defaultVoltage", 240)
+        phases = cfg.get("numberOfPhases", 1)
+        available_watts = self.getMaxAmpsToDivideAmongSlaves() * voltage * phases
+
+        # Per-controller remaining power budgets and EVSE counts
+        controller_budgets: dict = {}
+        controller_counts: dict = {}
+        for mod in controllers:
+            name = mod["name"]
+            controller_budgets[name] = mod["ref"].maxPower
+            controller_counts[name] = sum(
+                1 for e in wants_power if name in e.controllers
+            )
+
+        # Fair-share distribution — sort ascending by maxPower so the most
+        # constrained EVSEs are served first, reducing wasted capacity.
+        remaining_watts = available_watts
+        pending = sorted(wants_power, key=lambda e: e.maxPower)
+
+        for evse in pending:
+            if not pending:
+                break
+            fair_share = remaining_watts / len(pending)
+
+            # Constrain by EVSE capacity
+            offer = min(fair_share, evse.maxPower)
+
+            # Constrain by controller budgets
+            for ctrl_name in evse.controllers:
+                count = controller_counts.get(ctrl_name, 0)
+                if count > 0 and ctrl_name in controller_budgets:
+                    offer = min(offer, controller_budgets[ctrl_name] / count)
+
+            # Enforce minimum: offer nothing rather than an unusably small amount
+            if 0 < offer < evse.minPower:
+                offer = 0
+
+            evse.setTargetPower(offer)
+
+            # Update accounting
+            remaining_watts -= offer
+            for ctrl_name in evse.controllers:
+                if ctrl_name in controller_budgets:
+                    controller_budgets[ctrl_name] -= offer
+                if ctrl_name in controller_counts:
+                    controller_counts[ctrl_name] = max(
+                        0, controller_counts[ctrl_name] - 1
+                    )
+            pending.remove(evse)
+
+        # Zero out EVSEs that don't want power
+        for evse in evses:
+            if evse not in wants_power and not evse.isReadOnly:
+                evse.setTargetPower(0)
+
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]
 

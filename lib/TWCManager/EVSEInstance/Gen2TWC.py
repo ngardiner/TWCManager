@@ -26,6 +26,11 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         self._gen2_isCharging = 0
         self._gen2_currentVIN = ""
 
+        # Per-EVSE amps target set by distributeEVSEPower() (Phase 4).
+        # When not None, send_master_heartbeat() uses this value directly
+        # instead of recomputing the per-car fair share.
+        self._evseTargetAmps = None
+
         TWCSlave.__init__(self, TWCID, maxAmps, config, master)
 
     # ------------------------------------------------------------------
@@ -126,13 +131,15 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     # ------------------------------------------------------------------
 
     def setTargetPower(self, watts: float) -> None:
-        """Convert watts to amps and record as desired charge current.
+        """Convert watts to amps and store as the centralized amps target.
 
-        The existing heartbeat logic in send_master_heartbeat() will pick up
-        lastAmpsDesired and translate it into a protocol command to the slave.
+        Sets ``_evseTargetAmps`` which send_master_heartbeat() picks up in
+        place of the per-car fair-share calculation, giving the centralized
+        distributor full control over this slave's charge rate.
         """
         amps = self.convertWattsToAmps(watts, self.currentVoltage)
-        self.lastAmpsDesired = amps
+        self._evseTargetAmps = amps
+        self.lastAmpsDesired = amps  # kept for compatibility / logging
 
     def startCharging(self) -> None:
         """Charging start is managed by the RS485 heartbeat cycle."""

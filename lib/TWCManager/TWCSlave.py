@@ -698,8 +698,34 @@ class TWCSlave:
 
         # Determine how many cars are charging and how many amps they're using
         numCarsCharging = self.master.num_cars_charging_now()
-        desiredAmpsOffered = self.master.getMaxAmpsToDivideAmongSlaves()
-        flex = self.master.getAllowedFlex()
+
+        # Phase 4: if the centralized EVSE power distributor has pre-computed a
+        # per-EVSE target (via Gen2TWC.setTargetPower), use it directly and skip
+        # the per-car fair-share calculation below.  All downstream logic (6A
+        # spike workaround, dampen, timing guards, send) still applies.
+        _centralized_target = getattr(self, "_evseTargetAmps", None)
+        if _centralized_target is not None:
+            desiredAmpsOffered = _centralized_target
+            flex = 0
+        else:
+            desiredAmpsOffered = self.master.getMaxAmpsToDivideAmongSlaves()
+            flex = self.master.getAllowedFlex()
+
+            if numCarsCharging > 0:
+                desiredAmpsOffered -= sum(
+                    slaveTWC.reportedAmpsActual
+                    for slaveTWC in self.master.getSlaveTWCs()
+                    if slaveTWC.TWCID != self.TWCID
+                )
+                flex = self.master.getAllowedFlex() / numCarsCharging
+
+                # Allocate this slave a fraction of maxAmpsToDivideAmongSlaves
+                # divided by the number of cars actually charging.
+                fairShareAmps = int(
+                    self.master.getMaxAmpsToDivideAmongSlaves() / numCarsCharging
+                )
+                if desiredAmpsOffered > fairShareAmps:
+                    desiredAmpsOffered = fairShareAmps
 
         # Get charge rate control mode from settings
         # 1 = Use TWC Exclusively to control Charge Rate
@@ -707,22 +733,7 @@ class TWCSlave:
         # 3 = Use TWC >= 6A + Tesla API < 6A to control Charge Rate
         chargeRateControl = int(self.master.settings.get("chargeRateControl", 1))
 
-        if numCarsCharging > 0:
-            desiredAmpsOffered -= sum(
-                slaveTWC.reportedAmpsActual
-                for slaveTWC in self.master.getSlaveTWCs()
-                if slaveTWC.TWCID != self.TWCID
-            )
-            flex = self.master.getAllowedFlex() / numCarsCharging
-
-            # Allocate this slave a fraction of maxAmpsToDivideAmongSlaves divided
-            # by the number of cars actually charging.
-            fairShareAmps = int(
-                self.master.getMaxAmpsToDivideAmongSlaves() / numCarsCharging
-            )
-            if desiredAmpsOffered > fairShareAmps:
-                desiredAmpsOffered = fairShareAmps
-
+        if _centralized_target is None and numCarsCharging > 0:
             logger.debug(
                 "desiredAmpsOffered TWC: "
                 + self.master.hex_str(self.TWCID)
