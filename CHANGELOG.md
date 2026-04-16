@@ -2,7 +2,7 @@
 
 This document logs the changes per release of TWCManager.
 
-## v1.4.0 - Upcoming Development release
+## v1.4.0 - Upcoming
 
 ## v1.3.4 - 2026-04-15
 * Features
