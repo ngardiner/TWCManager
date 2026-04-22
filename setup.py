@@ -20,6 +20,7 @@ setup(
         "psycopg2",
         "pyjwt",
         "pyModbusTCP>=0.1.8",
+        "pymodbus>=3.0.0",
         "pymysql",
         "pyserial>=3.4",
         "pyyaml",
