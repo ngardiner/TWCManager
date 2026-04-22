@@ -794,5 +794,52 @@
             "mqtt_pass": "teslamate",
             "mqtt_prefix": "teslamate"
         }
-    }
+    },
+
+    # Gen3 TWC (Wall Connector Generation 3) support via Neurio Modbus emulation.
+    #
+    # Gen3 TWCs self-regulate charge current by polling a Neurio energy meter over
+    # RS485. TWCManager emulates that meter on the same serial bus, serving a
+    # synthetic "house load" that creates exactly the headroom needed to charge at
+    # the desired rate: house_load = fuse_capacity - target_charge_power.
+    #
+    # Prerequisites:
+    #   - pymodbus >= 3.0.0 (pip install pymodbus)
+    #   - A dedicated RS485 adapter wired to the Gen3's Neurio meter port
+    #   - The Gen3 TWC must be configured (via its web UI) to use an external
+    #     Neurio meter at baud 115200
+    #   - Each Gen3's IP address must be reachable for the HTTP vitals readback
+    #
+    # Multiple Gen3 devices sharing the same Neurio RS485 bus are supported.
+    # Each device entry maps to one Gen3 TWC unit.  fuseAmps should match the
+    # circuit breaker rating x 0.8 (same convention as wiringMaxAmpsAllTWCs).
+    #
+    #"controller.Gen3TWCs": {
+    #    "enabled": false,
+    #
+    #    # Serial port connected to the Gen3 Neurio meter RS485 bus.
+    #    # Use 'dmesg | grep ttyUSB' to identify the correct adapter.
+    #    "port": "/dev/ttyUSB1",
+    #
+    #    # Neurio meter serial parameters - do not change unless advised.
+    #    "baudrate": 115200,
+    #    "stopbits": 1,
+    #    "bytesize": 8,
+    #    "parity": "N",
+    #
+    #    # List of Gen3 TWC devices on this bus.
+    #    "devices": [
+    #        {
+    #            # IP address of the Gen3 TWC (for vitals readback via HTTP).
+    #            "ip": "192.168.1.100",
+    #
+    #            # Circuit breaker rating x 0.8, in amps.
+    #            # Example: 60 A breaker -> 60 x 0.8 = 48
+    #            "fuseAmps": 48,
+    #
+    #            # Number of AC phases (1 for North America, 3 for most of Europe).
+    #            "phases": 1
+    #        }
+    #    ]
+    #}
 }
