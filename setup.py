@@ -13,7 +13,7 @@ setup(
     # Dependencies
     install_requires=[
         "cryptography<3.4",
-        "growattServer>=1.0.0",
+        "growattServer==0.1.1",
         "jinja2>=2.11.2",
         "ocpp",
         "paho_mqtt>=1.5.0",
