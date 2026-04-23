@@ -22,6 +22,13 @@ The TWCManager configuration file at ```/etc/twcmanager/config.json``` has lots 
 
    * In addition, we have a set of [Configuration Examples](config_examples.md) intended to help with more complex setups such as those utilizing Flex Charging. These examples help to share information that has been discussed previously when setting up more complex charging policy.
 
+## Gen3 Wall Connector
+
+TWCManager supports Tesla Wall Connector Generation 3 units as of v1.4.0 via Neurio Modbus emulation.
+
+   * [Gen3 Status and Architecture](Gen3_Status.md) - how Gen3 control works and its limitations
+   * [Controller_Gen3TWCs module reference](modules/Controller_Gen3TWCs.md) - configuration guide
+
 ## Developing for TWCManager
 
 Your contributions are most welcome! If you've been working on a new EMS module or you want to contribute to the project in any way, please take a look at our [Development Guide](DevelopmentGuide.md) and feel free to get involved!
@@ -130,4 +137,4 @@ TWCs prior to this version will not respond to queries from TWCManager regarding
    * The Tesla TWC (Gen 2) wall charger was released in 2016 and was sold up until 2020, and differs only slighly from the Gen 1 from a visual perspective. The Gen 2 TWC provided better thermal management for the charger cable (an issue on older HPWCs) and better outdoor enclosure sealing, and introduced the charger load sharing protocol that this project uses.
       * Some, but not all Gen 2 Wall Connectors are able to charge non-Tesla vehicles, only the early versions have this capability. These can be identified by checking the part number 'P(TPN)' of the unit which is printed on the side. Part numbers ending in -00-x to -02-x (x can be any letter) should be able to charge non-Tesla vehicles.
       * Note, based on limited testing, the 'Legacy' DIP switch doesn't appear to affect whether the TWC can charge non-Tesla vehicles. When in SW-CAN (non Legacy) mode the TWC tries to communicate with the vehicle, and then drops back into legacy mode and starts charging if it doesn't get a response. If the Legacy DIP switch is on, then the handshake process is quicker for non-Tesla vehicles.
-   * The TWC Gen 3 wall charger was released in January 2020 and is still being sold today, and can be identified by the white faceplate and the shorter charging cable. The Gen 3 TWC has a single RS485 header (whereas the Gen 2 has a double RS485 header) and does not currently have sharing capability. It has the capability to connect to WiFi, however the value of this is not yet known.
+   * The TWC Gen 3 wall charger was released in January 2020 and is still being sold today, and can be identified by the white faceplate and the shorter charging cable. The Gen 3 TWC has a single RS485 header (whereas the Gen 2 has a double RS485 header) and connects to WiFi. As of v1.4.0, TWCManager supports Gen3 units via Neurio Modbus emulation - see [Gen3_Status.md](Gen3_Status.md) and [modules/Controller_Gen3TWCs.md](modules/Controller_Gen3TWCs.md) for details.

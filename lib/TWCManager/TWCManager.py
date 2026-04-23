@@ -745,6 +745,25 @@ if master.getModuleByName("TeslaAPI") is not None:
     except Exception as _e:
         logger.warning("Could not register TeslaAPIController: %s", _e)
 
+# Auto-register Gen3TWCs controller when enabled in config.
+# Starts a Neurio Modbus RTU server on the configured serial port so that
+# Gen3 Tesla Wall Connectors can be controlled via fake house-load registers.
+_gen3_cfg = master.config.get("controller.Gen3TWCs", {})
+if _gen3_cfg.get("enabled", False):
+    try:
+        from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
+
+        master.registerModule(
+            {
+                "name": "Gen3TWCs",
+                "ref": Gen3TWCs(master),
+                "type": "EVSEController",
+            }
+        )
+        logger.info("Registered Gen3TWCs EVSEController")
+    except Exception as _e:
+        logger.warning("Could not register Gen3TWCs: %s", _e)
+
 
 # Load settings from file
 master.loadSettings()
