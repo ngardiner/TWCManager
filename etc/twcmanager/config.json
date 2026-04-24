@@ -738,7 +738,7 @@
           #  "username": "mqttuser",
           #  "password": "mqttpass",
 
-      # Home Assistant discovery to automatically expose sensors from the MQTT topics
+       # Home Assistant discovery to automatically expose sensors from the MQTT topics
           # Set to true to enable discovery
           "homeassistantDiscovery": false,
 
@@ -749,6 +749,27 @@
           # Prefix NNNN (the ID of the device)
           # eg. TWC 1234
           "deviceNamePrefix": "TWC"
+        },
+        "OTEL": {
+            # OpenTelemetry Status module for observability and live debugging
+            # Exports traces, metrics, and logs to OpenTelemetry collectors
+            # Enables live debugging of module operations via Jaeger, Grafana, etc.
+            "enabled": false,
+
+            # Exporter type: "otlp" (default) or "jaeger"
+            "exporter": "otlp",
+
+            # OTLP gRPC endpoint (used when exporter is "otlp")
+            "otlpEndpoint": "http://localhost:4317",
+
+            # Jaeger endpoint (used when exporter is "jaeger")
+            "jaegerEndpoint": "http://localhost:14268/api/traces",
+
+            # Service name for identification in observability tools
+            "serviceName": "twcmanager",
+
+            # Service version for tracking across releases
+            "serviceVersion": "1.4.0"
         }
     },
     "vehicle": {
