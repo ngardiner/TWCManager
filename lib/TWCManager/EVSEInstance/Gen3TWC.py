@@ -59,19 +59,19 @@ class Gen3TWC(EVSEInstance):
             controller:  The Gen3TWCs controller that owns the Modbus server.
             master:      TWCMaster instance for config/settings.
         """
-        self.device_cfg  = device_cfg
-        self.controller  = controller
-        self.master      = master
+        self.device_cfg = device_cfg
+        self.controller = controller
+        self.master = master
         self.configConfig = master.config.get("config", {})
 
-        self._ip: str       = device_cfg.get("ip", "")
+        self._ip: str = device_cfg.get("ip", "")
         self._fuse_amps: float = float(device_cfg.get("fuseAmps", 48))
-        self._phases: int   = int(device_cfg.get("phases", 1))
+        self._phases: int = int(device_cfg.get("phases", 1))
 
         # Vitals cache
-        self._vitals: dict         = {}
-        self._vitals_ts: float     = 0.0
-        self._vitals_ok: bool      = False
+        self._vitals: dict = {}
+        self._vitals_ts: float = 0.0
+        self._vitals_ok: bool = False
 
     # ------------------------------------------------------------------
     # Vitals fetch helper
@@ -87,10 +87,11 @@ class Gen3TWC(EVSEInstance):
         try:
             import urllib.request
             import json
+
             url = f"http://{self._ip}/api/1/vitals"
             with urllib.request.urlopen(url, timeout=3) as resp:
                 data = json.loads(resp.read().decode())
-            self._vitals    = data
+            self._vitals = data
             self._vitals_ts = now
             self._vitals_ok = True
         except Exception as exc:
@@ -143,7 +144,7 @@ class Gen3TWC(EVSEInstance):
         """True when a vehicle is plugged in (connected) and not fully charged."""
         v = self._fetch_vitals()
         connected = v.get("vehicle_connected", False)
-        state     = str(v.get("evse_state", "")).lower()
+        state = str(v.get("evse_state", "")).lower()
         # "not_charging" can mean plugged-in-but-waiting; "charging" = active.
         # Exclude states that indicate completed / unplugged.
         not_done = state not in ("", "not_connected", "complete")
@@ -212,14 +213,19 @@ class Gen3TWC(EVSEInstance):
             watts: Desired charge power in watts.
         """
         voltages = self.currentVoltage
-        voltage  = next((v for v in voltages if v > 0), self.configConfig.get("defaultVoltage", 240))
+        voltage = next(
+            (v for v in voltages if v > 0), self.configConfig.get("defaultVoltage", 240)
+        )
 
-        fuse_watts  = self._fuse_amps * voltage * self._phases
+        fuse_watts = self._fuse_amps * voltage * self._phases
         house_watts = max(0.0, fuse_watts - watts)
 
         logger.debug(
             "Gen3TWC %s: target=%.0f W -> house_load=%.0f W (fuse=%.0f W)",
-            self._ip, watts, house_watts, fuse_watts,
+            self._ip,
+            watts,
+            house_watts,
+            fuse_watts,
         )
 
         self.controller.setHouseWatts(
@@ -233,12 +239,16 @@ class Gen3TWC(EVSEInstance):
 
     def stopCharging(self) -> None:
         """Stop charging by zeroing the headroom (present full fuse as house load)."""
-        voltages   = self.currentVoltage
-        voltage    = next((v for v in voltages if v > 0), self.configConfig.get("defaultVoltage", 240))
+        voltages = self.currentVoltage
+        voltage = next(
+            (v for v in voltages if v > 0), self.configConfig.get("defaultVoltage", 240)
+        )
         fuse_watts = self._fuse_amps * voltage * self._phases
         self.controller.setHouseWatts(
             watts=fuse_watts,
             phases=self._phases,
             voltage=voltage,
         )
-        logger.debug("Gen3TWC %s: stopCharging -> house_load=%.0f W", self._ip, fuse_watts)
+        logger.debug(
+            "Gen3TWC %s: stopCharging -> house_load=%.0f W", self._ip, fuse_watts
+        )

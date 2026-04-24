@@ -71,27 +71,27 @@ logger = logging.getLogger(__name__.rpartition(".")[2])
 # datasheet address when using pymodbus address arguments).
 #
 # Power registers (IEEE 754 FP32, big-endian pair)
-_REG_CT1_POWER  = 0x88   # 136
-_REG_CT2_POWER  = 0x8A   # 138
-_REG_CT3_POWER  = 0x8C   # 140
+_REG_CT1_POWER = 0x88  # 136
+_REG_CT2_POWER = 0x8A  # 138
+_REG_CT3_POWER = 0x8C  # 140
 _REG_TOTAL_POWER = 0x90  # 144
 
 # Current registers (IEEE 754 FP32, big-endian pair)
-_REG_CT1_CURRENT  = 0xF4   # 244
-_REG_CT2_CURRENT  = 0xF6   # 246
-_REG_CT3_CURRENT  = 0xF8   # 248
+_REG_CT1_CURRENT = 0xF4  # 244
+_REG_CT2_CURRENT = 0xF6  # 246
+_REG_CT3_CURRENT = 0xF8  # 248
 _REG_TOTAL_CURRENT = 0xFC  # 252
 
 # Number of holding registers to allocate (covers all addresses we serve)
-_NUM_REGISTERS = 0x100   # 256 - covers all Neurio addresses
+_NUM_REGISTERS = 0x100  # 256 - covers all Neurio addresses
 
 # Identity string registers (ASCII, 2 chars per register, 0-padded)
 _IDENTITY_MAP: list[tuple[int, str]] = [
-    (1,  "ENC"),          # manufacturer   (regs 1-10)
-    (11, "WBI1001-CCDC"), # model          (regs 11-16)
-    (29, "PWR"),          # (regs 29-31)
-    (32, "4.2.9.9"),      # firmware ver   (regs 32-38)
-    (47, "000000000"),    # serial         (regs 47-55)
+    (1, "ENC"),  # manufacturer   (regs 1-10)
+    (11, "WBI1001-CCDC"),  # model          (regs 11-16)
+    (29, "PWR"),  # (regs 29-31)
+    (32, "4.2.9.9"),  # firmware ver   (regs 32-38)
+    (47, "000000000"),  # serial         (regs 47-55)
 ]
 
 # Registers that should read as 0xFFFF (Neurio "not present" sentinel)
@@ -105,6 +105,7 @@ _FFFF_RANGES: list[tuple[int, int]] = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _fp32_pair(value: float) -> tuple[int, int]:
     """Encode a float as two big-endian 16-bit Modbus registers (IEEE 754)."""
@@ -147,6 +148,7 @@ def _build_static_registers() -> list[int]:
 # Gen3TWCs EVSEController
 # ---------------------------------------------------------------------------
 
+
 class Gen3TWCs(EVSEController):
     """EVSEController for Gen3 Tesla Wall Connectors via Neurio Modbus emulation."""
 
@@ -156,16 +158,16 @@ class Gen3TWCs(EVSEController):
         self.master = master
         config = master.config.get("controller.Gen3TWCs", {})
 
-        self._port:     str   = config.get("port",     "/dev/ttyUSB1")
-        self._baudrate: int   = int(config.get("baudrate", 115200))
-        self._stopbits: int   = int(config.get("stopbits", 1))
-        self._bytesize: int   = int(config.get("bytesize", 8))
-        self._parity:   str   = config.get("parity",   "N")
-        self._devices:  list  = config.get("devices",  [])
+        self._port: str = config.get("port", "/dev/ttyUSB1")
+        self._baudrate: int = int(config.get("baudrate", 115200))
+        self._stopbits: int = int(config.get("stopbits", 1))
+        self._bytesize: int = int(config.get("bytesize", 8))
+        self._parity: str = config.get("parity", "N")
+        self._devices: list = config.get("devices", [])
 
         # Shared register image - mutated by setHouseWatts(), read by the
         # Modbus action callback.  Protected by _lock.
-        self._lock    = threading.Lock()
+        self._lock = threading.Lock()
         self._registers: list[int] = _build_static_registers()
 
         # Per-EVSEInstance cache: ip -> Gen3TWC
@@ -173,7 +175,7 @@ class Gen3TWCs(EVSEController):
 
         # Background thread running the asyncio Modbus server
         self._server_thread: threading.Thread | None = None
-        self._server_loop:   asyncio.AbstractEventLoop | None = None
+        self._server_loop: asyncio.AbstractEventLoop | None = None
 
         self._start_server()
 
@@ -181,7 +183,9 @@ class Gen3TWCs(EVSEController):
     # Modbus server internals
     # ------------------------------------------------------------------
 
-    def setHouseWatts(self, watts: float, phases: int = 1, voltage: float = 240.0) -> None:
+    def setHouseWatts(
+        self, watts: float, phases: int = 1, voltage: float = 240.0
+    ) -> None:
         """Update the synthetic house-load registers served to Gen3 TWCs.
 
         The Gen3 TWC reads this value and charges at
@@ -193,8 +197,8 @@ class Gen3TWCs(EVSEController):
             phases:  Number of active phases (1 or 3); distributes watts evenly.
             voltage: Per-phase voltage (used to compute per-CT current values).
         """
-        phase_watts   = watts / max(phases, 1)
-        phase_amps    = phase_watts / max(voltage, 1.0)
+        phase_watts = watts / max(phases, 1)
+        phase_amps = phase_watts / max(voltage, 1.0)
         total_current = phase_amps * phases
 
         with self._lock:
@@ -202,22 +206,24 @@ class Gen3TWCs(EVSEController):
 
             def _wr(addr: int, val: float) -> None:
                 hi, lo = _fp32_pair(val)
-                r[addr]     = hi
+                r[addr] = hi
                 r[addr + 1] = lo
 
-            _wr(_REG_CT1_POWER,   phase_watts if phases >= 1 else 0.0)
-            _wr(_REG_CT2_POWER,   phase_watts if phases >= 2 else 0.0)
-            _wr(_REG_CT3_POWER,   phase_watts if phases >= 3 else 0.0)
+            _wr(_REG_CT1_POWER, phase_watts if phases >= 1 else 0.0)
+            _wr(_REG_CT2_POWER, phase_watts if phases >= 2 else 0.0)
+            _wr(_REG_CT3_POWER, phase_watts if phases >= 3 else 0.0)
             _wr(_REG_TOTAL_POWER, watts)
 
-            _wr(_REG_CT1_CURRENT,  phase_amps    if phases >= 1 else 0.0)
-            _wr(_REG_CT2_CURRENT,  phase_amps    if phases >= 2 else 0.0)
-            _wr(_REG_CT3_CURRENT,  phase_amps    if phases >= 3 else 0.0)
+            _wr(_REG_CT1_CURRENT, phase_amps if phases >= 1 else 0.0)
+            _wr(_REG_CT2_CURRENT, phase_amps if phases >= 2 else 0.0)
+            _wr(_REG_CT3_CURRENT, phase_amps if phases >= 3 else 0.0)
             _wr(_REG_TOTAL_CURRENT, total_current)
 
         logger.debug(
             "Gen3TWCs Neurio registers updated: %.0f W (%.1f A/phase x %d phase(s))",
-            watts, phase_amps, phases,
+            watts,
+            phase_amps,
+            phases,
         )
 
     def _make_action(self):
@@ -227,6 +233,7 @@ class Gen3TWCs(EVSEController):
         the current register image into the mutable ``current_registers`` list
         so the TWC always receives up-to-date values.
         """
+
         async def _action(
             function_code: int,
             start_address: int,
