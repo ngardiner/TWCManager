@@ -4,43 +4,30 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming
 
-## v1.3.4 - 2026-04-15
+* Architecture
+    * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
+    * (@ngardiner) Gen3 TWC support - new `Gen3TWCs` EVSEController and `Gen3TWC` EVSEInstance enable power control of Generation 3 Tesla Wall Connectors:
+        * Protocol implementation informed by @Klangen82/tesla-wall-connector-control and @LucaTNT's Neurio register map gist
+
+## v1.3.4 - 2026-04-24
 * Features
     * Implement missing API endpoints: `setPolicy`, `setLatLon`, `setConsumptionOffset`
     * Add centralized API input validation (`APIValidator`) across all endpoints
-* Bugfixes
-    * Fix SyntaxWarning (`is` with literal) in TeslaPowerwall2 cloud data fetch
-    * Fix invalid escape sequence (`\Z`) in TWCProtocol regex byte string (Python 3.12 compatibility)
-    * Fix HTTP status codes in API endpoints (correct 200/400/404 responses)
-    * Fix `/api/chargeNow` and `/api/cancelChargeNow` to return proper HTTP responses
-    * Fix `'bool' object is not callable` in `VehiclePriority.enabled()` — instance attribute was shadowing the method in TeslaBLE, TeslaAPI, and HomeAssistant vehicle modules
-    * Add `fsync` before atomic rename in `saveSettings()` to prevent partial writes surviving a power loss
-    * Reduce module loading log noise (INFO → DEBUG level)
-    * Fix: Debounce charge session end to avoid false stops on startup (closes #156)
-    * Fix: Avoid double-counting charger watts in `nominalOffer` when `treatGenerationAsGridDelivery` is set (closes #523)
-    * Fix: Use `parse_qs` instead of regex for OAuth callback URL parsing (closes #566)
-    * Fix: Add `slave_status` logging to MySQL and SQLite emit handlers (closes #539)
-    * Fix: Unload MySQLLogging module on connection failure to prevent cascading errors (closes #579)
-    * Fix: Guard against missing `drive_state`/`charge_state` keys in TeslaAPI vehicle response (closes #537)
-    * Fix: Disable TeslaBLE module when `tesla-control` binary is not executable (closes #610)
-    * Fix: Protocol module type handling for `CustomCommand`
-    * Update Docker documentation for Compose V2 and modern Raspberry Pi OS
-
-## v1.3.3 - 2026-04-13
-* (@MikeBishop) - Improve home location detection when vehicle is charging via TWC
-* (@ngardiner) - Add aWATTar pricing module with dynamic rate-based charging optimization
-* (@deece) - Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
-* (@ngardiner) - Post-merge improvements: input validation, error handling, comprehensive logging, rate limiting, and thread safety for MQTT and Home Assistant modules
-* (@ngardiner) - Centralized LoggerFactory for configurable logging prefixes
-* (@ngardiner) - Vehicle priority abstraction proxy for module fallback with retry multiplier logic
-* (@RichieB2B) - Add Fleet Telemetry MQTT support with typed updates and online state tracking
-* (@ngardiner) - Initial commit of local Tesla BLE vehicle control module with stability improvements
-* (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
-* (@MikeBishop) - Dampen API calls to reduce unnecessary calls
-* (@RichieB2B) - Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
-* (@ngardiner) - Add support for decrypting TeslaMate API credentials using the encryption key
-* (@ngardiner) - Refactor maxAmpsToDivideFromGrid to global configuration parameter
-* (@VIDGuide) - Add Charge Now duration display with remaining minutes and current amps in web UI
+* Architecture & Improvements
+    * (@MikeBishop) - Improve home location detection when vehicle is charging via TWC
+    * (@ngardiner) - Add aWATTar pricing module with dynamic rate-based charging optimization
+    * (@deece) - Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
+    * (@ngardiner) - Post-merge improvements: input validation, error handling, comprehensive logging, rate limiting, and thread safety for MQTT and Home Assistant modules
+    * (@ngardiner) - Centralized LoggerFactory for configurable logging prefixes
+    * (@ngardiner) - Vehicle priority abstraction proxy for module fallback with retry multiplier logic
+    * (@RichieB2B) - Add Fleet Telemetry MQTT support with typed updates and online state tracking
+    * (@ngardiner) - Initial commit of local Tesla BLE vehicle control module with stability improvements
+    * (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
+    * (@MikeBishop) - Dampen API calls to reduce unnecessary calls
+    * (@RichieB2B) - Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
+    * (@ngardiner) - Add support for decrypting TeslaMate API credentials using the encryption key
+    * (@ngardiner) - Refactor maxAmpsToDivideFromGrid to global configuration parameter
+    * (@VIDGuide) - Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
     * (@MikeBishop) - Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
     * (@dtiefnig) - Specify access scope for token refresh
@@ -53,6 +40,7 @@ This document logs the changes per release of TWCManager.
     * (@ngardiner) - Atomic writes for settings file to avoid data loss
     * (@ngardiner) - BLE pipe management with state tracking and cleanup
     * (@ngardiner) - Subprocess timeout handling with graceful shutdown
+    * Update Docker documentation for Compose V2 and modern Raspberry Pi OS
 
 ## v1.3.2 - 2023-03-12
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules
