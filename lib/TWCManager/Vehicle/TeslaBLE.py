@@ -159,17 +159,183 @@ class TeslaBLE:
 
     def car_api_charge(self, task):
         """
-        Enhanced car_api_charge method with proper priority system integration.
-        Returns True on success, False on failure to enable proper fallback.
+        Start or stop charging via BLE.
 
         Args:
             task: Dictionary with 'charge' key (True/False) and optional 'vin' key
         """
+        start_time = time.time()
+        span = None
+        
         try:
+            # Get OTEL status module for tracing
+            otel_modules = self.master.getModulesByType("Status")
+            otel_status = next((m["ref"] for m in otel_modules if m["ref"].__class__.__name__ == "OTELStatus"), None)
+            
             # Validate input task
             if not task:
                 logger.error("car_api_charge called with empty task")
                 return False
+
+            if not isinstance(task, dict):
+                logger.error(f"car_api_charge expects dict, got {type(task)}")
+                return False
+
+            # Extract charge parameter
+            charge = task.get("charge", None)
+            if charge is None:
+                logger.error("Task missing required 'charge' key")
+                return False
+
+            # If we know the VIN of the vehicle connected to the TWC Slave, we'll send the command
+            # directly to that vehicle
+            vin = task.get("vin", None)
+            if vin:
+                logger.debug(f"BLE command for specific VIN: {vin}, charge: {charge}")
+                
+                # Start OTEL span
+                if otel_status:
+                    span = otel_status.record_span(
+                        "ble.charge_command",
+                        attributes={
+                            "vin": vin,
+                            "command": "start_charging" if charge else "stop_charging",
+                            "charge": charge,
+                        }
+                    )
+
+                if charge:
+                    charge_success = self.startCharging(vin)
+                    if charge_success:
+                        ping_success = self.pingVehicle(vin)
+                        success = charge_success and ping_success
+                        logger.info(
+                            f"BLE start charging for {vin}: {'success' if success else 'failed'}"
+                        )
+                        if otel_status:
+                            otel_status.record_metric(
+                                "ble.command.duration_seconds",
+                                time.time() - start_time,
+                                {"vin": vin, "command": "start_charging", "status": "success" if success else "failed"}
+                            )
+                            otel_status.record_metric(
+                                "ble.command.total",
+                                1,
+                                {"vin": vin, "command": "start_charging", "status": "success" if success else "failed"}
+                            )
+                        return success
+                    else:
+                        logger.warning(f"BLE start charging failed for {vin}")
+                        if otel_status:
+                            otel_status.record_metric(
+                                "ble.command.duration_seconds",
+                                time.time() - start_time,
+                                {"vin": vin, "command": "start_charging", "status": "failed"}
+                            )
+                            otel_status.record_metric(
+                                "ble.command.total",
+                                1,
+                                {"vin": vin, "command": "start_charging", "status": "failed"}
+                            )
+                        return False
+                else:
+                    stop_success = self.stopCharging(vin)
+                    if stop_success:
+                        ping_success = self.pingVehicle(vin)
+                        success = stop_success and ping_success
+                        logger.info(
+                            f"BLE stop charging for {vin}: {'success' if success else 'failed'}"
+                        )
+                        if otel_status:
+                            otel_status.record_metric(
+                                "ble.command.duration_seconds",
+                                time.time() - start_time,
+                                {"vin": vin, "command": "stop_charging", "status": "success" if success else "failed"}
+                            )
+                            otel_status.record_metric(
+                                "ble.command.total",
+                                1,
+                                {"vin": vin, "command": "stop_charging", "status": "success" if success else "failed"}
+                            )
+                        return success
+                    else:
+                        logger.warning(f"BLE stop charging failed for {vin}")
+                        if otel_status:
+                            otel_status.record_metric(
+                                "ble.command.duration_seconds",
+                                time.time() - start_time,
+                                {"vin": vin, "command": "stop_charging", "status": "failed"}
+                            )
+                            otel_status.record_metric(
+                                "ble.command.total",
+                                1,
+                                {"vin": vin, "command": "stop_charging", "status": "failed"}
+                            )
+                        return False
+            else:
+                # If we don't know the VIN, we send to all vehicles
+                # This is not optimal for multi-vehicle installs, but may be necessary when TWC doesn't read VIN
+                logger.debug(f"BLE command for all vehicles, charge: {charge}")
+
+                if not self.master.settings.get("Vehicles"):
+                    logger.error("No vehicles configured for BLE operation")
+                    return False
+
+                success_count = 0
+                total_vehicles = len(self.master.settings["Vehicles"])
+
+                for vehicle in self.master.settings["Vehicles"].keys():
+                    try:
+                        if charge:
+                            charge_success = self.startCharging(vehicle)
+                            ping_success = (
+                                self.pingVehicle(vehicle) if charge_success else False
+                            )
+                            vehicle_success = charge_success and ping_success
+                        else:
+                            stop_success = self.stopCharging(vehicle)
+                            ping_success = (
+                                self.pingVehicle(vehicle) if stop_success else False
+                            )
+                            vehicle_success = stop_success and ping_success
+
+                        if vehicle_success:
+                            success_count += 1
+                            logger.debug(
+                                f"BLE command successful for vehicle {vehicle}"
+                            )
+                        else:
+                            logger.warning(f"BLE command failed for vehicle {vehicle}")
+
+                    except Exception as e:
+                        logger.error(
+                            f"BLE command exception for vehicle {vehicle}: {e}"
+                        )
+                        continue
+
+                # Consider operation successful if at least one vehicle responded
+                # This allows partial success in multi-vehicle scenarios
+                overall_success = success_count > 0
+                logger.info(
+                    f"BLE command result: {success_count}/{total_vehicles} vehicles responded"
+                )
+                if otel_status:
+                    otel_status.record_metric(
+                        "ble.command.duration_seconds",
+                        time.time() - start_time,
+                        {"command": "broadcast", "status": "success" if overall_success else "failed", "vehicles_responded": success_count, "total_vehicles": total_vehicles}
+                    )
+                return overall_success
+
+        except Exception as e:
+            logger.error(f"BLE car_api_charge failed with exception: {e}")
+            if otel_status:
+                otel_status.record_metric(
+                    "ble.command.duration_seconds",
+                    time.time() - start_time,
+                    {"status": "error", "error": str(e)}
+                )
+            return False
 
             if not isinstance(task, dict):
                 logger.error(f"car_api_charge expects dict, got {type(task)}")
@@ -394,20 +560,45 @@ class TeslaBLE:
         Ping a vehicle to verify BLE connectivity.
         Returns True on success, False on failure.
         """
+        start_time = time.time()
         try:
             logger.debug(f"Pinging vehicle {vin}")
+            
+            # Get OTEL status module for tracing
+            otel_modules = self.master.getModulesByType("Status")
+            otel_status = next((m["ref"] for m in otel_modules if m["ref"].__class__.__name__ == "OTELStatus"), None)
 
             ret = self.sendCommand(vin, "ping")
             if ret is None:
                 logger.debug(f"Failed to send ping command to {vin}")
+                if otel_status:
+                    otel_status.record_metric(
+                        "ble.ping.duration_seconds",
+                        time.time() - start_time,
+                        {"vin": vin, "status": "failed"}
+                    )
                 return False
 
             success = self.parseCommandOutput(ret)
             logger.debug(f"Ping {vin}: {'success' if success else 'failed'}")
+            if otel_status:
+                otel_status.record_metric(
+                    "ble.ping.duration_seconds",
+                    time.time() - start_time,
+                    {"vin": vin, "status": "success" if success else "failed"}
+                )
             return success
 
         except Exception as e:
             logger.error(f"pingVehicle exception for {vin}: {e}")
+            otel_modules = self.master.getModulesByType("Status")
+            otel_status = next((m["ref"] for m in otel_modules if m["ref"].__class__.__name__ == "OTELStatus"), None)
+            if otel_status:
+                otel_status.record_metric(
+                    "ble.ping.duration_seconds",
+                    time.time() - start_time,
+                    {"vin": vin, "status": "error", "error": str(e)}
+                )
             return False
 
     def sendCommand(self, vin, command, args=None):
@@ -575,8 +766,13 @@ class TeslaBLE:
         Start charging for a specific vehicle with enhanced error handling.
         Returns True on success, False on failure.
         """
+        start_time = time.time()
         try:
             logger.debug(f"Starting charging for vehicle {vin}")
+            
+            # Get OTEL status module for tracing
+            otel_modules = self.master.getModulesByType("Status")
+            otel_status = next((m["ref"] for m in otel_modules if m["ref"].__class__.__name__ == "OTELStatus"), None)
 
             # Wake vehicle first - don't fail if wake fails, but log it
             wake_result = self.wakeVehicle(vin)
@@ -588,16 +784,36 @@ class TeslaBLE:
             ret = self.sendCommand(vin, "charging-start")
             if ret is None:
                 logger.error(f"Failed to send charging-start command to {vin}")
+                if otel_status:
+                    otel_status.record_metric(
+                        "ble.start_charging.duration_seconds",
+                        time.time() - start_time,
+                        {"vin": vin, "status": "failed", "reason": "send_command_failed"}
+                    )
                 return False
 
             success = self.parseCommandOutput(ret)
             logger.info(
                 f"Start charging for {vin}: {'success' if success else 'failed'}"
             )
+            if otel_status:
+                otel_status.record_metric(
+                    "ble.start_charging.duration_seconds",
+                    time.time() - start_time,
+                    {"vin": vin, "status": "success" if success else "failed"}
+                )
             return success
 
         except Exception as e:
             logger.error(f"startCharging exception for {vin}: {e}")
+            otel_modules = self.master.getModulesByType("Status")
+            otel_status = next((m["ref"] for m in otel_modules if m["ref"].__class__.__name__ == "OTELStatus"), None)
+            if otel_status:
+                otel_status.record_metric(
+                    "ble.start_charging.duration_seconds",
+                    time.time() - start_time,
+                    {"vin": vin, "status": "error", "error": str(e)}
+                )
             return False
 
     def stopCharging(self, vin):
@@ -605,22 +821,47 @@ class TeslaBLE:
         Stop charging for a specific vehicle with enhanced error handling.
         Returns True on success, False on failure.
         """
+        start_time = time.time()
         try:
             logger.debug(f"Stopping charging for vehicle {vin}")
+            
+            # Get OTEL status module for tracing
+            otel_modules = self.master.getModulesByType("Status")
+            otel_status = next((m["ref"] for m in otel_modules if m["ref"].__class__.__name__ == "OTELStatus"), None)
 
             ret = self.sendCommand(vin, "charging-stop")
             if ret is None:
                 logger.error(f"Failed to send charging-stop command to {vin}")
+                if otel_status:
+                    otel_status.record_metric(
+                        "ble.stop_charging.duration_seconds",
+                        time.time() - start_time,
+                        {"vin": vin, "status": "failed", "reason": "send_command_failed"}
+                    )
                 return False
 
             success = self.parseCommandOutput(ret)
             logger.info(
                 f"Stop charging for {vin}: {'success' if success else 'failed'}"
             )
+            if otel_status:
+                otel_status.record_metric(
+                    "ble.stop_charging.duration_seconds",
+                    time.time() - start_time,
+                    {"vin": vin, "status": "success" if success else "failed"}
+                )
             return success
 
         except Exception as e:
             logger.error(f"stopCharging exception for {vin}: {e}")
+            otel_modules = self.master.getModulesByType("Status")
+            otel_status = next((m["ref"] for m in otel_modules if m["ref"].__class__.__name__ == "OTELStatus"), None)
+            if otel_status:
+                otel_status.record_metric(
+                    "ble.stop_charging.duration_seconds",
+                    time.time() - start_time,
+                    {"vin": vin, "status": "error", "error": str(e)}
+                )
             return False
 
     def scanForVehicles(self):
