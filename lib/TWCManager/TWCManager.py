@@ -114,6 +114,7 @@ modules_available = [
     "EMS.URL",
     "Status.HASSStatus",
     "Status.MQTTStatus",
+    "Status.OTELStatus",
 ]
 
 # Enable support for Python Visual Studio Debugger
