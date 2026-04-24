@@ -653,9 +653,6 @@ master = TWCMaster(fakeTWCID, config)
 LoggerFactory.set_master(master)
 
 # Instantiate all modules in the modules_available list automatically
-logger.info("=" * 70)
-logger.info("Starting module initialization")
-logger.info("=" * 70)
 modules_loaded = 0
 modules_skipped = 0
 modules_failed = 0
@@ -674,14 +671,11 @@ for module in modules_available:
             .get("enabled", 1)
         ):
             # We can see that this module is explicitly disabled in config, skip it
-            logger.debug("SKIP: %s (disabled in config)", module)
             modules_skipped += 1
             continue
 
-        logger.debug("LOAD: %s (importing...)", module)
         moduleref = importlib.import_module("TWCManager." + module)
         modclassref = getattr(moduleref, modulename[1])
-        logger.debug("LOAD: %s (instantiating...)", module)
         modinstance = modclassref(master)
 
         # Register the new module with master class, so every other module can
@@ -689,7 +683,6 @@ for module in modules_available:
         master.registerModule(
             {"name": modulename[1], "ref": modinstance, "type": modulename[0]}
         )
-        logger.debug("LOAD: %s ✓ SUCCESS", module)
         modules_loaded += 1
     except ImportError as e:
         logger.error(
@@ -700,7 +693,7 @@ for module in modules_available:
         )
         modules_failed += 1
     except ModuleNotFoundError as e:
-        logger.info(
+        logger.error(
             "FAIL: %s - ModuleNotFoundError: %s",
             module,
             str(e),
@@ -718,14 +711,12 @@ for module in modules_available:
         modules_failed += 1
         raise
 
-logger.info("=" * 70)
 logger.info(
-    "Module initialization complete: %d loaded, %d skipped, %d failed",
+    "Module initialization: %d loaded, %d skipped, %d failed",
     modules_loaded,
     modules_skipped,
     modules_failed,
 )
-logger.info("=" * 70)
 
 
 # Load settings from file
