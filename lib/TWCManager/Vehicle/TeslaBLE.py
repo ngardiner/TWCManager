@@ -1119,13 +1119,13 @@ class TeslaBLE:
             self.pipe.write(
                 base64.b64decode(self.master.settings["Vehicles"][vin]["pubKeyPEM"]),
             )
+            self.pipe.flush()  # Ensure data is written
             logger.debug(f"Public key sent for vehicle {vin}")
             return True
         except Exception as e:
             logger.error(f"Error sending public key for {vin}: {e}")
             return False
-        finally:
-            self._ensure_pipe_closed()
+        # NOTE: Do NOT close pipe here - it needs to stay open for tesla-control to read
 
     def sendPrivateKey(self, vin):
         """Send private key to vehicle via pipe with error handling."""
@@ -1146,13 +1146,13 @@ class TeslaBLE:
             self.pipe.write(
                 base64.b64decode(self.master.settings["Vehicles"][vin]["privKey"]),
             )
+            self.pipe.flush()  # Ensure data is written
             logger.debug(f"Private key sent for vehicle {vin}")
             return True
         except Exception as e:
             logger.error(f"Error sending private key for {vin}: {e}")
             return False
-        finally:
-            self._ensure_pipe_closed()
+        # NOTE: Do NOT close pipe here - it needs to stay open for tesla-control to read
 
     def enabled(self) -> bool:
         return self._enabled
