@@ -5,11 +5,15 @@
 
 import logging
 import array
-import scipy.stats
 import json
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
-logger = LoggerFactory.get_logger("P1Monitr", "EMS")
+try:
+    import scipy.stats
+except ImportError:
+    scipy = None
+
+logger = LoggerFactory.get_logger("P1Monitor", "EMS")
 
 
 class P1Monitor:
@@ -26,10 +30,19 @@ class P1Monitor:
         self.serverIP = self.configP1Mon.get("serverIP", None)
         self.samples = self.configP1Mon.get("samples", 1)
 
+        # Unload if scipy is not installed
+        if scipy is None:
+            logger.error(
+                "Cannot use P1Monitor module because scipy is not installed. "
+                "Install with: apt-get install python3-numpy python3-scipy"
+            )
+            master.releaseModule("lib.TWCManager.EMS", "P1Monitor")
+            return None
+
         # Unload if this module is disabled or misconfigured
         if not self.serverIP:
             logger.error(
-                "Cannot use P1Monitor module bacause it has no server ip configured!"
+                "Cannot use P1Monitor module because it has no server ip configured!"
             )
             master.releaseModule("lib.TWCManager.EMS", "P1Monitor")
             return None
@@ -37,7 +50,7 @@ class P1Monitor:
         # Unload if this module is disabled or misconfigured
         if self.samples < 1 or self.samples > 10:
             logger.error(
-                "Cannot use P1Monitor module bacause the samples configured in config.json is not a value from 1 to 10!"
+                "Cannot use P1Monitor module because the samples configured in config.json is not a value from 1 to 10!"
             )
             master.releaseModule("lib.TWCManager.EMS", "P1Monitor")
             return None
