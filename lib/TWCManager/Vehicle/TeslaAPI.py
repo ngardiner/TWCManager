@@ -1593,6 +1593,24 @@ class CarApiVehicle:
                 # This catches cases like trying to access
                 # apiResponseDict['response'] when 'response' doesn't exist in
                 # apiResponseDict.
+                error = (apiResponseDict or {}).get("error", "")
+                is_transient = any(
+                    error.startswith(e) for e in self.carapi.carApiTransientErrors
+                )
+                if is_transient:
+                    # Transient errors (vehicle unavailable, operation_timedout,
+                    # etc.) should not increment errorCount and trigger the full
+                    # exponential backoff; just retry after a short delay (closes #377).
+                    logger.log(
+                        logging.INFO8,
+                        "Transient error for "
+                        + self.name
+                        + ": "
+                        + error
+                        + ".  Will retry shortly.",
+                    )
+                    time.sleep(5)
+                    continue
                 logger.info(
                     "ERROR: Can't access vehicle status for "
                     + self.name
