@@ -510,7 +510,17 @@ def update_statuses():
             logger.debug(
                 f"Offering {maxampsDisplay} instead of {nominalOfferDisplay} to compensate for inexact current draw"
             )
-            conwatts = genwatts - master.convertAmpsToWatts(maxamps)
+            # Correct retcon calculation based on which path was used
+            if treatGenerationAsGridDelivery:
+                conwatts = genwatts - master.convertAmpsToWatts(maxamps)
+            elif subtractChargerLoad and conwatts > 0:
+                # Reverse: (genwatts + 2*chgwatts - conwatts) / voltage = maxamps
+                conwatts = genwatts + 2*chgwatts - master.convertAmpsToWatts(maxamps)
+            elif subtractChargerLoad and conwatts == 0:
+                # Reverse: (genwatts + chgwatts) / voltage = maxamps
+                conwatts = genwatts + chgwatts - master.convertAmpsToWatts(maxamps)
+            else:
+                conwatts = genwatts - master.convertAmpsToWatts(maxamps)
         generation = f"{master.convertWattsToAmps(genwatts):.2f}A"
         consumption = f"{master.convertWattsToAmps(conwatts):.2f}A"
         logger.info(
