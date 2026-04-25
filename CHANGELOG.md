@@ -10,6 +10,8 @@ This document logs the changes per release of TWCManager.
     * Fix: WebIPCControl recovers from ExistentialError when IPC queue is removed at runtime (closes #192)
     * Fix: Remove mislabeled "power" status update in TWCSlave that reported amps instead of watts (closes #325)
     * Fix: Cast numeric strings from settings in policyValue() so non-scheduled charge rate is applied correctly (closes #370)
+* Features
+    * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:

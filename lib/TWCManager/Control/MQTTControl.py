@@ -140,5 +140,48 @@ class MQTTControl:
             logger.log(logging.INFO3, "MQTT Message called Stop")
             self._thread.interrupt_main()
 
+        if message.topic == self.topicPrefix + "/control/nonScheduledAmpsMax":
+            payload = str(message.payload.decode("utf-8"))
+            logger.log(
+                logging.INFO3,
+                "MQTT Message called nonScheduledAmpsMax with payload " + payload,
+            )
+            try:
+                amps = int(payload)
+                maxAmps = self.configConfig.get("wiringMaxAmpsAllTWCs", 32)
+                if amps < 0 or amps > maxAmps:
+                    logger.warning(
+                        f"MQTT nonScheduledAmpsMax rejected: {amps} out of valid range [0, {maxAmps}]"
+                    )
+                    return
+                self.master.setNonScheduledAmpsMax(amps)
+                self.master.getModuleByName("Policy").applyPolicyImmediately()
+                self.master.queue_background_task({"cmd": "saveSettings"})
+            except ValueError as e:
+                logger.warning(
+                    f"MQTT nonScheduledAmpsMax command failed: invalid value - {str(e)}"
+                )
+
+        if message.topic == self.topicPrefix + "/control/nonScheduledAction":
+            payload = str(message.payload.decode("utf-8"))
+            logger.log(
+                logging.INFO3,
+                "MQTT Message called nonScheduledAction with payload " + payload,
+            )
+            try:
+                action = int(payload)
+                if action not in (1, 2, 3):
+                    logger.warning(
+                        f"MQTT nonScheduledAction rejected: {action} must be 1 (fixed rate), 2 (do not charge), or 3 (track green energy)"
+                    )
+                    return
+                self.master.settings["nonScheduledAction"] = action
+                self.master.getModuleByName("Policy").applyPolicyImmediately()
+                self.master.queue_background_task({"cmd": "saveSettings"})
+            except ValueError as e:
+                logger.warning(
+                    f"MQTT nonScheduledAction command failed: invalid value - {str(e)}"
+                )
+
     def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
