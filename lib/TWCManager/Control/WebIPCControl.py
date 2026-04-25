@@ -420,3 +420,12 @@ class WebIPCControl:
         except sysv_ipc.BusyError:
             # No web message is waiting.
             pass
+        except sysv_ipc.ExistentialError:
+            # The IPC queue was removed (e.g. system reboot or ipcrm). Recreate it.
+            logger.warning("IPC message queue no longer exists. Recreating.")
+            try:
+                self.webIPCqueue = sysv_ipc.MessageQueue(
+                    self.webIPCkey, sysv_ipc.IPC_CREAT, 0o666
+                )
+            except sysv_ipc.Error as e:
+                logger.error("Failed to recreate IPC message queue: " + str(e))

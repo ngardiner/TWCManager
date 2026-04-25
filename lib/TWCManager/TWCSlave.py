@@ -680,10 +680,6 @@ class TWCSlave:
         ):
             self.timeReportedAmpsActualChangedSignificantly = now
             self.reportedAmpsActualSignificantChangeMonitor = self.reportedAmpsActual
-            for module in self.master.getModulesByType("Status"):
-                module["ref"].setStatus(
-                    self.TWCID, "power", "power", self.reportedAmpsActual, "A"
-                )
 
         ltNow = time.localtime()
         hourNow = ltNow.tm_hour + (ltNow.tm_min / 60)
