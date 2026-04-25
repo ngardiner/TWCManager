@@ -226,13 +226,22 @@ class Policy:
 
         # If a charge limit is defined for this policy, apply it
         limit = limit = self.policyValue(policy.get("charge_limit", -1))
-        if self.limitOverride:
+        # limitOverride lowers the charge limit below current SOC to force the car
+        # to stop charging via the API. Only apply it when we are actually trying
+        # to stop charging (maxAmps == 0); otherwise a stale override from a
+        # previous stop attempt would incorrectly cap the limit when charging
+        # resumes (closes #586).
+        chargeAmps = self.master.getMaxAmpsToDivideAmongSlaves()
+        if self.limitOverride and chargeAmps == 0:
             currentCharge = (
                 self.master.getModuleByName("TeslaAPI").minBatteryLevelAtHome - 1
             )
             if currentCharge < 50:
                 currentCharge = 50
             limit = currentCharge if limit == -1 else min(limit, currentCharge)
+        elif self.limitOverride and chargeAmps > 0:
+            # Charging has resumed; clear the override so the limit is restored
+            self.limitOverride = False
         if not (limit >= 50 and limit <= 100):
             limit = -1
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})

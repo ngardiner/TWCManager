@@ -12,6 +12,9 @@ This document logs the changes per release of TWCManager.
     * Fix: Cast numeric strings from settings in policyValue() so non-scheduled charge rate is applied correctly (closes #370)
 * Features
     * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
+* Bugfixes
+    * Fix: Remove hardcoded /home/twcmanager fallback path for tesla-control binary; use PATH lookup only (closes #600)
+    * Fix: limitOverride no longer applies charge limit cap when charging has resumed, preventing 60% limit being set instead of stopping charge (closes #586)
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:

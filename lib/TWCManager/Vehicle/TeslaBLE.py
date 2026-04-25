@@ -134,10 +134,6 @@ class TeslaBLE:
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
             self.binaryPath = shutil.which("tesla-control")
 
-        # Final fallback prior to failure
-        if not self.binaryPath or not os.path.isfile(self.binaryPath):
-            self.binaryPath = "/home/twcmanager/gobin/tesla-control"
-
         # Check that binary exists and is executable, otherwise unload
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
             logger.error(
