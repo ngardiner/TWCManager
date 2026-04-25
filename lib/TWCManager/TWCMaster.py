@@ -1663,6 +1663,11 @@ class TWCMaster:
         self.consumptionAmpsValues[source] = value
 
     def setGeneration(self, source, value):
+        # Some EMS modules report generation as a negative value (e.g. -5000W
+        # means 5000W generated). Negate such values so the rest of the code
+        # always works with positive generation watts (closes #442).
+        if value < 0:
+            value = -value
         self.generationValues[source] = value
 
     def setHomeLat(self, lat):

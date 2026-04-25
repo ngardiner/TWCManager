@@ -17,6 +17,7 @@ This document logs the changes per release of TWCManager.
     * Fix: limitOverride no longer applies charge limit cap when charging has resumed, preventing 60% limit being set instead of stopping charge (closes #586)
     * Fix: Skip start-charge command when battery level is already at or above charge limit to avoid useless API calls (closes #591)
     * Fix: Transient API errors (vehicle unavailable, operation_timedout) no longer trigger full exponential backoff, preventing hour-long delays in stop-charge commands (closes #377)
+    * Fix: Negate negative generation values from EMS modules that report generation as negative watts (closes #442)
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
