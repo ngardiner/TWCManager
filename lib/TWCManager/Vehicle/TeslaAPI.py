@@ -701,6 +701,25 @@ class TeslaAPI:
                 vehicle.stopAskingToStartCharging = True
                 continue
 
+            if (
+                charge
+                and vehicle.batteryLevel > 0
+                and vehicle.chargeLimit > 0
+                and vehicle.batteryLevel >= vehicle.chargeLimit
+            ):
+                # Car is already at or above its charge limit; starting charge
+                # would be immediately rejected by the car (closes #591).
+                logger.info(
+                    vehicle.name
+                    + " battery level "
+                    + str(vehicle.batteryLevel)
+                    + "% is at or above charge limit "
+                    + str(vehicle.chargeLimit)
+                    + "%.  Do not start charge."
+                )
+                vehicle.stopAskingToStartCharging = True
+                continue
+
             if vehicle.chargingState == "Charging" and charge:
                 # Don't start charging if car is already charging.
                 logger.info(
