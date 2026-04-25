@@ -68,6 +68,7 @@ class TeslaAPI:
         "upstream internal error",
         "operation_timedout",
         "vehicle unavailable",
+        "context deadline exceeded",
     ]
 
     def __init__(self, master):
