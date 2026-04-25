@@ -99,15 +99,23 @@ class MQTT:
         # Takes an MQTT message, and update the associated Generation/Consumption value
         payload = str(message.payload.decode("utf-8"))
 
+        try:
+            value = float(payload)
+        except ValueError:
+            logger.warning(
+                f"MQTT EMS received non-numeric payload: {payload} on topic {message.topic}"
+            )
+            return
+
         if message.topic == self.__topicConsumption:
-            self.consumedW = payload
+            self.consumedW = value
             logger.log(
-                logging.INFO3, f"MQTT EMS Consumption Value updated to {payload}"
+                logging.INFO3, f"MQTT EMS Consumption Value updated to {value}W"
             )
 
         if message.topic == self.__topicGeneration:
-            self.generatedW = payload
-            logger.log(logging.INFO3, f"MQTT EMS Generation Value updated to {payload}")
+            self.generatedW = value
+            logger.log(logging.INFO3, f"MQTT EMS Generation Value updated to {value}W")
 
     def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
