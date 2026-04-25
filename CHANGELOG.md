@@ -20,6 +20,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Negate negative generation values from EMS modules that report generation as negative watts (closes #442)
     * Fix: Add "context deadline exceeded" to transient API errors so wake-up timeouts don't trigger full backoff (closes #593)
     * Fix: Reset historyAvgAmps to 0 after each history snapshot so kWh counter doesn't accumulate across periods (closes #470)
+    * Fix: Log a clear error and stop retrying when Tesla Vehicle Command Protocol is required, instead of silently failing (closes #580)
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:

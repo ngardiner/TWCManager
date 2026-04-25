@@ -793,6 +793,20 @@ class TeslaAPI:
                         # This generally indicates an error like 'vehicle
                         # unavailable', but it's not something I think the caller can do
                         # anything about, so return generic 'error'.
+                        error = (apiResponseDict or {}).get("error", "")
+                        if "Tesla Vehicle Command Protocol required" in error:
+                            # The legacy REST command endpoint has been decommissioned.
+                            # Log a clear message and stop retrying (closes #580).
+                            logger.error(
+                                "Tesla Vehicle Command Protocol (VCP) is required for "
+                                + vehicle.name
+                                + ". The legacy REST command endpoint is no longer "
+                                "supported. Please configure the Fleet API with a "
+                                "registered app, or enable the TeslaBLE module."
+                            )
+                            vehicle.stopAskingToStartCharging = True
+                            result = "error"
+                            return result
                         result = "error"
                         # Don't send another command to this vehicle for
                         # carApiErrorRetryMins mins.
