@@ -315,7 +315,14 @@ class Policy:
 
             # If value refers to a setting, return the setting
             if pieces[0] == "settings":
-                return self.master.settings.get(pieces[1], 0)
+                val = self.master.settings.get(pieces[1], 0)
+                # Settings loaded from JSON are strings; cast numeric values
+                if isinstance(val, str):
+                    try:
+                        val = float(val) if "." in val else int(val)
+                    except (ValueError, TypeError):
+                        pass
+                return val
             elif pieces[0] == "config":
                 return self.config["config"].get(pieces[1], 0)
             elif pieces[0] == "modules":
