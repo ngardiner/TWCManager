@@ -4,6 +4,10 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming
 
+* Bugfixes
+    * Fix: RS485 read returns empty bytes after reconnect instead of None, preventing crash on socket disconnect (closes #461)
+    * Fix: Stop flooding VIN queries when non-Tesla vehicle or CAN-disabled TWC returns all-zero VIN data (closes #296)
+
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
     * (@ngardiner) Gen3 TWC support - new `Gen3TWCs` EVSEController and `Gen3TWC` EVSEInstance enable power control of Generation 3 Tesla Wall Connectors:

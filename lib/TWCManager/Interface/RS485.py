@@ -79,6 +79,7 @@ class RS485:
                 ),
             )
             self.connect()
+            return b""
 
     def send(self, msg):
         # Send msg on the RS485 network. We'll escape bytes with a special meaning,

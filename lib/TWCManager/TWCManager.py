@@ -1459,7 +1459,13 @@ while True:
                             if sum % 11 != check:
                                 vinValid = False
 
-                        if vinValid:
+                        if vinValid and len(potentialVIN) == 0:
+                            # All VIN parts are empty - non-Tesla vehicle or CAN
+                            # communication disabled (DIP switch 2 down). Stop
+                            # querying; there is no VIN to retrieve.
+                            slaveTWC.lastVINQuery = 0
+                            slaveTWC.vinQueryAttempt = 0
+                        elif vinValid:
                             # Record Vehicle VIN
                             slaveTWC.currentVIN = potentialVIN
 
