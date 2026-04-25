@@ -489,11 +489,16 @@ class TeslaBLE:
                 )
 
             output = stderr.decode("utf-8") if stderr else ""
-            logger.debug(
-                f"BLE command output: {output[:200]}..."
-                if len(output) > 200
-                else output
-            )
+            
+            # Log full output when command fails, truncate for success
+            if return_code != 0:
+                logger.warning(f"BLE command full error output: {output}")
+            else:
+                logger.debug(
+                    f"BLE command output: {output[:200]}..."
+                    if len(output) > 200
+                    else output
+                )
             return output
 
         except Exception as e:
