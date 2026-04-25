@@ -109,9 +109,7 @@ class MQTT:
 
         if message.topic == self.__topicConsumption:
             self.consumedW = value
-            logger.log(
-                logging.INFO3, f"MQTT EMS Consumption Value updated to {value}W"
-            )
+            logger.log(logging.INFO3, f"MQTT EMS Consumption Value updated to {value}W")
 
         if message.topic == self.__topicGeneration:
             self.generatedW = value
