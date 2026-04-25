@@ -515,7 +515,7 @@ def update_statuses():
                 conwatts = genwatts - master.convertAmpsToWatts(maxamps)
             elif subtractChargerLoad and conwatts > 0:
                 # Reverse: (genwatts + 2*chgwatts - conwatts) / voltage = maxamps
-                conwatts = genwatts + 2*chgwatts - master.convertAmpsToWatts(maxamps)
+                conwatts = genwatts + 2 * chgwatts - master.convertAmpsToWatts(maxamps)
             elif subtractChargerLoad and conwatts == 0:
                 # Reverse: (genwatts + chgwatts) / voltage = maxamps
                 conwatts = genwatts + chgwatts - master.convertAmpsToWatts(maxamps)
