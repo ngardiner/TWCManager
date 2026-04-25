@@ -72,7 +72,14 @@ class RS485:
     def getBufferLen(self):
         # This function returns the size of the recieve buffer.
         # This is used by read functions to determine if information is waiting
-        return self.ser.inWaiting()
+        try:
+            return self.ser.inWaiting()
+        except serial.serialutil.SerialException as e:
+            logger.error(
+                "Error checking RS485 buffer: {}. Will attempt re-connect.".format(e)
+            )
+            self.connect()
+            return 0
 
     def read(self, len):
         # Read the specified amount of data from the serial interface
@@ -123,6 +130,12 @@ class RS485:
         msg = bytearray(b"\xc0" + msg + b"\xc0")
         logger.log(logging.INFO9, "Tx@: " + self.master.hex_str(msg))
 
-        self.ser.write(msg)
+        try:
+            self.ser.write(msg)
+        except serial.serialutil.SerialException as e:
+            logger.error(
+                "Error writing to RS485 interface: {}. Will attempt re-connect.".format(e)
+            )
+            self.connect()
 
         self.timeLastTx = time.time()
