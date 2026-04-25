@@ -1772,6 +1772,7 @@ class TWCMaster:
 
         for slave in self.getSlaveTWCs():
             avgCurrent += slave.historyAvgAmps
+            slave.historyAvgAmps = 0
             slave.historyNumSamples = 0
         self.advanceHistorySnap()
 
