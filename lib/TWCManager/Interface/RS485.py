@@ -134,7 +134,9 @@ class RS485:
             self.ser.write(msg)
         except serial.serialutil.SerialException as e:
             logger.error(
-                "Error writing to RS485 interface: {}. Will attempt re-connect.".format(e)
+                "Error writing to RS485 interface: {}. Will attempt re-connect.".format(
+                    e
+                )
             )
             self.connect()
 
