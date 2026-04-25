@@ -336,6 +336,17 @@ class TeslaAPI:
                     if vehicle.ready():
                         continue
 
+                    # Don't wake a vehicle we already know is not at home;
+                    # waking it would drain its battery unnecessarily (closes #466).
+                    if not vehicle.atHome and vehicle.lat != 10000:
+                        logger.log(
+                            logging.DEBUG2,
+                            "Don't wake "
+                            + vehicle.name
+                            + " because it is not at home.",
+                        )
+                        continue
+
                     if now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt:
                         logger.debug(
                             "car_api_available returning False because we are still delaying "
