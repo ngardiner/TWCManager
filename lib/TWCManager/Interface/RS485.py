@@ -51,6 +51,13 @@ class RS485:
         self.connect()
 
     def connect(self):
+        if not self.port:
+            logger.error(
+                "RS485 interface has no port configured. "
+                "Set interface.RS485.port in config.json or use the TCP interface instead."
+            )
+            self.master.releaseModule("lib.TWCManager.Interface", "RS485")
+            return
         # Reset any Slave TWC last RX heartbeat counters in case serial reconnection has occurred
         for slaveTWC in self.master.getSlaveTWCs():
             slaveTWC.timeLastRx = time.time()

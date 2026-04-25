@@ -21,7 +21,8 @@ This document logs the changes per release of TWCManager.
     * Fix: Add "context deadline exceeded" to transient API errors so wake-up timeouts don't trigger full backoff (closes #593)
     * Fix: Reset historyAvgAmps to 0 after each history snapshot so kWh counter doesn't accumulate across periods (closes #470)
     * Fix: Log a clear error and stop retrying when Tesla Vehicle Command Protocol is required, instead of silently failing (closes #580)
-    * Fix: Skip waking vehicles known to be away from home to prevent unnecessary API calls draining the battery (closes #466)
+    * Fix: Skip waking vehicles known to be away from home to prevent unnecessary API calls draining the battery (closes #466, #209)
+    * Fix: RS485 interface now logs a clear error and unloads gracefully when no port is configured, allowing TCP interface to take over (closes #612)
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
