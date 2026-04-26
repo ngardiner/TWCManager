@@ -26,6 +26,7 @@ class Enphase:
     status = False
     systemID = None
     timeout = 10
+    token = None
     userID = None
     voltage = 0
 
@@ -45,6 +46,7 @@ class Enphase:
         self.serverPort = self.configEnphase.get("serverPort", 80)
         self.status = self.configEnphase.get("enabled", False)
         self.systemID = self.configEnphase.get("systemID", None)
+        self.token = self.configEnphase.get("token", None)
         self.userID = self.configEnphase.get("userID", None)
 
         # Unload if this module is disabled or misconfigured
@@ -98,8 +100,13 @@ class Enphase:
         # Fetch the specified URL from the Enphase Portal and return the data
         self.fetchFailed = False
 
+        # Envoy firmware 7.x requires a JWT Bearer token for local API access
+        headers = {}
+        if self.token and self.serverIP:
+            headers["Authorization"] = "Bearer " + self.token
+
         try:
-            r = self.requests.get(url, timeout=self.timeout)
+            r = self.requests.get(url, timeout=self.timeout, headers=headers, verify=False)
         except self.requests.exceptions.ConnectionError as e:
             logger.log(
                 logging.INFO4,
