@@ -543,6 +543,19 @@ def update_statuses():
         "Charge when above %s (minAmpsPerTWC).", minchg, extra={"colored": "magenta"}
     )
 
+    # Warn if minAmpsPerTWC > wiringMaxAmpsPerTWC - this is a misconfiguration
+    # that will prevent charging from ever starting (closes #24).
+    if config["config"].get("minAmpsPerTWC", 12) > config["config"].get(
+        "wiringMaxAmpsPerTWC", 6
+    ):
+        logger.warning(
+            "WARNING: minAmpsPerTWC (%dA) is greater than wiringMaxAmpsPerTWC (%dA). "
+            "Charging will never start because the minimum charge rate exceeds the "
+            "wiring limit. Please review your config.json settings.",
+            config["config"]["minAmpsPerTWC"],
+            config["config"]["wiringMaxAmpsPerTWC"],
+        )
+
     # Update Sensors with min/max amp values
     for module in master.getModulesByType("Status"):
         module["ref"].setStatus(
