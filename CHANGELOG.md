@@ -24,6 +24,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Skip waking vehicles known to be away from home to prevent unnecessary API calls draining the battery (closes #466, #209)
     * Fix: RS485 interface now logs a clear error and unloads gracefully when no port is configured, allowing TCP interface to take over (closes #612)
     * Fix: RS485 getBufferLen() and send() now handle SerialException and attempt reconnect, preventing crashes on socket disconnection (closes #461)
+    * Fix: Track Green Energy policy no longer activates when Non-Scheduled action is set to Do Not Charge (closes #527)
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:

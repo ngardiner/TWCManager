@@ -41,11 +41,12 @@ class Policy:
         # 8pm. Sunrise in most U.S. areas varies from a little before
         # 6am in Jun to almost 7:30am in Nov before the clocks get set
         # back an hour. Sunset can be ~4:30pm to just after 8pm.
+        # Also skip if the user has set Non-Scheduled action to Do Not Charge (2).
         {
             "name": "Track Green Energy",
-            "match": ["tm_hour", "tm_hour", "settings.hourResumeTrackGreenEnergy"],
-            "condition": ["gte", "lt", "lte"],
-            "value": ["settings.sunrise", "settings.sunset", "tm_hour"],
+            "match": ["tm_hour", "tm_hour", "settings.hourResumeTrackGreenEnergy", "settings.nonScheduledAction"],
+            "condition": ["gte", "lt", "lte", "ne"],
+            "value": ["settings.sunrise", "settings.sunset", "tm_hour", 2],
             "background_task": "checkGreenEnergy",
             "allowed_flex": "config.greenEnergyFlexAmps",
             "charge_limit": "config.greenEnergyLimit",
