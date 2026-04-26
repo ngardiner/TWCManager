@@ -1023,7 +1023,8 @@ class TeslaAPI:
                 outside = vehicle.chargeLimit
             elif wasAtHome and not vehicle.atHome:
                 logger.log(logging.INFO2, vehicle.name + " has departed")
-                vehicle.stopAskingToStartCharging = False
+                # Don't ask a departed vehicle to start charging; it's not here
+                vehicle.stopAskingToStartCharging = True
                 forgetVehicle = True
 
             if limit == -1 or not vehicle.atHome:
