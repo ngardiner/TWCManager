@@ -26,6 +26,7 @@ This document logs the changes per release of TWCManager.
     * Fix: RS485 getBufferLen() and send() now handle SerialException and attempt reconnect, preventing crashes on socket disconnection (closes #461)
     * Fix: Track Green Energy policy no longer activates when Non-Scheduled action is set to Do Not Charge (closes #527)
     * Fix: Enphase local API now supports JWT Bearer token authentication required by Envoy firmware 7.x (closes #424)
+    * Fix: Publish charger_load_w status on every heartbeat so Home Assistant entities don't disappear after HA reboot (closes #462)
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:

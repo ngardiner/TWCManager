@@ -601,6 +601,7 @@ class TWCSlave:
         self.reportedAmpsMax = ((heartbeatData[1] << 8) + heartbeatData[2]) / 100
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
+        self.refreshingChargerLoadStatus()
 
         if self.reportedState == 0x02:
             logger.info(
