@@ -44,7 +44,12 @@ class Policy:
         # Also skip if the user has set Non-Scheduled action to Do Not Charge (2).
         {
             "name": "Track Green Energy",
-            "match": ["tm_hour", "tm_hour", "settings.hourResumeTrackGreenEnergy", "settings.nonScheduledAction"],
+            "match": [
+                "tm_hour",
+                "tm_hour",
+                "settings.hourResumeTrackGreenEnergy",
+                "settings.nonScheduledAction",
+            ],
             "condition": ["gte", "lt", "lte", "ne"],
             "value": ["settings.sunrise", "settings.sunset", "tm_hour", 2],
             "background_task": "checkGreenEnergy",

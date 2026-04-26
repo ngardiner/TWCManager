@@ -106,7 +106,9 @@ class Enphase:
             headers["Authorization"] = "Bearer " + self.token
 
         try:
-            r = self.requests.get(url, timeout=self.timeout, headers=headers, verify=False)
+            r = self.requests.get(
+                url, timeout=self.timeout, headers=headers, verify=False
+            )
         except self.requests.exceptions.ConnectionError as e:
             logger.log(
                 logging.INFO4,
