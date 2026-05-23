@@ -110,8 +110,8 @@ class TelmetryBase:
         logger.log(logging.INFO5, "MQTT Connected.")
         # No default subscriptions, should be handled by child class
 
-    def mqttDisconnect(self, client, userdata, flags, rc, properties=None):
-        if rc != 0:
+    def mqttDisconnect(self, client, userdata, disconnect_flags, reason_code, properties=None):
+        if reason_code != 0:
             logger.log(
                 logging.INFO5, "MQTT Disconnected. Should reconnect automatically."
             )
