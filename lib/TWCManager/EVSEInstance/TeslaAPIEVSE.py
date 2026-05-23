@@ -106,9 +106,13 @@ class TeslaAPIEVSE(EVSEInstance):
 
     @property
     def maxPower(self) -> float:
-        return self.convertAmpsToWatts(
-            self.vehicle.availableCurrent, self.currentVoltage
-        )
+        amps = self.vehicle.availableCurrent
+        if not amps:
+            # availableCurrent is 0 before the first vehicle_data poll (vehicle
+            # asleep or not yet queried).  Fall back to the wiring limit so the
+            # distributor doesn't offer 0W and trigger a spurious 1A API call.
+            amps = self.configConfig.get("wiringMaxAmpsPerTWC", 32)
+        return self.convertAmpsToWatts(amps, self.currentVoltage)
 
     # ------------------------------------------------------------------
     # EVSEInstance: optional properties
@@ -127,6 +131,11 @@ class TeslaAPIEVSE(EVSEInstance):
     # ------------------------------------------------------------------
 
     def setTargetPower(self, watts: float) -> None:
+        if not watts:
+            # 0W means the distributor wants this vehicle to stop drawing power.
+            # Do not call setChargeRate(0) — TeslaAPI clamps it to 1A, which
+            # would cause a continuous stream of spurious 1A API commands.
+            return
         amps = self.convertWattsToAmps(watts, self.currentVoltage)
         carapi = self.master.getModuleByName("TeslaAPI")
         if carapi:
