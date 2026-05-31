@@ -138,10 +138,10 @@ class TestMethodDelegation:
         """Test method delegation with fallback on failure."""
         module1 = Mock()
         module1.test_method = Mock(return_value=False)
-        
+
         module2 = Mock()
         module2.test_method = Mock(return_value=True)
-        
+
         priority.master.getModuleByPriority = Mock(
             side_effect=[
                 ("Module1", module1, 20),
@@ -149,11 +149,12 @@ class TestMethodDelegation:
                 (None, None, 0)
             ]
         )
-        
+
         result = priority.test_method()
-        
+
         assert result is True
-        module1.test_method.assert_called_once()
+        # Module1 at priority 20 gets 3 attempts (2 retries) before fallback
+        assert module1.test_method.call_count == 3
         module2.test_method.assert_called_once()
     
     def test_method_delegation_no_module(self, priority):
@@ -299,19 +300,19 @@ class TestStatisticsTracking:
         """Test that multiple successes are accumulated."""
         module = Mock()
         module.test_method = Mock(return_value=True)
-        
+
+        # Each call to priority.test_method() consumes one getModuleByPriority
+        # entry (success returns immediately; the None sentinel is never reached)
         priority.master.getModuleByPriority = Mock(
             side_effect=[
                 ("TestModule", module, 20),
-                (None, None, 0),
                 ("TestModule", module, 20),
-                (None, None, 0)
             ]
         )
-        
+
         priority.test_method()
         priority.test_method()
-        
+
         assert priority.master.stats["moduleSuccess"]["TestModule"] == 2
 
 
@@ -337,30 +338,31 @@ class TestPriorityOrdering:
     
     def test_higher_priority_tried_first(self, priority):
         """Test that higher priority modules are tried first."""
-        module_high = Mock()
-        module_high.test_method = Mock(return_value=False)
-        
-        module_low = Mock()
-        module_low.test_method = Mock(return_value=True)
-        
         call_order = []
-        
-        def track_calls(*args):
-            call_order.append(args[0])
-            if args[0] == "HighPriority":
-                return ("HighPriority", module_high, 20)
-            elif args[0] == "LowPriority":
-                return ("LowPriority", module_low, 10)
-            else:
-                return (None, None, 0)
-        
-        priority.master.getModuleByPriority = Mock(side_effect=track_calls)
-        
-        priority.test_method()
-        
-        # High priority should be tried before low priority
-        assert call_order[0] == "Vehicle"
-        assert call_order[1] == "Vehicle"
+
+        module_high = Mock()
+        module_high.test_method = Mock(
+            side_effect=lambda *a, **kw: call_order.append("high") or False
+        )
+
+        module_low = Mock()
+        module_low.test_method = Mock(
+            side_effect=lambda *a, **kw: call_order.append("low") or True
+        )
+
+        # Use priority 5 (0 retries) so each module is attempted exactly once
+        priority.master.getModuleByPriority = Mock(
+            side_effect=[
+                ("HighPriority", module_high, 5),
+                ("LowPriority", module_low, 5),
+                (None, None, 0),
+            ]
+        )
+
+        result = priority.test_method()
+
+        assert result is True
+        assert call_order == ["high", "low"]
 
 
 class TestMethodArguments:
