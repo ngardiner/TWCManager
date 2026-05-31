@@ -2,7 +2,7 @@ cryptography<3.4
 build
 growattServer==0.1.1
 jinja2>=2.11.2
-ocpp
+ocpp>=2.0
 paho_mqtt>=1.5.0
 psycopg2-binary
 pymodbus<3.0.0; python_version < '3.8'
@@ -18,5 +18,4 @@ solaredge_modbus>=0.7.0; python_version >= '3.7'
 sysv_ipc
 termcolor>=1.1.0
 urllib3>=1.26.11
-websockets<=9.1; python_version == '3.6'
-websockets>=9.1; python_version >= '3.7'
+websockets>=10.0

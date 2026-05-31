@@ -294,7 +294,8 @@
       },
       "OCPP": {
           "enabled": false,
-          "serverPort": 9000
+          "serverPort": 9000,
+          "serverHost": "0.0.0.0"
       }
 
     },

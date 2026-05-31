@@ -15,7 +15,7 @@ setup(
         "cryptography<3.4",
         "growattServer>=1.0.0",
         "jinja2>=2.11.2",
-        "ocpp",
+        "ocpp>=2.0",
         "paho_mqtt>=1.5.0",
         "psycopg2",
         "pyjwt",
@@ -30,8 +30,7 @@ setup(
         "sysv_ipc",
         "termcolor>=1.1.0",
         "urllib3>=1.26.11",
-        "websockets<=9.1; python_version == '3.6'",
-        "websockets>=9.1; python_version >= '3.7'",
+        "websockets>=10.0",
     ],
     # Package Metadata
     author="Nathan Gardiner",

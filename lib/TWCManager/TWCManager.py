@@ -89,7 +89,7 @@ modules_available = [
     "Control.WebIPCControl",
     "Control.HTTPControl",
     "Control.MQTTControl",
-    #    "Control.OCPPControl",
+    "Control.OCPPControl",
     "EMS.DSMRreader",
     "EMS.Efergy",
     "EMS.EmonCMS",
