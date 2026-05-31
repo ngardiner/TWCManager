@@ -509,7 +509,8 @@ class HomeAssistant:
 
         return self._get_state(ent) is not None
 
-    def car_api_charge(self, charge: bool) -> str:
+    def car_api_charge(self, task) -> str:
+        charge = task.get("charge", None) if isinstance(task, dict) else task
         now = time.time()
         if now - self.carApiLastStartOrStopChargeTime < 10:
             logger.debug("Charge command rate limited (10s minimum between commands)")
