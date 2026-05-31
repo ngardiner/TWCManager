@@ -419,14 +419,140 @@ class TestMethodArguments:
         """Test that mixed arguments are passed to module."""
         module = Mock()
         module.test_method = Mock(return_value=True)
-        
+
         priority.master.getModuleByPriority = Mock(
             side_effect=[
                 ("TestModule", module, 20),
                 (None, None, 0)
             ]
         )
-        
+
         priority.test_method("arg1", key1="value1")
-        
+
         module.test_method.assert_called_with("arg1", key1="value1")
+
+
+class TestBLENotLoaded:
+    """Backwards compatibility: VehiclePriority with only TeslaAPI (no BLE)."""
+
+    @pytest.fixture
+    def mock_master(self):
+        master = Mock()
+        master.stats = {
+            "moduleSuccess": {},
+            "moduleFailures": {},
+            "moduleDispatch": {},
+        }
+        return master
+
+    @pytest.fixture
+    def priority(self, mock_master):
+        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+        return VehiclePriority(mock_master)
+
+    def test_car_api_charge_only_api_loaded(self, priority):
+        """car_api_charge succeeds when only TeslaAPI is loaded (no BLE)."""
+        tesla_api = Mock()
+        tesla_api.car_api_charge = Mock(return_value=True)
+
+        priority.master.getModuleByPriority = Mock(
+            side_effect=[
+                ("TeslaAPI", tesla_api, 10),
+                (None, None, 0),
+            ]
+        )
+
+        task = {"cmd": "charge", "charge": True}
+        result = priority.car_api_charge(task)
+
+        assert result is True
+        tesla_api.car_api_charge.assert_called_once_with(task)
+
+    def test_car_api_charge_task_dict_passed_through(self, priority):
+        """Task dict is forwarded intact to TeslaAPI when BLE is absent."""
+        tesla_api = Mock()
+        tesla_api.car_api_charge = Mock(return_value=True)
+
+        priority.master.getModuleByPriority = Mock(
+            side_effect=[
+                ("TeslaAPI", tesla_api, 10),
+                (None, None, 0),
+            ]
+        )
+
+        task = {"cmd": "charge", "charge": False, "vin": "5YJ3E1EA1KF000001"}
+        priority.car_api_charge(task)
+
+        tesla_api.car_api_charge.assert_called_once_with(task)
+
+    def test_car_api_charge_no_modules_loaded(self, priority):
+        """car_api_charge returns False when no vehicle modules are loaded."""
+        priority.master.getModuleByPriority = Mock(return_value=(None, None, 0))
+
+        task = {"cmd": "charge", "charge": True}
+        result = priority.car_api_charge(task)
+
+        assert result is False
+
+    def test_ble_tried_before_api_when_both_loaded(self, priority):
+        """When BLE and TeslaAPI are both loaded, BLE is tried first."""
+        ble_module = Mock()
+        ble_module.car_api_charge = Mock(return_value=False)
+
+        tesla_api = Mock()
+        tesla_api.car_api_charge = Mock(return_value=True)
+
+        priority.master.getModuleByPriority = Mock(
+            side_effect=[
+                ("TeslaBLE", ble_module, 20),
+                ("TeslaAPI", tesla_api, 10),
+                (None, None, 0),
+            ]
+        )
+
+        task = {"cmd": "charge", "charge": True}
+        result = priority.car_api_charge(task)
+
+        # BLE at priority 20 gets 3 attempts before fallback (priority // 10 = 2 retries)
+        assert result is True
+        assert ble_module.car_api_charge.call_count == 3
+        tesla_api.car_api_charge.assert_called_once_with(task)
+
+    def test_ble_success_does_not_call_api(self, priority):
+        """When BLE succeeds, TeslaAPI is not called."""
+        ble_module = Mock()
+        ble_module.car_api_charge = Mock(return_value=True)
+
+        tesla_api = Mock()
+        tesla_api.car_api_charge = Mock(return_value=True)
+
+        priority.master.getModuleByPriority = Mock(
+            side_effect=[
+                ("TeslaBLE", ble_module, 20),
+                (None, None, 0),
+            ]
+        )
+
+        task = {"cmd": "charge", "charge": True}
+        priority.car_api_charge(task)
+
+        ble_module.car_api_charge.assert_called_once()
+        tesla_api.car_api_charge.assert_not_called()
+
+    def test_stop_charge_only_api_loaded(self, priority):
+        """Stop-charge command works when only TeslaAPI is loaded."""
+        tesla_api = Mock()
+        tesla_api.car_api_charge = Mock(return_value=True)
+
+        priority.master.getModuleByPriority = Mock(
+            side_effect=[
+                ("TeslaAPI", tesla_api, 10),
+                (None, None, 0),
+            ]
+        )
+
+        task = {"cmd": "charge", "charge": False}
+        result = priority.car_api_charge(task)
+
+        assert result is True
+        tesla_api.car_api_charge.assert_called_once_with(task)
