@@ -109,10 +109,14 @@ endif
 
 install_pkg:
 ifneq (,$(wildcard /usr/bin/pip3))
+	$(SUDO) pip3 install --upgrade pip
+	$(SUDO) pip3 install --upgrade setuptools
 	$(SUDO) pip3 install -r requirements.txt
 	$(SUDO) pip3 install .
 else
 ifneq (,$(wildcard /usr/bin/pip))
+	$(SUDO) pip install --upgrade pip
+	$(SUDO) pip install --upgrade setuptools
 	$(SUDO) pip install -r requirements.txt
 	$(SUDO) pip install .
 endif
