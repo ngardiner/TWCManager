@@ -146,14 +146,14 @@ class IotaWatt:
                     self.generatedW = float(apivalue)
                 else:
                     logger.debug("getGeneration fetch failed, using cached values")
-             else:
+            else:
                  logger.debug("Generation Entity Not Supplied. Not Querying")
 
-             # Update last fetch time
-             if self.fetchFailed is not True:
+            # Update last fetch time
+            if self.fetchFailed is not True:
                  self.lastFetch = int(time.time())
 
-             return True
+            return True
         else:
             # Cache time has not elapsed since last fetch, serve from cache.
             return False
