@@ -65,22 +65,46 @@ class HTTPControl:
         logger.info("HTTPControl: Creating HTTP server on port %s", self.httpPort)
         HTTPHandler = CreateHTTPHandlerClass(master)
         httpd = None
-        try:
-            httpd = ThreadingSimpleServer(("", self.httpPort), HTTPHandler)
-            logger.info("HTTPControl: HTTP server created successfully")
-        except OSError as e:
-            logger.error(
-                "HTTPControl: Unable to start HTTP Server on port %s: %s",
-                self.httpPort,
-                str(e),
-            )
-            self.master.releaseModule("lib.TWCManager.Control", self.__class__.__name__)
-            return None
+        
+        # Try to bind to the configured port, with auto-increment on conflict
+        max_port_attempts = 10
+        original_port = self.httpPort
+        port_attempt = 0
+        
+        while port_attempt < max_port_attempts and httpd is None:
+            try:
+                httpd = ThreadingSimpleServer(("", self.httpPort), HTTPHandler)
+                logger.info("HTTPControl: HTTP server created successfully on port %s", self.httpPort)
+            except OSError as e:
+                if e.errno == 98 or "Address already in use" in str(e):
+                    # Port conflict - try next port
+                    port_attempt += 1
+                    if port_attempt < max_port_attempts:
+                        self.httpPort += 1
+                        logger.warning(
+                            f"Port {self.httpPort - 1} already in use. Trying port {self.httpPort}..."
+                        )
+                    else:
+                        logger.error(
+                            f"Unable to start HTTP Server after trying ports {original_port}-{self.httpPort}. "
+                            f"Please configure a different listenPort in config.json or stop other services using these ports."
+                        )
+                else:
+                    # Different error - don't retry
+                    logger.error(
+                        "HTTPControl: Unable to start HTTP Server on port %s: %s",
+                        self.httpPort,
+                        str(e),
+                    )
+                    break
 
         if httpd:
-            logger.info(
-                "HTTPControl: Starting daemon thread to serve on port %s", self.httpPort
-            )
+            if self.httpPort != original_port:
+                logger.info(f"HTTP Server started on port {self.httpPort} (originally configured for {original_port})")
+            else:
+                logger.info(
+                    "HTTPControl: Starting daemon thread to serve on port %s", self.httpPort
+                )
             server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             server_thread.start()
             logger.info(
