@@ -150,13 +150,13 @@ class EmonCMS:
 
         if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from EmonCMS
-             feeds = []
+            feeds = []
 
-             if self.consumptionFeed:
-                 feeds.append(self.consumptionFeed)
+            if self.consumptionFeed:
+                feeds.append(self.consumptionFeed)
 
-             if self.generationFeed:
-                 feeds.append(self.generationFeed)
+            if self.generationFeed:
+                feeds.append(self.generationFeed)
 
             vals = self.getFeeds(feeds)
             if vals:
