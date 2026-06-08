@@ -600,8 +600,10 @@ def update_sunrise_sunset():
 
         r = {}
         try:
-            r = requests.get(url).json().get("results")
-        except Exception as e:
+            response = requests.get(url)
+            response.raise_for_status()
+            r = response.json().get("results", {})
+        except (requests.exceptions.RequestException, ValueError) as e:
             logger.debug(f"Error fetching sunrise/sunset data: {e}")
 
         if r.get("sunrise", None):
