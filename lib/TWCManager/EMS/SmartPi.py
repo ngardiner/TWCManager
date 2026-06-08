@@ -100,14 +100,15 @@ class SmartPi:
             return False
 
         if not httpResponse:
-            logger.log(logging.INFO4, "Empty HTTP Response from SmartPi API")
-            return False
+             logger.log(logging.INFO4, "Empty HTTP Response from SmartPi API")
+             return False
 
-        if httpResponse.json():
-            genWatts = 0
-            conWatts = 0
-            try:
-                for phase in httpResponse.json()["datasets"][0]["phases"]:
+         json_data = httpResponse.json()
+         if json_data:
+             genWatts = 0
+             conWatts = 0
+             try:
+                 for phase in json_data.get("datasets", [{}])[0].get("phases", []):
                     logger.log(
                         logging.INFO8,
                         "Logged "

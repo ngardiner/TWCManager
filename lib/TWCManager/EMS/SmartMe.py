@@ -106,16 +106,17 @@ class SmartMe:
             return False
 
         if not httpResponse:
-            logger.log(logging.INFO4, "Empty HTTP Response from SmartMe API")
-            return False
+             logger.log(logging.INFO4, "Empty HTTP Response from SmartMe API")
+             return False
 
-        if httpResponse.json():
-            self.generatedW = float(httpResponse.json()["ActivePower"]) * -1
-            if httpResponse.json()["ActivePowerUnit"] == "kW":
-                # Unit is kW, multiply by 1000 for W
-                self.generatedW = self.generatedW * 1000
-        else:
-            logger.log(logging.INFO4, "No JSON response from SmartMe API")
+         json_data = httpResponse.json()
+         if json_data:
+             self.generatedW = float(json_data.get("ActivePower", 0)) * -1
+             if json_data.get("ActivePowerUnit") == "kW":
+                 # Unit is kW, multiply by 1000 for W
+                 self.generatedW = self.generatedW * 1000
+         else:
+             logger.log(logging.INFO4, "No JSON response from SmartMe API")
 
     def setCacheTime(self, cacheTime):
         self.cacheTime = cacheTime
@@ -126,15 +127,15 @@ class SmartMe:
     def update(self):
         # Update function - determine if an update is required
 
-        if (int(time.time()) - self.lastFetch) > self.cacheTime:
-            # Cache has expired. Fetch values from SmartMe.
-            self.getGenerationValues()
+         if (int(time.time()) - self.lastFetch) > self.cacheTime:
+             # Cache has expired. Fetch values from SmartMe.
+             self.getGenerationValues()
 
              # Update last fetch time
              if self.fetchFailed is not True:
                  self.lastFetch = int(time.time())
 
-            return True
+             return True
         else:
             # Cache time has not elapsed since last fetch, serve from cache.
             return False

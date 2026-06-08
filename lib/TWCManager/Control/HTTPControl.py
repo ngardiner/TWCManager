@@ -249,8 +249,8 @@ def CreateHTTPHandlerClass(master):
                         curday = settings.get(day, {})
                     if (
                         today.get("enabled", None) == "on"
-                        and (int(curday.get("start", 0)[:2]) <= int(i))
-                        and (int(curday.get("end", 0)[:2]) >= int(i))
+                        and (int(str(curday.get("start", "00"))[:2]) <= int(i))
+                        and (int(str(curday.get("end", "00"))[:2]) >= int(i))
                     ):
                         page += (
                             "<td bgcolor='#CFFAFF'>SC @ "
