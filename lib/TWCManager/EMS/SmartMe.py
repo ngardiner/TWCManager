@@ -109,13 +109,13 @@ class SmartMe:
             logger.log(logging.INFO4, "Empty HTTP Response from SmartMe API")
             return False
 
-         json_data = httpResponse.json()
-         if json_data:
+        json_data = httpResponse.json()
+        if json_data:
             self.generatedW = float(json_data.get("ActivePower", 0)) * -1
             if json_data.get("ActivePowerUnit") == "kW":
-                 # Unit is kW, multiply by 1000 for W
-                 self.generatedW = self.generatedW * 1000
-         else:
+                # Unit is kW, multiply by 1000 for W
+                self.generatedW = self.generatedW * 1000
+        else:
             logger.log(logging.INFO4, "No JSON response from SmartMe API")
 
     def setCacheTime(self, cacheTime):
