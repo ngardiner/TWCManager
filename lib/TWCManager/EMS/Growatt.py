@@ -108,17 +108,17 @@ class Growatt:
                     return False
                 plant_list = plant_data[0]
                 plant_ID = plant_list["plantId"]
-                
+
                 device_list = api.device_list(plant_ID)
                 if not device_list:
                     logger.error("No devices returned from Growatt API for plant")
                     return False
                 inverter = device_list[0]
                 deviceAilas = inverter["deviceAilas"]
-                
+
                 status = api.mix_system_status(deviceAilas, plant_ID)
                 plant_info = api.plant_info(plant_ID)
-                
+
                 device_list_info = plant_info.get("deviceList", [])
                 if not device_list_info:
                     logger.error("No device list in plant info from Growatt API")
@@ -131,7 +131,8 @@ class Growatt:
                 gen_calc *= 1000
                 gen_api = float(status["ppv"]) * 1000
                 inTime = (
-                    self.now > datetime.time(00, 00) and self.now < self.useBatteryBefore
+                    self.now > datetime.time(00, 00)
+                    and self.now < self.useBatteryBefore
                 )
                 if self.discharginTill < self.batterySOC and inTime:
                     self.discharginTill = self.useBatteryTill

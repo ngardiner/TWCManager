@@ -271,7 +271,9 @@ class TeslaPowerwall2:
                             and i["battery_type"] == "ac_powerwall"
                         ]
                     except Exception as e:
-                        logger.warning(f"Error parsing Powerwall products response: {e}")
+                        logger.warning(
+                            f"Error parsing Powerwall products response: {e}"
+                        )
 
                     if len(products) == 1:
                         site, name = products[0]

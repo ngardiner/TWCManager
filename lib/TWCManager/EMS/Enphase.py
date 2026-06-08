@@ -147,7 +147,9 @@ class Enphase:
                             self.generatedW = int(portalData["production"][1]["wNow"])
                         if len(portalData.get("consumption", [])) > 0:
                             self.consumedW = int(portalData["consumption"][0]["wNow"])
-                            self.voltage = int(portalData["consumption"][0]["rmsVoltage"])
+                            self.voltage = int(
+                                portalData["consumption"][0]["rmsVoltage"]
+                            )
                 except (KeyError, TypeError, IndexError) as e:
                     logger.log(
                         logging.INFO4,

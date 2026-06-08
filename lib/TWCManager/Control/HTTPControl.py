@@ -65,16 +65,19 @@ class HTTPControl:
         logger.info("HTTPControl: Creating HTTP server on port %s", self.httpPort)
         HTTPHandler = CreateHTTPHandlerClass(master)
         httpd = None
-        
+
         # Try to bind to the configured port, with auto-increment on conflict
         max_port_attempts = 10
         original_port = self.httpPort
         port_attempt = 0
-        
+
         while port_attempt < max_port_attempts and httpd is None:
             try:
                 httpd = ThreadingSimpleServer(("", self.httpPort), HTTPHandler)
-                logger.info("HTTPControl: HTTP server created successfully on port %s", self.httpPort)
+                logger.info(
+                    "HTTPControl: HTTP server created successfully on port %s",
+                    self.httpPort,
+                )
             except OSError as e:
                 if e.errno == 98 or "Address already in use" in str(e):
                     # Port conflict - try next port
@@ -100,10 +103,13 @@ class HTTPControl:
 
         if httpd:
             if self.httpPort != original_port:
-                logger.info(f"HTTP Server started on port {self.httpPort} (originally configured for {original_port})")
+                logger.info(
+                    f"HTTP Server started on port {self.httpPort} (originally configured for {original_port})"
+                )
             else:
                 logger.info(
-                    "HTTPControl: Starting daemon thread to serve on port %s", self.httpPort
+                    "HTTPControl: Starting daemon thread to serve on port %s",
+                    self.httpPort,
                 )
             server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             server_thread.start()
@@ -1445,7 +1451,9 @@ def CreateHTTPHandlerClass(master):
                     master.setHomeLon(loc[0])
                     master.setHomeLat(loc[1])
                 else:
-                    logger.warning(f"Invalid vehicle location format: {self.getFieldValue('vehicle')}")
+                    logger.warning(
+                        f"Invalid vehicle location format: {self.getFieldValue('vehicle')}"
+                    )
 
             # Save Settings
             master.queue_background_task({"cmd": "saveSettings"})

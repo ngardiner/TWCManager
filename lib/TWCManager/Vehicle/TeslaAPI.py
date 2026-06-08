@@ -171,9 +171,7 @@ class TeslaAPI:
                 logging.INFO2, "JSON Decode Error parsing API Token Refresh Response"
             )
         except ValueError:
-            logger.log(
-                logging.INFO2, "ValueError parsing API Token Refresh Response"
-            )
+            logger.log(logging.INFO2, "ValueError parsing API Token Refresh Response")
         except Exception as e:
             logger.warning(f"Unexpected error during token refresh: {e}")
 

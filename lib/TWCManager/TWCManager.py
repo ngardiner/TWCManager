@@ -199,7 +199,9 @@ except (OSError, IOError, PermissionError) as e:
     # Fallback to /tmp if settingsPath is not writable (e.g., in Docker)
     logger = logging.getLogger("TWCManager")
     if "PYTEST_CURRENT_TEST" not in os.environ:
-        logger.warning(f"Unable to write PID file to {PIDfile}: {e}. Using /tmp instead.")
+        logger.warning(
+            f"Unable to write PID file to {PIDfile}: {e}. Using /tmp instead."
+        )
     PIDfile = "/tmp/TWCManager.pid"
     try:
         PIDTWCManager = open(PIDfile, "w")
@@ -207,7 +209,9 @@ except (OSError, IOError, PermissionError) as e:
         PIDTWCManager.close()
     except (PermissionError, OSError, IOError) as e2:
         if "PYTEST_CURRENT_TEST" not in os.environ:
-            logger.error(f"Unable to write PID file to {PIDfile}: {e2}. Continuing without PID file.")
+            logger.error(
+                f"Unable to write PID file to {PIDfile}: {e2}. Continuing without PID file."
+            )
         PIDfile = None
 
 # All TWCs ship with a random two-byte TWCID. We default to using 0x7777 as our
