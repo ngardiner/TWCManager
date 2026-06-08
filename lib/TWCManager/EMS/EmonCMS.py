@@ -148,7 +148,7 @@ class EmonCMS:
     def update(self):
         # Update function - determine if an update is required
 
-        if (int(self.time.time()) - self.lastFetch) > self.cacheTime:
+        if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from EmonCMS
             feeds = []
 
@@ -168,7 +168,7 @@ class EmonCMS:
                     self.generatedW = float(vals.pop())
                     logger.debug("getGeneration returns " + str(self.generatedW))
 
-                self.lastFetch = int(self.time.time())
+                self.lastFetch = int(time.time())
 
             return True
         else:

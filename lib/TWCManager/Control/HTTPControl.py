@@ -1441,8 +1441,11 @@ def CreateHTTPHandlerClass(master):
             # If learn was selected, learn location
             if "learn" in self.fields:
                 loc = self.getFieldValue("vehicle").split(",")
-                master.setHomeLon(loc[0])
-                master.setHomeLat(loc[1])
+                if len(loc) >= 2:
+                    master.setHomeLon(loc[0])
+                    master.setHomeLat(loc[1])
+                else:
+                    logger.warning(f"Invalid vehicle location format: {self.getFieldValue('vehicle')}")
 
             # Save Settings
             master.queue_background_task({"cmd": "saveSettings"})

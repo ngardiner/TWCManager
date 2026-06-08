@@ -92,4 +92,4 @@ class TCP:
 
         self.sock.send(msg)
 
-        self.timeLastTx = self.time.time()
+        self.timeLastTx = time.time()

@@ -101,29 +101,48 @@ class Growatt:
             return False
 
         if login_response:
-            plant_list = api.plant_list(login_response["userId"])["data"][0]
-            plant_ID = plant_list["plantId"]
-            inverter = api.device_list(plant_ID)[0]
-            deviceAilas = inverter["deviceAilas"]
-            status = api.mix_system_status(deviceAilas, plant_ID)
-            plant_info = api.plant_info(plant_ID)
-            device = plant_info["deviceList"][0]
-            device_sn = device["deviceSn"]
-            mix_status = api.mix_system_status(device_sn, plant_ID)
-            self.batterySOC = float(mix_status["SOC"])
-            gen_calc = float(status["pPv1"]) + float(status["pPv2"])
-            gen_calc *= 1000
-            gen_api = float(status["ppv"]) * 1000
-            inTime = (
-                self.now > datetime.time(00, 00) and self.now < self.useBatteryBefore
-            )
-            if self.discharginTill < self.batterySOC and inTime:
-                self.discharginTill = self.useBatteryTill
-                self.generatedW = gen_api + self.batteryMaxOutput
-            else:
-                self.discharginTill = self.useBatteryAt
-                self.generatedW = gen_api
-            self.consumedW = float(status["pLocalLoad"]) * 1000
+            try:
+                plant_data = api.plant_list(login_response["userId"]).get("data", [])
+                if not plant_data:
+                    logger.error("No plants returned from Growatt API")
+                    return False
+                plant_list = plant_data[0]
+                plant_ID = plant_list["plantId"]
+                
+                device_list = api.device_list(plant_ID)
+                if not device_list:
+                    logger.error("No devices returned from Growatt API for plant")
+                    return False
+                inverter = device_list[0]
+                deviceAilas = inverter["deviceAilas"]
+                
+                status = api.mix_system_status(deviceAilas, plant_ID)
+                plant_info = api.plant_info(plant_ID)
+                
+                device_list_info = plant_info.get("deviceList", [])
+                if not device_list_info:
+                    logger.error("No device list in plant info from Growatt API")
+                    return False
+                device = device_list_info[0]
+                device_sn = device["deviceSn"]
+                mix_status = api.mix_system_status(device_sn, plant_ID)
+                self.batterySOC = float(mix_status["SOC"])
+                gen_calc = float(status["pPv1"]) + float(status["pPv2"])
+                gen_calc *= 1000
+                gen_api = float(status["ppv"]) * 1000
+                inTime = (
+                    self.now > datetime.time(00, 00) and self.now < self.useBatteryBefore
+                )
+                if self.discharginTill < self.batterySOC and inTime:
+                    self.discharginTill = self.useBatteryTill
+                    self.generatedW = gen_api + self.batteryMaxOutput
+                else:
+                    self.discharginTill = self.useBatteryAt
+                    self.generatedW = gen_api
+                self.consumedW = float(status["pLocalLoad"]) * 1000
+            except (KeyError, TypeError, IndexError) as e:
+                logger.error(f"Error fetching Growatt data: {e}")
+                return False
         else:
             logger.log(logging.INFO4, "No response from Growatt API")
 
@@ -137,13 +156,13 @@ class Growatt:
         # Update function - determine if an update is required
         self.now = datetime.datetime.now().time()
 
-        if (int(self.time.time()) - self.lastFetch) > self.cacheTime:
+        if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from Growatt.
             self.getGenerationValues()
 
             # Update last fetch time
             if self.fetchFailed is not True:
-                self.lastFetch = int(self.time.time())
+                self.lastFetch = int(time.time())
 
             return True
         else:

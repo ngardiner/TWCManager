@@ -142,10 +142,13 @@ class Enphase:
                     if self.apiKey and self.userID and self.systemID:
                         self.generatedW = int(portalData["current_power"])
                     elif self.serverIP and self.serverPort:
-                        self.generatedW = int(portalData["production"][1]["wNow"])
-                        self.consumedW = int(portalData["consumption"][0]["wNow"])
-                        self.voltage = int(portalData["consumption"][0]["rmsVoltage"])
-                except (KeyError, TypeError) as e:
+                        # Check that production and consumption arrays have required elements
+                        if len(portalData.get("production", [])) > 1:
+                            self.generatedW = int(portalData["production"][1]["wNow"])
+                        if len(portalData.get("consumption", [])) > 0:
+                            self.consumedW = int(portalData["consumption"][0]["wNow"])
+                            self.voltage = int(portalData["consumption"][0]["rmsVoltage"])
+                except (KeyError, TypeError, IndexError) as e:
                     logger.log(
                         logging.INFO4,
                         "Exception during parsing Enphase data (current_power)",
