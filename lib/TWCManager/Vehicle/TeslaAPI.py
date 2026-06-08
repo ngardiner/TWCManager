@@ -170,9 +170,12 @@ class TeslaAPI:
             logger.log(
                 logging.INFO2, "JSON Decode Error parsing API Token Refresh Response"
             )
-            pass
         except ValueError:
-            pass
+            logger.log(
+                logging.INFO2, "ValueError parsing API Token Refresh Response"
+            )
+        except Exception as e:
+            logger.warning(f"Unexpected error during token refresh: {e}")
 
         try:
             logger.log(logging.INFO4, "Car API auth response" + str(apiResponseDict))
@@ -182,7 +185,8 @@ class TeslaAPI:
             self.master.queue_background_task({"cmd": "saveSettings"})
             return True
 
-        except:
+        except Exception as e:
+            logger.warning(f"Error processing token refresh response: {e}")
             pass
 
         return False
@@ -1287,7 +1291,11 @@ class TeslaAPI:
         # If no vehicle is specified, we take the first returned to us.
 
         if not vehicle:
-            vehicle = self.getCarApiVehicles()[0]
+            vehicles = self.getCarApiVehicles()
+            if not vehicles:
+                logger.error("No Tesla vehicles available to set charge rate")
+                return False
+            vehicle = vehicles[0]
 
         # Do not set charge_rate to 0 as this will effectively stop the car from charging all together
         if charge_rate < 1:

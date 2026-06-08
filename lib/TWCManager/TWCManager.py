@@ -384,15 +384,11 @@ def background_tasks_thread(master):
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
 
-        except:
-            logger.info(
-                "%s: "
-                + traceback.format_exc()
-                + ", occurred when processing background task",
-                "BackgroundError",
+        except Exception as e:
+            logger.error(
+                f"BackgroundError: {traceback.format_exc()}, occurred when processing background task: {e}",
                 extra={"colored": "red"},
             )
-            pass
 
         # task_done() must be called to let the queue know the task is finished.
         # backgroundTasksQueue.join() can then be used to block until all tasks
@@ -605,8 +601,8 @@ def update_sunrise_sunset():
         r = {}
         try:
             r = requests.get(url).json().get("results")
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Error fetching sunrise/sunset data: {e}")
 
         if r.get("sunrise", None):
             try:
@@ -614,8 +610,8 @@ def update_sunrise_sunset():
                     datetime.datetime.fromisoformat(r["sunrise"])
                 )
                 sunrise = dtSunrise.hour + (1 if dtSunrise.minute >= 30 else 0)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Error parsing sunrise time: {e}")
 
         if r.get("sunset", None):
             try:
@@ -623,8 +619,8 @@ def update_sunrise_sunset():
                     datetime.datetime.fromisoformat(r["sunset"])
                 )
                 sunset = dtSunset.hour + (1 if dtSunset.minute >= 30 else 0)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Error parsing sunset time: {e}")
 
         master.settings["sunrise"] = sunrise
         master.settings["sunset"] = sunset

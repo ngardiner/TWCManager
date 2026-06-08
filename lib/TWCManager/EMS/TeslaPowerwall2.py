@@ -270,8 +270,8 @@ class TeslaPowerwall2:
                             if "battery_type" in i
                             and i["battery_type"] == "ac_powerwall"
                         ]
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error parsing Powerwall products response: {e}")
 
                     if len(products) == 1:
                         site, name = products[0]
@@ -297,12 +297,13 @@ class TeslaPowerwall2:
                         r.raise_for_status()
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
-                    except:
+                    except Exception as e:
                         if r.status_code == 403:
                             logger.warn(
                                 "Error fetching Powerwall cloud data; does your API token have energy_device_data scope?"
                             )
-                        pass
+                        else:
+                            logger.warning(f"Error fetching Powerwall data: {e}")
 
             self.lastFetch[key] = (now, lastData)
         return lastData
