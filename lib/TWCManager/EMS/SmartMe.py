@@ -127,13 +127,13 @@ class SmartMe:
     def update(self):
         # Update function - determine if an update is required
 
-         if (int(time.time()) - self.lastFetch) > self.cacheTime:
+        if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from SmartMe.
             self.getGenerationValues()
 
             # Update last fetch time
             if self.fetchFailed is not True:
-                 self.lastFetch = int(time.time())
+                self.lastFetch = int(time.time())
 
             return True
         else:
