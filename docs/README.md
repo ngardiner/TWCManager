@@ -92,7 +92,7 @@ In an upcoming release, this will be offered as a switchable option to replace t
       
       * Use the Tesla API to connect to the car, sending a command to stop/start charging.
 
-This requires a Tesla API token, which is stored locally within a settings file. Tesla retired the legacy Owner API, so cloud control now requires a registered FleetAPI app (see the Vehicle module docs), TeslaMate token sync, or pasting a token into the Settings page. Local BLE control (TeslaBLE) is also available and needs no cloud token.
+This requires a Tesla API token, which is stored locally within a settings file. Tesla retired the legacy Owner API, so cloud control now requires a registered FleetAPI app (see the [Tesla FleetAPI setup guide](modules/Vehicle_TeslaAPI.md)), TeslaMate token sync, or pasting a token into the Settings page. Local BLE control (TeslaBLE) is also available and needs no cloud token.
 
 If you have multiple cars, TWCManager will attempt to identify which cars are home using geofencing. The following page of the TMC forums thread explains it better than I could: https://teslamotorsclub.com/tmc/threads/new-wall-connector-load-sharing-protocol.72830/page-16
 

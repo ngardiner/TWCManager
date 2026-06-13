@@ -145,6 +145,29 @@
         # See https://developer.tesla.com/docs/fleet-api#authentication
         #"teslaApiClientID": "client-id-of-registered-app",
 
+        # The client_secret of the app registered with Tesla. Required to
+        # complete the FleetAPI OAuth login from the web UI (Settings -> Tesla
+        # login). Keep config.json readable only by the twcmanager user.
+        #"teslaApiClientSecret": "client-secret-of-registered-app",
+
+        # The redirect URI registered against your Tesla app. It must match
+        # exactly in both the login request and the token exchange. To let
+        # TWCManager capture the login automatically, register and set this to
+        # the callback on this instance, e.g.
+        # "https://your-twcmanager-host/teslaAccount/callback". If TWCManager is
+        # not reachable at the registered URI you can still paste the redirect
+        # URL into the web UI to complete login.
+        #"teslaApiRedirectUri": "https://your-twcmanager-host/teslaAccount/callback",
+
+        # Your Tesla account region: NA, EU or CN. Selects the FleetAPI audience
+        # used during login. Defaults to NA; can also be chosen on the login page.
+        #"teslaApiRegion": "NA",
+
+        # Optional override of the OAuth scopes requested at login. The default
+        # covers charging control and vehicle data:
+        # "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds"
+        #"teslaApiScope": "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds",
+
         # Since 2024 the Tesla Vehicle Command protocol is required for all
         # vehicles manufacturered after 2021. The Tesla Vehicle Command proxy
         # will automatically fall back to the FleetAPI for older vehicles.

@@ -12,6 +12,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Cast numeric strings from settings in policyValue() so non-scheduled charge rate is applied correctly (closes #370)
 * Features
     * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
+    * (@ngardiner) - FleetAPI OAuth web login flow with auto-capture callback and paste-back, replacing the retired Owner API login
 * Architecture
     * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
 * Bugfixes
