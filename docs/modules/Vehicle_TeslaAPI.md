@@ -27,13 +27,28 @@ locally over Bluetooth and needs no Tesla account.
 3. Set the **allowed scopes** to include charging control and vehicle data, e.g.
    `vehicle_device_data`, `vehicle_cmds`, `vehicle_charging_cmds` (plus `openid` and
    `offline_access`).
-4. Add an **allowed origin** and one or more **redirect URIs**. The redirect URI must
-   match exactly what TWCManager sends. Two options:
-   - Auto-capture: register the callback on your TWCManager instance, e.g.
-     `https://your-twcmanager-host/teslaAccount/callback`. Tesla returns the browser
-     to TWCManager and login completes with no copy/paste.
-   - Paste-back: register any redirect URI you control. After login you copy the URL
-     you were redirected to and paste it into TWCManager.
+4. Add an **allowed origin** and one or more **redirect URIs**. Tesla ties the app to
+   a **public HTTPS domain you control** (the allowed origin) - this is the domain
+   where Tesla fetches your public key from
+   `https://<domain>/.well-known/appspecific/com.tesla.3p.public-key.pem` during the
+   partner/Vehicle Command setup. It **cannot be `localhost` or a LAN IP**, and it is
+   **not** TWCManager's own address. The redirect URI must be HTTPS, registered in
+   advance, and sit under that same domain; TWCManager must send it back exactly.
+
+   > **Do not expose TWCManager directly to the internet.** It controls your charger
+   > and has minimal authentication. The redirect domain is a domain you own; it does
+   > not need to reach TWCManager at all (see paste-back below).
+
+   Two ways to receive the authorization code:
+   - **Paste-back (recommended).** Register any redirect URI under your domain - it can
+     point at a static page or somewhere TWCManager can't see. After approving access
+     you copy the URL from your browser's address bar and paste it into TWCManager.
+     No inbound exposure of TWCManager is required.
+   - **Auto-capture (advanced).** Only if you already run a reverse proxy you control
+     that terminates HTTPS and forwards `/teslaAccount/callback` to TWCManager on your
+     LAN (e.g. `https://twc.yourdomain.com/teslaAccount/callback` -> `192.168.x.y:8080`).
+     Tesla returns the browser to that URL and login completes with no copy/paste.
+     This still must not be a TWCManager instance published openly to the internet.
 
 ## Configuration
 
@@ -43,7 +58,7 @@ Set the following in the `config` section of `config.json`:
 |-----|----------|-------------|
 | `teslaApiClientID` | Yes | Client ID of your registered application |
 | `teslaApiClientSecret` | Yes | Client secret of your registered application |
-| `teslaApiRedirectUri` | Yes | Redirect URI, matching one registered on the app |
+| `teslaApiRedirectUri` | Yes | Redirect URI, exactly matching one registered on the app (under your public domain - not TWCManager's address) |
 | `teslaApiRegion` | No | Account region: `NA` (default), `EU` or `CN` |
 | `teslaApiScope` | No | Override the requested OAuth scopes |
 
@@ -57,10 +72,10 @@ secret.
 2. Choose your account region and click **Log in to Tesla**.
 3. Approve access in the Tesla consent page.
 4. Completion:
-   - Auto-capture: if your redirect URI points at this instance, you are returned
-     automatically and the tokens are stored.
-   - Paste-back: copy the full URL you were redirected to and paste it into the box,
-     then click **Save Token**.
+   - Paste-back (typical): copy the full URL you were redirected to from your browser's
+     address bar and paste it into the box, then click **Save Token**.
+   - Auto-capture: only if your redirect URI is served by a reverse proxy that forwards
+     to TWCManager, you are returned automatically and the tokens are stored.
 
 Once tokens are stored, TWCManager refreshes them automatically (the refresh token is
 rotated on each refresh and persisted to the settings file).
