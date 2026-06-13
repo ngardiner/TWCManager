@@ -138,8 +138,10 @@
         # you will need to un-comment it to have it take effect.
         #"minChargeLevel": 10,
 
-        # The client_id of the app registered with Tesla. Registration is
-        # required to use the FleetAPI and Vehicle Command protocol.
+        # The client_id of the app registered with Tesla. The legacy Owner API
+        # has been retired by Tesla, so registration is now required for all
+        # cloud-based vehicle control via the FleetAPI and Vehicle Command
+        # protocol. Local BLE control (TeslaBLE) does not require this.
         # See https://developer.tesla.com/docs/fleet-api#authentication
         #"teslaApiClientID": "client-id-of-registered-app",
 
