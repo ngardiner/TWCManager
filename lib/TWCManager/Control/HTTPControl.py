@@ -165,9 +165,6 @@ def CreateHTTPHandlerClass(master):
             # render HTML, we can keep using those even inside jinja2
             self.templateEnv.globals.update(addButton=self.addButton)
             self.templateEnv.globals.update(ampsList=self.ampsList)
-            self.templateEnv.globals.update(
-                apiChallenge=master.getModuleByName("TeslaAPI").getApiChallenge
-            )
             self.templateEnv.globals.update(chargeScheduleDay=self.chargeScheduleDay)
             self.templateEnv.globals.update(checkBox=self.checkBox)
             self.templateEnv.globals.update(checkForUpdates=master.checkForUpdates)
@@ -1009,8 +1006,6 @@ def CreateHTTPHandlerClass(master):
                 {"route": "/settings", "tmpl": "settings.html.j2"},
                 {"route": "/settings/homeLocation", "error": "insecure"},
                 {"route": "/settings/save", "error": "insecure"},
-                {"route": "/teslaAccount/saveToken", "error": "insecure"},
-                {"rstart": "/teslaAccount", "tmpl": "main.html.j2"},
                 {"route": "/upgradePrompt", "tmpl": "upgradePrompt.html.j2"},
                 {"rstart": "/vehicleDetail", "tmpl": "vehicleDetail.html.j2"},
                 {"route": "/vehicles", "tmpl": "vehicles.html.j2"},
@@ -1025,9 +1020,6 @@ def CreateHTTPHandlerClass(master):
                 self.template = self.templateEnv.get_template("main.html.j2")
 
                 # Set some values that we use within the template
-                # Check if we're able to access the Tesla API
-                teslaapi = master.getModuleByName("TeslaAPI")
-                self.apiAvailable = teslaapi.car_api_available() if teslaapi else False
                 self.scheduledAmpsMax = master.getScheduledAmpsMax()
 
                 self.activeAction = master.getModuleByName(
@@ -1222,31 +1214,6 @@ def CreateHTTPHandlerClass(master):
                     self.process_save_graphs(objIni, objEnd)
                     self.send_response(302)
                     self.send_header("Location", "/graphsP")
-
-                self.end_headers()
-                self.wfile.write("".encode("utf-8"))
-                return
-
-            if self.url.path == "/teslaAccount/saveToken":
-                # Check if we are skipping Tesla Login submission
-                later = False
-                try:
-                    later = len(self.fields["later"][0])
-                except KeyError:
-                    later = False
-
-                res = ""
-                url = self.getFieldValue("url")
-
-                if later:
-                    master.teslaLoginAskLater = True
-                    res = "later"
-
-                else:
-                    res = master.getModuleByName("TeslaAPI").saveApiToken(url)
-
-                self.send_response(302)
-                self.send_header("Location", "/teslaAccount/" + res)
 
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
