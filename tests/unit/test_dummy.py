@@ -24,7 +24,7 @@ class TestDummyInitialization:
                 }
             }
         }
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=MagicMock())
         master.releaseModule = Mock()
         return master
     
@@ -65,7 +65,7 @@ class TestDummyInitialization:
                 }
             }
         }
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=MagicMock())
         
         dummy = Dummy(master)
         
@@ -86,7 +86,7 @@ class TestDummySimpleMode:
                 }
             }
         }
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=MagicMock())
         master.getSlaveSign = Mock(return_value=bytearray(b"\x00"))
         master.hex_str = lambda x: x.hex()
         return master
@@ -162,12 +162,11 @@ class TestDummyScenarioMode:
         master.config = {
             "interface": {
                 "Dummy": {
-                    "enabled": True,
-                    "scenario": "single_slave_normal"
+                    "enabled": True
                 }
             }
         }
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=MagicMock())
         master.getSlaveSign = Mock(return_value=bytearray(b"\x00"))
         master.hex_str = lambda x: x.hex()
         return master
@@ -301,7 +300,7 @@ class TestDummyBehaviors:
         """Create a mock master object."""
         master = Mock()
         master.config = {"interface": {"Dummy": {"enabled": True}}}
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=MagicMock())
         master.getSlaveSign = Mock(return_value=bytearray(b"\x00"))
         master.hex_str = lambda x: x.hex()
         return master
@@ -382,7 +381,7 @@ class TestDummyMessageHandling:
         """Create a mock master object."""
         master = Mock()
         master.config = {"interface": {"Dummy": {"enabled": True}}}
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=MagicMock())
         master.getSlaveSign = Mock(return_value=bytearray(b"\x00"))
         master.hex_str = lambda x: x.hex()
         return master
