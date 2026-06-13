@@ -1,0 +1,58 @@
+{% set tl = teslaLogin() %}
+<form action='/teslaAccount/saveToken' method='POST'>
+  <p>TWCManager uses the Tesla FleetAPI to start and stop charging, and to
+     control the charge rate, for Tesla vehicles you own.</p>
+
+  {% if not tl.configured %}
+    <p>
+      <b>Tesla FleetAPI is not configured yet.</b> Tesla retired the old Owner
+      API, so cloud control now requires you to register your own application
+      with Tesla. Set <code>teslaApiClientID</code>,
+      <code>teslaApiClientSecret</code> and <code>teslaApiRedirectUri</code> in
+      your <code>config.json</code>, then reload this page.
+    </p>
+    <p>
+      See the
+      <a href="https://github.com/ngardiner/TWCManager/blob/main/docs/modules/Vehicle_TeslaAPI.md" target="_blank">Tesla FleetAPI setup guide</a>.
+      Prefer not to use a cloud account? The
+      <a href="https://github.com/ngardiner/TWCManager/blob/main/docs/modules/Vehicle_TeslaBLE.md" target="_blank">TeslaBLE</a>
+      module controls charging locally over Bluetooth and needs no Tesla login.
+    </p>
+  {% else %}
+    <table>
+      <tr>
+        <td><b>Step 1</b></td>
+        <td>
+          Select your Tesla account region:
+          <select name="region" id="teslaRegion">
+            {% for r in tl.regions %}
+              <option value="{{ r }}" {% if r == tl.region %}selected{% endif %}>{{ r }}</option>
+            {% endfor %}
+          </select>
+        </td>
+      </tr>
+      <tr>
+        <td><b>Step 2</b></td>
+        <td>
+          <a href="/teslaAccount/login?region={{ tl.region }}" target="_blank"
+             onclick="this.href='/teslaAccount/login?region=' + document.getElementById('teslaRegion').value;">Log in to Tesla</a>
+          and approve access. If your configured redirect URI points back at
+          this TWCManager instance you will be returned here automatically.
+          Otherwise, copy the full URL you were redirected to and paste it below.
+        </td>
+      </tr>
+      <tr>
+        <td><b>Paste the redirect URL here:</b></td>
+        <td><input name="url" size=70></td>
+      </tr>
+      <tr>
+        <td>
+          {{ addButton(
+              ["save", "Save Token"],
+              "class='btn btn-outline-info' name='save'",
+          )|safe }}
+        </td>
+      </tr>
+    </table>
+  {% endif %}
+</form>
