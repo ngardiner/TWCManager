@@ -69,7 +69,6 @@ class TWCMaster:
     spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
     treatGenerationAsGridDelivery = False
-    teslaLoginAskLater = False
     TWCID = None
     updateVersion = False
     version = "1.3.4"
