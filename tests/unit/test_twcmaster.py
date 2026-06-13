@@ -536,7 +536,8 @@ class TestSettingsInitialization:
     
     def test_charge_now_sets_correct_values(self, master):
         """Test that chargeNow sets correct settings values."""
-        master.chargeNow(32, 3600)
+        master.setChargeNowAmps(32)
+        master.setChargeNowTimeEnd(3600)
         
         assert master.settings["chargeNowAmps"] == 32
         assert master.settings["chargeNowTimeEnd"] > time.time()
@@ -544,11 +545,12 @@ class TestSettingsInitialization:
     def test_cancel_charge_now_clears_values(self, master):
         """Test that cancelChargeNow clears settings."""
         # First set charge now
-        master.chargeNow(32, 3600)
+        master.setChargeNowAmps(32)
+        master.setChargeNowTimeEnd(3600)
         assert master.settings["chargeNowAmps"] == 32
         
         # Then cancel
-        master.cancelChargeNow()
+        master.resetChargeNowAmps()
         
         assert master.settings["chargeNowAmps"] == 0
         assert master.settings["chargeNowTimeEnd"] == 0
@@ -582,32 +584,39 @@ class TestSettingsEdgeCases:
     
     def test_charge_now_with_very_high_amps(self, master):
         """Test chargeNow with very high amperage."""
-        master.chargeNow(200, 3600)
-        assert master.settings["chargeNowAmps"] == 200
+        master.setChargeNowAmps(200)
+        master.setChargeNowTimeEnd(3600)
+        # Should be rejected as it's above wiringMaxAmpsAllTWCs (default 100 in mock)
+        assert master.settings["chargeNowAmps"] == 0
     
     def test_charge_now_with_very_long_duration(self, master):
         """Test chargeNow with very long duration."""
-        master.chargeNow(32, 86400 * 7)  # 7 days
+        master.setChargeNowAmps(32)
+        master.setChargeNowTimeEnd(86400 * 7)
         assert master.settings["chargeNowTimeEnd"] > time.time() + 86400 * 6
     
     def test_charge_now_with_minimum_amps(self, master):
         """Test chargeNow with minimum amperage."""
-        master.chargeNow(1, 3600)
+        master.setChargeNowAmps(1)
+        master.setChargeNowTimeEnd(3600)
         assert master.settings["chargeNowAmps"] == 1
     
     def test_charge_now_with_minimum_duration(self, master):
         """Test chargeNow with minimum duration."""
-        master.chargeNow(32, 60)  # 1 minute
+        master.setChargeNowAmps(32)
+        master.setChargeNowTimeEnd(60)
         assert master.settings["chargeNowTimeEnd"] > time.time()
     
     def test_multiple_charge_now_calls_override(self, master):
         """Test that multiple chargeNow calls override previous values."""
-        master.chargeNow(32, 3600)
+        master.setChargeNowAmps(32)
+        master.setChargeNowTimeEnd(3600)
         first_end_time = master.settings["chargeNowTimeEnd"]
         
         time.sleep(0.1)
         
-        master.chargeNow(24, 7200)
+        master.setChargeNowAmps(24)
+        master.setChargeNowTimeEnd(7200)
         second_end_time = master.settings["chargeNowTimeEnd"]
         
         assert master.settings["chargeNowAmps"] == 24
