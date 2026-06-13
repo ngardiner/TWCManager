@@ -8,7 +8,10 @@ This document logs the changes per release of TWCManager.
 * Features
     * Implement missing API endpoints: `setPolicy`, `setLatLon`, `setConsumptionOffset`
     * Add centralized API input validation (`APIValidator`) across all endpoints
+* Architecture
+    * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
 * Bugfixes
+    * Fix: Remove dead Tesla email/password login path that called a non-existent apiLogin method
     * Fix SyntaxWarning (`is` with literal) in TeslaPowerwall2 cloud data fetch
     * Fix invalid escape sequence (`\Z`) in TWCProtocol regex byte string (Python 3.12 compatibility)
     * Fix HTTP status codes in API endpoints (correct 200/400/404 responses)
