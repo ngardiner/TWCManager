@@ -1,13 +1,9 @@
-import base64
-import hashlib
 import json
 import logging
-import os
 import re
 import requests
 from threading import Thread
 import time
-from urllib.parse import parse_qs
 import jwt
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
@@ -15,19 +11,13 @@ logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
 
 class TeslaAPI:
-    __apiChallenge = None
-    __apiVerifier = None
-    __apiState = None
-    __authURL = "https://auth.tesla.com/oauth2/v3/token"
-    __callbackURL = "https://auth.tesla.com/void/callback"
     baseURL = ""
     regionURL = {
-        "OwnerAPI": "https://owner-api.teslamotors.com/api/1/vehicles",
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
         "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
     }
-    refreshClientID = "ownerapi"
+    refreshClientID = ""
     verifyCert = True
     carApiLastErrorTime = 0
     carApiBearerToken = ""
@@ -35,8 +25,6 @@ class TeslaAPI:
     carApiTokenExpireTime = time.time()
     carApiLastStartOrStopChargeTime = 0
     carApiLastChargeLimitApplyTime = 0
-    clientID = "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384"
-    clientSecret = "c7257eb71a564034f9419ee651c7d0e5f7aa6bfbd18bafb5c5c033b093bb2fa3"
     lastChargeLimitApplied = 0
     lastChargeCheck = 0
     chargeUpdateInterval = 1800
@@ -50,7 +38,6 @@ class TeslaAPI:
     minChargeLevel = -1
     params = None
     __password = None
-    refreshURL = "https://auth.tesla.com/oauth2/v3/token"
     fleetRefreshURL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
     __resp = None
     session = None
@@ -83,17 +70,13 @@ class TeslaAPI:
             if proxyURL:
                 self.baseURL = proxyURL + "/api/1/vehicles"
                 self.verifyCert = self.config["config"].get("teslaProxyCert", True)
-            self.refreshClientID = self.config["config"].get(
-                "teslaApiClientID", "ownerapi"
-            )
+            self.refreshClientID = self.config["config"].get("teslaApiClientID", "")
             self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
             self.chargeUpdateInterval = self.config["config"].get(
                 "cloudUpdateInterval", 1800
             )
         except KeyError:
             pass
-
-        self.generateChallenge()
 
     def enabled(self) -> bool:
         return self._enabled
@@ -130,6 +113,12 @@ class TeslaAPI:
     def apiRefresh(self):
         # Refresh tokens expire in 45
         # days when first issued, so we'll get a new token every 15 days.
+        if not self.refreshClientID:
+            logger.error(
+                "Cannot refresh Tesla token: no teslaApiClientID configured. "
+                "Register a Fleet API app and set teslaApiClientID in config.json."
+            )
+            return False
         headers = {"accept": "application/json", "Content-Type": "application/json"}
         data = {
             "client_id": self.refreshClientID,
@@ -137,11 +126,7 @@ class TeslaAPI:
             "refresh_token": self.getCarApiRefreshToken(),
             "scope": "offline_access",
         }
-        myRefreshURL = (
-            self.refreshURL
-            if self.refreshClientID == "ownerapi"
-            else self.fleetRefreshURL
-        )
+        myRefreshURL = self.fleetRefreshURL
         req = None
         now = time.time()
         try:
@@ -189,9 +174,7 @@ class TeslaAPI:
 
         return False
 
-    def car_api_available(
-        self, email=None, password=None, charge=None, applyLimit=None
-    ):
+    def car_api_available(self, charge=None, applyLimit=None):
         now = time.time()
         needSleep = False
         apiResponseDict = {}
@@ -221,43 +204,18 @@ class TeslaAPI:
                 "Entering car_api_available - next step is to query Tesla API",
             )
 
-        # Authentiate to Tesla API
+        # Authenticate to Tesla API
         if not self.master.tokenSyncEnabled() and (
             self.getCarApiBearerToken() == ""
             or self.getCarApiTokenExpireTime() - now < 60 * 60
         ):
             if self.getCarApiRefreshToken() != "":
-                headers = {
-                    "accept": "application/json",
-                    "Content-Type": "application/json",
-                }
-                data = {
-                    "client_id": self.clientID,
-                    "client_secret": self.clientSecret,
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.getCarApiRefreshToken(),
-                }
                 logger.log(logging.INFO8, "Attempting token refresh")
                 self.apiRefresh()
-
-            elif email is not None and password is not None:
-                logger.log(logging.INFO8, "Attempting password auth")
-                ret = self.apiLogin(email, password)
-
-                # If any string is returned, we redirect to it. This helps with MFA login flow
-                if (
-                    str(ret) != "True"
-                    and str(ret) != "False"
-                    and str(ret) != ""
-                    and str(ret) != "None"
-                ):
-                    return ret
 
         if self.getCarApiBearerToken() != "":
             if self.getVehicleCount() < 1:
                 url = self.baseURL
-                if "owner-api" in url:
-                    url = url.replace("vehicles", "products")
                 headers = {
                     "accept": "application/json",
                     "Authorization": "Bearer " + self.getCarApiBearerToken(),
@@ -553,22 +511,6 @@ class TeslaAPI:
             time.sleep(5)
 
         return True
-
-    def generateChallenge(self):
-        self.__apiVerifier = base64.urlsafe_b64encode(os.urandom(86)).rstrip(b"=")
-        self.__apiChallenge = base64.urlsafe_b64encode(
-            hashlib.sha256(self.__apiVerifier).digest()
-        ).rstrip(b"=")
-        self.__apiState = (
-            base64.urlsafe_b64encode(os.urandom(16)).rstrip(b"=").decode("utf-8")
-        )
-
-    def getApiChallenge(self):
-        return (
-            self.__apiChallenge.decode("UTF-8"),
-            self.__apiState,
-            self.__apiVerifier,
-        )
 
     def is_location_within_radius(self, lat, lon, radius):
         if (
@@ -1167,71 +1109,6 @@ class TeslaAPI:
         self.errorCount = 0
         return True
 
-    def saveApiToken(self, url):
-        # Extract code from url
-        if isinstance(url, bytes):
-            url = url.decode("UTF-8")
-        qs = parse_qs(url.split("?", 1)[-1])
-        auth_code = qs.get("code", [None])[0]
-        auth_state = qs.get("state", [None])[0]
-
-        if not auth_code:
-            logger.error("saveApiToken: no 'code' parameter found in URL")
-            return "error"
-
-        logger.log(logging.INFO2, "Code: " + auth_code)
-        logger.log(logging.INFO2, "State: " + str(auth_state))
-
-        # Exchange auth code for bearer token
-        headers = {"accept": "application/json", "Content-Type": "application/json"}
-        data = {
-            "client_id": "ownerapi",
-            "grant_type": "authorization_code",
-            "code": auth_code,
-            "code_verifier": self.__apiVerifier.decode("UTF-8"),
-            "redirect_uri": self.__callbackURL,
-        }
-        req = None
-        now = time.time()
-        try:
-            req = requests.post(self.__authURL, headers=headers, json=data)
-            logger.log(logging.INFO2, "Car API request" + str(req))
-            apiResponseDict = json.loads(req.text)
-        except requests.exceptions.RequestException:
-            logger.error("Request Exception parsing API Token Exchange Response")
-            pass
-        except ValueError:
-            pass
-        except json.decoder.JSONDecodeError:
-            logger.error("JSON Decode Error parsing API Token Exchange Response")
-            pass
-
-        params = json.loads(req.text)
-
-        # Check for errors
-        if "error" in params:
-            return params["error"]
-
-        if "access_token" in params:
-            try:
-                self.setCarApiBearerToken(params["access_token"])
-                self.setCarApiRefreshToken(params["refresh_token"])
-                self.setCarApiTokenExpireTime(time.time() + params["expires_in"])
-                self.master.queue_background_task({"cmd": "saveSettings"})
-                return "success"
-            except KeyError:
-                logger.log(
-                    logging.INFO2,
-                    "ERROR: Can't access Tesla car via API.  Please log in again via web interface.",
-                )
-                self.updateCarApiLastErrorTime()
-                return "response_no_token"
-
-        logger.log(logging.INFO2, str(req))
-        logger.log(logging.INFO2, req.text)
-
-        return "unknown"
-
     def setCarApiBearerToken(self, token=None):
         if token:
             if self.master.tokenSyncEnabled():
@@ -1249,10 +1126,14 @@ class TeslaAPI:
                         },
                     )
                     if not self.baseURL:
-                        if "owner-api" in "".join(decoded.get("aud", "")):
-                            self.baseURL = self.regionURL["OwnerAPI"]
-                        elif decoded.get("ou_code", "") in self.regionURL:
+                        if decoded.get("ou_code", "") in self.regionURL:
                             self.baseURL = self.regionURL[decoded["ou_code"]]
+                        else:
+                            logger.error(
+                                "Unable to determine Fleet API region from token. "
+                                "Set teslaProxy in config.json or provide a valid "
+                                "Fleet API token."
+                            )
 
                     if "exp" in decoded:
                         self.setCarApiTokenExpireTime(int(decoded["exp"]))
@@ -1260,8 +1141,10 @@ class TeslaAPI:
                         self.setCarApiTokenExpireTime(time.time() + 8 * 60 * 60)
 
                 except jwt.exceptions.DecodeError:
-                    # Fallback to owner-api if we get an exception decoding jwt token
-                    self.baseURL = self.regionURL["OwnerAPI"]
+                    logger.error(
+                        "Unable to decode Tesla API token; cannot determine Fleet "
+                        "API region."
+                    )
                     self.setCarApiTokenExpireTime(time.time() + 8 * 60 * 60)
                 return True
         else:
