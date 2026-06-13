@@ -69,11 +69,11 @@ class MQTTControl:
                 except ConnectionRefusedError as e:
                     logger.log(logging.INFO4, "Error connecting to MQTT Broker")
                     logger.debug(str(e))
-                    return False
+                    return
                 except OSError as e:
                     logger.log(logging.INFO4, "Error connecting to MQTT Broker")
                     logger.debug(str(e))
-                    return False
+                    return
 
                 self.connectionState = 1
                 self.__client.loop_start()
