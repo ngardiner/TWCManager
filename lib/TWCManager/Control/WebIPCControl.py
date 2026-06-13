@@ -116,15 +116,9 @@ class WebIPCControl:
                 webMsgID = unpacked[1]
                 webMsg = webMsgRaw[0][6 : len(webMsgRaw[0])]
 
-                webMsgRedacted = webMsg
-                # Hide car password in web request to send password to Tesla
-                m = re.search(b"^(carApiEmailPassword=[^\n]+\n)", webMsg, re.MULTILINE)
-                if m:
-                    webMsgRedacted = m.group(1) + b"[HIDDEN]"
-
                 logger.info(
                     "Web query: '"
-                    + str(webMsgRedacted)
+                    + str(webMsg)
                     + "', id "
                     + str(webMsgID)
                     + ", time "
@@ -275,18 +269,6 @@ class WebIPCControl:
                         )
                     else:
                         webResponseMsg = "None"
-                elif webMsg[0:20] == b"carApiEmailPassword=":
-                    m = re.search(
-                        b"([^\n]+)\n([^\n]+)", webMsg[20 : len(webMsg)], re.MULTILINE
-                    )
-                    if m:
-                        self.master.queue_background_task(
-                            {
-                                "cmd": "carApiEmailPassword",
-                                "email": m.group(1).decode("ascii"),
-                                "password": m.group(2).decode("ascii"),
-                            }
-                        )
                 elif webMsg[0:23] == b"setMasterHeartbeatData=":
                     m = re.search(
                         b"([0-9a-fA-F]*)", webMsg[23 : len(webMsg)], re.MULTILINE
