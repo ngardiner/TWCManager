@@ -88,7 +88,9 @@ class TWCProtocol:
                 bytearray(b"\xfd\xe0")
                 + packet["SenderID"]
                 + packet["RecieverID"]
-                + bytearray(b"\x00\x00\xa0\x00\x00\x00\x00")
+                + packet.get(
+                    "HeartbeatData", bytearray(b"\x00\x00\xa0\x00\x00\x00\x00")
+                )
             )
             if self.master.protocolVersion == 2:
                 msg += bytearray(b"\x00\x00")
@@ -182,7 +184,7 @@ class TWCProtocol:
                 packet["Match"] = True
                 packet["Command"] = "MasterHeartbeat"
                 packet["SenderID"] = msgMatch.group(1)
-                packet["ReceiverID"] = msgMatch.group(2)
+                packet["RecieverID"] = msgMatch.group(2)
                 packet["HeartbeatData"] = msgMatch.group(3)
 
         return packet

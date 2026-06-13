@@ -165,8 +165,8 @@ class TestProtocolMessageCreation:
         msg = protocol.createMessage(packet)
         
         assert msg is not None
-        # Protocol v1 should not have the extra 2 bytes at the end
-        assert not msg.endswith(bytearray(b"\x00\x00"))
+        # Protocol v1 should be 13 bytes
+        assert len(msg) == 13
     
     def test_create_message_protocol_v2(self, protocol):
         """Test message creation for protocol version 2."""
@@ -180,8 +180,8 @@ class TestProtocolMessageCreation:
         msg = protocol.createMessage(packet)
         
         assert msg is not None
-        # Protocol v2 should have extra 2 bytes at the end
-        assert msg.endswith(bytearray(b"\x00\x00"))
+        # Protocol v2 should be 15 bytes
+        assert len(msg) == 15
 
 
 class TestProtocolMessageParsing:
@@ -231,7 +231,7 @@ class TestProtocolMessageParsing:
         
         assert packet["Command"] == "MasterHeartbeat"
         assert packet["SenderID"] == bytearray(b"\x12\x34")
-        assert packet["ReceiverID"] == bytearray(b"\x56\x78")
+        assert packet["RecieverID"] == bytearray(b"\x56\x78")
         assert packet["Match"] is True
     
     def test_parse_unknown_message(self, protocol):
