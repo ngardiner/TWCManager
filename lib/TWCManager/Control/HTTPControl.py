@@ -177,6 +177,14 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(
                 vehicles=master.getModuleByName("TeslaAPI").getCarApiVehicles
             )
+            teslaModule = master.getModuleByName("TeslaAPI")
+            self.templateEnv.globals.update(
+                teslaLogin=(
+                    teslaModule.teslaLoginInfo
+                    if teslaModule
+                    else (lambda: {"configured": False})
+                )
+            )
 
             # Set master object
             self.master = master
@@ -1006,6 +1014,8 @@ def CreateHTTPHandlerClass(master):
                 {"route": "/settings", "tmpl": "settings.html.j2"},
                 {"route": "/settings/homeLocation", "error": "insecure"},
                 {"route": "/settings/save", "error": "insecure"},
+                {"route": "/teslaAccount/saveToken", "error": "insecure"},
+                {"rstart": "/teslaAccount", "tmpl": "main.html.j2"},
                 {"route": "/upgradePrompt", "tmpl": "upgradePrompt.html.j2"},
                 {"rstart": "/vehicleDetail", "tmpl": "vehicleDetail.html.j2"},
                 {"route": "/vehicles", "tmpl": "vehicles.html.j2"},
@@ -1020,6 +1030,11 @@ def CreateHTTPHandlerClass(master):
                 self.template = self.templateEnv.get_template("main.html.j2")
 
                 # Set some values that we use within the template
+                # The Tesla login form is hidden once we hold an API token.
+                teslaapi = master.getModuleByName("TeslaAPI")
+                self.apiAvailable = bool(
+                    teslaapi and teslaapi.getCarApiBearerToken() != ""
+                )
                 self.scheduledAmpsMax = master.getScheduledAmpsMax()
 
                 self.activeAction = master.getModuleByName(
@@ -1030,6 +1045,36 @@ def CreateHTTPHandlerClass(master):
                 page = self.template.render(vars(self))
 
                 self.wfile.write(page.encode("utf-8"))
+                return
+
+            # Tesla FleetAPI login: redirect the browser to the Tesla consent
+            # page, building the authorization URL from configured credentials.
+            if self.url.path == "/teslaAccount/login":
+                teslaapi = master.getModuleByName("TeslaAPI")
+                qs = urllib.parse.parse_qs(self.url.query)
+                region = qs.get("region", [None])[0]
+                loginURL = teslaapi.getLoginURL(region) if teslaapi else ""
+                self.send_response(302)
+                self.send_header(
+                    "Location", loginURL if loginURL else "/teslaAccount/not_configured"
+                )
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            # Tesla FleetAPI login: auto-capture callback. Tesla redirects the
+            # browser here (when redirect_uri points at this instance) with the
+            # authorization code, which we exchange for tokens.
+            if self.url.path == "/teslaAccount/callback":
+                teslaapi = master.getModuleByName("TeslaAPI")
+                qs = urllib.parse.parse_qs(self.url.query)
+                code = qs.get("code", [None])[0]
+                state = qs.get("state", [None])[0]
+                res = teslaapi.fleetTokenExchange(code, state) if teslaapi else "error"
+                self.send_response(302)
+                self.send_header("Location", "/teslaAccount/" + res)
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
                 return
 
             # Match web routes to defined webroutes routing
@@ -1215,6 +1260,21 @@ def CreateHTTPHandlerClass(master):
                     self.send_response(302)
                     self.send_header("Location", "/graphsP")
 
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            if self.url.path == "/teslaAccount/saveToken":
+                # Paste-back path: the user pastes the redirect URL they were
+                # sent to after logging in; we extract the code and exchange it.
+                res = "error"
+                url = self.getFieldValue("url")
+                teslaapi = master.getModuleByName("TeslaAPI")
+                if teslaapi and url:
+                    res = teslaapi.saveApiToken(url)
+
+                self.send_response(302)
+                self.send_header("Location", "/teslaAccount/" + res)
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
                 return
