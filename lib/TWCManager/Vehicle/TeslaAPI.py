@@ -5,13 +5,30 @@ import logging
 import os
 import re
 import requests
+from requests.adapters import HTTPAdapter
 from threading import Thread
 import time
 from urllib.parse import parse_qs
+import ssl
+from urllib3.util.ssl_ import create_urllib3_context
 import jwt
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
+
+
+class TLS13Adapter(HTTPAdapter):
+    """HTTPAdapter that enforces TLS 1.3 for Tesla API connections.
+    
+    Tesla requires TLS 1.3 for authentication endpoints as of June 2026.
+    This adapter ensures tokens obtained via auth.tesla.com are valid
+    for use with owner-api.teslamotors.com.
+    """
+    def init_poolmanager(self, *args, **kwargs):
+        context = create_urllib3_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        kwargs['ssl_context'] = context
+        return super().init_poolmanager(*args, **kwargs)
 
 
 class TeslaAPI:
@@ -93,6 +110,16 @@ class TeslaAPI:
             pass
 
         self.generateChallenge()
+        
+        # Initialize session with TLS 1.3 enforcement for Tesla API endpoints
+        self.session = requests.Session()
+        tls13_adapter = TLS13Adapter()
+        self.session.mount('https://auth.tesla.com', tls13_adapter)
+        self.session.mount('https://owner-api.teslamotors.com', tls13_adapter)
+        self.session.mount('https://fleet-api.prd.na.vn.cloud.tesla.com', tls13_adapter)
+        self.session.mount('https://fleet-api.prd.eu.vn.cloud.tesla.com', tls13_adapter)
+        self.session.mount('https://fleet-api.prd.cn.vn.cloud.tesla.cn', tls13_adapter)
+        self.session.mount('https://fleet-auth.prd.vn.cloud.tesla.com', tls13_adapter)
 
     def enabled(self) -> bool:
         return self._enabled
@@ -144,7 +171,7 @@ class TeslaAPI:
         req = None
         now = time.time()
         try:
-            req = requests.post(myRefreshURL, headers=headers, json=data)
+            req = self.session.post(myRefreshURL, headers=headers, json=data)
             logger.log(logging.INFO2, "Car API request" + str(req))
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
@@ -260,7 +287,7 @@ class TeslaAPI:
                     "Authorization": "Bearer " + self.getCarApiBearerToken(),
                 }
                 try:
-                    req = requests.get(url, headers=headers, verify=self.verifyCert)
+                    req = self.session.get(url, headers=headers, verify=self.verifyCert)
                     logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
                     apiResponseDict = json.loads(req.text)
                 except requests.exceptions.RequestException:
@@ -729,7 +756,7 @@ class TeslaAPI:
             # Retry up to 3 times on certain errors.
             for _ in range(0, 3):
                 try:
-                    req = requests.post(url, headers=headers, verify=self.verifyCert)
+                    req = self.session.post(url, headers=headers, verify=self.verifyCert)
                     logger.log(
                         logging.INFO8,
                         "Car API cmd charge_" + startOrStop + " " + str(req),
@@ -1146,7 +1173,7 @@ class TeslaAPI:
         req = None
         now = time.time()
         try:
-            req = requests.post(self.__authURL, headers=headers, json=data)
+            req = self.session.post(self.__authURL, headers=headers, json=data)
             logger.log(logging.INFO2, "Car API request" + str(req))
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
@@ -1260,7 +1287,7 @@ class TeslaAPI:
         body = {"charging_amps": charge_rate}
 
         try:
-            req = requests.post(url, headers=headers, json=body, verify=self.verifyCert)
+            req = self.session.post(url, headers=headers, json=body, verify=self.verifyCert)
             logger.log(
                 logging.INFO8,
                 f"Car API cmd set_charging_amps {charge_rate}A {str(req)}",
@@ -1344,7 +1371,7 @@ class TeslaAPI:
             "Authorization": "Bearer " + self.getCarApiBearerToken(),
         }
         try:
-            req = requests.post(url, headers=headers, verify=self.verifyCert)
+            req = self.session.post(url, headers=headers, verify=self.verifyCert)
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
@@ -1534,7 +1561,7 @@ class CarApiVehicle:
         # Retry up to 3 times on certain errors.
         for _ in range(0, 3):
             try:
-                req = requests.get(url, headers=headers, verify=self.verifyCert)
+                req = self.carapi.session.get(url, headers=headers, verify=self.verifyCert)
                 req.raise_for_status()
                 logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
                 apiResponseDict = json.loads(req.text)
@@ -1737,7 +1764,7 @@ class CarApiVehicle:
 
         for _ in range(0, 3):
             try:
-                req = requests.post(
+                req = self.carapi.session.post(
                     url, headers=headers, json=body, verify=self.verifyCert
                 )
                 logger.log(logging.INFO8, "Car API cmd set_charge_limit " + str(req))

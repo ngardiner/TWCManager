@@ -26,33 +26,43 @@ This document logs the changes per release of TWCManager.
     * Fix: Protocol module type handling for `CustomCommand`
     * Update Docker documentation for Compose V2 and modern Raspberry Pi OS
 
-## v1.3.3 - 2026-04-13
-* (@MikeBishop) - Improve home location detection when vehicle is charging via TWC
-* (@ngardiner) - Add aWATTar pricing module with dynamic rate-based charging optimization
-* (@deece) - Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
-* (@ngardiner) - Post-merge improvements: input validation, error handling, comprehensive logging, rate limiting, and thread safety for MQTT and Home Assistant modules
-* (@ngardiner) - Centralized LoggerFactory for configurable logging prefixes
-* (@ngardiner) - Vehicle priority abstraction proxy for module fallback with retry multiplier logic
-* (@RichieB2B) - Add Fleet Telemetry MQTT support with typed updates and online state tracking
-* (@ngardiner) - Initial commit of local Tesla BLE vehicle control module with stability improvements
-* (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
-* (@MikeBishop) - Dampen API calls to reduce unnecessary calls
-* (@RichieB2B) - Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
-* (@ngardiner) - Add support for decrypting TeslaMate API credentials using the encryption key
-* (@ngardiner) - Refactor maxAmpsToDivideFromGrid to global configuration parameter
-* (@VIDGuide) - Add Charge Now duration display with remaining minutes and current amps in web UI
+## v1.3.3 - 2026-06-13
+
+**Maintenance release with Tesla Owner API support and TLS 1.3 enforcement**
+
+This release maintains support for Tesla Owner API (owner-api.teslamotors.com) with TLS 1.3 enforcement to ensure compatibility with Tesla's updated security requirements. Users requiring Owner API support should use this release. For Fleet API-only deployments, use v1.3.4 or later.
+
+* Features
+    * Add TLS 1.3 enforcement for Tesla authentication and API endpoints
+    * Maintain Tesla Owner API support (ownerapi login flow, owner-api endpoints)
+* Architecture & Improvements
+    * Improve home location detection when vehicle is charging via TWC
+    * Add aWATTar pricing module with dynamic rate-based charging optimization
+    * Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
+    * Post-merge improvements: input validation, error handling, comprehensive logging, rate limiting, and thread safety for MQTT and Home Assistant modules
+    * Centralized LoggerFactory for configurable logging prefixes
+    * Vehicle priority abstraction proxy for module fallback with retry multiplier logic
+    * Add Fleet Telemetry MQTT support with typed updates and online state tracking
+    * Initial commit of local Tesla BLE vehicle control module with stability improvements
+    * Fall-back to VIN as vehicle name if API does not specify a name
+    * Dampen API calls to reduce unnecessary calls
+    * Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
+    * Add support for decrypting TeslaMate API credentials using the encryption key
+    * Refactor maxAmpsToDivideFromGrid to global configuration parameter
+    * Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
-    * (@MikeBishop) - Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
-    * (@dtiefnig) - Specify access scope for token refresh
-    * (@evheros) - Fix typo in log levels
-    * (@RichieB2B / @evheros) - Fix incorrect return variable name in BLE Peering code
-    * (@dehsgr) - Fix Makefile issues (alternate HOME support and BLE permissions)
-    * (@RichieB2B) - Avoid wake up loop during battery health check by applying per-vehicle retry backoff
-    * (@RichieB2B) - Cache vehicle.is_awake() state for 2 minutes to reduce Tesla Fleet API calls
-    * (@RichieB2B) - Fix NameError in BLE Peering code
-    * (@ngardiner) - Atomic writes for settings file to avoid data loss
-    * (@ngardiner) - BLE pipe management with state tracking and cleanup
-    * (@ngardiner) - Subprocess timeout handling with graceful shutdown
+    * Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
+    * Specify access scope for token refresh
+    * Fix typo in log levels
+    * Fix incorrect return variable name in BLE Peering code
+    * Fix Makefile issues (alternate HOME support and BLE permissions)
+    * Avoid wake up loop during battery health check by applying per-vehicle retry backoff
+    * Cache vehicle.is_awake() state for 2 minutes to reduce Tesla Fleet API calls
+    * Fix NameError in BLE Peering code
+    * Atomic writes for settings file to avoid data loss
+    * BLE pipe management with state tracking and cleanup
+    * Subprocess timeout handling with graceful shutdown
+    * Fix mqttDisconnect signature for paho-mqtt 2.x callback API
 
 ## v1.3.2 - 2023-03-12
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules
