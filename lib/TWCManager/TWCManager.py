@@ -318,12 +318,6 @@ def background_tasks_thread(master):
                     vehicleModule.applyChargeLimit(limit=task["limit"])
                 elif task["cmd"] == "charge":
                     vehicleModule.car_api_charge(task)
-                elif task["cmd"] == "carApiEmailPassword":
-                    # For credential updates, use TeslaAPI directly
-                    carapi = master.getModuleByName("TeslaAPI")
-                    if carapi:
-                        carapi.resetCarApiLastErrorTime()
-                        carapi.car_api_available(task["email"], task["password"])
                 elif task["cmd"] == "checkArrival":
                     # Get lastChargeLimitApplied from TeslaAPI
                     carapi = master.getModuleByName("TeslaAPI")

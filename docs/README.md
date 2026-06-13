@@ -92,13 +92,13 @@ In an upcoming release, this will be offered as a switchable option to replace t
       
       * Use the Tesla API to connect to the car, sending a command to stop/start charging.
 
-This is set up using the web interface. Log in with your Tesla login and password, and the login token will be stored locally within a settings file.
+This requires a Tesla API token, which is stored locally within a settings file. Tesla retired the legacy Owner API, so cloud control now requires a registered FleetAPI app (see the Vehicle module docs), TeslaMate token sync, or pasting a token into the Settings page. Local BLE control (TeslaBLE) is also available and needs no cloud token.
 
 If you have multiple cars, TWCManager will attempt to identify which cars are home using geofencing. The following page of the TMC forums thread explains it better than I could: https://teslamotorsclub.com/tmc/threads/new-wall-connector-load-sharing-protocol.72830/page-16
 
-### Why do I need to log into my Tesla account when using the web interface?
+### Why do I need a Tesla API token?
 
-   * TWCManager uses your Tesla login to obtain an API token. This API token is used to talk to your vehicle(s).
+   * TWCManager uses a Tesla API token to talk to your vehicle(s).
    * When the available charger capacity falls below minAmpsPerTWC, the TWCManager script will contact the Tesla API to tell the vehicle to stop charging. If this is not configured, your vehicle will continue to charge at 6A even when the charging policy dictates that we stop charging.
 
 ### Why does my TWC increase charging momentarily to 21A or 17A around the time that it changes charging rates?

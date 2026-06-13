@@ -150,7 +150,6 @@ class HomeAssistant:
 
     def __init__(self, master):
         self.master = master
-        master.teslaLoginAskLater = True
         self.config = getattr(master, "config", {})
 
         cfg = self.config.get("vehicle", {}).get("HomeAssistant", {}) or {}
