@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import logging
 import re
@@ -20,16 +22,25 @@ class TeslaAPI:
         "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
     }
     refreshClientID = ""
-    # FleetAPI OAuth (authorization code) login. Refresh uses fleetRefreshURL.
+    # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
+    # whether a client secret is configured:
+    #   - PKCE / public client (default, no secret): code_challenge, no audience,
+    #     tokens exchanged/refreshed at auth.tesla.com. This is what most
+    #     registered third-party apps use.
+    #   - Confidential client (teslaApiClientSecret set): client_secret + audience,
+    #     tokens exchanged at the regional fleet-auth endpoint.
     authorizeURL = "https://auth.tesla.com/oauth2/v3/authorize"
+    authTokenURL = "https://auth.tesla.com/oauth2/v3/token"
     clientSecret = ""
     redirectURI = ""
     region = "NA"
     scope = (
-        "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds"
+        "openid offline_access vehicle_device_data vehicle_cmds "
+        "vehicle_location vehicle_charging_cmds"
     )
     __loginState = None
     __loginRegion = None
+    __loginVerifier = None
     verifyCert = True
     carApiLastErrorTime = 0
     carApiBearerToken = ""
@@ -141,7 +152,9 @@ class TeslaAPI:
             "refresh_token": self.getCarApiRefreshToken(),
             "scope": "offline_access",
         }
-        myRefreshURL = self.fleetRefreshURL
+        # Refresh at the same host the token was issued from: auth.tesla.com for
+        # the PKCE/public-client flow, the regional fleet-auth for confidential.
+        myRefreshURL = self.authTokenURL if self.usePKCE() else self.fleetRefreshURL
         req = None
         now = time.time()
         try:
@@ -1077,14 +1090,20 @@ class TeslaAPI:
         self.errorCount = 0
         return True
 
+    def usePKCE(self):
+        # Public-client PKCE flow is used when no client secret is configured.
+        return not bool(self.clientSecret)
+
     def regionAudience(self, region):
-        # The token audience is the regional FleetAPI base URL without the
-        # /api/1/vehicles path suffix used elsewhere in this module.
+        # Confidential-client only: the token audience is the regional FleetAPI
+        # base URL without the /api/1/vehicles path suffix used elsewhere.
         base = self.regionURL.get(region, self.regionURL["NA"])
         return base.replace("/api/1/vehicles", "")
 
     def loginConfigured(self):
-        return bool(self.refreshClientID and self.clientSecret and self.redirectURI)
+        # Both flows need a client id and redirect URI; the secret is optional
+        # (its presence selects the confidential flow).
+        return bool(self.refreshClientID and self.redirectURI)
 
     def teslaLoginInfo(self):
         # Consumed by the web UI to render the FleetAPI login page.
@@ -1092,13 +1111,14 @@ class TeslaAPI:
             "configured": self.loginConfigured(),
             "client_id": self.refreshClientID,
             "redirect_uri": self.redirectURI,
+            "pkce": self.usePKCE(),
             "regions": list(self.regionURL.keys()),
             "region": self.region,
         }
 
     def getLoginURL(self, region=None):
-        # Build the FleetAPI authorization-code URL and remember the state and
-        # region so the later token exchange uses a matching audience.
+        # Build the authorization URL and remember the state (and PKCE verifier /
+        # region) so the later token exchange matches.
         if not self.loginConfigured():
             return ""
         if region not in self.regionURL:
@@ -1111,13 +1131,24 @@ class TeslaAPI:
             "redirect_uri": self.redirectURI,
             "scope": self.scope,
             "state": self.__loginState,
-            "audience": self.regionAudience(region),
         }
+        if self.usePKCE():
+            self.__loginVerifier = secrets.token_urlsafe(64)
+            params["code_challenge"] = (
+                base64.urlsafe_b64encode(
+                    hashlib.sha256(self.__loginVerifier.encode()).digest()
+                )
+                .rstrip(b"=")
+                .decode()
+            )
+            params["code_challenge_method"] = "S256"
+        else:
+            params["audience"] = self.regionAudience(region)
         return self.authorizeURL + "?" + urlencode(params)
 
     def fleetTokenExchange(self, code, state):
-        # Exchange an authorization code for FleetAPI tokens. Returns a status
-        # string used by the web UI ("success", "error", or a Tesla error code).
+        # Exchange an authorization code for tokens. Returns a status string used
+        # by the web UI ("success", "error", or a Tesla error code).
         if not self.loginConfigured():
             logger.error("Tesla FleetAPI login is not configured.")
             return "not_configured"
@@ -1128,22 +1159,29 @@ class TeslaAPI:
             logger.error("Tesla login: state mismatch; please retry the login.")
             return "state_mismatch"
 
-        region = self.__loginRegion or self.region
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         data = {
             "grant_type": "authorization_code",
             "client_id": self.refreshClientID,
-            "client_secret": self.clientSecret,
             "code": code,
-            "audience": self.regionAudience(region),
             "redirect_uri": self.redirectURI,
         }
-        # Note: baseURL is intentionally left to setCarApiBearerToken, which sets
-        # it from the token's region only when no teslaProxy is configured.
+        if self.usePKCE():
+            # Public client: prove possession of the PKCE verifier; no secret,
+            # no audience, exchange at auth.tesla.com.
+            data["code_verifier"] = self.__loginVerifier or ""
+            tokenURL = self.authTokenURL
+        else:
+            # Confidential client: secret + regional audience at fleet-auth.
+            data["client_secret"] = self.clientSecret
+            data["audience"] = self.regionAudience(self.__loginRegion or self.region)
+            tokenURL = self.fleetRefreshURL
+        # baseURL is left to setCarApiBearerToken, which derives the region from
+        # the token's ou_code when no teslaProxy is configured.
 
         req = None
         try:
-            req = requests.post(self.fleetRefreshURL, headers=headers, data=data)
+            req = requests.post(tokenURL, headers=headers, data=data)
             params = json.loads(req.text)
         except requests.exceptions.RequestException:
             logger.error("Request Exception during Tesla token exchange.")
@@ -1166,6 +1204,7 @@ class TeslaAPI:
                 time.time() + params.get("expires_in", 8 * 60 * 60)
             )
             self.__loginState = None
+            self.__loginVerifier = None
             self.master.queue_background_task({"cmd": "saveSettings"})
             logger.log(logging.INFO2, "Tesla FleetAPI tokens stored successfully.")
             return "success"
