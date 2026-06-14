@@ -13,8 +13,9 @@ locally over Bluetooth and needs no Tesla account.
 ## Prerequisites
 
 - A Tesla account that owns the vehicle(s).
-- An application registered at https://developer.tesla.com (provides a client ID and
-  client secret).
+- An application registered at https://developer.tesla.com with the **Authorization
+  Code (Third-Party Tokens)** grant type (provides a client ID; a client secret is also
+  issued but the default PKCE login does not use it).
 - For sending commands to vehicles built after 2021, the Tesla Vehicle Command proxy.
   See [the proxy](https://github.com/teslamotors/vehicle-command) and the `teslaProxy`
   / `teslaProxyCert` options in config.json. Partner account registration and hosting
@@ -23,11 +24,16 @@ locally over Bluetooth and needs no Tesla account.
 ## Registering your application
 
 1. Sign in at https://developer.tesla.com and create an application.
-2. Note the generated **client ID** and **client secret**.
-3. Set the **allowed scopes** to include charging control and vehicle data, e.g.
-   `vehicle_device_data`, `vehicle_cmds`, `vehicle_charging_cmds` (plus `openid` and
-   `offline_access`).
-4. Add an **allowed origin** and one or more **redirect URIs**. Tesla ties the app to
+2. For the **OAuth grant type**, choose **Authorization Code (Third-Party Tokens)**.
+   This is the user-authorization flow TWCManager uses. Do **not** choose **Client
+   Credentials (Partner Tokens)** - that is for partner/machine tokens and does not log
+   a user in.
+3. Note the generated **client ID**. A **client secret** is also generated, but the
+   default login does not use it (see Auth methods below).
+4. Set the **allowed scopes** to include charging control, vehicle data and location,
+   e.g. `vehicle_device_data`, `vehicle_cmds`, `vehicle_charging_cmds`,
+   `vehicle_location` (plus `openid` and `offline_access`).
+5. Add an **allowed origin** and one or more **redirect URIs**. Tesla ties the app to
    a **public HTTPS domain you control** (the allowed origin) - this is the domain
    where Tesla fetches your public key from
    `https://<domain>/.well-known/appspecific/com.tesla.3p.public-key.pem` during the
@@ -50,6 +56,19 @@ locally over Bluetooth and needs no Tesla account.
      Tesla returns the browser to that URL and login completes with no copy/paste.
      This still must not be a TWCManager instance published openly to the internet.
 
+## Auth methods (PKCE vs client secret)
+
+The Authorization Code flow can be completed two ways. TWCManager picks automatically
+based on whether you configure a client secret:
+
+- **PKCE (default, recommended).** No client secret. TWCManager proves the request with
+  a PKCE code challenge and exchanges the code at `auth.tesla.com`. The account region
+  is derived from the returned token, so you don't need to set it. This is what most
+  registered apps use. Just set `teslaApiClientID` and `teslaApiRedirectUri`.
+- **Client secret (optional/advanced).** If you set `teslaApiClientSecret`, TWCManager
+  instead sends the secret plus a regional `audience` and exchanges the code at the
+  regional `fleet-auth` endpoint. This also requires `teslaApiRegion`.
+
 ## Configuration
 
 Set the following in the `config` section of `config.json`:
@@ -57,19 +76,20 @@ Set the following in the `config` section of `config.json`:
 | Key | Required | Description |
 |-----|----------|-------------|
 | `teslaApiClientID` | Yes | Client ID of your registered application |
-| `teslaApiClientSecret` | Yes | Client secret of your registered application |
 | `teslaApiRedirectUri` | Yes | Redirect URI, exactly matching one registered on the app (under your public domain - not TWCManager's address) |
-| `teslaApiRegion` | No | Account region: `NA` (default), `EU` or `CN` |
+| `teslaApiClientSecret` | No | Only to force the client-secret exchange instead of PKCE (advanced) |
+| `teslaApiRegion` | No | Only used with `teslaApiClientSecret`: `NA` (default), `EU` or `CN` |
 | `teslaApiScope` | No | Override the requested OAuth scopes |
 
-Keep `config.json` readable only by the `twcmanager` user, as it holds the client
-secret.
+If you do set `teslaApiClientSecret`, keep `config.json` readable only by the
+`twcmanager` user.
 
 ## Logging in
 
 1. Open the TWCManager web UI. When no token is stored, the home page shows a Tesla
    login section.
-2. Choose your account region and click **Log in to Tesla**.
+2. Click **Log in to Tesla** (with PKCE there is no region to choose; the client-secret
+   method shows a region selector first).
 3. Approve access in the Tesla consent page.
 4. Completion:
    - Paste-back (typical): copy the full URL you were redirected to from your browser's
@@ -89,8 +109,8 @@ rotated on each refresh and persisted to the settings file).
 
 ## Troubleshooting
 
-- "Tesla FleetAPI is not configured": one of `teslaApiClientID`,
-  `teslaApiClientSecret` or `teslaApiRedirectUri` is missing.
+- "Tesla FleetAPI is not configured": `teslaApiClientID` or `teslaApiRedirectUri` is
+  missing (the client secret is optional).
 - "state mismatch": the login was started too long ago or in another browser session.
   Start the login again.
 - A Tesla error code on the result page usually indicates a mismatch between the
