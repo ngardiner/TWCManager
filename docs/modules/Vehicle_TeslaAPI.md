@@ -2,13 +2,23 @@
 
 ## Introduction
 
-TWCManager uses the Tesla FleetAPI to read vehicle state (state of charge, location)
-and to start, stop and rate-limit charging for Tesla vehicles you own.
+TWCManager exists to **drive charging** - it starts, stops and rate-limits your
+vehicle. The Tesla FleetAPI login covered here provides the cloud connection used to
+read vehicle state (state of charge, location, online status) for policy and home
+geofencing, and to issue charge commands.
 
-Tesla retired the legacy Owner API, so cloud control now requires you to register
+> **Important: FleetAPI login alone cannot drive charging.** Tesla now requires the
+> **Vehicle Command Protocol** for charge commands on essentially all vehicles - the
+> legacy REST charge endpoints return `403 "Tesla Vehicle Command Protocol required"`.
+> So to actually control charging you must **also** run the Tesla Vehicle Command proxy
+> (set `teslaProxy`) **or** use the local [TeslaBLE](Vehicle_TeslaBLE.md) module. The
+> login + tokens give you data and authentication; the proxy or BLE give you control.
+> See [Driving charging](#driving-charging-proxy-or-ble) below.
+
+Tesla retired the legacy Owner API, so cloud access now requires you to register
 your own application with Tesla and complete an OAuth login. If you would rather not
-register an application, the [TeslaBLE](Vehicle_TeslaBLE.md) module controls charging
-locally over Bluetooth and needs no Tesla account.
+register an application at all, TeslaBLE controls charging locally over Bluetooth and
+needs no Tesla account.
 
 ## Prerequisites
 
@@ -16,10 +26,11 @@ locally over Bluetooth and needs no Tesla account.
 - An application registered at https://developer.tesla.com with the **Authorization
   Code (Third-Party Tokens)** grant type (provides a client ID; a client secret is also
   issued but the default PKCE login does not use it).
-- For sending commands to vehicles built after 2021, the Tesla Vehicle Command proxy.
-  See [the proxy](https://github.com/teslamotors/vehicle-command) and the `teslaProxy`
-  / `teslaProxyCert` options in config.json. Partner account registration and hosting
-  your public key are part of that proxy setup and are not handled by TWCManager.
+- **To drive charging (required):** the Tesla Vehicle Command proxy **or** the TeslaBLE
+  module. Tesla's REST charge commands are deprecated and now return
+  `403 "Tesla Vehicle Command Protocol required"` on essentially all vehicles (confirmed
+  even on a 2019 Model 3), so FleetAPI by itself reads data but cannot start/stop charge.
+  See [Driving charging](#driving-charging-proxy-or-ble).
 
 ## Registering your application
 
@@ -99,6 +110,27 @@ If you do set `teslaApiClientSecret`, keep `config.json` readable only by the
 
 Once tokens are stored, TWCManager refreshes them automatically (the refresh token is
 rotated on each refresh and persisted to the settings file).
+
+## Driving charging (proxy or BLE)
+
+Logging in gets you a token and lets TWCManager **read** vehicle state. To actually
+**start, stop and rate-limit charging** - the reason TWCManager exists - you need one of:
+
+- **Tesla Vehicle Command proxy.** Run the
+  [vehicle-command](https://github.com/teslamotors/vehicle-command) HTTP proxy, which
+  signs commands with your app key, and point TWCManager at it with `teslaProxy`
+  (HTTPS URL) and `teslaProxyCert`. TWCManager then sends charge commands through the
+  proxy instead of the deprecated REST endpoints. Partner-account registration and
+  hosting your public key at `/.well-known/appspecific/com.tesla.3p.public-key.pem` are
+  prerequisites of that proxy setup (the same key/domain used for Fleet Telemetry), not
+  handled by TWCManager.
+- **TeslaBLE.** Control charging locally over Bluetooth with no proxy and no cloud
+  command path. See [TeslaBLE](Vehicle_TeslaBLE.md).
+
+Without one of these, charge commands fail with
+`403 "Tesla Vehicle Command Protocol required"` and TWCManager logs a clear error and
+stops retrying (it will still read state via the FleetAPI). FleetAPI data + (proxy or
+BLE) control is the intended, complete configuration.
 
 ## Alternatives to the web login
 
