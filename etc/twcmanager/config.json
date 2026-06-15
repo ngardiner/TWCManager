@@ -178,19 +178,23 @@
         # "openid offline_access vehicle_device_data vehicle_cmds vehicle_location vehicle_charging_cmds"
         #"teslaApiScope": "openid offline_access vehicle_device_data vehicle_cmds vehicle_location vehicle_charging_cmds",
 
-        # Since 2024 the Tesla Vehicle Command protocol is required for all
-        # vehicles manufacturered after 2021. The Tesla Vehicle Command proxy
-        # will automatically fall back to the FleetAPI for older vehicles.
+        # REQUIRED TO DRIVE CHARGING over the FleetAPI. Tesla has deprecated the
+        # REST charge-command endpoints; charge_start/stop/set-rate now return
+        # 403 "Tesla Vehicle Command Protocol required" on essentially all
+        # vehicles (confirmed even on a 2019 Model 3). Without the proxy below,
+        # the FleetAPI login can still READ vehicle state, but cannot start,
+        # stop or rate-limit charging.
         #
-        # TWCManager does not implement the Tesla Vehicle Command protocol.
-        # Instead it relies on the Tesla Vehicle Command proxy which translates
-        # the FleetAPI REST calls if the destination vehicle supports the
-        # new protocol. This requires the URL of the proxy to be set as
-        # "teslaProxy" and the proxy certificate for validation as
-        # "teslaProxyCert".
+        # TWCManager does not implement the Vehicle Command protocol itself; it
+        # relies on the Tesla Vehicle Command proxy, which signs commands with
+        # your app key and forwards them. Set the proxy URL as "teslaProxy" and
+        # its certificate as "teslaProxyCert".
         # See https://github.com/teslamotors/vehicle-command
         #
-        # The URL of the Tesla HTTP Proxy running locally
+        # (Alternatively, the TeslaBLE module drives charging locally over
+        # Bluetooth with no proxy - see docs/modules/Vehicle_TeslaBLE.md.)
+        #
+        # The URL of the Tesla HTTP Proxy
         # "teslaProxy": "https://localhost:4443",
         #
         # Only set "teslaProxyCert" when "teslaProxy" is set.
