@@ -9,6 +9,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from datetime import datetime, timedelta
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -22,7 +23,7 @@ logger = LoggerFactory.get_logger("HTTP", "Control")
 
 
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
-    pass
+    address_family = socket.AF_INET6
 
 
 class HTTPControl:
@@ -73,7 +74,7 @@ class HTTPControl:
 
         while port_attempt < max_port_attempts and httpd is None:
             try:
-                httpd = ThreadingSimpleServer(("", self.httpPort), HTTPHandler)
+                httpd = ThreadingSimpleServer(("::", self.httpPort), HTTPHandler)
                 logger.info(
                     "HTTPControl: HTTP server created successfully on port %s",
                     self.httpPort,
