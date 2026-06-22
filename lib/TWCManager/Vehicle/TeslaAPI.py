@@ -1541,28 +1541,30 @@ class CarApiVehicle:
         return False
 
     def is_awake(self):
-        if self.syncSource == "TeslaAPI" or self.syncTimestamp < (
-            time.time() - self.syncTimeout / 4
-        ):
-            now = time.time()
-            # Don't check more often than every 2 minutes
-            if now - self.lastVehicleAwakeTime < 120:
-                return self.lastVehicleAwakeState
-            url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
-            result, response = self.get_car_api(
-                url, checkReady=False, provesOnline=False
-            )
-            awakeState = result and response.get("state", "") == "online"
-            self.lastVehicleAwakeState = awakeState
-            self.lastVehicleAwakeTime = now
-            return awakeState
-        else:
-            return (
-                self.syncState == "online"
-                or self.syncState == "charging"
-                or self.syncState == "updating"
-                or self.syncState == "driving"
-            )
+        if self.syncSource != "TeslaAPI" and self.syncTimestamp > 0:
+            # External sync (e.g. TeslaMate) has provided at least one update.
+            if self.syncState in ("asleep", "offline"):
+                # Car is known to be asleep - trust the sync source and avoid
+                # Fleet API calls that cost money just to confirm it's still asleep.
+                return False
+            if self.syncTimestamp >= (time.time() - self.syncTimeout / 4):
+                # Fresh data and car is not asleep - trust it.
+                return self.syncState in ("online", "charging", "updating", "driving")
+            # Stale data but car was last known active - fall through to API check
+            # in case the sync source dropped while the car was still awake.
+
+        now = time.time()
+        # Don't check more often than every 2 minutes
+        if now - self.lastVehicleAwakeTime < 120:
+            return self.lastVehicleAwakeState
+        url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
+        result, response = self.get_car_api(
+            url, checkReady=False, provesOnline=False
+        )
+        awakeState = result and response.get("state", "") == "online"
+        self.lastVehicleAwakeState = awakeState
+        self.lastVehicleAwakeTime = now
+        return awakeState
 
     def get_car_api(self, url, checkReady=True, provesOnline=True):
         if checkReady and not self.ready():
