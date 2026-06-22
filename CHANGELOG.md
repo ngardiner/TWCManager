@@ -33,6 +33,8 @@ This document logs the changes per release of TWCManager.
     * Fix: Publish charger_load_w status on every heartbeat so Home Assistant entities don't disappear after HA reboot (closes #462)
     * Fix: Log a warning at startup when minAmpsPerTWC exceeds wiringMaxAmpsPerTWC, which would prevent charging from ever starting (closes #24)
     * Fix: Set stopAskingToStartCharging=True when a vehicle departs home, preventing unnecessary wake attempts on absent vehicles (closes #590)
+    * Fix: Trust TeslaMate asleep/offline state in is_awake() to avoid Fleet API status polls when vehicle is confirmed sleeping
+    * Fix: Fleet API wake minimization - 3-minute pre-wake delay (configurable wakeDelayMins), 30-minute retry backoff, no API polls during hold windows
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
