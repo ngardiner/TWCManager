@@ -18,9 +18,9 @@ This document logs the changes per release of TWCManager.
     * Fix invalid escape sequence (`\Z`) in TWCProtocol regex byte string (Python 3.12 compatibility)
     * Fix HTTP status codes in API endpoints (correct 200/400/404 responses)
     * Fix `/api/chargeNow` and `/api/cancelChargeNow` to return proper HTTP responses
-    * Fix `'bool' object is not callable` in `VehiclePriority.enabled()` — instance attribute was shadowing the method in TeslaBLE, TeslaAPI, and HomeAssistant vehicle modules
+    * Fix `'bool' object is not callable` in `VehiclePriority.enabled()` - instance attribute was shadowing the method in TeslaBLE, TeslaAPI, and HomeAssistant vehicle modules
     * Add `fsync` before atomic rename in `saveSettings()` to prevent partial writes surviving a power loss
-    * Reduce module loading log noise (INFO → DEBUG level)
+    * Reduce module loading log noise (INFO -> DEBUG level)
     * Fix: Debounce charge session end to avoid false stops on startup (closes #156)
     * Fix: Avoid double-counting charger watts in `nominalOffer` when `treatGenerationAsGridDelivery` is set (closes #523)
     * Fix: Use `parse_qs` instead of regex for OAuth callback URL parsing (closes #566)
@@ -30,6 +30,8 @@ This document logs the changes per release of TWCManager.
     * Fix: Disable TeslaBLE module when `tesla-control` binary is not executable (closes #610)
     * Fix: Protocol module type handling for `CustomCommand`
     * Update Docker documentation for Compose V2 and modern Raspberry Pi OS
+    * Fix: Trust TeslaMate asleep/offline state in is_awake() to avoid Fleet API status polls when vehicle is confirmed sleeping
+    * Fix: Fleet API wake minimization - 3-minute pre-wake delay (configurable wakeDelayMins), 30-minute retry backoff, no API polls during hold windows
 
 ## v1.3.3 - 2026-04-13
 * (@MikeBishop) - Improve home location detection when vehicle is charging via TWC
