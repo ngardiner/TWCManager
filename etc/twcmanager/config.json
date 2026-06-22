@@ -204,6 +204,12 @@
         # data retrieved from the Tesla API to evaluate policy.
         "cloudUpdateInterval": 1800,
 
+        // wakeDelayMins: how long to wait (minutes) before issuing a Fleet API
+        // wake_up command when a vehicle needs to start charging.  During the
+        // delay the car may self-start in response to the TWC power offer.
+        // Increasing this reduces Fleet API usage; set to 0 to wake immediately.
+        //"wakeDelayMins": 3,
+
         # These parameters enable you to specify different charge limits
         # for different charging policies.  The car's 'outside' limit
         # will be restored whenever GPS indicates the car has left home.
