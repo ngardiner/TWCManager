@@ -12,6 +12,7 @@ This document logs the changes per release of TWCManager.
 * Architecture
     * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
 * Bugfixes
+    * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
     * Fix: Remove dead Tesla email/password login path that called a non-existent apiLogin method
     * Fix SyntaxWarning (`is` with literal) in TeslaPowerwall2 cloud data fetch
     * Fix invalid escape sequence (`\Z`) in TWCProtocol regex byte string (Python 3.12 compatibility)
