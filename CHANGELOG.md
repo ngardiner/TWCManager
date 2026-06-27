@@ -51,6 +51,7 @@ This release maintains support for Tesla Owner API (owner-api.teslamotors.com) w
     * Refactor maxAmpsToDivideFromGrid to global configuration parameter
     * Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
+    * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
     * Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
     * Specify access scope for token refresh
     * Fix typo in log levels
