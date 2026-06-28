@@ -279,6 +279,11 @@ class TeslaBLE:
             "Command executed successfully",
             "Vehicle responded",
             "Success",
+            # "Already in desired state" responses — car is charging or done; goal achieved
+            "car could not execute command: complete",
+            "car could not execute command: is_charging",
+            "car could not execute command: charging",
+            "car could not execute command: requested",
         ]
 
         # Error indicators for detailed logging
