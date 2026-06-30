@@ -73,7 +73,9 @@ class VehiclePriority:
                             ret = module_method(*args, **kwargs)
 
                             # Track success/failure
-                            if ret:
+                            # TeslaAPI returns "success"/"error" strings; treat
+                            # "error" as failure so the priority fallback works.
+                            if ret and ret != "error":
                                 logger.debug(
                                     f"VehiclePriority: {module_name}.{name}() succeeded on attempt {attempt + 1}"
                                 )
