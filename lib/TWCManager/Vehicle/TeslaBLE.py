@@ -415,6 +415,9 @@ class TeslaBLE:
         Enhanced sendCommand with improved error handling and timeout management.
         Returns command output string or None on failure.
         """
+        # Accept either a VIN string or a vehicle object with a .VIN attribute
+        if hasattr(vin, "VIN"):
+            vin = vin.VIN
         return self._execute_with_retry(self._sendCommand_internal, vin, command, args)
 
     def _sendCommand_internal(self, vin, command, args=None):
