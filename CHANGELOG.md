@@ -51,6 +51,8 @@ This release maintains support for Tesla Owner API (owner-api.teslamotors.com) w
     * Refactor maxAmpsToDivideFromGrid to global configuration parameter
     * Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
+    * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
+    * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
     * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
     * Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
     * Specify access scope for token refresh
