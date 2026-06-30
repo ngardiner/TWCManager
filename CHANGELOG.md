@@ -5,6 +5,11 @@ This document logs the changes per release of TWCManager.
 ## v1.4.0 - Upcoming
 
 * Bugfixes
+    * Fix: Remove stopAskingToStartCharging heartbeat reset that caused charge_start API commands to fire every 60 seconds while already charging (re-opens #575, closes #651)
+    * Fix: Remove redundant car_api_available() call at applyChargeLimit entry - rate limit check now runs first, halving Fleet API calls on every policy tick
+    * Fix: VehiclePriority now treats TeslaAPI "error" string return as failure, enabling correct fallback to BLE and failure stat tracking
+    * Fix: update_location(minInterval) now honours the cache interval argument, preventing duplicate vehicle_data API calls per charge cycle
+    * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
     * Fix: RS485 read returns empty bytes after reconnect instead of None, preventing crash on socket disconnect (closes #461)
     * Fix: Stop flooding VIN queries when non-Tesla vehicle or CAN-disabled TWC returns all-zero VIN data (closes #296)
     * Fix: WebIPCControl recovers from ExistentialError when IPC queue is removed at runtime (closes #192)
@@ -15,6 +20,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Correct RecieverID key in TWCProtocol heartbeat parsing and build Dummy slave heartbeats via the protocol module
 * Features
     * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
+    * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, replacing the retired Owner API login
 * Architecture
     * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
 * Bugfixes
@@ -35,6 +41,8 @@ This document logs the changes per release of TWCManager.
     * Fix: Publish charger_load_w status on every heartbeat so Home Assistant entities don't disappear after HA reboot (closes #462)
     * Fix: Log a warning at startup when minAmpsPerTWC exceeds wiringMaxAmpsPerTWC, which would prevent charging from ever starting (closes #24)
     * Fix: Set stopAskingToStartCharging=True when a vehicle departs home, preventing unnecessary wake attempts on absent vehicles (closes #590)
+    * Fix: Trust TeslaMate asleep/offline state in is_awake() to avoid Fleet API status polls when vehicle is confirmed sleeping
+    * Fix: Fleet API wake minimization - 3-minute pre-wake delay (configurable wakeDelayMins), 30-minute retry backoff, no API polls during hold windows
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:

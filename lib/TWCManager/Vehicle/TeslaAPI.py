@@ -1,9 +1,13 @@
+import base64
+import hashlib
 import json
 import logging
 import re
 import requests
+import secrets
 from threading import Thread
 import time
+from urllib.parse import urlencode, urlsplit, parse_qs
 import jwt
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
@@ -18,8 +22,28 @@ class TeslaAPI:
         "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
     }
     refreshClientID = ""
+    # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
+    # whether a client secret is configured:
+    #   - PKCE / public client (default, no secret): code_challenge, no audience,
+    #     tokens exchanged/refreshed at auth.tesla.com. This is what most
+    #     registered third-party apps use.
+    #   - Confidential client (teslaApiClientSecret set): client_secret + audience,
+    #     tokens exchanged at the regional fleet-auth endpoint.
+    authorizeURL = "https://auth.tesla.com/oauth2/v3/authorize"
+    authTokenURL = "https://auth.tesla.com/oauth2/v3/token"
+    clientSecret = ""
+    redirectURI = ""
+    region = "NA"
+    scope = (
+        "openid offline_access vehicle_device_data vehicle_cmds "
+        "vehicle_location vehicle_charging_cmds"
+    )
+    __loginState = None
+    __loginRegion = None
+    __loginVerifier = None
     verifyCert = True
     carApiLastErrorTime = 0
+    wakeDelayMins = 3
     carApiBearerToken = ""
     carApiRefreshToken = ""
     carApiTokenExpireTime = time.time()
@@ -71,10 +95,15 @@ class TeslaAPI:
                 self.baseURL = proxyURL + "/api/1/vehicles"
                 self.verifyCert = self.config["config"].get("teslaProxyCert", True)
             self.refreshClientID = self.config["config"].get("teslaApiClientID", "")
+            self.clientSecret = self.config["config"].get("teslaApiClientSecret", "")
+            self.redirectURI = self.config["config"].get("teslaApiRedirectUri", "")
+            self.region = self.config["config"].get("teslaApiRegion", "NA")
+            self.scope = self.config["config"].get("teslaApiScope", self.scope)
             self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
             self.chargeUpdateInterval = self.config["config"].get(
                 "cloudUpdateInterval", 1800
             )
+            self.wakeDelayMins = self.config["config"].get("wakeDelayMins", 3)
         except KeyError:
             pass
 
@@ -126,7 +155,9 @@ class TeslaAPI:
             "refresh_token": self.getCarApiRefreshToken(),
             "scope": "offline_access",
         }
-        myRefreshURL = self.fleetRefreshURL
+        # Refresh at the same host the token was issued from: auth.tesla.com for
+        # the PKCE/public-client flow, the regional fleet-auth for confidential.
+        myRefreshURL = self.authTokenURL if self.usePKCE() else self.fleetRefreshURL
         req = None
         now = time.time()
         try:
@@ -293,9 +324,6 @@ class TeslaAPI:
                         )
                         continue
 
-                    if vehicle.ready():
-                        continue
-
                     # Don't wake a vehicle we already know is not at home;
                     # waking it would drain its battery unnecessarily (closes #466).
                     if not vehicle.atHome and vehicle.lat != 10000:
@@ -307,16 +335,43 @@ class TeslaAPI:
                         )
                         continue
 
-                    if now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt:
-                        logger.debug(
-                            "car_api_available returning False because we are still delaying "
-                            + str(vehicle.delayNextWakeAttempt)
-                            + " seconds after the last failed wake attempt."
+                    # Pre-wake delay: on first detection check awake state once,
+                    # then hold wakeDelayMins before sending wake_up.  During the
+                    # hold window no Fleet API calls are made, giving the car a
+                    # chance to self-start via the TWC offer.
+                    if vehicle.firstChargeNeededTime == 0:
+                        if vehicle.ready():
+                            continue
+                        vehicle.firstChargeNeededTime = now
+                        logger.info(
+                            vehicle.name
+                            + ": deferring wake for "
+                            + str(self.wakeDelayMins)
+                            + " minutes"
                         )
                         return False
 
-                    # It's been delayNextWakeAttempt seconds since we last failed to
-                    # wake the car, or it's never been woken. Wake it.
+                    wakeDelaySecs = self.wakeDelayMins * 60
+                    if now - vehicle.firstChargeNeededTime < wakeDelaySecs:
+                        # Still in pre-wake hold window - no API calls.
+                        return False
+
+                    # Pre-wake delay elapsed.  Honour post-wake retry delay
+                    # before issuing another wake command.
+                    if now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt:
+                        logger.debug(
+                            "car_api_available returning False - still in "
+                            + str(vehicle.delayNextWakeAttempt)
+                            + "s post-wake delay."
+                        )
+                        return False
+
+                    # Check whether the car woke itself since the last attempt.
+                    if vehicle.ready():
+                        vehicle.firstChargeNeededTime = 0
+                        continue
+
+                    # Car is still not awake.  Send a wake command.
                     apiResponseDict = self.wakeVehicle(vehicle)
 
                     state = "error"
@@ -339,6 +394,7 @@ class TeslaAPI:
                         # I suspect that happens when we happen to query the car
                         # when it periodically awakens for some reason.
                         vehicle.firstWakeAttemptTime = 0
+                        vehicle.firstChargeNeededTime = 0
                         vehicle.delayNextWakeAttempt = 0
                         # Don't alter vehicle.lastAPIAccessTime because
                         # vehicle.ready() uses it to return True if the last wake
@@ -348,97 +404,24 @@ class TeslaAPI:
                         if vehicle.firstWakeAttemptTime == 0:
                             vehicle.firstWakeAttemptTime = now
 
-                        if state == "asleep" or state == "waking":
+                        # Fleet API wake credits are finite and expensive.
+                        # Regardless of state (asleep/offline/error), wait 30
+                        # minutes before retrying.  Rapid retries don't help:
+                        # asleep cars can take 2+ minutes to come online after
+                        # the first wake_up, and offline cars may not be
+                        # reachable at all until they self-wake.
+                        if state in ("asleep", "waking"):
                             self.resetCarApiLastErrorTime()
-                            if now - vehicle.firstWakeAttemptTime <= 10 * 60:
-                                # http://visibletesla.com has a 'force wakeup' mode
-                                # that sends wake_up messages once every 5 seconds
-                                # 15 times. This generally manages to wake my car if
-                                # it's returning 'asleep' state, but I don't think
-                                # there is any reason for 5 seconds and 15 attempts.
-                                # The car did wake in two tests with that timing,
-                                # but on the third test, it had not entered online
-                                # mode by the 15th wake_up and took another 10+
-                                # seconds to come online. In general, I hear relays
-                                # in the car clicking a few seconds after the first
-                                # wake_up but the car does not enter 'waking' or
-                                # 'online' state for a random period of time. I've
-                                # seen it take over one minute, 20 sec.
-                                #
-                                # I interpret this to mean a car in 'asleep' mode is
-                                # still receiving car API messages and will start
-                                # to wake after the first wake_up, but it may take
-                                # awhile to finish waking up. Therefore, we try
-                                # waking every 30 seconds for the first 10 mins.
-                                vehicle.delayNextWakeAttempt = 30
-                            elif now - vehicle.firstWakeAttemptTime <= 70 * 60:
-                                # Cars in 'asleep' state should wake within a
-                                # couple minutes in my experience, so we should
-                                # never reach this point. If we do, try every 5
-                                # minutes for the next hour.
-                                vehicle.delayNextWakeAttempt = 5 * 60
-                            else:
-                                # Car hasn't woken for an hour and 10 mins. Try
-                                # again in 15 minutes. We'll show an error about
-                                # reaching this point later.
-                                vehicle.delayNextWakeAttempt = 15 * 60
                         elif state == "offline":
                             self.resetCarApiLastErrorTime()
-                            # In any case it can make sense to wait 5 seconds here.
-                            # I had the issue, that the next command was sent too
-                            # fast and only a reboot of the Raspberry resultet in
-                            # possible reconnect to the API (even the Tesla App
-                            # couldn't connect anymore).
+                            # Brief pause to avoid hammering the API on a
+                            # transient connectivity hiccup.
                             time.sleep(5)
-                            if now - vehicle.firstWakeAttemptTime <= 31 * 60:
-                                # A car in offline state is presumably not connected
-                                # wirelessly so our wake_up command will not reach
-                                # it. Instead, the car wakes itself every 20-30
-                                # minutes and waits some period of time for a
-                                # message, then goes back to sleep. I'm not sure
-                                # what the period of time is, so I tried sending
-                                # wake_up every 55 seconds for 16 minutes but the
-                                # car failed to wake.
-                                # Next I tried once every 25 seconds for 31 mins.
-                                # This worked after 19.5 and 19.75 minutes in 2
-                                # tests but I can't be sure the car stays awake for
-                                # 30secs or if I just happened to send a command
-                                # during a shorter period of wakefulness.
-                                vehicle.delayNextWakeAttempt = 25
-
-                                # I've run tests sending wake_up every 10-30 mins to
-                                # a car in offline state and it will go hours
-                                # without waking unless you're lucky enough to hit
-                                # it in the brief time it's waiting for wireless
-                                # commands. I assume cars only enter offline state
-                                # when set to max power saving mode, and even then,
-                                # they don't always enter the state even after 8
-                                # hours of no API contact or other interaction. I've
-                                # seen it remain in 'asleep' state when contacted
-                                # after 16.5 hours, but I also think I've seen it in
-                                # offline state after less than 16 hours, so I'm not
-                                # sure what the rules are or if maybe Tesla contacts
-                                # the car periodically which resets the offline
-                                # countdown.
-                                #
-                                # I've also seen it enter 'offline' state a few
-                                # minutes after finishing charging, then go 'online'
-                                # on the third retry every 55 seconds.  I suspect
-                                # that might be a case of the car briefly losing
-                                # wireless connection rather than actually going
-                                # into a deep sleep.
-                                # 'offline' may happen almost immediately if you
-                                # don't have the charger plugged in.
                         else:
                             # Handle 'error' state.
                             self.updateCarApiLastErrorTime()
-                            if now - vehicle.firstWakeAttemptTime >= 60 * 60:
-                                # Car hasn't woken for over an hour. Try again
-                                # in 15 minutes. We'll show an error about this
-                                # later.
-                                vehicle.delayNextWakeAttempt = 15 * 60
-                            else:
-                                vehicle.delayNextWakeAttempt = 25
+
+                        vehicle.delayNextWakeAttempt = 30 * 60
 
                         if state == "error":
                             logger.info(
@@ -573,10 +556,13 @@ class TeslaAPI:
         now = time.time()
         apiResponseDict = {}
         if not charge:
-            # Whenever we are going to tell vehicles to stop charging, set
-            # vehicle.stopAskingToStartCharging = False on all vehicles.
+            # Whenever we are going to tell vehicles to stop charging, reset
+            # per-vehicle wake state so the next start cycle is fresh.
             for vehicle in self.getCarApiVehicles():
                 vehicle.stopAskingToStartCharging = False
+                vehicle.firstChargeNeededTime = 0
+                vehicle.firstWakeAttemptTime = 0
+                vehicle.delayNextWakeAttempt = 0
 
         if now - self.getLastStartOrStopChargeTime() < 60:
             # Don't start or stop more often than once a minute
@@ -870,13 +856,6 @@ class TeslaAPI:
             logger.log(logging.INFO8, "applyChargeLimit skipped")
             return "error"
 
-        if not self.car_api_available():
-            logger.log(
-                logging.INFO8,
-                "applyChargeLimit return because car_api_available() == False",
-            )
-            return "error"
-
         now = time.time()
         if (
             not checkArrival
@@ -1109,6 +1088,138 @@ class TeslaAPI:
         self.errorCount = 0
         return True
 
+    def usePKCE(self):
+        # Public-client PKCE flow is used when no client secret is configured.
+        return not bool(self.clientSecret)
+
+    def regionAudience(self, region):
+        # Confidential-client only: the token audience is the regional FleetAPI
+        # base URL without the /api/1/vehicles path suffix used elsewhere.
+        base = self.regionURL.get(region, self.regionURL["NA"])
+        return base.replace("/api/1/vehicles", "")
+
+    def loginConfigured(self):
+        # Both flows need a client id and redirect URI; the secret is optional
+        # (its presence selects the confidential flow).
+        return bool(self.refreshClientID and self.redirectURI)
+
+    def teslaLoginInfo(self):
+        # Consumed by the web UI to render the FleetAPI login page.
+        return {
+            "configured": self.loginConfigured(),
+            "client_id": self.refreshClientID,
+            "redirect_uri": self.redirectURI,
+            "pkce": self.usePKCE(),
+            "regions": list(self.regionURL.keys()),
+            "region": self.region,
+        }
+
+    def getLoginURL(self, region=None):
+        # Build the authorization URL and remember the state (and PKCE verifier /
+        # region) so the later token exchange matches.
+        if not self.loginConfigured():
+            return ""
+        if region not in self.regionURL:
+            region = self.region
+        self.__loginState = secrets.token_urlsafe(16)
+        self.__loginRegion = region
+        params = {
+            "response_type": "code",
+            "client_id": self.refreshClientID,
+            "redirect_uri": self.redirectURI,
+            "scope": self.scope,
+            "state": self.__loginState,
+        }
+        if self.usePKCE():
+            self.__loginVerifier = secrets.token_urlsafe(64)
+            params["code_challenge"] = (
+                base64.urlsafe_b64encode(
+                    hashlib.sha256(self.__loginVerifier.encode()).digest()
+                )
+                .rstrip(b"=")
+                .decode()
+            )
+            params["code_challenge_method"] = "S256"
+        else:
+            params["audience"] = self.regionAudience(region)
+        return self.authorizeURL + "?" + urlencode(params)
+
+    def fleetTokenExchange(self, code, state):
+        # Exchange an authorization code for tokens. Returns a status string used
+        # by the web UI ("success", "error", or a Tesla error code).
+        if not self.loginConfigured():
+            logger.error("Tesla FleetAPI login is not configured.")
+            return "not_configured"
+        if not code:
+            logger.error("Tesla login: no authorization code provided.")
+            return "error"
+        if not state or state != self.__loginState:
+            logger.error("Tesla login: state mismatch; please retry the login.")
+            return "state_mismatch"
+
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": self.refreshClientID,
+            "code": code,
+            "redirect_uri": self.redirectURI,
+        }
+        if self.usePKCE():
+            # Public client: prove possession of the PKCE verifier; no secret,
+            # no audience, exchange at auth.tesla.com.
+            data["code_verifier"] = self.__loginVerifier or ""
+            tokenURL = self.authTokenURL
+        else:
+            # Confidential client: secret + regional audience at fleet-auth.
+            data["client_secret"] = self.clientSecret
+            data["audience"] = self.regionAudience(self.__loginRegion or self.region)
+            tokenURL = self.fleetRefreshURL
+        # baseURL is left to setCarApiBearerToken, which derives the region from
+        # the token's ou_code when no teslaProxy is configured.
+
+        req = None
+        try:
+            req = requests.post(tokenURL, headers=headers, data=data)
+            params = json.loads(req.text)
+        except requests.exceptions.RequestException:
+            logger.error("Request Exception during Tesla token exchange.")
+            return "error"
+        except (ValueError, json.decoder.JSONDecodeError):
+            logger.error("Could not parse Tesla token exchange response.")
+            return "error"
+
+        if "error" in params:
+            # Do not log the full response (may echo request detail); log the code.
+            logger.log(
+                logging.INFO2, "Tesla token exchange error: " + str(params["error"])
+            )
+            return params["error"]
+
+        if "access_token" in params and "refresh_token" in params:
+            self.setCarApiBearerToken(params["access_token"])
+            self.setCarApiRefreshToken(params["refresh_token"])
+            self.setCarApiTokenExpireTime(
+                time.time() + params.get("expires_in", 8 * 60 * 60)
+            )
+            self.__loginState = None
+            self.__loginVerifier = None
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            logger.log(logging.INFO2, "Tesla FleetAPI tokens stored successfully.")
+            return "success"
+
+        logger.error("Tesla token exchange returned no access token.")
+        return "response_no_token"
+
+    def saveApiToken(self, url):
+        # Paste-back path: extract code and state from the redirect URL the user
+        # copied from their browser, then perform the token exchange.
+        if isinstance(url, bytes):
+            url = url.decode("UTF-8")
+        qs = parse_qs(urlsplit(url).query)
+        code = qs.get("code", [None])[0]
+        state = qs.get("state", [None])[0]
+        return self.fleetTokenExchange(code, state)
+
     def setCarApiBearerToken(self, token=None):
         if token:
             if self.master.tokenSyncEnabled():
@@ -1326,6 +1437,7 @@ class CarApiVehicle:
     VIN = ""
 
     firstWakeAttemptTime = 0
+    firstChargeNeededTime = 0
     lastAPIAccessTime = 0
     delayNextWakeAttempt = 0
     lastLimitAttemptTime = 0
@@ -1432,28 +1544,30 @@ class CarApiVehicle:
         return False
 
     def is_awake(self):
-        if self.syncSource == "TeslaAPI" or self.syncTimestamp < (
-            time.time() - self.syncTimeout / 4
-        ):
-            now = time.time()
-            # Don't check more often than every 2 minutes
-            if now - self.lastVehicleAwakeTime < 120:
-                return self.lastVehicleAwakeState
-            url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
-            result, response = self.get_car_api(
-                url, checkReady=False, provesOnline=False
-            )
-            awakeState = result and response.get("state", "") == "online"
-            self.lastVehicleAwakeState = awakeState
-            self.lastVehicleAwakeTime = now
-            return awakeState
-        else:
-            return (
-                self.syncState == "online"
-                or self.syncState == "charging"
-                or self.syncState == "updating"
-                or self.syncState == "driving"
-            )
+        if self.syncSource != "TeslaAPI" and self.syncTimestamp > 0:
+            # External sync (e.g. TeslaMate) has provided at least one update.
+            if self.syncState in ("asleep", "offline"):
+                # Car is known to be asleep - trust the sync source and avoid
+                # Fleet API calls that cost money just to confirm it's still asleep.
+                return False
+            if self.syncTimestamp >= (time.time() - self.syncTimeout / 4):
+                # Fresh data and car is not asleep - trust it.
+                return self.syncState in ("online", "charging", "updating", "driving")
+            # Stale data but car was last known active - fall through to API check
+            # in case the sync source dropped while the car was still awake.
+
+        now = time.time()
+        # Don't check more often than every 2 minutes
+        if now - self.lastVehicleAwakeTime < 120:
+            return self.lastVehicleAwakeState
+        url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
+        result, response = self.get_car_api(
+            url, checkReady=False, provesOnline=False
+        )
+        awakeState = result and response.get("state", "") == "online"
+        self.lastVehicleAwakeState = awakeState
+        self.lastVehicleAwakeTime = now
+        return awakeState
 
     def get_car_api(self, url, checkReady=True, provesOnline=True):
         if checkReady and not self.ready():
@@ -1543,8 +1657,14 @@ class CarApiVehicle:
             self.carapi.updateCarApiLastErrorTime(self)
             return (False, None)
 
-    def update_location(self):
+    def update_location(self, minInterval=0):
         if self.syncSource == "TeslaAPI":
+            if minInterval > 0:
+                # Caller only needs fresh data if older than minInterval seconds.
+                # Set statusDeferral to skip the API call if data is recent enough.
+                now = time.time()
+                if now - self.lastAPIAccessTime < minInterval:
+                    return True
             return self.update_vehicle_data()
 
         else:

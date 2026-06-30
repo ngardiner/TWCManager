@@ -1,5 +1,18 @@
 # TWCManager Documentation
 
+## Choosing a Version
+
+Tesla is actively deprecating the Owner API in favour of Fleet API, with ongoing changes that affect how vehicle control works. TWCManager has two active 1.3.x tracks:
+
+| Track | Vehicle control |
+| ----- | --------------- |
+| **Stable (1.3.3)** | Owner API - works today, but Tesla is phasing this out |
+| **Fleet API (1.3.4)** | Fleet API (requires a registered app) or TeslaBLE |
+
+- **New users:** the Fleet API track (1.3.4) is the direction of travel. Starting there avoids a forced migration when Tesla eventually removes Owner API access.
+- **Existing stable users:** your installation continues to work. Plan to migrate as Tesla continues to phase out the Owner API.
+- **No Tesla account?** [TeslaBLE](modules/Vehicle_TeslaBLE.md) is available on both tracks and requires no cloud credentials.
+
 ## Having Trouble?
 
 If you're having trouble getting TWCManager working, check out our [Troubleshooting Guide](Troubleshooting.md) to see if any of our tips help you out!
@@ -92,7 +105,7 @@ In an upcoming release, this will be offered as a switchable option to replace t
       
       * Use the Tesla API to connect to the car, sending a command to stop/start charging.
 
-This requires a Tesla API token, which is stored locally within a settings file. Tesla retired the legacy Owner API, so cloud control now requires a registered FleetAPI app (see the Vehicle module docs), TeslaMate token sync, or pasting a token into the Settings page. Local BLE control (TeslaBLE) is also available and needs no cloud token.
+This requires a Tesla API token, which is stored locally within a settings file. Tesla retired the legacy Owner API, so cloud control now requires a registered FleetAPI app (see the [Tesla FleetAPI setup guide](modules/Vehicle_TeslaAPI.md)), TeslaMate token sync, or pasting a token into the Settings page. Local BLE control (TeslaBLE) is also available and needs no cloud token.
 
 If you have multiple cars, TWCManager will attempt to identify which cars are home using geofencing. The following page of the TMC forums thread explains it better than I could: https://teslamotorsclub.com/tmc/threads/new-wall-connector-load-sharing-protocol.72830/page-16
 

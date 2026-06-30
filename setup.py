@@ -12,7 +12,7 @@ setup(
     long_description="Controls the charge rate of certain versions of Tesla Wall Connector (TWC) via the built-in Load Sharing protocol.",
     # Dependencies
     install_requires=[
-        "cryptography<3.4",
+        "cryptography>=2.6",
         "growattServer>=1.0.0",
         "jinja2>=2.11.2",
         "ocpp",

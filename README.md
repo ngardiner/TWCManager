@@ -11,6 +11,15 @@
 ![Screenshot](docs/screenshot.png)
 ![Screenshot](docs/screenshot4.png)
 
+## Tesla API
+
+Tesla is actively deprecating the Owner API in favour of Fleet API, with ongoing changes affecting vehicle control. TWCManager reflects this with two active 1.3.x tracks:
+
+- **Stable (1.3.3):** Owner API based. Works today, but Tesla is phasing this out - new users should plan accordingly.
+- **Fleet API (1.3.4):** Fleet API based. Tesla's supported path going forward.
+
+See [Choosing a version](docs/README.md#choosing-a-version) for guidance on which to use.
+
 ## How it works
 
 * In order to allow multiple Tesla Wall Connector (TWC) units to operate on a single power circuit, Tesla provides a Load-Sharing protocol to interconnect the Tesla Wall Connector units together, and to direct those units to charge at a specific rate based on the number of cars charging simtultaneously.
