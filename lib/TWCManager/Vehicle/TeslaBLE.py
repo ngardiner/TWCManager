@@ -184,29 +184,17 @@ class TeslaBLE:
                 logger.debug(f"BLE command for specific VIN: {vin}, charge: {charge}")
 
                 if charge:
-                    charge_success = self.startCharging(vin)
-                    if charge_success:
-                        ping_success = self.pingVehicle(vin)
-                        success = charge_success and ping_success
-                        logger.info(
-                            f"BLE start charging for {vin}: {'success' if success else 'failed'}"
-                        )
-                        return success
-                    else:
-                        logger.warning(f"BLE start charging failed for {vin}")
-                        return False
+                    success = self.startCharging(vin)
+                    logger.info(
+                        f"BLE start charging for {vin}: {'success' if success else 'failed'}"
+                    )
+                    return success
                 else:
-                    stop_success = self.stopCharging(vin)
-                    if stop_success:
-                        ping_success = self.pingVehicle(vin)
-                        success = stop_success and ping_success
-                        logger.info(
-                            f"BLE stop charging for {vin}: {'success' if success else 'failed'}"
-                        )
-                        return success
-                    else:
-                        logger.warning(f"BLE stop charging failed for {vin}")
-                        return False
+                    success = self.stopCharging(vin)
+                    logger.info(
+                        f"BLE stop charging for {vin}: {'success' if success else 'failed'}"
+                    )
+                    return success
             else:
                 # If we don't know the VIN, we send to all vehicles
                 # This is not optimal for multi-vehicle installs, but may be necessary when TWC doesn't read VIN
@@ -222,17 +210,9 @@ class TeslaBLE:
                 for vehicle in self.master.settings["Vehicles"].keys():
                     try:
                         if charge:
-                            charge_success = self.startCharging(vehicle)
-                            ping_success = (
-                                self.pingVehicle(vehicle) if charge_success else False
-                            )
-                            vehicle_success = charge_success and ping_success
+                            vehicle_success = self.startCharging(vehicle)
                         else:
-                            stop_success = self.stopCharging(vehicle)
-                            ping_success = (
-                                self.pingVehicle(vehicle) if stop_success else False
-                            )
-                            vehicle_success = stop_success and ping_success
+                            vehicle_success = self.stopCharging(vehicle)
 
                         if vehicle_success:
                             success_count += 1
@@ -389,27 +369,6 @@ class TeslaBLE:
         finally:
             # Always ensure pipe is closed after pairing attempt
             self._ensure_pipe_closed()
-
-    def pingVehicle(self, vin):
-        """
-        Ping a vehicle to verify BLE connectivity.
-        Returns True on success, False on failure.
-        """
-        try:
-            logger.debug(f"Pinging vehicle {vin}")
-
-            ret = self.sendCommand(vin, "ping")
-            if ret is None:
-                logger.debug(f"Failed to send ping command to {vin}")
-                return False
-
-            success = self.parseCommandOutput(ret)
-            logger.debug(f"Ping {vin}: {'success' if success else 'failed'}")
-            return success
-
-        except Exception as e:
-            logger.error(f"pingVehicle exception for {vin}: {e}")
-            return False
 
     def sendCommand(self, vin, command, args=None):
         """
