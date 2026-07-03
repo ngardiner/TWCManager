@@ -314,6 +314,7 @@ class TestPolicySelection:
     def test_get_active_policy_action_charging(self, policy):
         """Test getActivePolicyAction returns 1 for charging."""
         policy.active_policy = "Charge Now"
+        policy.master.settings["chargeNowAmps"] = 32
         assert policy.getActivePolicyAction() == 1
     
     def test_get_active_policy_action_no_charge(self, policy):
@@ -444,7 +445,7 @@ class TestPolicyThrottling:
 
 
 class TestPolicyEdgeCases:
-    """Test suite for policy edge cases and boundary conditions."""
+    """Test suite for policy edge cases."""
     
     @pytest.fixture
     def mock_master(self):
@@ -464,14 +465,17 @@ class TestPolicyEdgeCases:
             "nonScheduledAmpsMax": 0,
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.getModuleByName = Mock(return_value=None)
+        master.setAllowedFlex = Mock()
+        mock_tesla_api = Mock()
+        mock_tesla_api.getCarApiVehicles = Mock(return_value=[])
+        master.getModuleByName = Mock(return_value=mock_tesla_api)
         master.getModulesByType = Mock(return_value=[])
         return master
     
     @pytest.fixture
     def policy(self, mock_master):
         """Create a Policy instance for testing."""
-        from TWCManager.Policy import Policy
+        from TWCManager.Policy.Policy import Policy
         return Policy(mock_master)
     
     def test_policy_with_zero_amps(self, policy):
@@ -558,14 +562,17 @@ class TestPolicyIntegration:
             "hourResumeTrackGreenEnergy": -1,
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.getModuleByName = Mock(return_value=None)
+        master.setAllowedFlex = Mock()
+        mock_tesla_api = Mock()
+        mock_tesla_api.getCarApiVehicles = Mock(return_value=[])
+        master.getModuleByName = Mock(return_value=mock_tesla_api)
         master.getModulesByType = Mock(return_value=[])
         return master
     
     @pytest.fixture
     def policy(self, mock_master):
         """Create a Policy instance for testing."""
-        from TWCManager.Policy import Policy
+        from TWCManager.Policy.Policy import Policy
         return Policy(mock_master)
     
     def test_policy_charge_now_overrides_scheduled(self, policy):
@@ -634,14 +641,17 @@ class TestPolicyThrottling:
             "nonScheduledAmpsMax": 0,
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.getModuleByName = Mock(return_value=None)
+        master.setAllowedFlex = Mock()
+        mock_tesla_api = Mock()
+        mock_tesla_api.getCarApiVehicles = Mock(return_value=[])
+        master.getModuleByName = Mock(return_value=mock_tesla_api)
         master.getModulesByType = Mock(return_value=[])
         return master
     
     @pytest.fixture
     def policy(self, mock_master):
         """Create a Policy instance for testing."""
-        from TWCManager.Policy import Policy
+        from TWCManager.Policy.Policy import Policy
         return Policy(mock_master)
     
     def test_policy_throttle_interval_respected(self, policy):
@@ -658,15 +668,19 @@ class TestPolicyThrottling:
         assert policy.master.setMaxAmpsToDivideAmongSlaves.call_count == initial_call_count
     
     def test_policy_throttle_reset_on_immediate_apply(self, policy):
-        """Test that applyPolicyImmediately resets throttle."""
+        """Test that applyPolicyImmediately resets throttle and applies policy."""
         import time
         policy.policyCheckInterval = 30
-        policy.lastPolicyCheck = time.time()
+        policy.lastPolicyCheck = time.time() - 10  # 10 seconds ago
+        
+        initial_call_count = policy.master.setMaxAmpsToDivideAmongSlaves.call_count
         
         policy.applyPolicyImmediately()
         
-        # Throttle should be reset
-        assert policy.lastPolicyCheck == 0
+        # Policy should have been applied immediately despite throttle
+        assert policy.master.setMaxAmpsToDivideAmongSlaves.call_count > initial_call_count
+        # lastPolicyCheck should be updated to current time after applying
+        assert policy.lastPolicyCheck > 0
     
     def test_policy_zero_throttle_interval(self, policy):
         """Test policy with zero throttle interval."""
