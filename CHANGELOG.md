@@ -12,6 +12,7 @@ This document logs the changes per release of TWCManager.
 * Architecture
     * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
 * Bugfixes
+    * Fix: Correct invalid logging level in update_vehicle_data error handler which crashed when logging a failed API response
     * Fix: Remove stopAskingToStartCharging heartbeat reset that caused charge_start API commands to fire every 60 seconds while already charging (re-opens #575, closes #651)
     * Fix: Remove redundant car_api_available() call at applyChargeLimit entry - rate limit check now runs first, halving Fleet API calls on every policy tick
     * Fix: VehiclePriority now treats TeslaAPI "error" string return as failure, enabling correct fallback to BLE and failure stat tracking
