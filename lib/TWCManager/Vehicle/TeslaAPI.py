@@ -548,8 +548,18 @@ class TeslaAPI:
 
         return True
 
-    def is_location_home(self, lat, lon):
+    def is_location_home(self, lat, lon, gpsAge=None):
         if self.master.getHomeLatLon()[0] == 10000:
+            # Don't seed home from a stale GPS fix. A sleeping car reports its
+            # last known coordinates, which can be hours old and kilometres
+            # away; seeding retries on a later poll once the fix is fresh.
+            if gpsAge is not None and gpsAge > 600:
+                logger.info(
+                    "Home location for vehicles has never been set, but the "
+                    "vehicle's GPS fix is %d seconds old. Waiting for a fresh "
+                    "fix before setting home." % gpsAge
+                )
+                return False
             logger.info(
                 "Home location for vehicles has never been set.  "
                 + "We'll assume home is where we found the first vehicle currently parked.  "
@@ -1404,6 +1414,9 @@ class TeslaAPI:
         for car in self.carApiVehicles:
             if car.VIN == vin:
                 if not car.atHome:
+                    # Force a real fetch; the status deferral would otherwise
+                    # return cached (possibly stale) coordinates unqueried.
+                    car.statusDeferral = 0
                     updated = car.update_location(0)
                     if updated and not car.atHome:
                         logger.log(
@@ -1411,18 +1424,29 @@ class TeslaAPI:
                             car.name
                             + " was connected to a TWC, so is definitely home.",
                         )
-                        logger.log(
-                            logging.INFO2,
-                            "Resetting home location to ("
-                            + str(car.lat)
-                            + ", "
-                            + str(car.lon)
-                            + ")",
-                        )
-                        self.master.setHomeLat(car.lat)
-                        self.master.setHomeLon(car.lon)
-                        self.master.queue_background_task({"cmd": "sunrise"})
-                        self.master.queue_background_task({"cmd": "saveSettings"})
+                        if car.gpsAsOf and time.time() - car.gpsAsOf > 600:
+                            # The car is home (the TWC reports its VIN), but
+                            # its GPS fix is stale - don't move home to
+                            # wherever the car last had reception.
+                            logger.log(
+                                logging.INFO2,
+                                "Not resetting home location: "
+                                + car.name
+                                + "'s GPS fix is stale.",
+                            )
+                        else:
+                            logger.log(
+                                logging.INFO2,
+                                "Resetting home location to ("
+                                + str(car.lat)
+                                + ", "
+                                + str(car.lon)
+                                + ")",
+                            )
+                            self.master.setHomeLat(car.lat)
+                            self.master.setHomeLon(car.lon)
+                            self.master.queue_background_task({"cmd": "sunrise"})
+                            self.master.queue_background_task({"cmd": "saveSettings"})
                         car.atHome = True
                 return
 
@@ -1502,6 +1526,7 @@ class CarApiVehicle:
     chargeLimit = -1
     lat = 10000
     lon = 10000
+    gpsAsOf = 0
     atHome = False
     timeToFullCharge = 0.0
     availableCurrent = 0
@@ -1768,7 +1793,9 @@ class CarApiVehicle:
                 )
                 return False
 
-            self.atHome = self.carapi.is_location_home(self.lat, self.lon)
+            self.gpsAsOf = drive.get("gps_as_of") or 0
+            gpsAge = (now - self.gpsAsOf) if self.gpsAsOf else None
+            self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
 
             self.chargeLimit = charge.get("charge_limit_soc", self.chargeLimit)
             self.batteryLevel = charge.get("battery_level", self.batteryLevel)
