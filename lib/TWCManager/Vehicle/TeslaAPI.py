@@ -1543,8 +1543,14 @@ class CarApiVehicle:
             self.carapi.updateCarApiLastErrorTime(self)
             return (False, None)
 
-    def update_location(self):
+    def update_location(self, minInterval=0):
         if self.syncSource == "TeslaAPI":
+            if minInterval > 0:
+                # Caller only needs fresh data if older than minInterval seconds.
+                # Set statusDeferral to skip the API call if data is recent enough.
+                now = time.time()
+                if now - self.lastAPIAccessTime < minInterval:
+                    return True
             return self.update_vehicle_data()
 
         else:
