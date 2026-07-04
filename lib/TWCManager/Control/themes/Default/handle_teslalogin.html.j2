@@ -1,0 +1,46 @@
+{% if url.path == "/teslaAccount/success" %}
+  <font color="blue">
+    <b>Success, your Tesla FleetAPI tokens have been stored.</b>
+  </font>
+  <p>TWCManager can now read your vehicle state. To <b>drive charging</b>
+     (start/stop/rate-limit), you also need the Tesla Vehicle Command proxy
+     (set <code>teslaProxy</code>) or the TeslaBLE module - Tesla's REST charge
+     commands now require the Vehicle Command Protocol. See the
+     <a href="https://github.com/ngardiner/TWCManager/blob/main/docs/modules/Vehicle_TeslaAPI.md#driving-charging-proxy-or-ble" target="_blank">Driving charging</a> docs.</p>
+{% elif url.path == "/teslaAccount/state_mismatch" %}
+  <font color='red'>
+    <b>Login security check failed (state mismatch). This usually happens if the
+       login was started a while ago or in another session. Please start the
+       login again.</b>
+  </font>
+{% elif url.path == "/teslaAccount/not_configured" %}
+  <font color='red'>
+    <b>Tesla FleetAPI is not configured. Set teslaApiClientID,
+       teslaApiClientSecret and teslaApiRedirectUri in config.json.</b>
+  </font>
+{% elif url.path == "/teslaAccount/response_no_token" %}
+  <font color='red'>
+    <b>The Tesla API did not return an access token. Please try again.</b>
+  </font>
+{% elif url.path == "/teslaAccount/error" %}
+  <font color='red'>
+    <b>An error occurred during Tesla login. Please check the logs and try
+       again.</b>
+  </font>
+{% elif url.path.startswith("/teslaAccount/")
+        and url.path != "/teslaAccount/login"
+        and url.path != "/teslaAccount/callback"
+        and url.path != "/teslaAccount/saveToken" %}
+  <font color='red'>
+    <b>Tesla reported an error: {{ url.path.split('/')[-1] }}. Please try the
+       login again.</b>
+  </font>
+{% endif %}
+
+{% if not master.tokenSyncEnabled()
+      and url.path != "/teslaAccount/success" %}
+      <!-- Show the login form whenever we don't already hold an API token -->
+      {% if not apiAvailable %}
+          {% include 'request_teslalogin.html.j2' %}
+      {% endif %}
+{% endif %}

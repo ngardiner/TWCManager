@@ -1,9 +1,13 @@
+import base64
+import hashlib
 import json
 import logging
 import re
 import requests
+import secrets
 from threading import Thread
 import time
+from urllib.parse import urlencode, urlsplit, parse_qs
 import jwt
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
@@ -18,6 +22,25 @@ class TeslaAPI:
         "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
     }
     refreshClientID = ""
+    # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
+    # whether a client secret is configured:
+    #   - PKCE / public client (default, no secret): code_challenge, no audience,
+    #     tokens exchanged/refreshed at auth.tesla.com. This is what most
+    #     registered third-party apps use.
+    #   - Confidential client (teslaApiClientSecret set): client_secret + audience,
+    #     tokens exchanged at the regional fleet-auth endpoint.
+    authorizeURL = "https://auth.tesla.com/oauth2/v3/authorize"
+    authTokenURL = "https://auth.tesla.com/oauth2/v3/token"
+    clientSecret = ""
+    redirectURI = ""
+    region = "NA"
+    scope = (
+        "openid offline_access vehicle_device_data vehicle_cmds "
+        "vehicle_location vehicle_charging_cmds"
+    )
+    __loginState = None
+    __loginRegion = None
+    __loginVerifier = None
     verifyCert = True
     carApiLastErrorTime = 0
     carApiBearerToken = ""
@@ -71,6 +94,10 @@ class TeslaAPI:
                 self.baseURL = proxyURL + "/api/1/vehicles"
                 self.verifyCert = self.config["config"].get("teslaProxyCert", True)
             self.refreshClientID = self.config["config"].get("teslaApiClientID", "")
+            self.clientSecret = self.config["config"].get("teslaApiClientSecret", "")
+            self.redirectURI = self.config["config"].get("teslaApiRedirectUri", "")
+            self.region = self.config["config"].get("teslaApiRegion", "NA")
+            self.scope = self.config["config"].get("teslaApiScope", self.scope)
             self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
             self.chargeUpdateInterval = self.config["config"].get(
                 "cloudUpdateInterval", 1800
@@ -1108,6 +1135,138 @@ class TeslaAPI:
             vehicle.errorCount = 0
         self.errorCount = 0
         return True
+
+    def usePKCE(self):
+        # Public-client PKCE flow is used when no client secret is configured.
+        return not bool(self.clientSecret)
+
+    def regionAudience(self, region):
+        # Confidential-client only: the token audience is the regional FleetAPI
+        # base URL without the /api/1/vehicles path suffix used elsewhere.
+        base = self.regionURL.get(region, self.regionURL["NA"])
+        return base.replace("/api/1/vehicles", "")
+
+    def loginConfigured(self):
+        # Both flows need a client id and redirect URI; the secret is optional
+        # (its presence selects the confidential flow).
+        return bool(self.refreshClientID and self.redirectURI)
+
+    def teslaLoginInfo(self):
+        # Consumed by the web UI to render the FleetAPI login page.
+        return {
+            "configured": self.loginConfigured(),
+            "client_id": self.refreshClientID,
+            "redirect_uri": self.redirectURI,
+            "pkce": self.usePKCE(),
+            "regions": list(self.regionURL.keys()),
+            "region": self.region,
+        }
+
+    def getLoginURL(self, region=None):
+        # Build the authorization URL and remember the state (and PKCE verifier /
+        # region) so the later token exchange matches.
+        if not self.loginConfigured():
+            return ""
+        if region not in self.regionURL:
+            region = self.region
+        self.__loginState = secrets.token_urlsafe(16)
+        self.__loginRegion = region
+        params = {
+            "response_type": "code",
+            "client_id": self.refreshClientID,
+            "redirect_uri": self.redirectURI,
+            "scope": self.scope,
+            "state": self.__loginState,
+        }
+        if self.usePKCE():
+            self.__loginVerifier = secrets.token_urlsafe(64)
+            params["code_challenge"] = (
+                base64.urlsafe_b64encode(
+                    hashlib.sha256(self.__loginVerifier.encode()).digest()
+                )
+                .rstrip(b"=")
+                .decode()
+            )
+            params["code_challenge_method"] = "S256"
+        else:
+            params["audience"] = self.regionAudience(region)
+        return self.authorizeURL + "?" + urlencode(params)
+
+    def fleetTokenExchange(self, code, state):
+        # Exchange an authorization code for tokens. Returns a status string used
+        # by the web UI ("success", "error", or a Tesla error code).
+        if not self.loginConfigured():
+            logger.error("Tesla FleetAPI login is not configured.")
+            return "not_configured"
+        if not code:
+            logger.error("Tesla login: no authorization code provided.")
+            return "error"
+        if not state or state != self.__loginState:
+            logger.error("Tesla login: state mismatch; please retry the login.")
+            return "state_mismatch"
+
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": self.refreshClientID,
+            "code": code,
+            "redirect_uri": self.redirectURI,
+        }
+        if self.usePKCE():
+            # Public client: prove possession of the PKCE verifier; no secret,
+            # no audience, exchange at auth.tesla.com.
+            data["code_verifier"] = self.__loginVerifier or ""
+            tokenURL = self.authTokenURL
+        else:
+            # Confidential client: secret + regional audience at fleet-auth.
+            data["client_secret"] = self.clientSecret
+            data["audience"] = self.regionAudience(self.__loginRegion or self.region)
+            tokenURL = self.fleetRefreshURL
+        # baseURL is left to setCarApiBearerToken, which derives the region from
+        # the token's ou_code when no teslaProxy is configured.
+
+        req = None
+        try:
+            req = requests.post(tokenURL, headers=headers, data=data)
+            params = json.loads(req.text)
+        except requests.exceptions.RequestException:
+            logger.error("Request Exception during Tesla token exchange.")
+            return "error"
+        except (ValueError, json.decoder.JSONDecodeError):
+            logger.error("Could not parse Tesla token exchange response.")
+            return "error"
+
+        if "error" in params:
+            # Do not log the full response (may echo request detail); log the code.
+            logger.log(
+                logging.INFO2, "Tesla token exchange error: " + str(params["error"])
+            )
+            return params["error"]
+
+        if "access_token" in params and "refresh_token" in params:
+            self.setCarApiBearerToken(params["access_token"])
+            self.setCarApiRefreshToken(params["refresh_token"])
+            self.setCarApiTokenExpireTime(
+                time.time() + params.get("expires_in", 8 * 60 * 60)
+            )
+            self.__loginState = None
+            self.__loginVerifier = None
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            logger.log(logging.INFO2, "Tesla FleetAPI tokens stored successfully.")
+            return "success"
+
+        logger.error("Tesla token exchange returned no access token.")
+        return "response_no_token"
+
+    def saveApiToken(self, url):
+        # Paste-back path: extract code and state from the redirect URL the user
+        # copied from their browser, then perform the token exchange.
+        if isinstance(url, bytes):
+            url = url.decode("UTF-8")
+        qs = parse_qs(urlsplit(url).query)
+        code = qs.get("code", [None])[0]
+        state = qs.get("state", [None])[0]
+        return self.fleetTokenExchange(code, state)
 
     def setCarApiBearerToken(self, token=None):
         if token:

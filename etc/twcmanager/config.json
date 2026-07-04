@@ -138,26 +138,63 @@
         # you will need to un-comment it to have it take effect.
         #"minChargeLevel": 10,
 
-        # The client_id of the app registered with Tesla. The legacy Owner API
-        # has been retired by Tesla, so registration is now required for all
-        # cloud-based vehicle control via the FleetAPI and Vehicle Command
-        # protocol. Local BLE control (TeslaBLE) does not require this.
+        # The client_id of the app you register at developer.tesla.com. The
+        # legacy Owner API has been retired, so cloud control now requires your
+        # own registered application. When registering, choose the OAuth grant
+        # type "Authorization Code (Third-Party Tokens)" (NOT "Client
+        # Credentials", which is for partner/machine tokens). Local BLE control
+        # (TeslaBLE) does not require this.
         # See https://developer.tesla.com/docs/fleet-api#authentication
         #"teslaApiClientID": "client-id-of-registered-app",
 
-        # Since 2024 the Tesla Vehicle Command protocol is required for all
-        # vehicles manufacturered after 2021. The Tesla Vehicle Command proxy
-        # will automatically fall back to the FleetAPI for older vehicles.
+        # The redirect URI registered against your Tesla app. It must match
+        # exactly in both the login request and the token exchange, and it must
+        # be an HTTPS URL under the public domain you control (the app's allowed
+        # origin) - NOT TWCManager's LAN address.
         #
-        # TWCManager does not implement the Tesla Vehicle Command protocol.
-        # Instead it relies on the Tesla Vehicle Command proxy which translates
-        # the FleetAPI REST calls if the destination vehicle supports the
-        # new protocol. This requires the URL of the proxy to be set as
-        # "teslaProxy" and the proxy certificate for validation as
-        # "teslaProxyCert".
+        # Do NOT expose TWCManager to the internet. The redirect URI does not
+        # need to reach TWCManager: after logging in you simply paste the URL
+        # you were redirected to into the web UI (paste-back). Only set this to
+        # a callback that forwards to TWCManager (e.g. via a reverse proxy you
+        # control) if you specifically want the auto-capture flow.
+        #"teslaApiRedirectUri": "https://twc.yourdomain.com/teslaAccount/callback",
+
+        # OPTIONAL/ADVANCED. By default TWCManager logs in using PKCE (the
+        # standard public-client method) and needs NO client secret. Only set
+        # teslaApiClientSecret if you specifically want the client-secret token
+        # exchange; doing so also requires teslaApiRegion below. Keep config.json
+        # readable only by the twcmanager user if you set this.
+        #"teslaApiClientSecret": "client-secret-of-registered-app",
+
+        # Only used when teslaApiClientSecret is set (the secret-based exchange
+        # needs a regional audience). Your Tesla account region: NA, EU or CN.
+        # Not needed for the default PKCE login (the region is derived from the
+        # token). Defaults to NA.
+        #"teslaApiRegion": "NA",
+
+        # Optional override of the OAuth scopes requested at login. The default
+        # covers charging control, vehicle data and location (used for home
+        # geofencing):
+        # "openid offline_access vehicle_device_data vehicle_cmds vehicle_location vehicle_charging_cmds"
+        #"teslaApiScope": "openid offline_access vehicle_device_data vehicle_cmds vehicle_location vehicle_charging_cmds",
+
+        # REQUIRED TO DRIVE CHARGING over the FleetAPI. Tesla has deprecated the
+        # REST charge-command endpoints; charge_start/stop/set-rate now return
+        # 403 "Tesla Vehicle Command Protocol required" on essentially all
+        # vehicles (confirmed even on a 2019 Model 3). Without the proxy below,
+        # the FleetAPI login can still READ vehicle state, but cannot start,
+        # stop or rate-limit charging.
+        #
+        # TWCManager does not implement the Vehicle Command protocol itself; it
+        # relies on the Tesla Vehicle Command proxy, which signs commands with
+        # your app key and forwards them. Set the proxy URL as "teslaProxy" and
+        # its certificate as "teslaProxyCert".
         # See https://github.com/teslamotors/vehicle-command
         #
-        # The URL of the Tesla HTTP Proxy running locally
+        # (Alternatively, the TeslaBLE module drives charging locally over
+        # Bluetooth with no proxy - see docs/modules/Vehicle_TeslaBLE.md.)
+        #
+        # The URL of the Tesla HTTP Proxy
         # "teslaProxy": "https://localhost:4443",
         #
         # Only set "teslaProxyCert" when "teslaProxy" is set.
