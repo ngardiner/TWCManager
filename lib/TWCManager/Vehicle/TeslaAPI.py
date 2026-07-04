@@ -43,6 +43,7 @@ class TeslaAPI:
     __loginVerifier = None
     verifyCert = True
     carApiLastErrorTime = 0
+    wakeDelayMins = 3
     carApiBearerToken = ""
     carApiRefreshToken = ""
     carApiTokenExpireTime = time.time()
@@ -102,6 +103,7 @@ class TeslaAPI:
             self.chargeUpdateInterval = self.config["config"].get(
                 "cloudUpdateInterval", 1800
             )
+            self.wakeDelayMins = cfg.get("wakeDelayMins", 3)
         except KeyError:
             pass
 
@@ -320,9 +322,6 @@ class TeslaAPI:
                         )
                         continue
 
-                    if vehicle.ready():
-                        continue
-
                     # Don't wake a vehicle we already know is not at home;
                     # waking it would drain its battery unnecessarily (closes #466).
                     if not vehicle.atHome and vehicle.lat != 10000:
@@ -334,16 +333,43 @@ class TeslaAPI:
                         )
                         continue
 
-                    if now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt:
-                        logger.debug(
-                            "car_api_available returning False because we are still delaying "
-                            + str(vehicle.delayNextWakeAttempt)
-                            + " seconds after the last failed wake attempt."
+                    # Pre-wake delay: on first detection check awake state once,
+                    # then hold wakeDelayMins before sending wake_up.  During the
+                    # hold window no Fleet API calls are made, giving the car a
+                    # chance to self-start via the TWC offer.
+                    if vehicle.firstChargeNeededTime == 0:
+                        if vehicle.ready():
+                            continue
+                        vehicle.firstChargeNeededTime = now
+                        logger.info(
+                            vehicle.name
+                            + ": deferring wake for "
+                            + str(self.wakeDelayMins)
+                            + " minutes"
                         )
                         return False
 
-                    # It's been delayNextWakeAttempt seconds since we last failed to
-                    # wake the car, or it's never been woken. Wake it.
+                    wakeDelaySecs = self.wakeDelayMins * 60
+                    if now - vehicle.firstChargeNeededTime < wakeDelaySecs:
+                        # Still in pre-wake hold window - no API calls.
+                        return False
+
+                    # Pre-wake delay elapsed.  Honour post-wake retry delay
+                    # before issuing another wake command.
+                    if now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt:
+                        logger.debug(
+                            "car_api_available returning False - still in "
+                            + str(vehicle.delayNextWakeAttempt)
+                            + "s post-wake delay."
+                        )
+                        return False
+
+                    # Check whether the car woke itself since the last attempt.
+                    if vehicle.ready():
+                        vehicle.firstChargeNeededTime = 0
+                        continue
+
+                    # Car is still not awake.  Send a wake command.
                     apiResponseDict = self.wakeVehicle(vehicle)
 
                     state = "error"
@@ -375,97 +401,24 @@ class TeslaAPI:
                         if vehicle.firstWakeAttemptTime == 0:
                             vehicle.firstWakeAttemptTime = now
 
-                        if state == "asleep" or state == "waking":
+                        # Fleet API wake credits are finite and expensive.
+                        # Regardless of state (asleep/offline/error), wait 30
+                        # minutes before retrying.  Rapid retries don't help:
+                        # asleep cars can take 2+ minutes to come online after
+                        # the first wake_up, and offline cars may not be
+                        # reachable at all until they self-wake.
+                        if state in ("asleep", "waking"):
                             self.resetCarApiLastErrorTime()
-                            if now - vehicle.firstWakeAttemptTime <= 10 * 60:
-                                # http://visibletesla.com has a 'force wakeup' mode
-                                # that sends wake_up messages once every 5 seconds
-                                # 15 times. This generally manages to wake my car if
-                                # it's returning 'asleep' state, but I don't think
-                                # there is any reason for 5 seconds and 15 attempts.
-                                # The car did wake in two tests with that timing,
-                                # but on the third test, it had not entered online
-                                # mode by the 15th wake_up and took another 10+
-                                # seconds to come online. In general, I hear relays
-                                # in the car clicking a few seconds after the first
-                                # wake_up but the car does not enter 'waking' or
-                                # 'online' state for a random period of time. I've
-                                # seen it take over one minute, 20 sec.
-                                #
-                                # I interpret this to mean a car in 'asleep' mode is
-                                # still receiving car API messages and will start
-                                # to wake after the first wake_up, but it may take
-                                # awhile to finish waking up. Therefore, we try
-                                # waking every 30 seconds for the first 10 mins.
-                                vehicle.delayNextWakeAttempt = 30
-                            elif now - vehicle.firstWakeAttemptTime <= 70 * 60:
-                                # Cars in 'asleep' state should wake within a
-                                # couple minutes in my experience, so we should
-                                # never reach this point. If we do, try every 5
-                                # minutes for the next hour.
-                                vehicle.delayNextWakeAttempt = 5 * 60
-                            else:
-                                # Car hasn't woken for an hour and 10 mins. Try
-                                # again in 15 minutes. We'll show an error about
-                                # reaching this point later.
-                                vehicle.delayNextWakeAttempt = 15 * 60
                         elif state == "offline":
                             self.resetCarApiLastErrorTime()
-                            # In any case it can make sense to wait 5 seconds here.
-                            # I had the issue, that the next command was sent too
-                            # fast and only a reboot of the Raspberry resultet in
-                            # possible reconnect to the API (even the Tesla App
-                            # couldn't connect anymore).
+                            # Brief pause to avoid hammering the API on a
+                            # transient connectivity hiccup.
                             time.sleep(5)
-                            if now - vehicle.firstWakeAttemptTime <= 31 * 60:
-                                # A car in offline state is presumably not connected
-                                # wirelessly so our wake_up command will not reach
-                                # it. Instead, the car wakes itself every 20-30
-                                # minutes and waits some period of time for a
-                                # message, then goes back to sleep. I'm not sure
-                                # what the period of time is, so I tried sending
-                                # wake_up every 55 seconds for 16 minutes but the
-                                # car failed to wake.
-                                # Next I tried once every 25 seconds for 31 mins.
-                                # This worked after 19.5 and 19.75 minutes in 2
-                                # tests but I can't be sure the car stays awake for
-                                # 30secs or if I just happened to send a command
-                                # during a shorter period of wakefulness.
-                                vehicle.delayNextWakeAttempt = 25
-
-                                # I've run tests sending wake_up every 10-30 mins to
-                                # a car in offline state and it will go hours
-                                # without waking unless you're lucky enough to hit
-                                # it in the brief time it's waiting for wireless
-                                # commands. I assume cars only enter offline state
-                                # when set to max power saving mode, and even then,
-                                # they don't always enter the state even after 8
-                                # hours of no API contact or other interaction. I've
-                                # seen it remain in 'asleep' state when contacted
-                                # after 16.5 hours, but I also think I've seen it in
-                                # offline state after less than 16 hours, so I'm not
-                                # sure what the rules are or if maybe Tesla contacts
-                                # the car periodically which resets the offline
-                                # countdown.
-                                #
-                                # I've also seen it enter 'offline' state a few
-                                # minutes after finishing charging, then go 'online'
-                                # on the third retry every 55 seconds.  I suspect
-                                # that might be a case of the car briefly losing
-                                # wireless connection rather than actually going
-                                # into a deep sleep.
-                                # 'offline' may happen almost immediately if you
-                                # don't have the charger plugged in.
                         else:
                             # Handle 'error' state.
                             self.updateCarApiLastErrorTime()
-                            if now - vehicle.firstWakeAttemptTime >= 60 * 60:
-                                # Car hasn't woken for over an hour. Try again
-                                # in 15 minutes. We'll show an error about this
-                                # later.
-                                vehicle.delayNextWakeAttempt = 15 * 60
-                            else:
-                                vehicle.delayNextWakeAttempt = 25
+
+                        vehicle.delayNextWakeAttempt = 30 * 60
 
                         if state == "error":
                             logger.info(
@@ -610,10 +563,13 @@ class TeslaAPI:
         now = time.time()
         apiResponseDict = {}
         if not charge:
-            # Whenever we are going to tell vehicles to stop charging, set
-            # vehicle.stopAskingToStartCharging = False on all vehicles.
+            # Whenever we are going to tell vehicles to stop charging, reset
+            # per-vehicle wake state so the next start cycle is fresh.
             for vehicle in self.getCarApiVehicles():
                 vehicle.stopAskingToStartCharging = False
+                vehicle.firstChargeNeededTime = 0
+                vehicle.firstWakeAttemptTime = 0
+                vehicle.delayNextWakeAttempt = 0
 
         if now - self.getLastStartOrStopChargeTime() < 60:
             # Don't start or stop more often than once a minute
@@ -1540,6 +1496,7 @@ class CarApiVehicle:
     VIN = ""
 
     firstWakeAttemptTime = 0
+    firstChargeNeededTime = 0
     lastAPIAccessTime = 0
     delayNextWakeAttempt = 0
     lastLimitAttemptTime = 0

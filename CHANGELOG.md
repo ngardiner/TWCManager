@@ -32,7 +32,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Remove dead Tesla email/password login path that called a non-existent apiLogin method
     * Fix: Remove hardcoded /home/twcmanager fallback path for tesla-control binary; use PATH lookup only (closes #600)
     * Fix: limitOverride no longer applies charge limit cap when charging has resumed, preventing 60% limit being set instead of stopping charge (closes #586)
-    * Fix: Skip start-charge command when battery level is already at or above charge limit to avoid useless API calls (closes #591)
+    * Fix: Skip start-charge commands (API and BLE) when the car is waiting on its own Scheduled Charging/Departure timer; disable via respectVehicleSchedule (closes #493)
     * Fix: Transient API errors (vehicle unavailable, operation_timedout) no longer trigger full exponential backoff, preventing hour-long delays in stop-charge commands (closes #377)
     * Fix: Negate negative generation values from EMS modules that report generation as negative watts (closes #442)
     * Fix: Add "context deadline exceeded" to transient API errors so wake-up timeouts don't trigger full backoff (closes #593)
@@ -46,6 +46,8 @@ This document logs the changes per release of TWCManager.
     * Fix: Publish charger_load_w status on every heartbeat so Home Assistant entities don't disappear after HA reboot (closes #462)
     * Fix: Log a warning at startup when minAmpsPerTWC exceeds wiringMaxAmpsPerTWC, which would prevent charging from ever starting (closes #24)
     * Fix: Set stopAskingToStartCharging=True when a vehicle departs home, preventing unnecessary wake attempts on absent vehicles (closes #590)
+    * Fix: Trust TeslaMate asleep/offline state in is_awake() to avoid Fleet API status polls when vehicle is confirmed sleeping
+    * Fix: Fleet API wake minimization - 3-minute pre-wake delay (configurable wakeDelayMins), 30-minute retry backoff, no API polls during hold windows
 
 * Architecture
     * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
