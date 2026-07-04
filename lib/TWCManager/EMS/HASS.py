@@ -1,4 +1,5 @@
 import logging
+import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("HASS", "EMS")
@@ -9,7 +10,6 @@ class HASS:
     # Fetches Consumption and Generation details from HomeAssistant
 
     import requests
-    import time
 
     apiKey = None
     cacheTime = 10

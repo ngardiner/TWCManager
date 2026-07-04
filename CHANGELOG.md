@@ -5,6 +5,7 @@ This document logs the changes per release of TWCManager.
 ## v1.4.0 - Upcoming
 
 * Bugfixes
+    * Fix: Add missing module-level time import in HASS, EmonCMS, Growatt, IotaWatt, SmartMe and TCP modules, which crashed EMS polling and caused charge current oscillation (closes #644)
     * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
     * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
     * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)

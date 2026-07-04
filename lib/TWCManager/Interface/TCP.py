@@ -1,4 +1,5 @@
 import logging
+import time
 import socket
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
@@ -6,7 +7,6 @@ logger = LoggerFactory.get_logger("TCP", "Interface")
 
 
 class TCP:
-    import time
 
     config = None
     configTCP = None

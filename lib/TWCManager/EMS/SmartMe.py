@@ -1,4 +1,5 @@
 import logging
+import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("SmartMe", "EMS")
@@ -9,7 +10,6 @@ class SmartMe:
     # Fetches Consumption and Generation details from SmartMe API
 
     import requests
-    import time
 
     cacheTime = 10
     config = None

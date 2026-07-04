@@ -1,4 +1,5 @@
 import logging
+import time
 import growattServer
 import datetime
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -11,7 +12,6 @@ class Growatt:
     # Fetches Consumption and Generation details from Growatt API
 
     import requests
-    import time
 
     cacheTime = 10
     config = None
