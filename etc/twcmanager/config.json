@@ -807,6 +807,12 @@
         #                          Fleet API commands are billed per call, so this
         #                          caps API spend; reads still use the API.
         #   api_only             - commands go to the Tesla API only, never BLE
+        #
+        # Normally you configure this from the web UI (Settings page), where it
+        # is stored in settings.json and can be changed at runtime. Only
+        # uncomment it here if you want to hard-set the policy: a value in
+        # config.json overrides whatever is set in the UI and disables the UI
+        # control until it is removed from config.json again.
         #"commandPolicy": "prefer_ble",
 
         "teslaAPI": {

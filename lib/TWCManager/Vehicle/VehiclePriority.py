@@ -12,9 +12,10 @@ logger = LoggerFactory.get_logger("VehiclePriority", "Vehicle")
 
 class VehiclePriority:
     master = None
-    commandPolicy = "prefer_ble"
+    VALID_COMMAND_POLICIES = ("prefer_ble", "ble_only", "api_only")
+    configPolicy = None
 
-    # State-changing (command) methods. The commandPolicy config restricts
+    # State-changing (command) methods. The commandPolicy setting restricts
     # which modules may execute these; read-only methods are unaffected and
     # always use the full priority fallback.
     COMMAND_METHODS = frozenset(
@@ -30,13 +31,32 @@ class VehiclePriority:
 
     def __init__(self, master):
         self.master = master
-        policy = (
-            master.config.get("vehicle", {}).get("commandPolicy", "prefer_ble").lower()
-        )
-        if policy not in ("prefer_ble", "ble_only", "api_only"):
-            logger.error(f"Invalid vehicle commandPolicy '{policy}'; using prefer_ble")
-            policy = "prefer_ble"
-        self.commandPolicy = policy
+        # commandPolicy in config.json is a hard override. When it is not set
+        # there, the policy is runtime-configurable from the Settings page and
+        # persisted in settings.json.
+        policy = master.config.get("vehicle", {}).get("commandPolicy", None)
+        if policy:
+            policy = str(policy).lower()
+            if policy not in self.VALID_COMMAND_POLICIES:
+                logger.error(
+                    f"Invalid vehicle commandPolicy '{policy}' in config.json; ignoring override"
+                )
+                policy = None
+        self.configPolicy = policy
+
+    @property
+    def commandPolicy(self):
+        if self.configPolicy:
+            return self.configPolicy
+        policy = str(self.master.settings.get("commandPolicy", "prefer_ble")).lower()
+        if policy not in self.VALID_COMMAND_POLICIES:
+            return "prefer_ble"
+        return policy
+
+    @property
+    def commandPolicyOverridden(self):
+        # True when config.json pins the policy, disabling the UI control.
+        return bool(self.configPolicy)
 
     def updateSettings(self):
         # Need to catch this one to avoid an exception

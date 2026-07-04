@@ -509,14 +509,17 @@ class TestBLENotLoaded:
 class TestCommandPolicy:
     """Test commandPolicy restrictions on state-changing methods."""
 
-    def make_master(self, policy=None):
+    def make_master(self, policy=None, configPolicy=None):
         master = Mock()
         master.stats = {
             "moduleSuccess": {},
             "moduleFailures": {},
             "moduleDispatch": {},
         }
-        master.config = {"vehicle": {"commandPolicy": policy}} if policy else {}
+        master.config = (
+            {"vehicle": {"commandPolicy": configPolicy}} if configPolicy else {}
+        )
+        master.settings = {"commandPolicy": policy} if policy else {}
         return master
 
     def make_modules(self, master, ble_result=False, api_result=True):
@@ -546,6 +549,41 @@ class TestCommandPolicy:
 
         priority = VehiclePriority(self.make_master("banana"))
         assert priority.commandPolicy == "prefer_ble"
+
+    def test_policy_from_settings(self):
+        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+
+        priority = VehiclePriority(self.make_master("ble_only"))
+        assert priority.commandPolicy == "ble_only"
+        assert priority.commandPolicyOverridden is False
+
+    def test_settings_change_applies_at_runtime(self):
+        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+
+        master = self.make_master("prefer_ble")
+        priority = VehiclePriority(master)
+        assert priority.commandPolicy == "prefer_ble"
+
+        master.settings["commandPolicy"] = "ble_only"
+        assert priority.commandPolicy == "ble_only"
+
+    def test_config_overrides_settings(self):
+        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+
+        priority = VehiclePriority(
+            self.make_master(policy="ble_only", configPolicy="api_only")
+        )
+        assert priority.commandPolicy == "api_only"
+        assert priority.commandPolicyOverridden is True
+
+    def test_invalid_config_override_is_ignored(self):
+        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+
+        priority = VehiclePriority(
+            self.make_master(policy="ble_only", configPolicy="banana")
+        )
+        assert priority.commandPolicy == "ble_only"
+        assert priority.commandPolicyOverridden is False
 
     def test_prefer_ble_falls_back_to_api_on_command(self):
         from TWCManager.Vehicle.VehiclePriority import VehiclePriority
