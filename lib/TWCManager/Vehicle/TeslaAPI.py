@@ -103,7 +103,7 @@ class TeslaAPI:
             self.chargeUpdateInterval = self.config["config"].get(
                 "cloudUpdateInterval", 1800
             )
-            self.wakeDelayMins = cfg.get("wakeDelayMins", 3)
+            self.wakeDelayMins = self.config["config"].get("wakeDelayMins", 3)
         except KeyError:
             pass
 
@@ -392,6 +392,7 @@ class TeslaAPI:
                         # I suspect that happens when we happen to query the car
                         # when it periodically awakens for some reason.
                         vehicle.firstWakeAttemptTime = 0
+                        vehicle.firstChargeNeededTime = 0
                         vehicle.delayNextWakeAttempt = 0
                         # Don't alter vehicle.lastAPIAccessTime because
                         # vehicle.ready() uses it to return True if the last wake
