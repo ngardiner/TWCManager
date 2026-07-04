@@ -721,6 +721,25 @@ class TeslaAPI:
                 vehicle.stopAskingToStartCharging = True
                 continue
 
+            if (
+                charge
+                and vehicle.scheduledChargingPending
+                and self.config["config"].get("respectVehicleSchedule", True)
+            ):
+                # The car is deliberately waiting on its own Scheduled
+                # Charging / Scheduled Departure timer; a charge_start command
+                # would override the in-car schedule and begin charging
+                # immediately at full rate. The TWC keeps offering power,
+                # which the car accepts when its schedule fires. Not setting
+                # stopAskingToStartCharging so this re-evaluates each cycle
+                # in case the user cancels the schedule.
+                logger.info(
+                    vehicle.name
+                    + " is waiting on its in-car charging schedule.  Do not"
+                    + " start charge (respectVehicleSchedule)."
+                )
+                continue
+
             # If you send charge_start/stop less than 1 second after calling
             # update_location(), the charge command usually returns:
             #   {'response': {'result': False, 'reason': 'could_not_wake_buses'}}
@@ -1410,6 +1429,18 @@ class TeslaAPI:
                 car.update_charge()
         self.lastChargeCheck = time.time()
 
+    def vehicleScheduledChargingPending(self, vin=None):
+        # True if the named (or any at-home) vehicle reports it is waiting on
+        # its in-car charging schedule (Scheduled Charging / Departure).
+        for vehicle in self.carApiVehicles:
+            if vin and vehicle.VIN != vin:
+                continue
+            if not vin and not vehicle.atHome:
+                continue
+            if vehicle.scheduledChargingPending:
+                return True
+        return False
+
     def vehicleIsDefinitelyHome(self, vin):
         for car in self.carApiVehicles:
             if car.VIN == vin:
@@ -1528,6 +1559,7 @@ class CarApiVehicle:
     lon = 10000
     gpsAsOf = 0
     atHome = False
+    scheduledChargingPending = False
     timeToFullCharge = 0.0
     availableCurrent = 0
     _actualCurrent = 0
@@ -1817,6 +1849,9 @@ class CarApiVehicle:
             self.phases = charge.get("charger_phases", self.phases)
             self.voltage = charge.get("charger_voltage", self.voltage)
             self.chargingState = charge.get("charging_state", self.chargingState)
+            self.scheduledChargingPending = charge.get(
+                "scheduled_charging_pending", self.scheduledChargingPending
+            )
 
             if not self.atHome:
                 if self.carapi.is_far_from_home(self.lat, self.lon):

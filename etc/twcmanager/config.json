@@ -138,6 +138,13 @@
         # you will need to un-comment it to have it take effect.
         #"minChargeLevel": 10,
 
+        # When the car has its own Scheduled Charging or Scheduled Departure
+        # timer active and is waiting for it, TWCManager will not send a start
+        # charge command that would override the in-car schedule and begin
+        # charging immediately at full rate. Set to false to restore the old
+        # behaviour of starting the charge regardless of the car's schedule.
+        #"respectVehicleSchedule": true,
+
         # The client_id of the app you register at developer.tesla.com. The
         # legacy Owner API has been retired, so cloud control now requires your
         # own registered application. When registering, choose the OAuth grant

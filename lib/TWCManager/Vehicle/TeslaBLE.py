@@ -153,6 +153,22 @@ class TeslaBLE:
         else:
             logger.info(f"tesla-control binary found at: {self.binaryPath}")
 
+    def _scheduleBlocksStart(self, vin):
+        # Don't override the car's own Scheduled Charging / Departure timer
+        # with a BLE start command (see TeslaAPI.car_api_charge for the
+        # API-side equivalent). Schedule state comes from the TeslaAPI module;
+        # without it (BLE-only installs) we have no schedule data and allow
+        # the command.
+        if not self.master.config["config"].get("respectVehicleSchedule", True):
+            return False
+        teslaapi = self.master.getModuleByName("TeslaAPI")
+        if not teslaapi:
+            return False
+        try:
+            return teslaapi.vehicleScheduledChargingPending(vin)
+        except Exception:
+            return False
+
     def car_api_charge(self, task):
         """
         Enhanced car_api_charge method with proper priority system integration.
@@ -184,6 +200,11 @@ class TeslaBLE:
                 logger.debug(f"BLE command for specific VIN: {vin}, charge: {charge}")
 
                 if charge:
+                    if self._scheduleBlocksStart(vin):
+                        logger.info(
+                            f"{vin} is waiting on its in-car charging schedule; not sending BLE start"
+                        )
+                        return True
                     success = self.startCharging(vin)
                     logger.info(
                         f"BLE start charging for {vin}: {'success' if success else 'failed'}"
@@ -210,6 +231,12 @@ class TeslaBLE:
                 for vehicle in self.master.settings["Vehicles"].keys():
                     try:
                         if charge:
+                            if self._scheduleBlocksStart(vehicle):
+                                logger.info(
+                                    f"{vehicle} is waiting on its in-car charging schedule; not sending BLE start"
+                                )
+                                success_count += 1
+                                continue
                             vehicle_success = self.startCharging(vehicle)
                         else:
                             vehicle_success = self.stopCharging(vehicle)
