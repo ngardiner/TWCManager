@@ -8,6 +8,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Add missing module-level time import in HASS, EmonCMS, Growatt, IotaWatt, SmartMe and TCP modules, which crashed EMS polling and caused charge current oscillation (closes #644)
     * Fix: Restore minInterval parameter on update_location, fixing TypeError that broke API start/stop charging and home location correction
     * Fix: Correct invalid logging level in update_vehicle_data error handler which crashed when logging a failed API response
+    * Fix: VehiclePriority now treats TeslaAPI "error" string return as failure, enabling correct fallback to BLE and failure stat tracking
     * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
     * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
     * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
