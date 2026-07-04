@@ -52,20 +52,29 @@ class TestKostalInitialization:
     
     def test_init_with_host(self):
         """Test initialization with valid host."""
+        from unittest.mock import MagicMock
         master = Mock()
         master.config = {
             "config": {},
             "sources": {
                 "Kostal": {
                     "enabled": True,
-                    "host": "192.168.1.100"
+                    "serverIP": "192.168.1.100"
                 }
             }
         }
-        
-        with patch('TWCManager.EMS.Kostal.logger'):
+
+        with patch('TWCManager.EMS.Kostal.logger'), \
+             patch('TWCManager.EMS.Kostal.ModbusClient') as mock_modbus_cls:
+            mock_client = MagicMock()
+            mock_client.open.return_value = True
+            mock_client.is_open.return_value = True
+            # String reads return a list of zeroes; produces null-char string
+            mock_client.read_holding_registers.return_value = [0] * 32
+            mock_modbus_cls.return_value = mock_client
+
             from TWCManager.EMS.Kostal import Kostal
             kostal = Kostal(master)
-            
+
             master.releaseModule.assert_not_called()
             assert kostal.host == "192.168.1.100"

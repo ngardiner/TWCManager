@@ -90,6 +90,27 @@ class TWCMaster:
         self.treatGenerationAsGridDelivery = config["config"].get(
             "treatGenerationAsGridDelivery", False
         )
+        # Instance-level mutable state (class-level definitions are defaults only)
+        self.modules = {}
+        self.slaveTWCRoundRobin = []
+        self.slaveTWCs = {}
+        self.stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
+        self.settings = {
+            "chargeNowAmps": 0,
+            "chargeStopMode": "1",
+            "chargeNowTimeEnd": 0,
+            "homeLat": 10000,
+            "homeLon": 10000,
+            "hourResumeTrackGreenEnergy": -1,
+            "kWhDelivered": 119,
+            "nonScheduledAmpsMax": 0,
+            "respondToSlaves": 1,
+            "scheduledAmpsDaysBitmap": 0x7F,
+            "scheduledAmpsEndHour": -1,
+            "scheduledAmpsMax": 0,
+            "scheduledAmpsStartHour": -1,
+            "sendServerTime": 0,
+        }
         self.advanceHistorySnap()
         if config["config"].get("maxAmpsAllowedFromGrid", None) is None:
             self.setLimitAmpsToDivideAmongSlaves(

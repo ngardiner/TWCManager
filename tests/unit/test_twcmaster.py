@@ -299,7 +299,7 @@ class TestTWCMasterConfiguration:
 
 class TestTWCMasterModuleManagement:
     """Test module registration and management."""
-    
+
     @pytest.fixture
     def mock_config(self):
         """Create a mock configuration."""
@@ -312,13 +312,13 @@ class TestTWCMasterModuleManagement:
                 "maxAmpsAllowedFromGrid": None,
             }
         }
-    
+
     @pytest.fixture
     def master(self, mock_config):
         """Create a TWCMaster instance."""
         from TWCManager.TWCMaster import TWCMaster
         master = TWCMaster("AB", mock_config)
-        master.getModuleByName = Mock(return_value=Mock())
+        # Do NOT mock getModuleByName here — these tests verify the real implementation
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -383,10 +383,12 @@ class TestTWCMasterHistory:
     
     def test_advance_history_snap(self, master):
         """Test advancing history snapshot."""
+        # Simulate "snap time has arrived" by placing it in the past before re-advancing
+        master.nextHistorySnap = datetime.now().astimezone() - timedelta(minutes=1)
         initial_snap = master.nextHistorySnap
         master.advanceHistorySnap()
-        
-        # Should have advanced to next 5-minute boundary
+
+        # Should have advanced to a future 5-minute boundary
         assert master.nextHistorySnap > initial_snap
     
     def test_history_snap_is_future(self, master):
@@ -398,7 +400,7 @@ class TestTWCMasterHistory:
 
 class TestSettingsInitialization:
     """Test suite for settings initialization and persistence."""
-    
+
     @pytest.fixture
     def mock_config(self):
         """Create a mock configuration."""
@@ -408,6 +410,7 @@ class TestSettingsInitialization:
                 "subtractChargerLoad": False,
                 "treatGenerationAsGridDelivery": False,
                 "wiringMaxAmpsAllTWCs": 80,
+                "minAmpsPerTWC": 6,
                 "settingsPath": "/tmp/test_settings",
             }
         }

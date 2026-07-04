@@ -75,7 +75,7 @@ class TestEfegyInitialization:
             "sources": {
                 "Efergy": {
                     "enabled": True,
-                    "apiKey": None
+                    "token": None
                 }
             }
         }
@@ -111,7 +111,7 @@ class TestEmonCMSInitialization:
                 "EmonCMS": {
                     "enabled": True,
                     "apiKey": "test_key",
-                    "url": "http://emoncms.local"
+                    "serverIP": "emoncms.local"
                 }
             }
         }
@@ -146,7 +146,7 @@ class TestIotaWattInitialization:
             "sources": {
                 "IotaWatt": {
                     "enabled": True,
-                    "host": "192.168.1.100"
+                    "serverIP": "192.168.1.100"
                 }
             }
         }
@@ -165,7 +165,7 @@ class TestOpenHabInitialization:
         master = Mock()
         master.config = {
             "config": {},
-            "sources": {"OpenHab": {"enabled": False}}
+            "sources": {"openHAB": {"enabled": False}}
         }
         
         with patch('TWCManager.EMS.OpenHab.logger'):
@@ -179,9 +179,9 @@ class TestOpenHabInitialization:
         master.config = {
             "config": {},
             "sources": {
-                "OpenHab": {
+                "openHAB": {
                     "enabled": True,
-                    "url": "http://openhab.local:8080"
+                    "serverIP": "openhab.local"
                 }
             }
         }
@@ -251,7 +251,7 @@ class TestP1MonitorInitialization:
             "sources": {
                 "P1Monitor": {
                     "enabled": True,
-                    "host": "192.168.1.100"
+                    "serverIP": "192.168.1.100"
                 }
             }
         }
@@ -357,7 +357,7 @@ class TestSolarLogInitialization:
             "sources": {
                 "SolarLog": {
                     "enabled": True,
-                    "host": "192.168.1.100"
+                    "serverIP": "192.168.1.100"
                 }
             }
         }
@@ -392,7 +392,7 @@ class TestTEDInitialization:
             "sources": {
                 "TED": {
                     "enabled": True,
-                    "host": "192.168.1.100"
+                    "serverIP": "192.168.1.100"
                 }
             }
         }

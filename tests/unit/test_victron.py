@@ -15,7 +15,6 @@ class TestVictronInit:
         victron = Victron(master)
 
         master.releaseModule.assert_called_once_with("lib.TWCManager.EMS", "Victron")
-        assert victron is None
 
     def test_init_no_config(self):
         """Module should unload when not configured"""
@@ -25,7 +24,6 @@ class TestVictronInit:
         victron = Victron(master)
 
         master.releaseModule.assert_called_once_with("lib.TWCManager.EMS", "Victron")
-        assert victron is None
 
     def test_init_no_server_ip(self):
         """Module should unload when serverIP is missing"""
@@ -35,7 +33,6 @@ class TestVictronInit:
         victron = Victron(master)
 
         master.releaseModule.assert_called_once_with("lib.TWCManager.EMS", "Victron")
-        assert victron is None
 
     @patch("TWCManager.EMS.Victron.ModbusClient")
     def test_init_connection_success(self, mock_modbus_class):
@@ -85,7 +82,6 @@ class TestVictronInit:
         victron = Victron(master)
 
         master.releaseModule.assert_called_once_with("lib.TWCManager.EMS", "Victron")
-        assert victron is None
 
     @patch("TWCManager.EMS.Victron.ModbusClient")
     def test_init_custom_registers(self, mock_modbus_class):
@@ -226,7 +222,7 @@ class TestVictronReadRegisters:
         mock_client = MagicMock()
         mock_client.open.return_value = True
         mock_client.is_open = True
-        mock_client.read_input_registers.side_effect = [[1000], [1500], [2000]]
+        mock_client.read_input_registers.return_value = [0]
         mock_modbus_class.return_value = mock_client
 
         master = Mock()
@@ -240,6 +236,10 @@ class TestVictronReadRegisters:
         }
 
         victron = Victron(master)
+
+        # Reset after __init__ consumed reads during __update(); prime for our call
+        mock_client.read_input_registers.reset_mock()
+        mock_client.read_input_registers.side_effect = [[1000], [1500], [2000]]
         registers = [(817, 100), (818, 100), (819, 100)]
 
         result = victron._Victron__readRegisters(registers)
@@ -253,7 +253,7 @@ class TestVictronReadRegisters:
         mock_client = MagicMock()
         mock_client.open.return_value = True
         mock_client.is_open = True
-        mock_client.read_input_registers.side_effect = [[1000], None, [2000]]
+        mock_client.read_input_registers.return_value = [0]
         mock_modbus_class.return_value = mock_client
 
         master = Mock()
@@ -267,6 +267,10 @@ class TestVictronReadRegisters:
         }
 
         victron = Victron(master)
+
+        # Reset after __init__ consumed reads during __update(); prime for our call
+        mock_client.read_input_registers.reset_mock()
+        mock_client.read_input_registers.side_effect = [[1000], None, [2000]]
         registers = [(817, 100), (818, 100), (819, 100)]
 
         result = victron._Victron__readRegisters(registers)
@@ -303,7 +307,7 @@ class TestVictronReadRegisters:
 
     @patch("TWCManager.EMS.Victron.ModbusClient")
     def test_read_registers_unit_id_switching(self, mock_modbus_class):
-        """Should switch unit IDs for each register"""
+        """Should switch unit IDs for each register and restore the original"""
         mock_client = MagicMock()
         mock_client.open.return_value = True
         mock_client.is_open = True
@@ -322,13 +326,17 @@ class TestVictronReadRegisters:
         }
 
         victron = Victron(master)
-        registers = [(817, 100), (818, 101), (819, 102)]
 
+        # Reset after __init__ consumed reads during __update()
+        mock_client.read_input_registers.reset_mock()
+
+        registers = [(817, 100), (818, 101), (819, 102)]
         result = victron._Victron__readRegisters(registers)
 
-        # Verify unit_id was set for each register
-        unit_id_calls = [call.unit_id for call in mock_client.method_calls if "unit_id" in str(call)]
-        assert len(unit_id_calls) >= 3
+        # All three registers were read
+        assert mock_client.read_input_registers.call_count == 3
+        # unit_id is restored to original value after all reads
+        assert mock_client.unit_id == 100
 
 
 class TestVictronCaching:
@@ -344,8 +352,9 @@ class TestVictronCaching:
         mock_client.read_input_registers.return_value = [1000]
         mock_modbus_class.return_value = mock_client
 
-        # Mock time progression
-        mock_time.time.side_effect = [0, 0, 15]  # Initial, then 15 seconds later
+        # Mock time progression: __init__ uses 1 call, each cache-miss __update() uses 2
+        # [init-check, first-check, second-check, third-check, third-setLastUpdate]
+        mock_time.time.side_effect = [0, 0, 0, 15, 15]
 
         master = Mock()
         master.config = {

@@ -42,7 +42,7 @@ class Efergy:
         self.token = self.configEfergy.get("token", None)
 
         # Unload if this module is disabled or misconfigured
-        if not self.status:
+        if not self.status or not self.token:
             self.master.releaseModule("lib.TWCManager.EMS", self.__class__.__name__)
             return None
 
