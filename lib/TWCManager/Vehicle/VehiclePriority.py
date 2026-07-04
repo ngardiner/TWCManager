@@ -12,13 +12,48 @@ logger = LoggerFactory.get_logger("VehiclePriority", "Vehicle")
 
 class VehiclePriority:
     master = None
+    commandPolicy = "prefer_ble"
+
+    # State-changing (command) methods. The commandPolicy config restricts
+    # which modules may execute these; read-only methods are unaffected and
+    # always use the full priority fallback.
+    COMMAND_METHODS = frozenset(
+        [
+            "car_api_charge",
+            "setChargeRate",
+            "startCharging",
+            "stopCharging",
+            "applyChargeLimit",
+            "wakeVehicle",
+        ]
+    )
 
     def __init__(self, master):
         self.master = master
+        policy = (
+            master.config.get("vehicle", {}).get("commandPolicy", "prefer_ble").lower()
+        )
+        if policy not in ("prefer_ble", "ble_only", "api_only"):
+            logger.error(f"Invalid vehicle commandPolicy '{policy}'; using prefer_ble")
+            policy = "prefer_ble"
+        self.commandPolicy = policy
 
     def updateSettings(self):
         # Need to catch this one to avoid an exception
         return True
+
+    def _skip_module_for_command(self, module_name, method_name):
+        """Return True if commandPolicy excludes this module from executing a
+        state-changing method. Fleet API commands are billed per call, so
+        ble_only prevents any API spend on commands; api_only is the inverse
+        for setups without working Bluetooth."""
+        if method_name not in self.COMMAND_METHODS:
+            return False
+        if self.commandPolicy == "ble_only" and module_name == "TeslaAPI":
+            return True
+        if self.commandPolicy == "api_only" and module_name == "TeslaBLE":
+            return True
+        return False
 
     def _calculate_retries(self, priority):
         """Calculate number of retries based on priority level.
@@ -50,6 +85,13 @@ class VehiclePriority:
                         f"VehiclePriority: No more modules available for {name}"
                     )
                     break
+
+                if self._skip_module_for_command(module_name, name):
+                    logger.log(
+                        logging.INFO2,
+                        f"VehiclePriority: commandPolicy {self.commandPolicy} excludes {module_name} for {name}",
+                    )
+                    continue
 
                 # Calculate retries for this priority level
                 retries = self._calculate_retries(priority)

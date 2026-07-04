@@ -793,6 +793,15 @@
         }
     },
     "vehicle": {
+        # commandPolicy controls which modules may send state-changing commands
+        # (start/stop charging, set charge rate, charge limit, wake):
+        #   prefer_ble (default) - try TeslaBLE first, fall back to the Tesla API
+        #   ble_only             - commands go over BLE only, never the API.
+        #                          Fleet API commands are billed per call, so this
+        #                          caps API spend; reads still use the API.
+        #   api_only             - commands go to the Tesla API only, never BLE
+        #"commandPolicy": "prefer_ble",
+
         "teslaAPI": {
           "enabled": true,
         },

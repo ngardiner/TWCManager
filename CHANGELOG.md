@@ -22,6 +22,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Correct RecieverID key in TWCProtocol heartbeat parsing and build Dummy slave heartbeats via the protocol module
 * Features
     * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, ported from v1.3.4 (closes #639)
+    * Add vehicle commandPolicy config (prefer_ble/ble_only/api_only) to restrict state-changing commands to BLE or API, capping billed Fleet API command spend (closes #651)
     * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
 * Architecture
     * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
