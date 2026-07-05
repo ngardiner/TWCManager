@@ -1623,9 +1623,7 @@ class CarApiVehicle:
         if now - self.lastVehicleAwakeTime < 120:
             return self.lastVehicleAwakeState
         url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
-        result, response = self.get_car_api(
-            url, checkReady=False, provesOnline=False
-        )
+        result, response = self.get_car_api(url, checkReady=False, provesOnline=False)
         awakeState = result and response.get("state", "") == "online"
         self.lastVehicleAwakeState = awakeState
         self.lastVehicleAwakeTime = now

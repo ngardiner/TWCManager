@@ -34,4 +34,5 @@ class DSMR:
             self.serial.open()
         except ValueError:
             import sys
+
             sys.exit("Error opening serial port (%s). exiting" % self.serial.name)
