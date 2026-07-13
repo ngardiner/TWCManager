@@ -102,7 +102,9 @@ class Growatt:
 
         if login_response:
             try:
-                plant_data = api.plant_list(login_response["userId"]).get("data", [])
+                # 0.1.1/1.x returns {"data": [...]}, 2.x returns the list directly
+                _pl = api.plant_list(login_response["userId"])
+                plant_data = _pl if isinstance(_pl, list) else _pl.get("data", [])
                 if not plant_data:
                     logger.error("No plants returned from Growatt API")
                     return False
