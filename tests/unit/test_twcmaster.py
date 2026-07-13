@@ -613,3 +613,87 @@ class TestSettingsEdgeCases:
         assert master.settings["chargeNowAmps"] == 24
         assert second_end_time > first_end_time
 
+
+class TestSubtractChargerLoadGetMaxAmps:
+    """Regression tests for subtractChargerLoad in getMaxAmpsForTargetGridUsage.
+
+    Without the fix, when the spike-to-cancel-6A-limit temporarily drives
+    charger draw far above generation, the incremental step produced a deeply
+    negative newOffer which clamped the final result to 0 A even though net
+    available solar was still positive.
+    """
+
+    @pytest.fixture
+    def mock_config(self):
+        return {
+            "config": {
+                "debugOutputToFile": False,
+                "subtractChargerLoad": True,
+                "treatGenerationAsGridDelivery": False,
+                "wiringMaxAmpsAllTWCs": 80,
+                "defaultVoltage": 240,
+                "numberOfPhases": 1,
+                "minAmpsPerTWC": 6,
+                "realPowerFactorMinAmps": 1,
+                "realPowerFactorMaxAmps": 1,
+            }
+        }
+
+    @pytest.fixture
+    def master(self, mock_config):
+        from TWCManager.TWCMaster import TWCMaster
+
+        master = TWCMaster("AB", mock_config)
+        master.registerModule = Mock()
+        master.getModuleByName = Mock(return_value=Mock())
+        master.getModulesByType = Mock(return_value=[])
+        return master
+
+    def _add_fake_slave(self, master, reported_amps_actual):
+        """Add a mock slave with the given actual amp draw."""
+        slave = Mock()
+        slave.reportedAmpsActual = reported_amps_actual
+        slave.voltsPhaseA = 0
+        slave.voltsPhaseB = 0
+        slave.voltsPhaseC = 0
+        slave.isCharging = 1
+        master.slaveTWCRoundRobin.append(slave)
+        return slave
+
+    def test_returns_positive_when_charger_spiked(self, master):
+        """After a spike to ~20 A, available power must stay positive, not drop to 0."""
+        # Solar: 2838 W (~11.83 A @ 240 V)
+        master.setGeneration("test", 2838)
+        # Total consumption including 20 A charger draw: 5836 W
+        master.setConsumption("test", 5836)
+        # Charger is currently drawing 19.83 A (spike in progress)
+        self._add_fake_slave(master, 19.83)
+        # Previous offer was 7 A (before spike)
+        master.maxAmpsToDivideAmongSlaves = 7.0
+        master.limitAmpsToDivideAmongSlaves = 80.0
+
+        result = master.getMaxAmpsForTargetGridUsage()
+
+        # Net available = generation - other_load = ~11.83 - ~4.49 = ~7.3 A
+        # Must be clearly positive, not clamped to 0
+        assert result > 0, (
+            f"Expected positive amps available but got {result}; "
+            "subtractChargerLoad spike bug likely regressed"
+        )
+
+    def test_stable_at_min_charge_returns_correct_offer(self, master):
+        """At steady 6 A charging, offer should reflect net solar surplus."""
+        # Solar: 2757 W (~11.49 A), consumption 2691 W (charger 1554 W + other 1137 W)
+        master.setGeneration("test", 2757)
+        master.setConsumption("test", 2691)
+        # Charger drawing 6.475 A
+        self._add_fake_slave(master, 6.475)
+        master.maxAmpsToDivideAmongSlaves = 6.28
+        master.limitAmpsToDivideAmongSlaves = 80.0
+
+        result = master.getMaxAmpsForTargetGridUsage()
+
+        # Net: (2757 - 1137) / 240 = 6.75 A
+        assert result > 0
+        assert result < 12, f"Offer {result} A seems too high for available solar"
+

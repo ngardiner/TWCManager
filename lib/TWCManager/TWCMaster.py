@@ -720,6 +720,17 @@ class TWCMaster:
         # is not available
         if targetA == 0 or not consumptionA:
             consumptionA = float(self.convertWattsToAmps(self.getConsumption()))
+
+        # When subtractChargerLoad is enabled, remove the charger's own draw
+        # from consumptionA here (incremental step), consistent with what
+        # getGenerationOffset() does for the de-novo step below.  Without this,
+        # the spike-to-cancel-6A-limit temporarily drives consumptionA far above
+        # generationA, making newOffer go deeply negative and clamping the result
+        # to 0 A even though net available power is still positive.
+        if self.subtractChargerLoad:
+            chargerA = float(self.convertWattsToAmps(self.getChargerLoad()))
+            consumptionA = max(0.0, consumptionA - chargerA)
+
         availableA = generationA + targetA - consumptionA
 
         # Calculate what we should offer to match the target (0 for green)
