@@ -108,11 +108,9 @@ class TeslaBLE:
         # Retry statistics tracking
         self.retry_stats = {}
 
-        # Per-VIN flag: True once the car has confirmed it is already in the
-        # desired charge state (complete, is_charging, disconnected, etc.).
-        # Prevents re-sending a start command on every poll cycle.
-        # Reset to False when a stop-charge task arrives.
-        self._stopAskingToStartCharging = {}
+        # Per-VIN flag: True once we've successfully applied a charge limit.
+        # Prevents re-sending on every poll cycle.
+        self._stopTryingToApplyLimit = {}
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
@@ -611,11 +609,105 @@ class TeslaBLE:
             logger.error(f"setChargeRate exception: {e}")
             return False
 
-    def startCharging(self, vin):
+    def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
         """
-        Start charging for a specific vehicle with enhanced error handling.
+        Apply charge limit to vehicle(s) via BLE.
+        Args:
+            limit: Charge limit percentage (50-100), or -1 to restore to pre-TWCManager default
+            checkArrival: Ignored (BLE doesn't poll state)
+            checkDeparture: Ignored (BLE doesn't poll state)
         Returns True on success, False on failure.
         """
+        try:
+            if limit != -1 and (limit < 50 or limit > 100):
+                logger.error(
+                    f"Invalid charge limit {limit}%; must be 50-100 or -1 to restore"
+                )
+                return False
+
+            if not self.master.settings.get("Vehicles"):
+                logger.error("No vehicles configured for charge limit")
+                return False
+
+            logger.debug(
+                f"Applying charge limit {limit}{'% to all vehicles' if limit != -1 else ' (restore default) to all vehicles'}"
+            )
+
+            success_count = 0
+            total_vehicles = len(self.master.settings["Vehicles"])
+
+            for vehicle_vin in self.master.settings["Vehicles"].keys():
+                try:
+                    # Skip if we've already successfully applied a limit to this vehicle
+                    if self._stopTryingToApplyLimit.get(vehicle_vin):
+                        logger.debug(
+                            f"Not re-attempting apply charge limit for {vehicle_vin}: already applied"
+                        )
+                        success_count += 1
+                        continue
+
+                    # Retrieve saved normal charge limit (outside TWCManager management)
+                    has_saved, outside_limit, last_applied = self.master.getNormalChargeLimit(
+                        vehicle_vin
+                    )
+
+                    if limit == -1:
+                        # Restore to the pre-TWCManager default
+                        if has_saved and outside_limit is not None:
+                            target_limit = outside_limit
+                            logger.debug(
+                                f"Restoring {vehicle_vin} to normal charge limit {target_limit}%"
+                            )
+                        else:
+                            # No saved limit; skip this vehicle
+                            logger.debug(
+                                f"No saved normal charge limit for {vehicle_vin}; skipping restore"
+                            )
+                            success_count += 1
+                            continue
+                    else:
+                        target_limit = limit
+
+                    ret = self.sendCommand(vehicle_vin, "charging-set-limit", target_limit)
+                    if ret is not None and self.parseCommandOutput(ret):
+                        success_count += 1
+                        if limit == -1:
+                            # Restore: clear the flag so next apply cycle is fresh
+                            self._stopTryingToApplyLimit.pop(vehicle_vin, None)
+                            self.master.removeNormalChargeLimit(vehicle_vin)
+                            logger.info(
+                                f"Restored {vehicle_vin} to charge limit {target_limit}%"
+                            )
+                        else:
+                            # Apply: set the flag to avoid re-sending on next cycle
+                            self._stopTryingToApplyLimit[vehicle_vin] = True
+                            self.master.saveNormalChargeLimit(
+                                vehicle_vin, outside_limit if has_saved else target_limit, limit
+                            )
+                            logger.info(
+                                f"Set {vehicle_vin} to charge limit {target_limit}%"
+                            )
+                    else:
+                        logger.warning(
+                            f"Set charge limit {target_limit}% failed for vehicle {vehicle_vin}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"applyChargeLimit exception for vehicle {vehicle_vin}: {e}"
+                    )
+                    continue
+
+            overall_success = success_count > 0
+            logger.info(
+                f"Apply charge limit {limit}% result: {success_count}/{total_vehicles} vehicles succeeded"
+            )
+            return overall_success
+
+        except Exception as e:
+            logger.error(f"applyChargeLimit exception: {e}")
+            return False
+
+    def startCharging(self, vin):
         try:
             logger.debug(f"Starting charging for vehicle {vin}")
 
