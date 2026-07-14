@@ -14,8 +14,8 @@ setup(
     install_requires=[
         "cryptography>=2.6",
         "growattServer>=0.1.1,<1.7.1; python_version < '3.10'",
-        "growattServer>=1.7.1,<2.2.0; python_version >= '3.10' and python_version < '3.12'",
-        "growattServer>=1.7.1; python_version >= '3.12'",
+        "growattServer>=1.7.1,<2.0.0; python_version == '3.10'",
+        "growattServer>=1.7.1; python_version >= '3.11'",
         "jinja2>=2.11.2",
         "ocpp",
         "paho_mqtt>=1.5.0",
