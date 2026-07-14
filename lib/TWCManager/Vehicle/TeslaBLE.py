@@ -111,6 +111,8 @@ class TeslaBLE:
         # Per-VIN flag: True once we've successfully applied a charge limit.
         # Prevents re-sending on every poll cycle.
         self._stopTryingToApplyLimit = {}
+        # Track the last-applied limit per VIN to allow changing limits
+        self._lastAppliedChargeLimit = {}
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
@@ -638,10 +640,11 @@ class TeslaBLE:
 
             for vehicle_vin in self.master.settings["Vehicles"].keys():
                 try:
-                    # Skip if we've already successfully applied a limit to this vehicle
-                    if self._stopTryingToApplyLimit.get(vehicle_vin):
+                    # Skip if we've already successfully applied this exact limit to this vehicle
+                    if (self._stopTryingToApplyLimit.get(vehicle_vin) and
+                        self._lastAppliedChargeLimit.get(vehicle_vin) == limit):
                         logger.debug(
-                            f"Not re-attempting apply charge limit for {vehicle_vin}: already applied"
+                            f"Not re-attempting apply charge limit {limit}% for {vehicle_vin}: already applied"
                         )
                         success_count += 1
                         continue
@@ -672,15 +675,17 @@ class TeslaBLE:
                     if ret is not None and self.parseCommandOutput(ret):
                         success_count += 1
                         if limit == -1:
-                            # Restore: clear the flag so next apply cycle is fresh
+                            # Restore: remove the flag and saved limit
                             self._stopTryingToApplyLimit.pop(vehicle_vin, None)
+                            self._lastAppliedChargeLimit.pop(vehicle_vin, None)
                             self.master.removeNormalChargeLimit(vehicle_vin)
                             logger.info(
                                 f"Restored {vehicle_vin} to charge limit {target_limit}%"
                             )
                         else:
-                            # Apply: set the flag to avoid re-sending on next cycle
+                            # Apply: set the flag and remember this limit
                             self._stopTryingToApplyLimit[vehicle_vin] = True
+                            self._lastAppliedChargeLimit[vehicle_vin] = limit
                             self.master.saveNormalChargeLimit(
                                 vehicle_vin, outside_limit if has_saved else target_limit, limit
                             )
