@@ -108,6 +108,12 @@ class TeslaBLE:
         # Retry statistics tracking
         self.retry_stats = {}
 
+        # Per-VIN flag: True once the car has confirmed it is already in the
+        # desired charge state (complete, is_charging, disconnected, etc.).
+        # Prevents re-sending a start command on every poll cycle.
+        # Reset to False when a stop-charge task arrives.
+        self._stopAskingToStartCharging = {}
+
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
         # absent from the environment. By starting one daemon here and passing its
@@ -181,6 +187,11 @@ class TeslaBLE:
                 logger.error("Task missing required 'charge' key")
                 return False
 
+            # When stopping, reset per-VIN "stop asking" flags so the next
+            # start cycle starts fresh (mirrors TeslaAPI.car_api_charge).
+            if not charge:
+                self._stopAskingToStartCharging.clear()
+
             # If we know the VIN of the vehicle connected to the TWC Slave, we'll send the command
             # directly to that vehicle
             vin = task.get("vin", None)
@@ -188,6 +199,12 @@ class TeslaBLE:
                 logger.debug(f"BLE command for specific VIN: {vin}, charge: {charge}")
 
                 if charge:
+                    if self._stopAskingToStartCharging.get(vin):
+                        logger.debug(
+                            "BLE: not re-requesting charge start for %s: already in desired state"
+                            % vin
+                        )
+                        return True
                     success = self.startCharging(vin)
                     logger.info(
                         f"BLE start charging for {vin}: {'success' if success else 'failed'}"
@@ -209,13 +226,24 @@ class TeslaBLE:
                     return False
 
                 success_count = 0
+                attempted_count = 0
+                skipped_count = 0
                 total_vehicles = len(self.master.settings["Vehicles"])
 
                 for vehicle in self.master.settings["Vehicles"].keys():
                     try:
                         if charge:
+                            if self._stopAskingToStartCharging.get(vehicle):
+                                logger.debug(
+                                    "BLE: not re-requesting charge start for %s: already in desired state"
+                                    % vehicle
+                                )
+                                skipped_count += 1
+                                continue
+                            attempted_count += 1
                             vehicle_success = self.startCharging(vehicle)
                         else:
+                            attempted_count += 1
                             vehicle_success = self.stopCharging(vehicle)
 
                         if vehicle_success:
@@ -232,17 +260,40 @@ class TeslaBLE:
                         )
                         continue
 
-                # Consider operation successful if at least one vehicle responded
-                # This allows partial success in multi-vehicle scenarios
-                overall_success = success_count > 0
-                logger.info(
-                    f"BLE command result: {success_count}/{total_vehicles} vehicles responded"
-                )
+                # Consider operation successful if any commands succeeded, or if all
+                # vehicles were skipped (already in desired state, etc.).
+                if attempted_count > 0:
+                    overall_success = success_count > 0
+                    logger.info(
+                        f"BLE command result: {success_count}/{attempted_count} attempted vehicles succeeded"
+                        + (f", {skipped_count} skipped" if skipped_count > 0 else "")
+                    )
+                else:
+                    overall_success = True
+
                 return overall_success
 
         except Exception as e:
             logger.error(f"BLE car_api_charge failed with exception: {e}")
             return False
+
+    def _is_already_satisfied(self, output):
+        """Return True if output indicates the car is already in the desired charge state."""
+        if not output:
+            return False
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="ignore")
+        output_lower = output.lower()
+        return any(
+            ("car could not execute command: " + reason) in output_lower
+            for reason in (
+                "complete",
+                "is_charging",
+                "charging",
+                "requested",
+                "disconnected",
+            )
+        )
 
     def parseCommandOutput(self, output):
         """
@@ -263,14 +314,21 @@ class TeslaBLE:
             "Command executed successfully",
             "Vehicle responded",
             "Success",
-            # "Already in desired state" responses — car is charging or done; goal achieved
-            "car could not execute command: complete",
-            "car could not execute command: is_charging",
-            "car could not execute command: charging",
-            "car could not execute command: requested",
         ]
 
-        # Error indicators for detailed logging
+        output_lower = output.lower()
+
+        # Check for success
+        for indicator in success_indicators:
+            if indicator.lower() in output_lower:
+                logger.debug(f"BLE command success: {indicator}")
+                return True
+
+        if self._is_already_satisfied(output):
+            logger.debug("BLE command success: already in desired state")
+            return True
+
+        # Categorize errors for detailed logging
         error_indicators = {
             "timeout": ["timeout", "timed out", "no response"],
             "connection": ["connection failed", "unable to connect", "bluetooth error"],
@@ -282,16 +340,6 @@ class TeslaBLE:
             ],
             "command_failed": ["command failed", "error executing", "operation failed"],
         }
-
-        output_lower = output.lower()
-
-        # Check for success
-        for indicator in success_indicators:
-            if indicator.lower() in output_lower:
-                logger.debug(f"BLE command success: {indicator}")
-                return True
-
-        # Categorize errors for better debugging
         error_type = "unknown"
         for category, indicators in error_indicators.items():
             for indicator in indicators:
@@ -456,7 +504,7 @@ class TeslaBLE:
                 )
 
             output = stderr.decode("utf-8") if stderr else ""
-            
+
             # Log full output when command fails, truncate for success
             if return_code != 0:
                 logger.warning(f"BLE command full error output: {output}")
@@ -563,6 +611,15 @@ class TeslaBLE:
                 return False
 
             success = self.parseCommandOutput(ret)
+
+            # If the car reported it is already in the desired state, record
+            # that so car_api_charge won't re-send the command next cycle
+            # (mirrors TeslaAPI's stopAskingToStartCharging logic).
+            if success and self._is_already_satisfied(ret):
+                self._stopAskingToStartCharging[vin] = True
+                logger.info(
+                    "BLE: %s already in desired charge state; will not re-request" % vin
+                )
             logger.info(
                 f"Start charging for {vin}: {'success' if success else 'failed'}"
             )
@@ -893,7 +950,9 @@ class TeslaBLE:
         """
         dbus_launch = shutil.which("dbus-launch")
         if not dbus_launch:
-            logger.debug("dbus-launch not found; skipping persistent D-Bus session setup")
+            logger.debug(
+                "dbus-launch not found; skipping persistent D-Bus session setup"
+            )
             return
         try:
             result = subprocess.run(
@@ -917,7 +976,9 @@ class TeslaBLE:
                     f"{self._dbus_session_address}"
                 )
             else:
-                logger.warning("dbus-launch ran but produced no DBUS_SESSION_BUS_ADDRESS")
+                logger.warning(
+                    "dbus-launch ran but produced no DBUS_SESSION_BUS_ADDRESS"
+                )
         except Exception as e:
             logger.warning(f"Could not start persistent D-Bus session: {e}")
 
@@ -926,7 +987,9 @@ class TeslaBLE:
         if self._dbus_session_pid:
             try:
                 os.kill(self._dbus_session_pid, signal.SIGTERM)
-                logger.debug(f"Terminated D-Bus session daemon PID {self._dbus_session_pid}")
+                logger.debug(
+                    f"Terminated D-Bus session daemon PID {self._dbus_session_pid}"
+                )
             except (ProcessLookupError, PermissionError):
                 pass
             self._dbus_session_pid = None
