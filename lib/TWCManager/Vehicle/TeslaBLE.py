@@ -283,16 +283,19 @@ class TeslaBLE:
                         )
                         continue
 
-                # Consider operation successful if at least one vehicle responded
-                # This allows partial success in multi-vehicle scenarios
-                overall_success = success_count > 0
-
-                # Only log if any commands were actually attempted
+                # Consider operation successful if any commands succeeded, or if all
+                # vehicles were skipped (already in desired state, schedule blocking, etc.).
+                # Skipped vehicles = successfully handled by deciding not to re-send.
                 if attempted_count > 0:
+                    # Commands were attempted; succeed only if at least one succeeded
+                    overall_success = success_count > 0
                     logger.info(
                         f"BLE command result: {success_count}/{attempted_count} attempted vehicles succeeded"
                         + (f", {skipped_count} skipped" if skipped_count > 0 else "")
                     )
+                else:
+                    # All vehicles skipped; that's a successful handling
+                    overall_success = True
 
                 return overall_success
 
