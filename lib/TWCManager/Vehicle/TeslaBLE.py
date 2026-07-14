@@ -243,6 +243,8 @@ class TeslaBLE:
                     return False
 
                 success_count = 0
+                attempted_count = 0
+                skipped_count = 0
                 total_vehicles = len(self.master.settings["Vehicles"])
 
                 for vehicle in self.master.settings["Vehicles"].keys():
@@ -253,16 +255,18 @@ class TeslaBLE:
                                     "BLE: not re-requesting charge start for %s: already in desired state"
                                     % vehicle
                                 )
-                                success_count += 1
+                                skipped_count += 1
                                 continue
                             if self._scheduleBlocksStart(vehicle):
                                 logger.info(
                                     f"{vehicle} is waiting on its in-car charging schedule; not sending BLE start"
                                 )
-                                success_count += 1
+                                skipped_count += 1
                                 continue
+                            attempted_count += 1
                             vehicle_success = self.startCharging(vehicle)
                         else:
+                            attempted_count += 1
                             vehicle_success = self.stopCharging(vehicle)
 
                         if vehicle_success:
@@ -282,9 +286,14 @@ class TeslaBLE:
                 # Consider operation successful if at least one vehicle responded
                 # This allows partial success in multi-vehicle scenarios
                 overall_success = success_count > 0
-                logger.info(
-                    f"BLE command result: {success_count}/{total_vehicles} vehicles responded"
-                )
+
+                # Only log if any commands were actually attempted
+                if attempted_count > 0:
+                    logger.info(
+                        f"BLE command result: {success_count}/{attempted_count} attempted vehicles succeeded"
+                        + (f", {skipped_count} skipped" if skipped_count > 0 else "")
+                    )
+
                 return overall_success
 
         except Exception as e:
