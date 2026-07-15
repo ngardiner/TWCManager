@@ -312,7 +312,14 @@ class TeslaBLE:
         output_lower = output.lower()
         return any(
             ("car could not execute command: " + reason) in output_lower
-            for reason in ("complete", "is_charging", "charging", "requested", "disconnected")
+            for reason in (
+                "complete",
+                "is_charging",
+                "charging",
+                "requested",
+                "disconnected",
+                "already_set",
+            )
         )
 
     def parseCommandOutput(self, output):
