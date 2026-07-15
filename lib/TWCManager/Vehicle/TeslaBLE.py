@@ -657,6 +657,8 @@ class TeslaBLE:
             )
 
             success_count = 0
+            attempted_count = 0
+            skipped_count = 0
             total_vehicles = len(self.master.settings["Vehicles"])
 
             for vehicle_vin in self.master.settings["Vehicles"].keys():
@@ -667,7 +669,7 @@ class TeslaBLE:
                         logger.debug(
                             f"Not re-attempting apply charge limit {limit}% for {vehicle_vin}: already applied"
                         )
-                        success_count += 1
+                        skipped_count += 1
                         continue
 
                     # Retrieve saved normal charge limit (outside TWCManager management)
@@ -687,10 +689,12 @@ class TeslaBLE:
                             logger.debug(
                                 f"No saved normal charge limit for {vehicle_vin}; skipping restore"
                             )
-                            success_count += 1
+                            skipped_count += 1
                             continue
                     else:
                         target_limit = limit
+
+                    attempted_count += 1
 
                     # Wake vehicle first - don't fail if wake fails, but log it
                     wake_result = self.wakeVehicle(vehicle_vin)
@@ -730,10 +734,17 @@ class TeslaBLE:
                     )
                     continue
 
-            overall_success = success_count > 0
-            logger.info(
-                f"Apply charge limit {limit}% result: {success_count}/{total_vehicles} vehicles succeeded"
-            )
+            # Only log if commands were actually attempted
+            if attempted_count > 0:
+                logger.info(
+                    f"Apply charge limit {limit}% result: {success_count}/{attempted_count} attempted vehicles succeeded"
+                    + (f", {skipped_count} skipped" if skipped_count > 0 else "")
+                )
+                overall_success = success_count > 0
+            else:
+                # All vehicles skipped; that's a successful handling
+                overall_success = True
+
             return overall_success
 
         except Exception as e:
