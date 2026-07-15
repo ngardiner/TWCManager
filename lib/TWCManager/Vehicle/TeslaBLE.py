@@ -292,6 +292,7 @@ class TeslaBLE:
                 "charging",
                 "requested",
                 "disconnected",
+                "already_set",
             )
         )
 
