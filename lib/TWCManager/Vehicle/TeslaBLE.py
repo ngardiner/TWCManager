@@ -563,6 +563,13 @@ class TeslaBLE:
                     f"Setting charge rate {charge_rate}A for vehicle {vehicle}"
                 )
 
+                # Wake vehicle first - don't fail if wake fails, but log it
+                wake_result = self.wakeVehicle(vehicle)
+                if not wake_result:
+                    logger.warning(
+                        f"Wake command may have failed for {vehicle}, proceeding with charge rate"
+                    )
+
                 ret = self.sendCommand(vehicle, "charging-set-amps", charge_rate)
                 if ret is None:
                     logger.error(
@@ -589,6 +596,13 @@ class TeslaBLE:
 
                 for vehicle_vin in self.master.settings["Vehicles"].keys():
                     try:
+                        # Wake vehicle first - don't fail if wake fails, but log it
+                        wake_result = self.wakeVehicle(vehicle_vin)
+                        if not wake_result:
+                            logger.debug(
+                                f"Wake command may have failed for {vehicle_vin}, proceeding with charge rate"
+                            )
+
                         ret = self.sendCommand(
                             vehicle_vin, "charging-set-amps", charge_rate
                         )
@@ -677,6 +691,13 @@ class TeslaBLE:
                             continue
                     else:
                         target_limit = limit
+
+                    # Wake vehicle first - don't fail if wake fails, but log it
+                    wake_result = self.wakeVehicle(vehicle_vin)
+                    if not wake_result:
+                        logger.warning(
+                            f"Wake command may have failed for {vehicle_vin}, proceeding with charge limit"
+                        )
 
                     ret = self.sendCommand(vehicle_vin, "charging-set-limit", target_limit)
                     if ret is not None and self.parseCommandOutput(ret):
