@@ -22,7 +22,10 @@ This document logs the changes per release of TWCManager.
     * Fix: Create the CSV and File logging output directory if it does not exist, instead of failing at startup
     * Fix: MQTTControl no longer returns a value from __init__ when the broker connection fails
     * Fix: Correct RecieverID key in TWCProtocol heartbeat parsing and build Dummy slave heartbeats via the protocol module
+    * Fix: BLE no longer re-sends charge start commands every poll cycle once the car reports it is already in the desired state (closes #652)
 * Features
+    * (@MikeBishop) - Apply charge limit over BLE
+    * (@MikeBishop) - Fetch charge and location state over BLE, falling back to Fleet API when BLE is unavailable
     * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, ported from v1.3.4 (closes #639)
     * Add vehicle commandPolicy (prefer_ble/ble_only/api_only) to restrict state-changing commands to BLE or API, capping billed Fleet API command spend; configurable from the Settings page, with optional hard override in config.json (closes #651)
     * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
