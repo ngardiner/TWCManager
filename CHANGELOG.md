@@ -19,6 +19,7 @@ This document logs the changes per release of TWCManager.
     * Fix: update_location(minInterval) now honours the cache interval argument, preventing duplicate vehicle_data API calls per charge cycle
     * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
     * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
+    * Fix: BLE no longer re-sends charge start commands every poll cycle once the car reports it is already in the desired state (closes #652)
     * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
     * Fix: Remove dead Tesla email/password login path that called a non-existent apiLogin method
     * Fix SyntaxWarning (`is` with literal) in TeslaPowerwall2 cloud data fetch
