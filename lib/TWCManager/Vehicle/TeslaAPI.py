@@ -1720,11 +1720,39 @@ class CarApiVehicle:
     def update_location(self, minInterval=0):
         if self.syncSource == "TeslaAPI":
             if minInterval > 0:
-                # Caller only needs fresh data if older than minInterval seconds.
-                # Set statusDeferral to skip the API call if data is recent enough.
                 now = time.time()
                 if now - self.lastAPIAccessTime < minInterval:
                     return True
+
+            # Try BLE first if policy allows
+            try:
+                vp = self.carapi.master.getModuleByName("VehiclePriority")
+                policy = vp.commandPolicy if vp else "prefer_ble"
+            except Exception:
+                policy = "prefer_ble"
+
+            if policy != "api_only":
+                ble = self.carapi.master.getModuleByName("TeslaBLE")
+                if ble:
+                    loc_data = ble.get_location_state(self.VIN)
+                    # If state fetch failed and car might be asleep, try wake + retry
+                    if loc_data is None and time.time() - self.lastAPIAccessTime >= 2 * 60:
+                        if ble.wakeVehicle(self.VIN):
+                            loc_data = ble.get_location_state(self.VIN)
+
+                    if loc_data is not None:
+                        now = time.time()
+                        if loc_data.get("latitude") is not None:
+                            self.lat = loc_data["latitude"]
+                        if loc_data.get("longitude") is not None:
+                            self.lon = loc_data["longitude"]
+                        self.gpsAsOf = loc_data.get("gpsAsOf") or 0
+                        gpsAge = (now - self.gpsAsOf) if self.gpsAsOf else None
+                        self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
+                        self.lastAPIAccessTime = now
+                        logger.debug(f"BLE location state fetch succeeded for {self.VIN}")
+                        return True
+
             return self.update_vehicle_data()
 
         else:
@@ -1832,6 +1860,46 @@ class CarApiVehicle:
 
     def update_charge(self):
         if self.syncSource == "TeslaAPI":
+            # Try BLE first if policy allows
+            try:
+                vp = self.carapi.master.getModuleByName("VehiclePriority")
+                policy = vp.commandPolicy if vp else "prefer_ble"
+            except Exception:
+                policy = "prefer_ble"
+
+            if policy != "api_only":
+                ble = self.carapi.master.getModuleByName("TeslaBLE")
+                if ble:
+                    charge_data = ble.get_charge_state(self.VIN)
+                    # If state fetch failed and car might be asleep, try wake + retry
+                    if charge_data is None and time.time() - self.lastAPIAccessTime >= 2 * 60:
+                        if ble.wakeVehicle(self.VIN):
+                            charge_data = ble.get_charge_state(self.VIN)
+
+                    if charge_data is not None:
+                        now = time.time()
+                        if charge_data.get("batteryLevel") is not None:
+                            self.batteryLevel = charge_data["batteryLevel"]
+                        if charge_data.get("chargeLimit") is not None:
+                            self.chargeLimit = charge_data["chargeLimit"]
+                        if charge_data.get("chargingState") is not None:
+                            self.chargingState = charge_data["chargingState"]
+                        if charge_data.get("availableCurrent") is not None:
+                            self.availableCurrent = charge_data["availableCurrent"]
+                        if charge_data.get("actualCurrent") is not None:
+                            self.actualCurrent = charge_data["actualCurrent"]
+                        if charge_data.get("voltage") is not None:
+                            self.voltage = charge_data["voltage"]
+                        if charge_data.get("phases") is not None:
+                            self.phases = charge_data["phases"]
+                        if charge_data.get("scheduledChargingPending") is not None:
+                            self.scheduledChargingPending = charge_data["scheduledChargingPending"]
+                        if charge_data.get("timeToFullCharge") is not None:
+                            self.timeToFullCharge = charge_data["timeToFullCharge"]
+                        self.lastAPIAccessTime = now
+                        logger.debug(f"BLE charge state fetch succeeded for {self.VIN}")
+                        return True
+
             return self.update_vehicle_data()
 
         else:

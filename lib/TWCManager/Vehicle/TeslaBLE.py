@@ -3,6 +3,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
+import json
 import logging
 import os
 from pathlib import Path
@@ -108,10 +109,12 @@ class TeslaBLE:
         # Retry statistics tracking
         self.retry_stats = {}
 
-        # Per-VIN flag: True once the car has confirmed it is already in the
-        # desired charge state (complete, is_charging, disconnected, etc.).
-        # Prevents re-sending a start command on every poll cycle.
-        # Reset to False when a stop-charge task arrives.
+        # Per-VIN flag: True once we've successfully applied a charge limit.
+        # Prevents re-sending on every poll cycle.
+        self._stopTryingToApplyLimit = {}
+        # Track the last-applied limit per VIN to allow changing limits
+        self._lastAppliedChargeLimit = {}
+        # Per-VIN flag: True once car confirmed already in desired charge state
         self._stopAskingToStartCharging = {}
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.
@@ -563,6 +566,13 @@ class TeslaBLE:
                     f"Setting charge rate {charge_rate}A for vehicle {vehicle}"
                 )
 
+                # Wake vehicle first - don't fail if wake fails, but log it
+                wake_result = self.wakeVehicle(vehicle)
+                if not wake_result:
+                    logger.warning(
+                        f"Wake command may have failed for {vehicle}, proceeding with charge rate"
+                    )
+
                 ret = self.sendCommand(vehicle, "charging-set-amps", charge_rate)
                 if ret is None:
                     logger.error(
@@ -589,6 +599,13 @@ class TeslaBLE:
 
                 for vehicle_vin in self.master.settings["Vehicles"].keys():
                     try:
+                        # Wake vehicle first - don't fail if wake fails, but log it
+                        wake_result = self.wakeVehicle(vehicle_vin)
+                        if not wake_result:
+                            logger.debug(
+                                f"Wake command may have failed for {vehicle_vin}, proceeding with charge rate"
+                            )
+
                         ret = self.sendCommand(
                             vehicle_vin, "charging-set-amps", charge_rate
                         )
@@ -618,11 +635,115 @@ class TeslaBLE:
             logger.error(f"setChargeRate exception: {e}")
             return False
 
-    def startCharging(self, vin):
+    def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
         """
-        Start charging for a specific vehicle with enhanced error handling.
+        Apply charge limit to vehicle(s) via BLE.
+        Args:
+            limit: Charge limit percentage (50-100), or -1 to restore to pre-TWCManager default
+            checkArrival: Ignored (BLE doesn't poll state)
+            checkDeparture: Ignored (BLE doesn't poll state)
         Returns True on success, False on failure.
         """
+        try:
+            if limit != -1 and (limit < 50 or limit > 100):
+                logger.error(
+                    f"Invalid charge limit {limit}%; must be 50-100 or -1 to restore"
+                )
+                return False
+
+            if not self.master.settings.get("Vehicles"):
+                logger.error("No vehicles configured for charge limit")
+                return False
+
+            logger.debug(
+                f"Applying charge limit {limit}{'% to all vehicles' if limit != -1 else ' (restore default) to all vehicles'}"
+            )
+
+            success_count = 0
+            total_vehicles = len(self.master.settings["Vehicles"])
+
+            for vehicle_vin in self.master.settings["Vehicles"].keys():
+                try:
+                    # Skip if we've already successfully applied this exact limit to this vehicle
+                    if (self._stopTryingToApplyLimit.get(vehicle_vin) and
+                        self._lastAppliedChargeLimit.get(vehicle_vin) == limit):
+                        logger.debug(
+                            f"Not re-attempting apply charge limit {limit}% for {vehicle_vin}: already applied"
+                        )
+                        success_count += 1
+                        continue
+
+                    # Retrieve saved normal charge limit (outside TWCManager management)
+                    has_saved, outside_limit, last_applied = self.master.getNormalChargeLimit(
+                        vehicle_vin
+                    )
+
+                    if limit == -1:
+                        # Restore to the pre-TWCManager default
+                        if has_saved and outside_limit is not None:
+                            target_limit = outside_limit
+                            logger.debug(
+                                f"Restoring {vehicle_vin} to normal charge limit {target_limit}%"
+                            )
+                        else:
+                            # No saved limit; skip this vehicle
+                            logger.debug(
+                                f"No saved normal charge limit for {vehicle_vin}; skipping restore"
+                            )
+                            success_count += 1
+                            continue
+                    else:
+                        target_limit = limit
+
+                    # Wake vehicle first - don't fail if wake fails, but log it
+                    wake_result = self.wakeVehicle(vehicle_vin)
+                    if not wake_result:
+                        logger.warning(
+                            f"Wake command may have failed for {vehicle_vin}, proceeding with charge limit"
+                        )
+
+                    ret = self.sendCommand(vehicle_vin, "charging-set-limit", target_limit)
+                    if ret is not None and self.parseCommandOutput(ret):
+                        success_count += 1
+                        if limit == -1:
+                            # Restore: remove the flag and saved limit
+                            self._stopTryingToApplyLimit.pop(vehicle_vin, None)
+                            self._lastAppliedChargeLimit.pop(vehicle_vin, None)
+                            self.master.removeNormalChargeLimit(vehicle_vin)
+                            logger.info(
+                                f"Restored {vehicle_vin} to charge limit {target_limit}%"
+                            )
+                        else:
+                            # Apply: set the flag and remember this limit
+                            self._stopTryingToApplyLimit[vehicle_vin] = True
+                            self._lastAppliedChargeLimit[vehicle_vin] = limit
+                            self.master.saveNormalChargeLimit(
+                                vehicle_vin, outside_limit if has_saved else target_limit, limit
+                            )
+                            logger.info(
+                                f"Set {vehicle_vin} to charge limit {target_limit}%"
+                            )
+                    else:
+                        logger.warning(
+                            f"Set charge limit {target_limit}% failed for vehicle {vehicle_vin}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"applyChargeLimit exception for vehicle {vehicle_vin}: {e}"
+                    )
+                    continue
+
+            overall_success = success_count > 0
+            logger.info(
+                f"Apply charge limit {limit}% result: {success_count}/{total_vehicles} vehicles succeeded"
+            )
+            return overall_success
+
+        except Exception as e:
+            logger.error(f"applyChargeLimit exception: {e}")
+            return False
+
+    def startCharging(self, vin):
         try:
             logger.debug(f"Starting charging for vehicle {vin}")
 
@@ -747,6 +868,93 @@ class TeslaBLE:
         except Exception as e:
             logger.error(f"wakeVehicle exception for {vin}: {e}")
             return False
+
+    def _extract_enum_value(self, val):
+        """Extract string key from Tesla protobuf enum format like {"Charging": {}}."""
+        if isinstance(val, dict) and val:
+            return next(iter(val))
+        return val
+
+    def _parse_proto_timestamp(self, val):
+        """Parse a protobuf Timestamp ({"seconds":…} or bare number) to Unix epoch."""
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, dict):
+            return float(val.get("seconds", 0)) or None
+        return None
+
+    def _fetch_state_json(self, vin, state_type):
+        """Run `tesla-control state STATE_TYPE` and return parsed JSON dict, or None."""
+        if not self.binaryPath or not os.path.isfile(self.binaryPath):
+            return None
+        if not self.master.settings.get("Vehicles", {}).get(vin):
+            return None
+
+        self.sendPrivateKey(vin)
+
+        command_string = [
+            self.binaryPath,
+            "-ble",
+            "-vin", vin,
+            "-key-file", self.pipeName,
+            "state",
+            state_type,
+        ]
+        if self.isDocker():
+            command_string.insert(0, "nsenter --net=/rootns/net")
+
+        try:
+            stdout, stderr, return_code = self._run_command_with_timeout(
+                command_string, timeout=self.commandTimeout
+            )
+            if stdout is None or return_code != 0:
+                logger.debug(f"BLE state {state_type} failed for {vin} (rc={return_code})")
+                return None
+            return json.loads(stdout.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+            logger.debug(f"BLE state {state_type} JSON parse error for {vin}: {e}")
+            return None
+        finally:
+            self._ensure_pipe_closed()
+
+    def get_charge_state(self, vin):
+        """Fetch charge state via BLE. Returns normalized dict or None on failure."""
+        raw = self._fetch_state_json(vin, "charge")
+        if raw is None:
+            return None
+        cs = raw.get("chargeState")
+        if not cs:
+            logger.debug(f"BLE state charge: no chargeState in response for {vin}")
+            return None
+        return {
+            "batteryLevel": cs.get("batteryLevel"),
+            "chargeLimit": cs.get("chargeLimitSoc"),
+            "chargingState": self._extract_enum_value(cs.get("chargingState")),
+            "availableCurrent": cs.get("chargerPilotCurrent"),
+            "actualCurrent": cs.get("chargerActualCurrent"),
+            "voltage": cs.get("chargerVoltage"),
+            "phases": cs.get("chargerPhases"),
+            "scheduledChargingPending": cs.get("scheduledChargingPending"),
+            "timeToFullCharge": cs.get("timeToFullCharge"),
+        }
+
+    def get_location_state(self, vin):
+        """Fetch location state via BLE. Returns normalized dict or None on failure."""
+        raw = self._fetch_state_json(vin, "location")
+        if raw is None:
+            return None
+        ls = raw.get("locationState")
+        if not ls:
+            logger.debug(f"BLE state location: no locationState in response for {vin}")
+            return None
+        return {
+            "latitude": ls.get("latitude"),
+            "longitude": ls.get("longitude"),
+            "heading": ls.get("heading"),
+            "gpsAsOf": self._parse_proto_timestamp(ls.get("gpsAsOf")),
+        }
 
     def _is_transient_error(self, output):
         """Determine if error is transient (should retry) or permanent (fail fast)."""
