@@ -165,6 +165,7 @@ jobs:
               -v \
               --tb=short \
               --junit-xml=test-results/junit-integration.xml \
+              --junit-prefix=py${{ matrix.python-version }} \
               --cov=lib/TWCManager \
               --cov-report=xml:test-results/coverage.xml \
               --cov-report=term-missing
@@ -243,6 +244,7 @@ jobs:
             -v \
             --tb=short \
             --junit-xml=test-results/junit-unit.xml \
+            --junit-prefix=py${{ matrix.python-version }} \
             --cov=lib/TWCManager \
             --cov-report=xml:test-results/coverage.xml \
             --cov-report=term-missing \
