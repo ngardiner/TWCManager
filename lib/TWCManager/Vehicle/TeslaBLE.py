@@ -665,8 +665,10 @@ class TeslaBLE:
             for vehicle_vin in self.master.settings["Vehicles"].keys():
                 try:
                     # Skip if we've already successfully applied this exact limit to this vehicle
-                    if (self._stopTryingToApplyLimit.get(vehicle_vin) and
-                        self._lastAppliedChargeLimit.get(vehicle_vin) == limit):
+                    if (
+                        self._stopTryingToApplyLimit.get(vehicle_vin)
+                        and self._lastAppliedChargeLimit.get(vehicle_vin) == limit
+                    ):
                         logger.debug(
                             f"Not re-attempting apply charge limit {limit}% for {vehicle_vin}: already applied"
                         )
@@ -674,8 +676,8 @@ class TeslaBLE:
                         continue
 
                     # Retrieve saved normal charge limit (outside TWCManager management)
-                    has_saved, outside_limit, last_applied = self.master.getNormalChargeLimit(
-                        vehicle_vin
+                    has_saved, outside_limit, last_applied = (
+                        self.master.getNormalChargeLimit(vehicle_vin)
                     )
 
                     if limit == -1:
@@ -702,7 +704,9 @@ class TeslaBLE:
                             f"Wake command may have failed for {vehicle_vin}, proceeding with charge limit"
                         )
 
-                    ret = self.sendCommand(vehicle_vin, "charging-set-limit", target_limit)
+                    ret = self.sendCommand(
+                        vehicle_vin, "charging-set-limit", target_limit
+                    )
                     if ret is not None and self.parseCommandOutput(ret):
                         success_count += 1
                         if limit == -1:
@@ -718,7 +722,9 @@ class TeslaBLE:
                             self._stopTryingToApplyLimit[vehicle_vin] = True
                             self._lastAppliedChargeLimit[vehicle_vin] = limit
                             self.master.saveNormalChargeLimit(
-                                vehicle_vin, outside_limit if has_saved else target_limit, limit
+                                vehicle_vin,
+                                outside_limit if has_saved else target_limit,
+                                limit,
                             )
                             logger.info(
                                 f"Set {vehicle_vin} to charge limit {target_limit}%"
@@ -897,8 +903,10 @@ class TeslaBLE:
         command_string = [
             self.binaryPath,
             "-ble",
-            "-vin", vin,
-            "-key-file", self.pipeName,
+            "-vin",
+            vin,
+            "-key-file",
+            self.pipeName,
             "state",
             state_type,
         ]
@@ -910,7 +918,9 @@ class TeslaBLE:
                 command_string, timeout=self.commandTimeout
             )
             if stdout is None or return_code != 0:
-                logger.debug(f"BLE state {state_type} failed for {vin} (rc={return_code})")
+                logger.debug(
+                    f"BLE state {state_type} failed for {vin} (rc={return_code})"
+                )
                 return None
             return json.loads(stdout.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:

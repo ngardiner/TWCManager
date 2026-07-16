@@ -1736,7 +1736,10 @@ class CarApiVehicle:
                 if ble:
                     loc_data = ble.get_location_state(self.VIN)
                     # If state fetch failed and car might be asleep, try wake + retry
-                    if loc_data is None and time.time() - self.lastAPIAccessTime >= 2 * 60:
+                    if (
+                        loc_data is None
+                        and time.time() - self.lastAPIAccessTime >= 2 * 60
+                    ):
                         if ble.wakeVehicle(self.VIN):
                             loc_data = ble.get_location_state(self.VIN)
 
@@ -1748,9 +1751,13 @@ class CarApiVehicle:
                             self.lon = loc_data["longitude"]
                         self.gpsAsOf = loc_data.get("gpsAsOf") or 0
                         gpsAge = (now - self.gpsAsOf) if self.gpsAsOf else None
-                        self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
+                        self.atHome = self.carapi.is_location_home(
+                            self.lat, self.lon, gpsAge
+                        )
                         self.lastAPIAccessTime = now
-                        logger.debug(f"BLE location state fetch succeeded for {self.VIN}")
+                        logger.debug(
+                            f"BLE location state fetch succeeded for {self.VIN}"
+                        )
                         return True
 
             return self.update_vehicle_data()
@@ -1872,7 +1879,10 @@ class CarApiVehicle:
                 if ble:
                     charge_data = ble.get_charge_state(self.VIN)
                     # If state fetch failed and car might be asleep, try wake + retry
-                    if charge_data is None and time.time() - self.lastAPIAccessTime >= 2 * 60:
+                    if (
+                        charge_data is None
+                        and time.time() - self.lastAPIAccessTime >= 2 * 60
+                    ):
                         if ble.wakeVehicle(self.VIN):
                             charge_data = ble.get_charge_state(self.VIN)
 
@@ -1893,7 +1903,9 @@ class CarApiVehicle:
                         if charge_data.get("phases") is not None:
                             self.phases = charge_data["phases"]
                         if charge_data.get("scheduledChargingPending") is not None:
-                            self.scheduledChargingPending = charge_data["scheduledChargingPending"]
+                            self.scheduledChargingPending = charge_data[
+                                "scheduledChargingPending"
+                            ]
                         if charge_data.get("timeToFullCharge") is not None:
                             self.timeToFullCharge = charge_data["timeToFullCharge"]
                         self.lastAPIAccessTime = now
