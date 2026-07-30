@@ -819,6 +819,7 @@ if "PYTEST_CURRENT_TEST" in os.environ:
     # Running under pytest - skip the blocking event loop so that
     # importing this module for unit tests does not hang indefinitely.
     import sys
+
     sys.exit(0)
 
 while True:
