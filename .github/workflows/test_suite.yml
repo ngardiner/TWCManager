@@ -257,10 +257,63 @@ jobs:
           name: test-results-unit-${{ matrix.python-version }}
           path: test-results/
 
+  venv-install-tests:
+    name: Venv Install - Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system venv package
+        run: sudo apt-get -y install python3-venv
+
+      - name: Create venv and install TWCManager
+        run: |
+          python${{ matrix.python-version }} -m venv .venv
+          .venv/bin/pip install --upgrade pip setuptools wheel
+          .venv/bin/pip install -r requirements.txt
+          .venv/bin/pip install -r requirements-test.txt
+          .venv/bin/pip install -e .
+
+      - name: Verify TWCManager importable from venv
+        run: |
+          .venv/bin/python -c "import TWCManager.TWCMaster; print('TWCMaster import OK')"
+          .venv/bin/python -c "import TWCManager.Vehicle.TeslaBLE; print('TeslaBLE import OK')"
+          .venv/bin/python -c "import TWCManager.Vehicle.TeslaAPI; print('TeslaAPI import OK')"
+          .venv/bin/python -c "import TWCManager.EMS.HASS; print('HASS import OK')"
+          .venv/bin/python -c "import TWCManager.Control.HTTPControl; print('HTTPControl import OK')"
+
+      - name: Run unit tests inside venv
+        run: |
+          mkdir -p test-results
+          .venv/bin/pytest tests/unit/ \
+            -v \
+            --tb=short \
+            --junit-xml=test-results/junit-venv.xml \
+            --junit-prefix=py${{ matrix.python-version }}.venv \
+            2>/dev/null || true
+
+      - name: Upload venv test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-venv-${{ matrix.python-version }}
+          path: test-results/
+
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [integration-tests, unit-tests]
+    needs: [integration-tests, unit-tests, venv-install-tests]
     if: always()
     
     steps:

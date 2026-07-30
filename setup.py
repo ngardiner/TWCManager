@@ -20,7 +20,7 @@ setup(
         "jinja2>=2.11.2",
         "ocpp",
         "paho_mqtt>=1.5.0",
-        "psycopg2",
+        "psycopg2-binary",
         "pyjwt",
         "pyModbusTCP>=0.1.8",
         "pymodbus>=3.0.0",

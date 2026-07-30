@@ -10,6 +10,19 @@ GROUP := twcmanager
 VER := $(shell lsb_release -sr)
 BLUETOOTH = $(shell grep -c bluetooth /etc/group)
 
+# Venv configuration (overridable: make venv-install VENV_DIR=/opt/twcmanager/venv)
+VENV_DIR := $(HOME)/venv
+VENV_PYTHON := $(VENV_DIR)/bin/python3
+VENV_PIP := $(VENV_DIR)/bin/pip3
+
+# Detect whether pip supports --break-system-packages (pip >= 22.1, PEP 668 systems)
+PIP_BREAK_FLAG := $(shell pip3 install --break-system-packages --dry-run pip 2>&1 | grep -q "unknown option\|no such option\|unrecognized" && echo "" || echo "--break-system-packages")
+
+# pip invocation wrapper: use --break-system-packages where supported, plain pip elsewhere
+define pip_install
+	$(SUDO) pip3 install $(PIP_BREAK_FLAG) $(1)
+endef
+
 .PHONY: tests upload
 
 build: deps build_pkg
@@ -94,9 +107,9 @@ ifeq ($(CI), 1)
 	$(SUDO) /home/docker/.pyenv/shims/python3 -m build
 else
 ifneq (,$(wildcard /usr/bin/pip3))
-	$(SUDO) pip3 install --upgrade pip
-	$(SUDO) pip3 install --upgrade setuptools
-	$(SUDO) pip3 install -r requirements.txt
+	$(call pip_install,--upgrade pip)
+	$(call pip_install,--upgrade setuptools)
+	$(call pip_install,-r requirements.txt)
 else
 ifneq (,$(wildcard /usr/bin/pip))
 	$(SUDO) pip install --upgrade pip
@@ -109,10 +122,10 @@ endif
 
 install_pkg:
 ifneq (,$(wildcard /usr/bin/pip3))
-	$(SUDO) pip3 install --upgrade pip
-	$(SUDO) pip3 install --upgrade setuptools
-	$(SUDO) pip3 install -r requirements.txt
-	$(SUDO) pip3 install .
+	$(call pip_install,--upgrade pip)
+	$(call pip_install,--upgrade setuptools)
+	$(call pip_install,-r requirements.txt)
+	$(call pip_install,.)
 else
 ifneq (,$(wildcard /usr/bin/pip))
 	$(SUDO) pip install --upgrade pip
@@ -121,6 +134,38 @@ ifneq (,$(wildcard /usr/bin/pip))
 	$(SUDO) pip install .
 endif
 endif
+
+# Install into a virtual environment (does not affect system Python).
+# By default the venv is created at $(VENV_DIR) ($(HOME)/venv).
+# Override with: make venv-install VENV_DIR=/path/to/venv
+#
+# After running this target, update the systemd service ExecStart to use
+# the venv interpreter:
+#   ExecStart=$(VENV_DIR)/bin/python3 -u -m TWCManager.TWCManager
+venv-install:
+	$(SUDO) apt-get -y install python3-venv
+	$(SUDO) -u $(USER) python3 -m venv $(VENV_DIR)
+	$(SUDO) -u $(USER) $(VENV_PIP) install --upgrade pip setuptools wheel
+	$(SUDO) -u $(USER) $(VENV_PIP) install -r requirements.txt
+	$(SUDO) -u $(USER) $(VENV_PIP) install .
+	@echo ""
+	@echo "TWCManager installed into venv at $(VENV_DIR)."
+	@echo "To use this venv with the systemd service, set:"
+	@echo "  ExecStart=$(VENV_DIR)/bin/python3 -u -m TWCManager.TWCManager"
+	@echo "in /etc/systemd/system/twcmanager.service, then run:"
+	@echo "  sudo systemctl daemon-reload && sudo systemctl restart twcmanager"
+
+# Build package inside a local .venv (for development / testing the venv install path).
+# Creates .venv in the repo directory, does not require root.
+venv-build:
+	python3 -m venv .venv
+	.venv/bin/pip install --upgrade pip setuptools wheel
+	.venv/bin/pip install -r requirements.txt
+	.venv/bin/pip install -r requirements-test.txt
+	.venv/bin/pip install -e .
+	@echo ""
+	@echo "Development venv ready at .venv/"
+	@echo "Activate with: source .venv/bin/activate"
 
 test_direct:
 	cd tests && make test_direct
