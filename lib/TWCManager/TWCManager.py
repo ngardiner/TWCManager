@@ -815,6 +815,12 @@ logger.info("=" * 70)
 logger.info("Starting main event loop...")
 logger.info("=" * 70)
 
+if "PYTEST_CURRENT_TEST" in os.environ:
+    # Running under pytest - skip the blocking event loop so that
+    # importing this module for unit tests does not hang indefinitely.
+    import sys
+    sys.exit(0)
+
 while True:
     try:
         # In this area, we always send a linkready message when we first start.
