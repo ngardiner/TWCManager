@@ -39,7 +39,7 @@ class Growatt:
         self.master = master
         self.config = master.config
         self.configConfig = master.config.get("config", {})
-        self.configGrowatt = master.config["sources"].get("Growatt", {})
+        self.configGrowatt = master.config.get("sources", {}).get("Growatt", {})
         self.password = self.configGrowatt.get("password", "")
         self.status = self.configGrowatt.get("enabled", False)
         self.username = self.configGrowatt.get("username", "")

@@ -255,8 +255,20 @@ class TestP1MonitorInitialization:
                 }
             }
         }
-        
-        with patch('TWCManager.EMS.P1Monitor.logger'):
+
+        import sys
+        import types
+        # Provide a minimal scipy.stats stub so the scipy-missing early-return
+        # doesn't mask the behaviour this test is actually checking.
+        scipy_stub = types.ModuleType("scipy")
+        scipy_stub.stats = types.ModuleType("scipy.stats")
+        scipy_stub.stats.trim_mean = lambda data, proportiontocut: 0.0
+        with patch('TWCManager.EMS.P1Monitor.logger'), \
+             patch.dict(sys.modules, {"scipy": scipy_stub, "scipy.stats": scipy_stub.stats}), \
+             patch('TWCManager.EMS.P1Monitor.scipy', scipy_stub):
+            # Reimport to pick up the mocked scipy
+            if 'TWCManager.EMS.P1Monitor' in sys.modules:
+                del sys.modules['TWCManager.EMS.P1Monitor']
             from TWCManager.EMS.P1Monitor import P1Monitor
             p1 = P1Monitor(master)
             master.releaseModule.assert_not_called()
