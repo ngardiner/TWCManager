@@ -156,8 +156,11 @@ else:
                 "displayMilliseconds": False,
                 "debugLevel": 1,
                 "wiringMaxAmpsAllTWCs": 80,
-                "minAmpsPerTWC": 12,
-            }
+                "wiringMaxAmpsPerTWC": 6,
+                "minAmpsPerTWC": 6,
+                "fakeMaster": 1,
+            },
+            "sources": {},
         }
 
 
