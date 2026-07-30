@@ -31,7 +31,7 @@ class SmartMe:
         self.master = master
         self.config = master.config
         self.configConfig = master.config.get("config", {})
-        self.configSmartMe = master.config["sources"].get("SmartMe", {})
+        self.configSmartMe = master.config.get("sources", {}).get("SmartMe", {})
         self.password = self.configSmartMe.get("password", "")
         self.status = self.configSmartMe.get("enabled", False)
         self.serialNumber = self.configSmartMe.get("serialNumber", None)

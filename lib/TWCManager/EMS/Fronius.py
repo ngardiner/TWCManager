@@ -33,7 +33,7 @@ class Fronius:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configFronius = master.config["sources"]["Fronius"]
+            self.configFronius = master.config.get("sources", {})["Fronius"]
         except KeyError:
             self.configFronius = {}
         self.status = self.configFronius.get("enabled", False)

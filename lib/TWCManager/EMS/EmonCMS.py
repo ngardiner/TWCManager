@@ -38,7 +38,7 @@ class EmonCMS:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configEmonCMS = master.config["sources"]["EmonCMS"]
+            self.configEmonCMS = master.config.get("sources", {})["EmonCMS"]
         except KeyError:
             self.configEmonCMS = {}
         self.status = self.configEmonCMS.get("enabled", False)

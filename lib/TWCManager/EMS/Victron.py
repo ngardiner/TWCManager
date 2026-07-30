@@ -44,7 +44,7 @@ class Victron:
         self.generatedW = 0
 
         try:
-            self.configVictron = master.config["sources"]["Victron"]
+            self.configVictron = master.config.get("sources", {})["Victron"]
         except KeyError:
             self.configVictron = {}
 

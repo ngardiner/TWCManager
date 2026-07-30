@@ -34,7 +34,7 @@ class Efergy:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configEfergy = master.config["sources"]["Efergy"]
+            self.configEfergy = master.config.get("sources", {})["Efergy"]
         except KeyError:
             self.configEfergy = {}
         self.debugLevel = self.configConfig.get("debugLevel", 0)

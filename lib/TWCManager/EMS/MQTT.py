@@ -30,7 +30,7 @@ class MQTT:
         except KeyError:
             self.__configConfig = {}
         try:
-            self.__configMQTT = master.config["sources"]["MQTT"]
+            self.__configMQTT = master.config.get("sources", {})["MQTT"]
         except KeyError:
             self.__configMQTT = {}
 

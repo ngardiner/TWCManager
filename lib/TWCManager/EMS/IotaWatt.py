@@ -35,7 +35,7 @@ class IotaWatt:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configIotaWatt = master.config["sources"]["IotaWatt"]
+            self.configIotaWatt = master.config.get("sources", {})["IotaWatt"]
         except KeyError:
             self.configIotaWatt = {}
         self.status = self.configIotaWatt.get("enabled", False)

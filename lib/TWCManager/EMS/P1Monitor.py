@@ -26,7 +26,7 @@ class P1Monitor:
 
     def __init__(self, master):
         self.p1monData = {}
-        self.configP1Mon = master.config["sources"].get("P1Monitor", {})
+        self.configP1Mon = master.config.get("sources", {}).get("P1Monitor", {})
         self.serverIP = self.configP1Mon.get("serverIP", None)
         self.samples = self.configP1Mon.get("samples", 1)
 

@@ -37,7 +37,7 @@ class HASS:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configHASS = master.config["sources"]["HASS"]
+            self.configHASS = master.config.get("sources", {})["HASS"]
         except KeyError:
             self.configHASS = {}
         self.status = self.configHASS.get("enabled", False)

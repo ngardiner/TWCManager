@@ -34,7 +34,7 @@ class URL:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configURL = master.config["sources"]["URL"]
+            self.configURL = master.config.get("sources", {})["URL"]
         except KeyError:
             self.configURL = {}
         self.status = self.configURL.get("enabled", False)

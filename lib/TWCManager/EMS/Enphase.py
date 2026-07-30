@@ -38,7 +38,7 @@ class Enphase:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configEnphase = master.config["sources"]["Enphase"]
+            self.configEnphase = master.config.get("sources", {})["Enphase"]
         except KeyError:
             self.configEnphase = {}
         self.apiKey = self.configEnphase.get("apiKey", None)

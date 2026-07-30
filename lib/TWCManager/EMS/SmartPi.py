@@ -29,7 +29,7 @@ class SmartPi:
         self.master = master
         self.config = master.config
         self.configConfig = master.config.get("config", {})
-        self.configSmartPi = master.config["sources"].get("SmartPi", {})
+        self.configSmartPi = master.config.get("sources", {}).get("SmartPi", {})
         self.serverIP = self.configSmartPi.get("serverIP", None)
         self.serverPort = self.configSmartPi.get("serverPort", 80)
         self.showConsumption = self.configSmartPi.get("showConsumption", False)
