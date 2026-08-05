@@ -79,6 +79,7 @@ class TWCSlave:
         self.TWCID = TWCID
         self.maxAmps = maxAmps
         self.APIcontrol = False
+        self.vehicleRateRaised = False
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
         self.useFlexAmpsToStartCharge = self.configConfig.get(
@@ -839,6 +840,7 @@ class TWCSlave:
             # Control is given to the Tesla API to control Charge Rate
             # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
             self.APIcontrol = True
+            self.vehicleRateRaised = False
 
             # Call the Tesla API to set the charge rate for vehicle connected to this TWC
             # TODO: Identify vehicle
@@ -868,13 +870,17 @@ class TWCSlave:
             desiredAmpsOffered = self.wiringMaxAmps
 
         else:
-            # If we just switched from API to TWC make sure the car is set to a
-            # high enough charge rate so it is not limiting the TWC control
-            if chargeRateControl == 3 and self.APIcontrol:
+            # TWC is controlling the charge rate here. The car only ever
+            # charges at min(TWC offer, car's own charge rate limit), so make
+            # sure the car isn't left capped below what TWC is about to offer
+            # (e.g. leftover from API control, the Tesla app, or never raised
+            # since startup) before relying on the TWC-side value alone.
+            if not self.vehicleRateRaised:
                 self.vehicleModule.setChargeRate(
                     self.wiringMaxAmps, self.getLastVehicle()
                 )
-                self.APIcontrol = False
+                self.vehicleRateRaised = True
+            self.APIcontrol = False
 
             # We can tell the TWC how much power to use in 0.01A increments, but
             # the car will only alter its power in larger increments (somewhere
