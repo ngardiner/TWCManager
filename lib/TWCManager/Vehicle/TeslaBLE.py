@@ -500,14 +500,24 @@ class TeslaBLE:
                     f"BLE command '{command}' timed out after {self.commandTimeout}s"
                 )
                 return None
-            elif return_code != 0:
-                output = stderr.decode("utf-8") if stderr else ""
+            output = stderr.decode("utf-8") if stderr else ""
+
+            if return_code != 0:
+                if self._is_already_satisfied(output):
+                    # Car rejected the command because it's already in the
+                    # desired state. That's a success, not something to
+                    # retry - retrying would just get the same rejection.
+                    logger.debug(
+                        f"BLE command '{command}' already satisfied: {output[:200]}"
+                    )
+                    return output
+
                 logger.warning(
                     f"BLE command '{command}' failed with return code {return_code}: {output}"
                 )
+                logger.warning(f"BLE command full error output: {output}")
                 return None
 
-            output = stderr.decode("utf-8") if stderr else ""
             logger.debug(
                 f"BLE command output: {output[:200]}..."
                 if len(output) > 200
