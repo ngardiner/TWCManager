@@ -940,11 +940,81 @@ def CreateHTTPHandlerClass(master):
             self.debugLogAPI("Ending API POST")
 
         def do_get_policy(self):
+            mod_policy = master.getModuleByName("Policy")
+
+            def render_leaf(match, condition, value):
+                match_result = mod_policy.policyValue(match)
+                value_result = mod_policy.policyValue(value)
+                result = mod_policy.doesConditionMatch(match, condition, value, False)
+
+                match_txt = str(match)
+                if match != match_result:
+                    match_txt += " (" + str(match_result) + ")"
+                value_txt = str(value)
+                if value != value_result:
+                    value_txt += " (" + str(value_result) + ")"
+
+                leaf = (
+                    '<div class="policy-leaf '
+                    + ("leaf-true" if result else "leaf-false")
+                    + '">'
+                    + '<span class="policy-match">'
+                    + match_txt
+                    + "</span>"
+                    + '<span class="policy-cond">'
+                    + str(condition)
+                    + "</span>"
+                    + '<span class="policy-value">'
+                    + value_txt
+                    + "</span>"
+                    + "</div>"
+                )
+                return leaf, result
+
+            def render_group(matches, conditions, values, exitOn):
+                items = []
+                results = []
+                for m, c, v in zip(matches, conditions, values):
+                    if all(isinstance(x, list) for x in (m, c, v)):
+                        sub_html, sub_result = render_group(m, c, v, not exitOn)
+                    else:
+                        sub_html, sub_result = render_leaf(m, c, v)
+                    items.append(sub_html)
+                    results.append(sub_result)
+                overall = all(results) if not exitOn else any(results)
+
+                group = (
+                    '<div class="policy-group">'
+                    + '<div class="group-bar '
+                    + ("group-true" if overall else "group-false")
+                    + '">'
+                    + ("OR" if exitOn else "AND")
+                    + "</div>"
+                    + '<div class="group-body">'
+                    + "".join(items)
+                    + "</div>"
+                    + "</div>"
+                )
+                return group, overall
+
             page = """
+      <style>
+        .policy-group { display: flex; align-items: stretch; margin: 4px 0; border: 1px solid #ccc; border-radius: 4px; }
+        .group-bar { writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
+                     display: flex; align-items: center; justify-content: center; padding: 6px 3px;
+                     font-weight: bold; color: #fff; min-width: 22px; }
+        .group-bar.group-true { background: #28a745; }
+        .group-bar.group-false { background: #dc3545; }
+        .group-body { flex: 1; display: flex; flex-direction: column; padding: 4px; }
+        .policy-leaf { display: flex; gap: 12px; align-items: center; border-left: 6px solid;
+                        padding: 4px 8px; margin: 2px 0; border-radius: 3px; }
+        .policy-leaf.leaf-true { border-color: #28a745; background: #eaf7ec; }
+        .policy-leaf.leaf-false { border-color: #dc3545; background: #fbeaea; }
+        .policy-cond { font-style: italic; color: #666; }
+      </style>
       <table>
         """
             j = 0
-            mod_policy = master.getModuleByName("Policy")
             insertion_points = {0: "Emergency", 1: "Before", 3: "After"}
             replaced = all(
                 x not in mod_policy.default_policy for x in mod_policy.charge_policy
@@ -961,31 +1031,22 @@ def CreateHTTPHandlerClass(master):
                     j += 1
                 else:
                     cat = "Custom" if replaced else insertion_points.get(j, "Unknown")
+
+                is_active = str(policy["name"]) == str(mod_policy.active_policy)
                 page += (
-                    "<tr><td>&nbsp;</td><td>"
-                    + policy["name"]
-                    + " ("
-                    + cat
-                    + ")</td></tr>"
+                    '<tr class="table-success">'
+                    if is_active
+                    else "<tr>"
                 )
-                page += "<tr><th>&nbsp;</th><th>&nbsp;</th><th>Match Criteria</th><th>Condition</th><th>Value</th></tr>"
-                for match, condition, value in zip(
-                    policy["match"], policy["condition"], policy["value"]
-                ):
-                    page += "<tr><td>&nbsp;</td><td>&nbsp;</td>"
-                    page += "<td>" + str(match)
-                    match_result = mod_policy.policyValue(match)
-                    if match != match_result:
-                        page += " (" + str(match_result) + ")"
-                    page += "</td>"
+                page += "<td>&nbsp;</td><td>" + policy["name"] + " (" + cat + ")"
+                if is_active:
+                    page += ' <span class="badge badge-primary">Active</span>'
+                page += "</td></tr>"
 
-                    page += "<td>" + str(condition) + "</td>"
-
-                    page += "<td>" + str(value)
-                    value_result = mod_policy.policyValue(value)
-                    if value != value_result:
-                        page += " (" + str(value_result) + ")"
-                    page += "</td></tr>"
+                group_html, _ = render_group(
+                    policy["match"], policy["condition"], policy["value"], False
+                )
+                page += '<tr><td>&nbsp;</td><td>' + group_html + "</td></tr>"
 
             page += """
       </table>
