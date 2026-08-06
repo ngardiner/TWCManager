@@ -983,6 +983,9 @@ def CreateHTTPHandlerClass(master):
                     results.append(sub_result)
                 overall = all(results) if not exitOn else any(results)
 
+                if len(items) == 1:
+                    return items[0], overall
+
                 group = (
                     '<div class="policy-group">'
                     + '<div class="group-bar '
@@ -1011,8 +1014,12 @@ def CreateHTTPHandlerClass(master):
         .policy-leaf.leaf-true { border-color: #28a745; background: #eaf7ec; }
         .policy-leaf.leaf-false { border-color: #dc3545; background: #fbeaea; }
         .policy-cond { font-style: italic; color: #666; }
+        .policy-box { border: 2px solid #ccc; border-radius: 6px; margin: 10px 0; padding: 8px; }
+        .policy-box.active { border-color: #28a745; box-shadow: 0 0 0 2px rgba(40, 167, 69, 0.35); }
+        .policy-header { font-weight: bold; margin-bottom: 4px; }
+        .policy-ext { font-weight: bold; margin: 10px 0 2px; }
       </style>
-      <table>
+      <div>
         """
             j = 0
             insertion_points = {0: "Emergency", 1: "Before", 3: "After"}
@@ -1025,8 +1032,11 @@ def CreateHTTPHandlerClass(master):
                     ext = insertion_points.get(j, None)
 
                     if ext:
-                        page += "<tr><th>Policy Extension Point</th></tr>"
-                        page += "<tr><td>" + ext + "</td></tr>"
+                        page += (
+                            '<div class="policy-ext">Policy Extension Point: '
+                            + ext
+                            + "</div>"
+                        )
 
                     j += 1
                 else:
@@ -1034,22 +1044,25 @@ def CreateHTTPHandlerClass(master):
 
                 is_active = str(policy["name"]) == str(mod_policy.active_policy)
                 page += (
-                    '<tr class="table-success">'
+                    '<div class="policy-box active">'
                     if is_active
-                    else "<tr>"
+                    else '<div class="policy-box">'
                 )
-                page += "<td>&nbsp;</td><td>" + policy["name"] + " (" + cat + ")"
+                page += (
+                    '<div class="policy-header">' + policy["name"] + " (" + cat + ")"
+                )
                 if is_active:
                     page += ' <span class="badge badge-primary">Active</span>'
-                page += "</td></tr>"
+                page += "</div>"
 
                 group_html, _ = render_group(
                     policy["match"], policy["condition"], policy["value"], False
                 )
-                page += '<tr><td>&nbsp;</td><td>' + group_html + "</td></tr>"
+                page += group_html
+                page += "</div>"
 
             page += """
-      </table>
+      </div>
       </div>
     </body>
         """
