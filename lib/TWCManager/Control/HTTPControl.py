@@ -1067,12 +1067,19 @@ def CreateHTTPHandlerClass(master):
                     + " Extension Point (no policies)</div>"
                 )
 
+            default_names = [p["name"] for p in mod_policy.default_policy]
+
             bucket = []
             for policy in mod_policy.charge_policy:
                 if policy in mod_policy.default_policy:
                     page += flush_bucket(insertion_points.get(j), bucket)
                     bucket = []
                     page += render_policy_box(policy, "Default")
+                    j += 1
+                elif not replaced and policy["name"] in default_names:
+                    page += flush_bucket(insertion_points.get(j), bucket)
+                    bucket = []
+                    page += render_policy_box(policy, "Default, Modified")
                     j += 1
                 elif replaced:
                     page += render_policy_box(policy, "Custom")
