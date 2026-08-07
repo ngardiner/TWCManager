@@ -336,7 +336,11 @@ def background_tasks_thread(master):
                 elif task["cmd"] == "checkCharge":
                     vehicleModule.updateChargeAtHome()
                 elif task["cmd"] == "checkDeparture":
-                    limit = master.lastChargeLimitApplied
+                    limit = (
+                        master.lastChargeLimitApplied
+                        if master.lastChargeLimitApplied != 0
+                        else -1
+                    )
                     vehicleModule.applyChargeLimit(limit=limit, checkDeparture=True)
                 elif task["cmd"] == "checkGreenEnergy":
                     check_green_energy()
