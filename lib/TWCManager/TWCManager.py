@@ -935,6 +935,15 @@ while True:
         # slave TWC, repeat the query
         master.retryVINQuery()
 
+        # Periodically refresh the Tesla Fleet API token even if no vehicle
+        # command has run recently, so read-only features like Storm Watch
+        # don't rely on a charge/wake command to keep it alive.
+        if (time.time() - master.lastTeslaTokenRefreshCheck) > (60 * 5):
+            master.lastTeslaTokenRefreshCheck = time.time()
+            carapi = master.getModuleByName("TeslaAPI")
+            if carapi:
+                carapi.refreshTokenIfNeeded()
+
         ########################################################################
         # See if there's an incoming message on the input interface.
 
