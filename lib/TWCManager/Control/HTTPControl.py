@@ -1000,6 +1000,26 @@ def CreateHTTPHandlerClass(master):
                 )
                 return group, overall
 
+            def render_policy_box(policy, cat=None):
+                is_active = str(policy["name"]) == str(mod_policy.active_policy)
+                box = (
+                    '<div class="policy-box active">'
+                    if is_active
+                    else '<div class="policy-box">'
+                )
+                box += '<div class="policy-header">' + policy["name"]
+                if cat:
+                    box += " (" + cat + ")"
+                if is_active:
+                    box += ' <span class="badge badge-primary">Active</span>'
+                box += "</div>"
+                group_html, _ = render_group(
+                    policy["match"], policy["condition"], policy["value"], False
+                )
+                box += group_html
+                box += "</div>"
+                return box
+
             page = """
       <style>
         .policy-group { display: flex; align-items: stretch; margin: 4px 0; border: 1px solid #ccc; border-radius: 4px; }
@@ -1017,7 +1037,10 @@ def CreateHTTPHandlerClass(master):
         .policy-box { border: 2px solid #ccc; border-radius: 6px; margin: 10px 0; padding: 8px; }
         .policy-box.active { border-color: #28a745; box-shadow: 0 0 0 2px rgba(40, 167, 69, 0.35); }
         .policy-header { font-weight: bold; margin-bottom: 4px; }
-        .policy-ext { font-weight: bold; margin: 10px 0 2px; }
+        .ext-box { border: 2px dashed #999; border-radius: 6px; margin: 14px 0; padding: 8px; }
+        .ext-title { font-weight: bold; color: #555; margin-bottom: 6px; }
+        .ext-marker { color: #999; font-size: 0.85em; font-style: italic; margin: 6px 0;
+                      padding: 2px 8px; border-left: 3px solid #ddd; }
       </style>
       <div>
         """
@@ -1026,40 +1049,38 @@ def CreateHTTPHandlerClass(master):
             replaced = all(
                 x not in mod_policy.default_policy for x in mod_policy.charge_policy
             )
+
+            def flush_bucket(ext_name, bucket):
+                if not ext_name:
+                    return "".join(bucket)
+                if bucket:
+                    return (
+                        '<div class="ext-box"><div class="ext-title">'
+                        + ext_name
+                        + " Extension Point</div>"
+                        + "".join(bucket)
+                        + "</div>"
+                    )
+                return (
+                    '<div class="ext-marker">'
+                    + ext_name
+                    + " Extension Point (no policies)</div>"
+                )
+
+            bucket = []
             for policy in mod_policy.charge_policy:
                 if policy in mod_policy.default_policy:
-                    cat = "Default"
-                    ext = insertion_points.get(j, None)
-
-                    if ext:
-                        page += (
-                            '<div class="policy-ext">Policy Extension Point: '
-                            + ext
-                            + "</div>"
-                        )
-
+                    page += flush_bucket(insertion_points.get(j), bucket)
+                    bucket = []
+                    page += render_policy_box(policy, "Default")
                     j += 1
+                elif replaced:
+                    page += render_policy_box(policy, "Custom")
                 else:
-                    cat = "Custom" if replaced else insertion_points.get(j, "Unknown")
+                    bucket.append(render_policy_box(policy))
 
-                is_active = str(policy["name"]) == str(mod_policy.active_policy)
-                page += (
-                    '<div class="policy-box active">'
-                    if is_active
-                    else '<div class="policy-box">'
-                )
-                page += (
-                    '<div class="policy-header">' + policy["name"] + " (" + cat + ")"
-                )
-                if is_active:
-                    page += ' <span class="badge badge-primary">Active</span>'
-                page += "</div>"
-
-                group_html, _ = render_group(
-                    policy["match"], policy["condition"], policy["value"], False
-                )
-                page += group_html
-                page += "</div>"
+            if not replaced:
+                page += flush_bucket(insertion_points.get(j), bucket)
 
             page += """
       </div>
