@@ -30,6 +30,7 @@ class TWCMaster:
     consumptionAmpsValues = {}
     debugOutputToFile = False
     generationValues = {}
+    lastChargeLimitApplied = 0
     lastkWhMessage = time.time()
     lastkWhPoll = 0
     lastSaveFailed = 0
