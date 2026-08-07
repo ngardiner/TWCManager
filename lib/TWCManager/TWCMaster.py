@@ -32,6 +32,7 @@ class TWCMaster:
     lastChargeLimitApplied = 0
     lastkWhMessage = time.time()
     lastkWhPoll = 0
+    lastTeslaTokenRefreshCheck = 0
     lastSaveFailed = 0
     lastTWCResponseMsg = None
     lastUpdateCheck = 0
