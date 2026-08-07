@@ -1,3 +1,4 @@
+import copy
 import logging
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -80,7 +81,7 @@ class Policy:
             "charge_limit": "config.greenEnergyLimit",
         },
     ]
-    charge_policy = default_policy[:]
+    charge_policy = copy.deepcopy(default_policy)
     lastPolicyCheck = 0
     limitOverride = False
     master = None
