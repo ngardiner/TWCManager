@@ -322,20 +322,25 @@ def background_tasks_thread(master):
                 elif task["cmd"] == "charge":
                     vehicleModule.car_api_charge(task)
                 elif task["cmd"] == "checkArrival":
-                    # Get lastChargeLimitApplied from TeslaAPI
-                    carapi = master.getModuleByName("TeslaAPI")
+                    # Use the policy-tracked limit, not TeslaAPI's own
+                    # lastChargeLimitApplied: that attribute is only updated
+                    # when TeslaAPI itself applies a limit, so it stays 0
+                    # (and this would wrongly restore/-1) whenever TeslaBLE
+                    # is the module actually managing charge limits.
                     limit = (
-                        carapi.lastChargeLimitApplied
-                        if carapi and carapi.lastChargeLimitApplied != 0
+                        master.lastChargeLimitApplied
+                        if master.lastChargeLimitApplied != 0
                         else -1
                     )
                     vehicleModule.applyChargeLimit(limit=limit, checkArrival=True)
                 elif task["cmd"] == "checkCharge":
                     vehicleModule.updateChargeAtHome()
                 elif task["cmd"] == "checkDeparture":
-                    # Get lastChargeLimitApplied from TeslaAPI
-                    carapi = master.getModuleByName("TeslaAPI")
-                    limit = carapi.lastChargeLimitApplied if carapi else 0
+                    limit = (
+                        master.lastChargeLimitApplied
+                        if master.lastChargeLimitApplied != 0
+                        else -1
+                    )
                     vehicleModule.applyChargeLimit(limit=limit, checkDeparture=True)
                 elif task["cmd"] == "checkGreenEnergy":
                     check_green_energy()
