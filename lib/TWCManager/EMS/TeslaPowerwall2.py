@@ -237,6 +237,7 @@ class TeslaPowerwall2:
 
     def getStormWatch(self):
         carapi = self.master.getModuleByName("TeslaAPI")
+        carapi.refreshTokenIfNeeded()
         token = carapi.getCarApiBearerToken()
         expiry = carapi.getCarApiTokenExpireTime()
         baseURL = carapi.getCarApiBaseURL()
@@ -300,12 +301,17 @@ class TeslaPowerwall2:
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
                     except Exception as e:
-                        if r.status_code == 403:
+                        if hasattr(e, "response") and e.response is not None and e.response.status_code == 403:
                             logger.warn(
                                 "Error fetching Powerwall cloud data; does your API token have energy_device_data scope?"
                             )
                         else:
                             logger.warning(f"Error fetching Powerwall data: {e}")
+            else:
+                logger.log(
+                    logging.INFO8,
+                    "Skipping Storm Watch check; Tesla API token unavailable or expired.",
+                )
 
             self.lastFetch[key] = (now, lastData)
         return lastData
