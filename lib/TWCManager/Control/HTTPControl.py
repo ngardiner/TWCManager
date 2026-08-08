@@ -1022,25 +1022,36 @@ def CreateHTTPHandlerClass(master):
 
             page = """
       <style>
-        .policy-group { display: flex; align-items: stretch; margin: 4px 0; border: 1px solid #ccc; border-radius: 4px; }
+        .policy-group { display: flex; align-items: stretch; margin: 4px 0; border: 1px solid #ccc;
+                        border-radius: 4px; max-width: 100%; }
         .group-bar { writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
                      display: flex; align-items: center; justify-content: center; padding: 6px 3px;
-                     font-weight: bold; color: #fff; min-width: 22px; }
+                     font-weight: bold; color: #fff; min-width: 22px; flex-shrink: 0; }
         .group-bar.group-true { background: #28a745; }
         .group-bar.group-false { background: #dc3545; }
-        .group-body { flex: 1; display: flex; flex-direction: column; padding: 4px; }
-        .policy-leaf { display: flex; gap: 12px; align-items: center; border-left: 6px solid;
-                        padding: 4px 8px; margin: 2px 0; border-radius: 3px; }
+        .group-body { flex: 1; display: flex; flex-direction: column; padding: 4px; min-width: 0; }
+        .policy-leaf { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; border-left: 6px solid;
+                        padding: 4px 8px; margin: 2px 0; border-radius: 3px; min-width: 0; }
         .policy-leaf.leaf-true { border-color: #28a745; background: #eaf7ec; }
         .policy-leaf.leaf-false { border-color: #dc3545; background: #fbeaea; }
+        .policy-match, .policy-value { word-break: break-word; overflow-wrap: anywhere; }
         .policy-cond { font-style: italic; color: #666; }
-        .policy-box { border: 2px solid #ccc; border-radius: 6px; margin: 10px 0; padding: 8px; }
+        .policy-box { border: 2px solid #ccc; border-radius: 6px; margin: 10px 0; padding: 8px;
+                      max-width: 100%; box-sizing: border-box; }
         .policy-box.active { border-color: #28a745; box-shadow: 0 0 0 2px rgba(40, 167, 69, 0.35); }
         .policy-header { font-weight: bold; margin-bottom: 4px; }
-        .ext-box { border: 2px dashed #999; border-radius: 6px; margin: 14px 0; padding: 8px; }
+        .ext-box { border: 2px dashed #999; border-radius: 6px; margin: 14px 0; padding: 8px;
+                   max-width: 100%; box-sizing: border-box; }
         .ext-title { font-weight: bold; color: #555; margin-bottom: 6px; }
         .ext-marker { color: #999; font-size: 0.85em; font-style: italic; margin: 6px 0;
                       padding: 2px 8px; border-left: 3px solid #ddd; }
+        @media (max-width: 576px) {
+          .policy-leaf { flex-direction: column; align-items: stretch; gap: 2px; }
+          .policy-match, .policy-cond, .policy-value { width: 100%; }
+          .group-bar { writing-mode: horizontal-tb; transform: none; min-width: 0;
+                       width: 100%; padding: 3px 6px; }
+          .policy-group { flex-direction: column; }
+        }
       </style>
       <div>
         """
