@@ -251,6 +251,7 @@ class Policy:
             self.limitOverride = False
         if not (limit >= 50 and limit <= 100):
             limit = -1
+        self.master.lastChargeLimitApplied = limit
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
 
         # Report current policy via Status modules
