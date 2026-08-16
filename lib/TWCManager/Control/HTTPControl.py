@@ -941,55 +941,181 @@ def CreateHTTPHandlerClass(master):
             self.debugLogAPI("Ending API POST")
 
         def do_get_policy(self):
+            mod_policy = master.getModuleByName("Policy")
+
+            def render_leaf(match, condition, value):
+                match_result = mod_policy.policyValue(match)
+                value_result = mod_policy.policyValue(value)
+                result = mod_policy.doesConditionMatch(match, condition, value, False)
+
+                match_txt = str(match)
+                if match != match_result:
+                    match_txt += " (" + str(match_result) + ")"
+                value_txt = str(value)
+                if value != value_result:
+                    value_txt += " (" + str(value_result) + ")"
+
+                leaf = (
+                    '<div class="policy-leaf '
+                    + ("leaf-true" if result else "leaf-false")
+                    + '">'
+                    + '<span class="policy-match">'
+                    + match_txt
+                    + "</span>"
+                    + '<span class="policy-cond">'
+                    + str(condition)
+                    + "</span>"
+                    + '<span class="policy-value">'
+                    + value_txt
+                    + "</span>"
+                    + "</div>"
+                )
+                return leaf, result
+
+            def render_group(matches, conditions, values, exitOn):
+                items = []
+                results = []
+                for m, c, v in zip(matches, conditions, values):
+                    if all(isinstance(x, list) for x in (m, c, v)):
+                        sub_html, sub_result = render_group(m, c, v, not exitOn)
+                    else:
+                        sub_html, sub_result = render_leaf(m, c, v)
+                    items.append(sub_html)
+                    results.append(sub_result)
+                overall = all(results) if not exitOn else any(results)
+
+                if len(items) == 1:
+                    return items[0], overall
+
+                group = (
+                    '<div class="policy-group">'
+                    + '<div class="group-bar '
+                    + ("group-true" if overall else "group-false")
+                    + '">'
+                    + ("OR" if exitOn else "AND")
+                    + "</div>"
+                    + '<div class="group-body">'
+                    + "".join(items)
+                    + "</div>"
+                    + "</div>"
+                )
+                return group, overall
+
+            def render_policy_box(policy, cat=None):
+                is_active = str(policy["name"]) == str(mod_policy.active_policy)
+                box = (
+                    '<div class="policy-box active">'
+                    if is_active
+                    else '<div class="policy-box">'
+                )
+                box += '<div class="policy-header">' + policy["name"]
+                if cat:
+                    box += " (" + cat + ")"
+                if is_active:
+                    box += ' <span class="badge badge-primary">Active</span>'
+                box += "</div>"
+                group_html, _ = render_group(
+                    policy["match"], policy["condition"], policy["value"], False
+                )
+                box += group_html
+                box += "</div>"
+                return box
+
             page = """
-      <table>
+      <style>
+        .policy-group { display: flex; align-items: stretch; margin: 4px 0; border: 1px solid #ccc;
+                        border-radius: 4px; max-width: 100%; }
+        .group-bar { writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
+                     display: flex; align-items: center; justify-content: center; padding: 6px 3px;
+                     font-weight: bold; color: #fff; min-width: 22px; flex-shrink: 0; }
+        .group-bar.group-true { background: #28a745; }
+        .group-bar.group-false { background: #dc3545; }
+        .group-body { flex: 1; display: flex; flex-direction: column; padding: 4px; min-width: 0; }
+        .policy-leaf { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; border-left: 6px solid;
+                        padding: 4px 8px; margin: 2px 0; border-radius: 3px; min-width: 0; }
+        .policy-leaf.leaf-true { border-color: #28a745; background: #eaf7ec; }
+        .policy-leaf.leaf-false { border-color: #dc3545; background: #fbeaea; }
+        .policy-match, .policy-value { word-break: break-word; overflow-wrap: anywhere; }
+        .policy-cond { font-style: italic; color: #666; }
+        .policy-box { border: 2px solid #ccc; border-radius: 6px; margin: 10px 0; padding: 8px;
+                      max-width: 100%; box-sizing: border-box; }
+        .policy-box.active { border-color: #28a745; box-shadow: 0 0 0 2px rgba(40, 167, 69, 0.35); }
+        .policy-header { font-weight: bold; margin-bottom: 4px; }
+        .ext-box { border: 2px dashed #999; border-radius: 6px; margin: 14px 0; padding: 8px;
+                   max-width: 100%; box-sizing: border-box; }
+        .ext-title { font-weight: bold; color: #555; margin-bottom: 6px; }
+        .ext-marker { color: #999; font-size: 0.85em; font-style: italic; margin: 6px 0;
+                      padding: 2px 8px; border-left: 3px solid #ddd; }
+        @media (max-width: 576px) {
+          .policy-leaf { flex-direction: column; align-items: stretch; gap: 2px; }
+          .policy-match, .policy-cond, .policy-value { width: 100%; }
+          .group-bar { writing-mode: horizontal-tb; transform: none; min-width: 0;
+                       width: 100%; padding: 3px 6px; }
+          .policy-group { flex-direction: column; }
+        }
+      </style>
+      <div>
         """
             j = 0
-            mod_policy = master.getModuleByName("Policy")
             insertion_points = {0: "Emergency", 1: "Before", 3: "After"}
             replaced = all(
                 x not in mod_policy.default_policy for x in mod_policy.charge_policy
             )
-            for policy in mod_policy.charge_policy:
-                if policy in mod_policy.default_policy:
-                    cat = "Default"
-                    ext = insertion_points.get(j, None)
 
-                    if ext:
-                        page += "<tr><th>Policy Extension Point</th></tr>"
-                        page += "<tr><td>" + ext + "</td></tr>"
-
-                    j += 1
-                else:
-                    cat = "Custom" if replaced else insertion_points.get(j, "Unknown")
-                page += (
-                    "<tr><td>&nbsp;</td><td>"
-                    + policy["name"]
-                    + " ("
-                    + cat
-                    + ")</td></tr>"
+            def flush_bucket(ext_name, bucket):
+                if not ext_name:
+                    return "".join(bucket)
+                if bucket:
+                    return (
+                        '<div class="ext-box"><div class="ext-title">'
+                        + ext_name
+                        + " Extension Point</div>"
+                        + "".join(bucket)
+                        + "</div>"
+                    )
+                return (
+                    '<div class="ext-marker">'
+                    + ext_name
+                    + " Extension Point (no policies)</div>"
                 )
-                page += "<tr><th>&nbsp;</th><th>&nbsp;</th><th>Match Criteria</th><th>Condition</th><th>Value</th></tr>"
-                for match, condition, value in zip(
-                    policy["match"], policy["condition"], policy["value"]
-                ):
-                    page += "<tr><td>&nbsp;</td><td>&nbsp;</td>"
-                    page += "<td>" + str(match)
-                    match_result = mod_policy.policyValue(match)
-                    if match != match_result:
-                        page += " (" + str(match_result) + ")"
-                    page += "</td>"
 
-                    page += "<td>" + str(condition) + "</td>"
+            def conditions_match(a, b):
+                return (
+                    a.get("match") == b.get("match")
+                    and a.get("condition") == b.get("condition")
+                    and a.get("value") == b.get("value")
+                )
 
-                    page += "<td>" + str(value)
-                    value_result = mod_policy.policyValue(value)
-                    if value != value_result:
-                        page += " (" + str(value_result) + ")"
-                    page += "</td></tr>"
+            bucket = []
+            for policy in mod_policy.charge_policy:
+                default_slot = (
+                    mod_policy.default_policy[j] if j < len(mod_policy.default_policy) else None
+                )
+                is_default_slot = (
+                    not replaced
+                    and default_slot is not None
+                    and policy["name"] == default_slot["name"]
+                )
+                if is_default_slot and conditions_match(policy, default_slot):
+                    page += flush_bucket(insertion_points.get(j), bucket)
+                    bucket = []
+                    page += render_policy_box(policy, "Default")
+                    j += 1
+                elif is_default_slot:
+                    page += flush_bucket(insertion_points.get(j), bucket)
+                    bucket = []
+                    page += render_policy_box(policy, "Default, Modified")
+                    j += 1
+                elif replaced:
+                    page += render_policy_box(policy, "Custom")
+                else:
+                    bucket.append(render_policy_box(policy))
+
+            if not replaced:
+                page += flush_bucket(insertion_points.get(j), bucket)
 
             page += """
-      </table>
+      </div>
       </div>
     </body>
         """
