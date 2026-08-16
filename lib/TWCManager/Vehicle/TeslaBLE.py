@@ -344,6 +344,7 @@ class TeslaBLE:
             "Command executed successfully",
             "Vehicle responded",
             "Success",
+            "ok",
         ]
 
         output_lower = output.lower()
@@ -530,22 +531,19 @@ class TeslaBLE:
                 )
                 return None
             elif return_code != 0:
+                output = stderr.decode("utf-8") if stderr else ""
                 logger.warning(
-                    f"BLE command '{command}' failed with return code {return_code}"
+                    f"BLE command '{command}' failed with return code {return_code}: {output}"
                 )
+                return None
 
             output = stderr.decode("utf-8") if stderr else ""
-
-            # Log full output when command fails, truncate for success
-            if return_code != 0:
-                logger.warning(f"BLE command full error output: {output}")
-            else:
-                logger.debug(
-                    f"BLE command output: {output[:200]}..."
-                    if len(output) > 200
-                    else output
-                )
-            return output
+            logger.debug(
+                f"BLE command output: {output[:200]}..."
+                if len(output) > 200
+                else output
+            )
+            return output or "ok"
 
         except Exception as e:
             logger.error(f"sendCommand exception: {e}")
