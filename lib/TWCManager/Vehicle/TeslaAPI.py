@@ -203,6 +203,20 @@ class TeslaAPI:
 
         return False
 
+    def refreshTokenIfNeeded(self):
+        # Proactively refresh the bearer token if it's missing or close to
+        # expiry. Called both from car_api_available() (ahead of vehicle
+        # commands) and from read-only callers such as Storm Watch, which
+        # otherwise have no other path that keeps the token alive.
+        now = time.time()
+        if not self.master.tokenSyncEnabled() and (
+            self.getCarApiBearerToken() == ""
+            or self.getCarApiTokenExpireTime() - now < 60 * 60
+        ):
+            if self.getCarApiRefreshToken() != "":
+                logger.log(logging.INFO8, "Attempting token refresh")
+                self.apiRefresh()
+
     def car_api_available(self, charge=None, applyLimit=None):
         now = time.time()
         needSleep = False
@@ -234,13 +248,7 @@ class TeslaAPI:
             )
 
         # Authenticate to Tesla API
-        if not self.master.tokenSyncEnabled() and (
-            self.getCarApiBearerToken() == ""
-            or self.getCarApiTokenExpireTime() - now < 60 * 60
-        ):
-            if self.getCarApiRefreshToken() != "":
-                logger.log(logging.INFO8, "Attempting token refresh")
-                self.apiRefresh()
+        self.refreshTokenIfNeeded()
 
         if self.getCarApiBearerToken() != "":
             if self.getVehicleCount() < 1:
