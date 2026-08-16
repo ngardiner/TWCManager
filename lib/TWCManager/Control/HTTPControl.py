@@ -1089,7 +1089,9 @@ def CreateHTTPHandlerClass(master):
             bucket = []
             for policy in mod_policy.charge_policy:
                 default_slot = (
-                    mod_policy.default_policy[j] if j < len(mod_policy.default_policy) else None
+                    mod_policy.default_policy[j]
+                    if j < len(mod_policy.default_policy)
+                    else None
                 )
                 is_default_slot = (
                     not replaced
