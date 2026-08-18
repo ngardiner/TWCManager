@@ -625,6 +625,33 @@ class TWCMaster:
 
         return float(price)
 
+    def getPriceForecast(self, hoursAhead=24):
+        """
+        Get price forecast from the first pricing module that supports forecasting.
+        Returns list of forecast entries or empty list if unavailable.
+        """
+        for module in self.getModulesByType("Pricing"):
+            if module["ref"].getCapabilities("Forecasting"):
+                return module["ref"].getPriceForecast(hoursAhead)
+        return []
+
+    def getCheapestWindow(self, numHours, startHour=None, endHour=None):
+        """
+        Find the cheapest charging window across all pricing modules.
+        Returns the best result from all modules that support forecasting.
+        """
+        best_result = None
+        best_price = float("inf")
+
+        for module in self.getModulesByType("Pricing"):
+            if module["ref"].getCapabilities("Forecasting"):
+                result = module["ref"].getCheapestWindow(numHours, startHour, endHour)
+                if result and result["avgPrice"] < best_price:
+                    best_price = result["avgPrice"]
+                    best_result = result
+
+        return best_result
+
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
 

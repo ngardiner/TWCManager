@@ -914,6 +914,19 @@
         #"PVPCes": {
         #    "enabled": false,
         #    "token": "your-esios-api-token-here"
+        #},
+
+        # Amber Electric: Australian wholesale electricity pricing.
+        # Real-time prices for NSW, VIC, QLD, SA with spike detection.
+        # Requires an API token from Amber Electric developer portal.
+        # Prices can go negative - get paid to charge during high solar!
+        #"Amber": {
+        #    "enabled": false,
+        #    "token": "your-amber-api-token-here",
+        #    # siteId is optional - will auto-discover if not specified
+        #    #"siteId": "01F5A5CRKMZ5BCX9P1S4V990AM",
+        #    # cacheTime in seconds (default 300 = 5 minutes)
+        #    #"cacheTime": 300
         #}
     },
 

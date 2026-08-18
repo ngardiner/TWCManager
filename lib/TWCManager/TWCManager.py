@@ -115,6 +115,7 @@ modules_available = [
     "Status.HASSStatus",
     "Status.MQTTStatus",
     "Pricing.aWATTarPricing",
+    "Pricing.AmberPricing",
     "Pricing.PVPCesPricing",
     "Pricing.StaticPricing",
 ]

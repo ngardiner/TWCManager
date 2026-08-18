@@ -333,6 +333,18 @@ class Policy:
             return self.master.getImportPrice()
         elif value == "getExportPrice()":
             return self.master.getExportPrice()
+        elif value.startswith("getCheapestWindow"):
+            import re
+            match = re.match(r"getCheapestWindow\((\d+)(?:,\s*(\d+),\s*(\d+))?\)", value)
+            if match:
+                numHours = int(match.group(1))
+                startHour = int(match.group(2)) if match.group(2) else None
+                endHour = int(match.group(3)) if match.group(3) else None
+                result = self.master.getCheapestWindow(numHours, startHour, endHour)
+                if result:
+                    return result.get("avgPrice", 999)
+                return 999
+            return 999
 
         # If value is tiered, split it up
         if value.find(".") != -1:

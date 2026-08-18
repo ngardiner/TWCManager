@@ -16,6 +16,7 @@ if _lib_path not in sys.path:
 
 import pytest
 import time
+from datetime import datetime, timedelta
 from unittest.mock import Mock, MagicMock, patch
 
 
@@ -393,3 +394,549 @@ class TestTWCMasterPricingAggregation:
         master.exportPricingValues = {}
         assert master.getImportPrice() == 0.0
         assert master.getExportPrice() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# AmberPricing
+# ---------------------------------------------------------------------------
+
+
+class TestAmberPricing:
+    """Tests for the AmberPricing module (Australian Amber Electric)."""
+
+    @pytest.fixture
+    def master_enabled(self):
+        return make_master(
+            {"Amber": {"enabled": True, "token": "test-amber-token"}}
+        )
+
+    @pytest.fixture
+    def master_disabled(self):
+        return make_master({"Amber": {"enabled": False, "token": "x"}})
+
+    @pytest.fixture
+    def master_no_token(self):
+        return make_master({"Amber": {"enabled": True}})
+
+    def _make_current_price_response(self, general_price=25.0, feedin_price=8.0, spike_status="none", descriptor="neutral", renewables=45):
+        """Build a minimal Amber API /prices/current response that covers current time."""
+        now_utc = datetime.utcnow()
+        minute = now_utc.minute
+        if minute < 30:
+            start = now_utc.replace(minute=0, second=0, microsecond=0)
+            end = now_utc.replace(minute=30, second=0, microsecond=0)
+        else:
+            start = now_utc.replace(minute=30, second=0, microsecond=0)
+            end = (now_utc + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+
+        return [
+            {
+                "type": "CurrentInterval",
+                "duration": 30,
+                "spotPerKwh": general_price - 5,
+                "perKwh": general_price,
+                "date": start.strftime("%Y-%m-%d"),
+                "nemTime": end.strftime("%Y-%m-%dT%H:%M:%S+10:00"),
+                "startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "renewables": renewables,
+                "channelType": "general",
+                "spikeStatus": spike_status,
+                "descriptor": descriptor,
+            },
+            {
+                "type": "CurrentInterval",
+                "duration": 30,
+                "spotPerKwh": feedin_price - 2,
+                "perKwh": feedin_price,
+                "date": start.strftime("%Y-%m-%d"),
+                "nemTime": end.strftime("%Y-%m-%dT%H:%M:%S+10:00"),
+                "startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "renewables": renewables,
+                "channelType": "feedIn",
+                "spikeStatus": spike_status,
+                "descriptor": descriptor,
+            },
+        ]
+
+    def test_disabled_module_unloads(self, master_disabled):
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        AmberPricing(master_disabled)
+        master_disabled.releaseModule.assert_called_once()
+
+    def test_missing_token_unloads(self, master_no_token):
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        AmberPricing(master_no_token)
+        master_no_token.releaseModule.assert_called_once()
+
+    def test_disabled_import_returns_zero(self, master_disabled):
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_disabled)
+        assert module.getImportPrice() == 0
+
+    def test_disabled_export_returns_zero(self, master_disabled):
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_disabled)
+        assert module.getExportPrice() == 0
+
+    def test_import_price_converts_cents_to_dollars(self, master_enabled):
+        """Amber returns prices in c/kWh; module must convert to $/kWh."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"  # Skip auto-discovery
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_current_price_response(
+            general_price=35.0
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            price = module.getImportPrice()
+
+        assert price == pytest.approx(0.35)
+
+    def test_export_price_from_feedin_channel(self, master_enabled):
+        """Export price should come from feedIn channel."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_current_price_response(
+            feedin_price=12.0
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            price = module.getExportPrice()
+
+        assert price == pytest.approx(0.12)
+
+    def test_spike_detection(self, master_enabled):
+        """getSpikeStatus should return spike status from API."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_current_price_response(
+            spike_status="spike", descriptor="spike"
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            status = module.getSpikeStatus()
+
+        assert status == "spike"
+
+    def test_renewables_percentage(self, master_enabled):
+        """getRenewables should return renewables percentage."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_current_price_response(
+            renewables=72
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            renewables = module.getRenewables()
+
+        assert renewables == 72
+
+    def test_price_descriptor(self, master_enabled):
+        """getPriceDescriptor should return human-readable price level."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_current_price_response(
+            descriptor="extremelyLow"
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            descriptor = module.getPriceDescriptor()
+
+        assert descriptor == "extremelyLow"
+
+    def test_cache_respected(self, master_enabled):
+        """After a successful fetch, cache should prevent immediate re-fetch."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_current_price_response()
+
+        with patch.object(module.requests, "get", return_value=mock_response) as mock_get:
+            module.update()
+            first_fetch_time = module.lastFetch
+            assert first_fetch_time > 0
+
+            module.update()
+            assert mock_get.call_count == 1
+
+    def test_site_discovery(self, master_enabled):
+        """Module should auto-discover siteId from /sites endpoint."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        assert module.siteId is None
+
+        sites_response = [
+            {"id": "site-123", "status": "active", "nmi": "1234567890"}
+        ]
+
+        with patch.object(module.requests, "get") as mock_get:
+            mock_get.return_value = Mock(
+                json=lambda: sites_response,
+                raise_for_status=Mock()
+            )
+            module.discoverSiteId()
+
+        assert module.siteId == "site-123"
+
+    def test_get_capabilities(self, master_enabled):
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        assert module.getCapabilities("AdvancePricing") is True
+        assert module.getCapabilities("SpikeDetection") is True
+        assert module.getCapabilities("Renewables") is True
+        assert module.getCapabilities("NonExistent") is False
+
+    def test_negative_prices_supported(self, master_enabled):
+        """Amber prices can go negative; module should handle this."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_current_price_response(
+            general_price=-5.0
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            price = module.getImportPrice()
+
+        assert price == pytest.approx(-0.05)
+
+    def _make_forecast_response(self, num_intervals=48, base_price=25.0, price_pattern=None):
+        """Build a forecast response with multiple future intervals."""
+        now_utc = datetime.utcnow()
+        intervals = []
+        
+        for i in range(num_intervals):
+            start = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=30 * i)
+            end = start + timedelta(minutes=30)
+            
+            if price_pattern:
+                price = price_pattern(i)
+            else:
+                price = base_price + (i % 10) * 2
+            
+            intervals.append({
+                "type": "ForecastInterval",
+                "duration": 30,
+                "spotPerKwh": price - 5,
+                "perKwh": price,
+                "date": start.strftime("%Y-%m-%d"),
+                "nemTime": end.strftime("%Y-%m-%dT%H:%M:%S+10:00"),
+                "startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "renewables": 40 + (i % 30),
+                "channelType": "general",
+                "spikeStatus": "spike" if price > 50 else "none",
+                "descriptor": "high" if price > 40 else "neutral",
+            })
+            
+            intervals.append({
+                "type": "ForecastInterval",
+                "duration": 30,
+                "spotPerKwh": 8,
+                "perKwh": 8,
+                "date": start.strftime("%Y-%m-%d"),
+                "nemTime": end.strftime("%Y-%m-%dT%H:%M:%S+10:00"),
+                "startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "renewables": 40 + (i % 30),
+                "channelType": "feedIn",
+                "spikeStatus": "none",
+                "descriptor": "neutral",
+            })
+        
+        return intervals
+
+    def test_get_price_forecast_returns_list(self, master_enabled):
+        """getPriceForecast should return a list of forecast entries."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_forecast_response(num_intervals=24)
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            forecast = module.getPriceForecast(hoursAhead=12)
+
+        assert isinstance(forecast, list)
+        assert len(forecast) > 0
+
+    def test_forecast_entries_have_required_fields(self, master_enabled):
+        """Each forecast entry should have timestamp, importPrice, exportPrice."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_forecast_response(num_intervals=10)
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            forecast = module.getPriceForecast(hoursAhead=5)
+
+        assert len(forecast) > 0
+        entry = forecast[0]
+        assert "timestamp" in entry
+        assert "importPrice" in entry
+        assert "exportPrice" in entry
+        assert "spikeStatus" in entry
+        assert "descriptor" in entry
+        assert "renewables" in entry
+
+    def test_get_cheapest_window_finds_minimum(self, master_enabled):
+        """getCheapestWindow should identify the lowest-priced window."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        def price_pattern(i):
+            if 20 <= i < 30:
+                return 10.0
+            return 40.0
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_forecast_response(
+            num_intervals=48, price_pattern=price_pattern
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            result = module.getCheapestWindow(numHours=4)
+
+        assert result is not None
+        assert "startHour" in result
+        assert "avgPrice" in result
+        assert result["avgPrice"] == pytest.approx(0.10)
+
+    def test_get_cheapest_window_with_time_restriction(self, master_enabled):
+        """getCheapestWindow should respect startHour/endHour constraints."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        def price_pattern(i):
+            hour = (i * 30) // 60
+            if hour == 2:
+                return 5.0
+            elif hour == 14:
+                return 8.0
+            return 30.0
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_forecast_response(
+            num_intervals=48, price_pattern=price_pattern
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            result = module.getCheapestWindow(numHours=2, startHour=12, endHour=18)
+
+        assert result is not None
+        assert 12 <= result["startHour"] < 18
+
+    def test_get_cheapest_window_crosses_midnight(self, master_enabled):
+        """getCheapestWindow should handle windows crossing midnight."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        def price_pattern(i):
+            hour = (i * 30) // 60
+            if 22 <= hour or hour < 4:
+                return 8.0
+            return 35.0
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_forecast_response(
+            num_intervals=48, price_pattern=price_pattern
+        )
+
+        with patch.object(module.requests, "get", return_value=mock_response):
+            result = module.getCheapestWindow(numHours=3, startHour=22, endHour=6)
+
+        assert result is not None
+
+    def test_forecast_capability_flag(self, master_enabled):
+        """Module should report Forecasting capability."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        assert module.getCapabilities("Forecasting") is True
+
+    def test_forecast_cache_respected(self, master_enabled):
+        """Forecast should be cached and not refetched immediately."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        mock_response = Mock()
+        mock_response.json.return_value = self._make_forecast_response(num_intervals=10)
+
+        with patch.object(module.requests, "get", return_value=mock_response) as mock_get:
+            module._updateForecast(5)
+            assert len(module.priceForecast) > 0
+            
+            module._updateForecast(5)
+            assert mock_get.call_count == 1
+
+    def test_cheapest_window_returns_none_for_invalid_hours(self, master_enabled):
+        """getCheapestWindow should return None for invalid numHours."""
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(master_enabled)
+        module.siteId = "test-site-id"
+
+        result = module.getCheapestWindow(numHours=0)
+        assert result is None
+
+        result = module.getCheapestWindow(numHours=30)
+        assert result is None
+
+
+class TestTWCMasterForecasting:
+    """Tests for TWCMaster's forecast aggregation methods."""
+
+    @pytest.fixture
+    def master(self):
+        import logging
+        from TWCManager.TWCMaster import TWCMaster
+
+        for name, level in [
+            ("INFO2", 19), ("INFO3", 18), ("INFO4", 17), ("INFO5", 16),
+            ("INFO6", 15), ("INFO7", 14), ("INFO8", 13), ("INFO9", 12),
+            ("DEBUG2", 9),
+        ]:
+            if not hasattr(logging, name):
+                logging.addLevelName(level, name)
+                setattr(logging, name, level)
+
+        config = {
+            "config": {
+                "wiringMaxAmpsAllTWCs": 48,
+                "wiringMaxAmpsPerTWC": 48,
+                "minAmpsPerTWC": 6,
+                "debugLevel": 0,
+                "displayMilliseconds": False,
+            }
+        }
+        m = TWCMaster(b"\x77\x78", config)
+        return m
+
+    def test_get_price_forecast_returns_empty_without_modules(self, master):
+        """getPriceForecast should return empty list if no forecasting modules."""
+        result = master.getPriceForecast(hoursAhead=12)
+        assert result == []
+
+    def test_get_cheapest_window_returns_none_without_modules(self, master):
+        """getCheapestWindow should return None if no forecasting modules."""
+        result = master.getCheapestWindow(numHours=4)
+        assert result is None
+
+    def test_get_price_forecast_delegates_to_module(self, master):
+        """getPriceForecast should delegate to first forecasting-capable module."""
+        mock_module = Mock()
+        mock_module.getCapabilities.return_value = True
+        mock_module.getPriceForecast.return_value = [
+            {"timestamp": datetime.now(), "importPrice": 0.25, "exportPrice": 0.08}
+        ]
+        
+        master.modules = {
+            "Amber": {
+                "type": "Pricing",
+                "ref": mock_module,
+                "priority": 0,
+            }
+        }
+        
+        result = master.getPriceForecast(hoursAhead=12)
+        
+        assert len(result) == 1
+        mock_module.getPriceForecast.assert_called_once_with(12)
+
+    def test_get_cheapest_window_delegates_to_module(self, master):
+        """getCheapestWindow should delegate to forecasting modules and return best."""
+        mock_module1 = Mock()
+        mock_module1.getCapabilities.return_value = True
+        mock_module1.getCheapestWindow.return_value = {
+            "startHour": 2,
+            "avgPrice": 0.15,
+            "totalCost": 0.60,
+        }
+        
+        mock_module2 = Mock()
+        mock_module2.getCapabilities.return_value = True
+        mock_module2.getCheapestWindow.return_value = {
+            "startHour": 14,
+            "avgPrice": 0.10,
+            "totalCost": 0.40,
+        }
+        
+        master.modules = {
+            "Amber1": {
+                "type": "Pricing",
+                "ref": mock_module1,
+                "priority": 0,
+            },
+            "Amber2": {
+                "type": "Pricing",
+                "ref": mock_module2,
+                "priority": 1,
+            },
+        }
+        
+        result = master.getCheapestWindow(numHours=4)
+        
+        assert result["avgPrice"] == pytest.approx(0.10)
+        assert result["startHour"] == 14
+
+    def test_get_cheapest_window_ignores_non_forecasting_modules(self, master):
+        """getCheapestWindow should skip modules without Forecasting capability."""
+        mock_module_no_forecast = Mock()
+        mock_module_no_forecast.getCapabilities.return_value = False
+        
+        master.modules = {
+            "Static": {
+                "type": "Pricing",
+                "ref": mock_module_no_forecast,
+                "priority": 0,
+            }
+        }
+        
+        result = master.getCheapestWindow(numHours=4)
+        assert result is None
