@@ -8,6 +8,9 @@
         <ul class="navbar-nav mr-auto">
           {{ navbarItem("/", "Home")|safe }}
           {{ navbarItem("/policy", "Policy")|safe }}
+          {% if master.getModulesByType("Pricing") %}
+          {{ navbarItem("/pricing", "Pricing")|safe }}
+          {% endif %}
           {{ navbarItem("/schedule", "Schedule")|safe }}
           {{ navbarItem("/vehicles", "Vehicles")| safe }}
           {{ navbarItem("/graphs", "Graphs")|safe }}

@@ -333,6 +333,120 @@ def CreateHTTPHandlerClass(master):
                 json_data = json.dumps(master.getModuleByName("Policy").charge_policy)
                 self.wfile.write(json_data.encode("utf-8"))
 
+            elif self.url.path == "/api/getPricing":
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+
+                json_data = json.dumps(
+                    {
+                        "export": master.getExportPrice(),
+                        "import": master.getImportPrice(),
+                    }
+                )
+                self.wfile.write(json_data.encode("utf-8"))
+
+            elif self.url.path == "/api/getPricingModules":
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+
+                json_data = json.dumps(master.getPricingModules())
+                self.wfile.write(json_data.encode("utf-8"))
+
+            elif self.url.path == "/api/getPricingDetails":
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+
+                module_name = self.querydict.get("module", [None])
+                if isinstance(module_name, list):
+                    module_name = module_name[0] if module_name else None
+
+                if module_name:
+                    details = master.getPricingModuleDetails(module_name)
+                    if details:
+                        json_data = json.dumps(details)
+                    else:
+                        json_data = json.dumps({"error": "Module not found"})
+                else:
+                    all_details = []
+                    for module in master.getModulesByType("Pricing"):
+                        details = master.getPricingModuleDetails(module["name"])
+                        if details:
+                            all_details.append(details)
+                    json_data = json.dumps(all_details)
+
+                self.wfile.write(json_data.encode("utf-8"))
+
+            elif self.url.path == "/api/getPricingForecast":
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+
+                hours = self.querydict.get("hours", [24])
+                if isinstance(hours, list):
+                    hours = hours[0] if hours else 24
+                try:
+                    hours = int(hours)
+                except (ValueError, TypeError):
+                    hours = 24
+
+                forecast = master.getPriceForecast(hours)
+                json_data = json.dumps(
+                    {
+                        "hoursRequested": hours,
+                        "forecast": forecast,
+                    }
+                )
+                self.wfile.write(json_data.encode("utf-8"))
+
+            elif self.url.path == "/api/getCheapestWindow":
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+
+                num_hours = self.querydict.get("hours", [4])
+                start_hour = self.querydict.get("startHour", [None])
+                end_hour = self.querydict.get("endHour", [None])
+
+                if isinstance(num_hours, list):
+                    num_hours = num_hours[0] if num_hours else 4
+                if isinstance(start_hour, list):
+                    start_hour = start_hour[0] if start_hour else None
+                if isinstance(end_hour, list):
+                    end_hour = end_hour[0] if end_hour else None
+
+                try:
+                    num_hours = int(num_hours)
+                except (ValueError, TypeError):
+                    num_hours = 4
+
+                try:
+                    start_hour = int(start_hour) if start_hour is not None else None
+                except (ValueError, TypeError):
+                    start_hour = None
+
+                try:
+                    end_hour = int(end_hour) if end_hour is not None else None
+                except (ValueError, TypeError):
+                    end_hour = None
+
+                result = master.getCheapestWindow(num_hours, start_hour, end_hour)
+                if result:
+                    json_data = json.dumps(result)
+                else:
+                    json_data = json.dumps(
+                        {
+                            "error": "No suitable window found",
+                            "numHours": num_hours,
+                            "startHour": start_hour,
+                            "endHour": end_hour,
+                        }
+                    )
+
+                self.wfile.write(json_data.encode("utf-8"))
+
             elif self.url.path == "/api/getSlaveTWCs":
                 data = {}
                 totals = {
@@ -932,6 +1046,21 @@ def CreateHTTPHandlerClass(master):
                         json.dumps({"error": "offset is required"}).encode("utf-8")
                     )
 
+            elif self.url.path == "/api/refreshPricing":
+                master.refreshPricing()
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "import": master.getImportPrice(),
+                            "export": master.getExportPrice(),
+                        }
+                    ).encode("utf-8")
+                )
+
             else:
                 # All other routes missed, return 404
                 self.send_response(404)
@@ -1284,6 +1413,23 @@ def CreateHTTPHandlerClass(master):
                 page = self.template.render(self.__dict__)
 
                 page += self.do_get_policy()
+                self.wfile.write(page.encode("utf-8"))
+                return
+
+            if self.url.path == "/pricing":
+                if len(master.getModulesByType("Pricing")) == 0:
+                    self.send_response(302)
+                    self.send_header("Location", "/")
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
+                    return
+
+                self.send_response(200)
+                self.send_header("Content-type", "text/html")
+                self.end_headers()
+
+                self.template = self.templateEnv.get_template("pricing.html.j2")
+                page = self.template.render(self.__dict__)
                 self.wfile.write(page.encode("utf-8"))
                 return
 

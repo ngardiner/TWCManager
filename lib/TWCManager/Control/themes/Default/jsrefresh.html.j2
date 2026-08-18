@@ -59,6 +59,66 @@ $(document).ready(function() {
     requestSlaves();
 });
 
+// AJAJ refresh for getPricing API call (poll every 30s - pricing updates infrequently)
+$(document).ready(function() {
+    function requestPricing() {
+        $.ajax({
+            url: "/api/getPricing",
+            dataType: "text",
+            cache: false,
+            success: function(data) {
+                var json = $.parseJSON(data);
+                $('#importPrice').html(json['import']);
+                $('#exportPrice').html(json['export']);
+            }
+        });
+        setTimeout(requestPricing, 30000);
+    }
+
+    requestPricing();
+});
+
+// AJAJ refresh for pricing details (poll every 30s)
+$(document).ready(function() {
+    function requestPricingDetails() {
+        $.ajax({
+            url: "/api/getPricingDetails",
+            dataType: "text",
+            cache: false,
+            success: function(data) {
+                var modules = $.parseJSON(data);
+                if (modules && modules.length > 0) {
+                    var hasDescriptor = false;
+                    var hasRenewables = false;
+                    
+                    modules.forEach(function(mod) {
+                        if (mod.enabled) {
+                            if (mod.priceDescriptor) {
+                                $('#priceDescriptor').html(mod.priceDescriptor);
+                                hasDescriptor = true;
+                            }
+                            if (mod.renewables !== undefined && mod.capabilities && mod.capabilities.Renewables) {
+                                $('#renewablesPct').html(mod.renewables);
+                                hasRenewables = true;
+                            }
+                        }
+                    });
+                    
+                    if (hasDescriptor) {
+                        $('#priceDescriptorRow').show();
+                    }
+                    if (hasRenewables) {
+                        $('#renewablesRow').show();
+                    }
+                }
+            }
+        });
+        setTimeout(requestPricingDetails, 30000);
+    }
+
+    requestPricingDetails();
+});
+
 $(document).ready(function() {
   $("#start_chargenow").click(function(e) {
     e.preventDefault();

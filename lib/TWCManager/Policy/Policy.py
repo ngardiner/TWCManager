@@ -254,6 +254,10 @@ class Policy:
         self.master.lastChargeLimitApplied = limit
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
 
+        # If at least one pricing module is active, fetch current pricing
+        if len(self.master.getModulesByType("Pricing")) > 0:
+            self.master.queue_background_task({"cmd": "getPricing"})
+
         # Report current policy via Status modules
         for module in self.master.getModulesByType("Status"):
             module["ref"].setStatus(
@@ -325,6 +329,22 @@ class Policy:
             return self.master.getMaxAmpsForTargetGridUsage()
         elif value == "checkScheduledCharging()":
             return self.master.checkScheduledCharging()
+        elif value == "getImportPrice()":
+            return self.master.getImportPrice()
+        elif value == "getExportPrice()":
+            return self.master.getExportPrice()
+        elif value.startswith("getCheapestWindow"):
+            import re
+            match = re.match(r"getCheapestWindow\((\d+)(?:,\s*(\d+),\s*(\d+))?\)", value)
+            if match:
+                numHours = int(match.group(1))
+                startHour = int(match.group(2)) if match.group(2) else None
+                endHour = int(match.group(3)) if match.group(3) else None
+                result = self.master.getCheapestWindow(numHours, startHour, endHour)
+                if result:
+                    return result.get("avgPrice", 999)
+                return 999
+            return 999
 
         # If value is tiered, split it up
         if value.find(".") != -1:
