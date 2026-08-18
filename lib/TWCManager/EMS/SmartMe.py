@@ -1,4 +1,5 @@
 import logging
+import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("SmartMe", "EMS")
@@ -9,7 +10,6 @@ class SmartMe:
     # Fetches Consumption and Generation details from SmartMe API
 
     import requests
-    import time
 
     cacheTime = 10
     config = None
@@ -31,7 +31,7 @@ class SmartMe:
         self.master = master
         self.config = master.config
         self.configConfig = master.config.get("config", {})
-        self.configSmartMe = master.config["sources"].get("SmartMe", {})
+        self.configSmartMe = master.config.get("sources", {}).get("SmartMe", {})
         self.password = self.configSmartMe.get("password", "")
         self.status = self.configSmartMe.get("enabled", False)
         self.serialNumber = self.configSmartMe.get("serialNumber", None)
@@ -109,9 +109,10 @@ class SmartMe:
             logger.log(logging.INFO4, "Empty HTTP Response from SmartMe API")
             return False
 
-        if httpResponse.json():
-            self.generatedW = float(httpResponse.json()["ActivePower"]) * -1
-            if httpResponse.json()["ActivePowerUnit"] == "kW":
+        json_data = httpResponse.json()
+        if json_data:
+            self.generatedW = float(json_data.get("ActivePower", 0)) * -1
+            if json_data.get("ActivePowerUnit") == "kW":
                 # Unit is kW, multiply by 1000 for W
                 self.generatedW = self.generatedW * 1000
         else:
@@ -126,13 +127,13 @@ class SmartMe:
     def update(self):
         # Update function - determine if an update is required
 
-        if (int(self.time.time()) - self.lastFetch) > self.cacheTime:
+        if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from SmartMe.
             self.getGenerationValues()
 
             # Update last fetch time
             if self.fetchFailed is not True:
-                self.lastFetch = int(self.time.time())
+                self.lastFetch = int(time.time())
 
             return True
         else:

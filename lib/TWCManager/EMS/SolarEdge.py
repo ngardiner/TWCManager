@@ -46,7 +46,7 @@ class SolarEdge:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configSolarEdge = master.config["sources"]["SolarEdge"]
+            self.configSolarEdge = master.config.get("sources", {})["SolarEdge"]
         except KeyError:
             self.configSolarEdge = {}
         self.apiKey = self.configSolarEdge.get("apiKey", None)

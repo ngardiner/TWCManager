@@ -22,6 +22,13 @@ The TWCManager configuration file at ```/etc/twcmanager/config.json``` has lots 
 
    * In addition, we have a set of [Configuration Examples](config_examples.md) intended to help with more complex setups such as those utilizing Flex Charging. These examples help to share information that has been discussed previously when setting up more complex charging policy.
 
+## Gen3 Wall Connector
+
+TWCManager supports Tesla Wall Connector Generation 3 units as of v1.4.0 via Neurio Modbus emulation.
+
+   * [Gen3 Status and Architecture](Gen3_Status.md) - how Gen3 control works and its limitations
+   * [Controller_Gen3TWCs module reference](modules/Controller_Gen3TWCs.md) - configuration guide
+
 ## Developing for TWCManager
 
 Your contributions are most welcome! If you've been working on a new EMS module or you want to contribute to the project in any way, please take a look at our [Development Guide](DevelopmentGuide.md) and feel free to get involved!
@@ -85,13 +92,13 @@ In an upcoming release, this will be offered as a switchable option to replace t
       
       * Use the Tesla API to connect to the car, sending a command to stop/start charging.
 
-This is set up using the web interface. Log in with your Tesla login and password, and the login token will be stored locally within a settings file.
+This requires a Tesla API token, which is stored locally within a settings file. Tesla retired the legacy Owner API, so cloud control now requires a registered FleetAPI app (see the [Tesla FleetAPI setup guide](modules/Vehicle_TeslaAPI.md)), TeslaMate token sync, or pasting a token into the Settings page. Local BLE control (TeslaBLE) is also available and needs no cloud token.
 
 If you have multiple cars, TWCManager will attempt to identify which cars are home using geofencing. The following page of the TMC forums thread explains it better than I could: https://teslamotorsclub.com/tmc/threads/new-wall-connector-load-sharing-protocol.72830/page-16
 
-### Why do I need to log into my Tesla account when using the web interface?
+### Why do I need a Tesla API token?
 
-   * TWCManager uses your Tesla login to obtain an API token. This API token is used to talk to your vehicle(s).
+   * TWCManager uses a Tesla API token to talk to your vehicle(s).
    * When the available charger capacity falls below minAmpsPerTWC, the TWCManager script will contact the Tesla API to tell the vehicle to stop charging. If this is not configured, your vehicle will continue to charge at 6A even when the charging policy dictates that we stop charging.
 
 ### Why does my TWC increase charging momentarily to 21A or 17A around the time that it changes charging rates?
@@ -130,4 +137,4 @@ TWCs prior to this version will not respond to queries from TWCManager regarding
    * The Tesla TWC (Gen 2) wall charger was released in 2016 and was sold up until 2020, and differs only slighly from the Gen 1 from a visual perspective. The Gen 2 TWC provided better thermal management for the charger cable (an issue on older HPWCs) and better outdoor enclosure sealing, and introduced the charger load sharing protocol that this project uses.
       * Some, but not all Gen 2 Wall Connectors are able to charge non-Tesla vehicles, only the early versions have this capability. These can be identified by checking the part number 'P(TPN)' of the unit which is printed on the side. Part numbers ending in -00-x to -02-x (x can be any letter) should be able to charge non-Tesla vehicles.
       * Note, based on limited testing, the 'Legacy' DIP switch doesn't appear to affect whether the TWC can charge non-Tesla vehicles. When in SW-CAN (non Legacy) mode the TWC tries to communicate with the vehicle, and then drops back into legacy mode and starts charging if it doesn't get a response. If the Legacy DIP switch is on, then the handshake process is quicker for non-Tesla vehicles.
-   * The TWC Gen 3 wall charger was released in January 2020 and is still being sold today, and can be identified by the white faceplate and the shorter charging cable. The Gen 3 TWC has a single RS485 header (whereas the Gen 2 has a double RS485 header) and does not currently have sharing capability. It has the capability to connect to WiFi, however the value of this is not yet known.
+   * The TWC Gen 3 wall charger was released in January 2020 and is still being sold today, and can be identified by the white faceplate and the shorter charging cable. The Gen 3 TWC has a single RS485 header (whereas the Gen 2 has a double RS485 header) and connects to WiFi. As of v1.4.0, TWCManager supports Gen3 units via Neurio Modbus emulation - see [Gen3_Status.md](Gen3_Status.md) and [modules/Controller_Gen3TWCs.md](modules/Controller_Gen3TWCs.md) for details.

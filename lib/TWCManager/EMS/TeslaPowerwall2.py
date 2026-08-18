@@ -237,6 +237,7 @@ class TeslaPowerwall2:
 
     def getStormWatch(self):
         carapi = self.master.getModuleByName("TeslaAPI")
+        carapi.refreshTokenIfNeeded()
         token = carapi.getCarApiBearerToken()
         expiry = carapi.getCarApiTokenExpireTime()
         baseURL = carapi.getCarApiBaseURL()
@@ -270,8 +271,10 @@ class TeslaPowerwall2:
                             if "battery_type" in i
                             and i["battery_type"] == "ac_powerwall"
                         ]
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"Error parsing Powerwall products response: {e}"
+                        )
 
                     if len(products) == 1:
                         site, name = products[0]
@@ -297,12 +300,18 @@ class TeslaPowerwall2:
                         r.raise_for_status()
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
-                    except:
-                        if r.status_code is 403:
+                    except Exception as e:
+                        if hasattr(e, "response") and e.response is not None and e.response.status_code == 403:
                             logger.warn(
                                 "Error fetching Powerwall cloud data; does your API token have energy_device_data scope?"
                             )
-                        pass
+                        else:
+                            logger.warning(f"Error fetching Powerwall data: {e}")
+            else:
+                logger.log(
+                    logging.INFO8,
+                    "Skipping Storm Watch check; Tesla API token unavailable or expired.",
+                )
 
             self.lastFetch[key] = (now, lastData)
         return lastData

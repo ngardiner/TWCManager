@@ -156,12 +156,12 @@ class Dummy:
             slave["actualAmps"] = 0
         elif behavior == self.BEHAVIOR_CAR_PLUGGED:
             slave["state"] = "plugged"
-            slave["requestedAmps"] = slave.get("requestedAmps", 32)
+            slave["requestedAmps"] = slave.get("requestedAmps") or 32
             slave["actualAmps"] = 0
         elif behavior == self.BEHAVIOR_CHARGING:
             slave["state"] = "charging"
-            slave["requestedAmps"] = slave.get("requestedAmps", 32)
-            slave["actualAmps"] = slave.get("actualAmps", 32)
+            slave["requestedAmps"] = slave.get("requestedAmps") or 32
+            slave["actualAmps"] = slave.get("actualAmps") or 32
         elif behavior == self.BEHAVIOR_ERROR:
             slave["state"] = "error"
             slave["requestedAmps"] = 0
@@ -254,7 +254,7 @@ class Dummy:
 
             receiver_id_str = (
                 receiver_id.decode("utf-8", errors="ignore")
-                if isinstance(receiver_id, bytes)
+                if isinstance(receiver_id, (bytes, bytearray))
                 else str(receiver_id)
             )
 
@@ -340,11 +340,13 @@ class Dummy:
         if self.master.protocolVersion == 2:
             heartbeat_response += bytearray(b"\x00\x00")
 
-        response = (
-            bytearray(b"\xfd\xe0")
-            + bytearray(slave_id.encode())
-            + packet["SenderID"]
-            + heartbeat_response
+        response = self.proto.createMessage(
+            {
+                "Command": "SlaveHeartbeat",
+                "SenderID": bytearray(slave_id.encode()),
+                "RecieverID": packet["SenderID"],
+                "HeartbeatData": heartbeat_response,
+            }
         )
         self._send_internal(response)
         slave["lastHeartbeatTime"] = time.time()

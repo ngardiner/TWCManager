@@ -1,4 +1,5 @@
 import logging
+import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("IotaWatt", "EMS")
@@ -9,7 +10,6 @@ class IotaWatt:
     # Fetches Consumption and Generation details from IotaWatt
 
     import requests
-    import time
 
     apiKey = None
     cacheTime = 10
@@ -35,7 +35,7 @@ class IotaWatt:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configIotaWatt = master.config["sources"]["IotaWatt"]
+            self.configIotaWatt = master.config.get("sources", {})["IotaWatt"]
         except KeyError:
             self.configIotaWatt = {}
         self.status = self.configIotaWatt.get("enabled", False)
@@ -126,7 +126,7 @@ class IotaWatt:
     def update(self):
         # Update function - determine if an update is required
 
-        if (int(self.time.time()) - self.lastFetch) > self.cacheTime:
+        if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from IotaWatt.
 
             if self.iotaWattOutputConsumption:
@@ -151,7 +151,7 @@ class IotaWatt:
 
             # Update last fetch time
             if self.fetchFailed is not True:
-                self.lastFetch = int(self.time.time())
+                self.lastFetch = int(time.time())
 
             return True
         else:

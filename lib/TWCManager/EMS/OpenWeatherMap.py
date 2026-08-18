@@ -33,7 +33,9 @@ class OpenWeatherMap:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configOpenWeatherMap = master.config["sources"]["OpenWeatherMap"]
+            self.configOpenWeatherMap = master.config.get("sources", {})[
+                "OpenWeatherMap"
+            ]
         except KeyError:
             self.configOpenWeatherMap = {}
 

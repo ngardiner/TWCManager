@@ -31,7 +31,7 @@ class Volkszahler:
         self.master = master
         self.config = master.config
         self.configConfig = master.config.get("config", {})
-        self.configVolkszahler = master.config["sources"].get("Volkszahler", {})
+        self.configVolkszahler = master.config.get("sources", {}).get("Volkszahler", {})
         self.serverIP = self.configVolkszahler.get("serverIP", None)
         self.serverPort = self.configVolkszahler.get("serverPort", 80)
         self.status = self.configVolkszahler.get("enabled", False)

@@ -29,7 +29,7 @@ class SmartPi:
         self.master = master
         self.config = master.config
         self.configConfig = master.config.get("config", {})
-        self.configSmartPi = master.config["sources"].get("SmartPi", {})
+        self.configSmartPi = master.config.get("sources", {}).get("SmartPi", {})
         self.serverIP = self.configSmartPi.get("serverIP", None)
         self.serverPort = self.configSmartPi.get("serverPort", 80)
         self.showConsumption = self.configSmartPi.get("showConsumption", False)
@@ -103,11 +103,12 @@ class SmartPi:
             logger.log(logging.INFO4, "Empty HTTP Response from SmartPi API")
             return False
 
-        if httpResponse.json():
+        json_data = httpResponse.json()
+        if json_data:
             genWatts = 0
             conWatts = 0
             try:
-                for phase in httpResponse.json()["datasets"][0]["phases"]:
+                for phase in json_data.get("datasets", [{}])[0].get("phases", []):
                     logger.log(
                         logging.INFO8,
                         "Logged "

@@ -43,10 +43,13 @@ class ScenarioEMS:
             master.releaseModule("lib.TWCManager.EMS", classname)
             return
 
-        scenario_path = os.environ.get("TWCM_SCENARIO_FILE", "")
+        # Accept scenarioFile from config as well as TWCM_SCENARIO_FILE env var
+        scenario_path = self._config.get(
+            "scenarioFile", os.environ.get("TWCM_SCENARIO_FILE", "")
+        )
         if not scenario_path or not Path(scenario_path).exists():
             logger.warning(
-                "ScenarioEMS enabled but TWCM_SCENARIO_FILE not set or not found "
+                "ScenarioEMS enabled but scenario file not set or not found "
                 "(%s) — unloading",
                 scenario_path,
             )

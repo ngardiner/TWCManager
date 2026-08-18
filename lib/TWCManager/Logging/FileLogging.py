@@ -1,10 +1,9 @@
 # ConsoleLogging module. Provides output to console for logging.
-import logging
-
 from sys import modules
 import logging
-from logging.handlers import TimedRotatingFileHandler
+import os
 import re
+from logging.handlers import TimedRotatingFileHandler
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("FileLogging", "Logging")
@@ -45,8 +44,15 @@ class FileLogging:
         # Initialize Logger
         handler = None
         try:
+            log_path = self.configLogging.get("path", "/etc/twcmanager/log")
+            if not os.path.exists(log_path):
+                try:
+                    os.makedirs(log_path, exist_ok=True)
+                except Exception as e:
+                    logger.error(f"Could not create log directory {log_path}: {e}")
+
             handler = TimedRotatingFileHandler(
-                self.configLogging.get("path", "/etc/twcmanager/log") + "/logfile",
+                log_path + "/logfile",
                 when="H",
                 interval=1,
                 backupCount=24,

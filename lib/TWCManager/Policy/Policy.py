@@ -1,3 +1,4 @@
+import copy
 import logging
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -41,11 +42,17 @@ class Policy:
         # 8pm. Sunrise in most U.S. areas varies from a little before
         # 6am in Jun to almost 7:30am in Nov before the clocks get set
         # back an hour. Sunset can be ~4:30pm to just after 8pm.
+        # Also skip if the user has set Non-Scheduled action to Do Not Charge (2).
         {
             "name": "Track Green Energy",
-            "match": ["tm_hour", "tm_hour", "settings.hourResumeTrackGreenEnergy"],
-            "condition": ["gte", "lt", "lte"],
-            "value": ["settings.sunrise", "settings.sunset", "tm_hour"],
+            "match": [
+                "tm_hour",
+                "tm_hour",
+                "settings.hourResumeTrackGreenEnergy",
+                "settings.nonScheduledAction",
+            ],
+            "condition": ["gte", "lt", "lte", "ne"],
+            "value": ["settings.sunrise", "settings.sunset", "tm_hour", 2],
             "background_task": "checkGreenEnergy",
             "allowed_flex": "config.greenEnergyFlexAmps",
             "charge_limit": "config.greenEnergyLimit",
@@ -74,7 +81,7 @@ class Policy:
             "charge_limit": "config.greenEnergyLimit",
         },
     ]
-    charge_policy = default_policy[:]
+    charge_policy = copy.deepcopy(default_policy)
     lastPolicyCheck = 0
     limitOverride = False
     master = None
@@ -218,7 +225,7 @@ class Policy:
 
         # If we are not checking green energy already but we need to, queue that
         # as well.
-        if bgt is not "checkGreenEnergy":
+        if bgt != "checkGreenEnergy":
             alwaysPoll = self.config.get("policy", {}).get("alwaysPollEMS", False)
             maxAmps = self.config.get("config", {}).get("maxAmpsAllowedFromGrid", None)
             if alwaysPoll or maxAmps or self.policyIsGreen():
@@ -226,15 +233,25 @@ class Policy:
 
         # If a charge limit is defined for this policy, apply it
         limit = limit = self.policyValue(policy.get("charge_limit", -1))
-        if self.limitOverride:
+        # limitOverride lowers the charge limit below current SOC to force the car
+        # to stop charging via the API. Only apply it when we are actually trying
+        # to stop charging (maxAmps == 0); otherwise a stale override from a
+        # previous stop attempt would incorrectly cap the limit when charging
+        # resumes (closes #586).
+        chargeAmps = self.master.getMaxAmpsToDivideAmongSlaves()
+        if self.limitOverride and chargeAmps == 0:
             currentCharge = (
                 self.master.getModuleByName("TeslaAPI").minBatteryLevelAtHome - 1
             )
             if currentCharge < 50:
                 currentCharge = 50
             limit = currentCharge if limit == -1 else min(limit, currentCharge)
+        elif self.limitOverride and chargeAmps > 0:
+            # Charging has resumed; clear the override so the limit is restored
+            self.limitOverride = False
         if not (limit >= 50 and limit <= 100):
             limit = -1
+        self.master.lastChargeLimitApplied = limit
         self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
 
         # If at least one pricing module is active, fetch current pricing
@@ -323,7 +340,14 @@ class Policy:
 
             # If value refers to a setting, return the setting
             if pieces[0] == "settings":
-                return self.master.settings.get(pieces[1], 0)
+                val = self.master.settings.get(pieces[1], 0)
+                # Settings loaded from JSON are strings; cast numeric values
+                if isinstance(val, str):
+                    try:
+                        val = float(val) if "." in val else int(val)
+                    except (ValueError, TypeError):
+                        pass
+                return val
             elif pieces[0] == "config":
                 return self.config["config"].get(pieces[1], 0)
             elif pieces[0] == "modules":
@@ -356,6 +380,20 @@ class Policy:
 
         if all([isinstance(a, list) for a in (matchValue, condition, value)]):
             return self.checkConditions(matchValue, condition, value, not exitOn)
+
+        # Convert numeric strings to numbers for comparison
+        def to_number(val):
+            if isinstance(val, str):
+                try:
+                    return float(val) if "." in val else int(val)
+                except (ValueError, TypeError):
+                    return val
+            return val
+
+        # For numeric comparisons, convert both values
+        if condition in ("gt", "gte", "lt", "lte"):
+            matchValue = to_number(matchValue)
+            value = to_number(value)
 
         # Perform comparison
         if condition == "gt":

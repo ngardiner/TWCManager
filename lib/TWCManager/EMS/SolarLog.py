@@ -31,7 +31,7 @@ class SolarLog:
         self.master = master
         self.config = master.config
         self.configConfig = master.config.get("config", {})
-        self.configSolarLog = master.config["sources"].get("SolarLog", {})
+        self.configSolarLog = master.config.get("sources", {}).get("SolarLog", {})
         self.status = self.configSolarLog.get("enabled", False)
         self.serverIP = self.configSolarLog.get("serverIP", None)
         self.excludeConsumptionInverters = self.configSolarLog.get(

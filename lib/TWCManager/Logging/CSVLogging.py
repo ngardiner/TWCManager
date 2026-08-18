@@ -1,6 +1,7 @@
 # CSVLogging module. Provides output to CSV file for regular stats
 
 import logging
+import os
 
 
 class CSVLogging:
@@ -34,9 +35,15 @@ class CSVLogging:
         if not self.configLogging.get("mute", None):
             self.configLogging["mute"] = {}
 
-        green_energy_handler = logging.FileHandler(
-            self.configLogging["path"] + "/greenenergy.csv"
-        )
+        log_path = self.configLogging.get("path", "/etc/twcmanager/csv")
+        if not os.path.exists(log_path):
+            try:
+                os.makedirs(log_path, exist_ok=True)
+            except Exception as e:
+                # We can't log this to our own CSV logger yet, so use console
+                print(f"Could not create CSV log directory {log_path}: {e}")
+
+        green_energy_handler = logging.FileHandler(log_path + "/greenenergy.csv")
         green_energy_handler.addFilter(self.green_energy_filter)
         green_energy_formatter = logging.Formatter(
             self.qt("%(created)d")

@@ -125,6 +125,28 @@
           </td>
         </tr>
         <tr>
+          <th>Vehicle Command Policy:</th>
+          <td>
+            {% set configPolicy = master.config.get("vehicle", {}).get("commandPolicy") %}
+            {% if configPolicy %}
+              Hard-set to <b>{{ configPolicy }}</b> via commandPolicy in
+              config.json. Remove it from config.json to control this setting
+              here instead.
+            {% else %}
+            {{ optionList(
+              [
+                ["prefer_ble", "Prefer BLE, fall back to Tesla API"],
+                ["ble_only", "BLE only - never send billed API commands"],
+                ["api_only", "Tesla API only - never use BLE"],
+              ],
+              {
+                "name": "commandPolicy",
+                "value": master.settings.get("commandPolicy", "prefer_ble")
+              })|safe }}
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
           <th>Consumption Offsets</th>
           <td>
             <table id="consumptionOffsets">

@@ -33,16 +33,17 @@ class Fronius:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configFronius = master.config["sources"]["Fronius"]
+            self.configFronius = master.config.get("sources", {})["Fronius"]
         except KeyError:
             self.configFronius = {}
         self.status = self.configFronius.get("enabled", False)
         self.serverIP = self.configFronius.get("serverIP", None)
         self.serverPort = self.configFronius.get("serverPort", "80")
 
-        # If serverIP is not a list, make it one
+        # If serverIP is not a list, make it one; filter out None/empty entries
         if not isinstance(self.serverIP, list):
             self.serverIP = [self.serverIP]
+        self.serverIP = [ip for ip in self.serverIP if ip]
 
         # Unload if this module is disabled or misconfigured
         if (not self.status) or (not self.serverIP) or (int(self.serverPort) < 1):

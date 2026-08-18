@@ -150,20 +150,19 @@ class HomeAssistant:
 
     def __init__(self, master):
         self.master = master
-        master.teslaLoginAskLater = True
         self.config = getattr(master, "config", {})
 
         cfg = self.config.get("vehicle", {}).get("HomeAssistant", {}) or {}
-        self.enabled: bool = cfg.get("enabled", False)
+        self._enabled: bool = cfg.get("enabled", False)
         self.url: str = cfg.get("url", "").rstrip("/")
         self.token: Optional[str] = cfg.get("longLivedToken")
 
-        if not self.enabled:
+        if not self._enabled:
             logger.info("HomeAssistant vehicle module disabled.")
             return
         if not self.url or not self.token:
             logger.error("HomeAssistant enabled but URL or longLivedToken is missing.")
-            self.enabled = False
+            self._enabled = False
             return
 
         # Validate token format (should be at least 20 chars, typically much longer)
@@ -172,7 +171,7 @@ class HomeAssistant:
                 "HomeAssistant longLivedToken appears invalid (too short). "
                 "Generate a new token in Home Assistant: Profile → Long-Lived Access Tokens"
             )
-            self.enabled = False
+            self._enabled = False
             return
 
         self.rest_base = f"{self.url}/api"
@@ -201,7 +200,7 @@ class HomeAssistant:
                 "Cannot connect to Home Assistant at %s. Check URL and network connectivity.",
                 self.url,
             )
-            self.enabled = False
+            self._enabled = False
             return
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
@@ -214,11 +213,11 @@ class HomeAssistant:
                     "HomeAssistant returned HTTP %d. Check URL and token.",
                     e.response.status_code,
                 )
-            self.enabled = False
+            self._enabled = False
             return
         except Exception as e:
             logger.error("Failed to verify HomeAssistant connectivity: %s", str(e))
-            self.enabled = False
+            self._enabled = False
             return
 
         try:
@@ -235,7 +234,7 @@ class HomeAssistant:
                 )
 
     def enabled(self) -> bool:
-        return self.enabled
+        return self._enabled
 
     # ----------------------------------------------------------------------
     # Discovery via WebSocket API
@@ -500,7 +499,7 @@ class HomeAssistant:
         return len(self.carApiVehicles)
 
     def car_api_available(self, *args, **kwargs):
-        if not self.enabled or not self.carApiVehicles:
+        if not self._enabled or not self.carApiVehicles:
             return False
 
         ent = self.carApiVehicles[0].entity_ids.get("battery_level_sensor")
@@ -509,7 +508,8 @@ class HomeAssistant:
 
         return self._get_state(ent) is not None
 
-    def car_api_charge(self, charge: bool) -> str:
+    def car_api_charge(self, task) -> str:
+        charge = task.get("charge", None) if isinstance(task, dict) else task
         now = time.time()
         if now - self.carApiLastStartOrStopChargeTime < 10:
             logger.debug("Charge command rate limited (10s minimum between commands)")

@@ -30,7 +30,7 @@ class DSMRreader:
         except KeyError:
             self.__configConfig = {}
         try:
-            self.__configDSMRreader = master.config["sources"]["DSMRreader"]
+            self.__configDSMRreader = master.config.get("sources", {})["DSMRreader"]
         except KeyError:
             self.__configDSMRreader = {}
 

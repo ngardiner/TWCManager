@@ -65,6 +65,7 @@ class TWCSlave:
     voltsPhaseC = 0
     isCharging = 0
     lastChargingStart = 0
+    chargingDroppedBelowThresholdTime = 0
     VINData = ["", "", ""]
     currentVIN = ""
     lastVIN = ""
@@ -78,6 +79,8 @@ class TWCSlave:
         self.TWCID = TWCID
         self.maxAmps = maxAmps
         self.APIcontrol = False
+        self.vehicleRateRaised = False
+        self.__vehicleRateRaiseAttemptTime = 0
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
         self.useFlexAmpsToStartCharge = self.configConfig.get(
@@ -600,6 +603,7 @@ class TWCSlave:
         self.reportedAmpsMax = ((heartbeatData[1] << 8) + heartbeatData[2]) / 100
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
+        self.refreshingChargerLoadStatus()
 
         if self.reportedState == 0x02:
             logger.info(
@@ -679,10 +683,6 @@ class TWCSlave:
         ):
             self.timeReportedAmpsActualChangedSignificantly = now
             self.reportedAmpsActualSignificantChangeMonitor = self.reportedAmpsActual
-            for module in self.master.getModulesByType("Status"):
-                module["ref"].setStatus(
-                    self.TWCID, "power", "power", self.reportedAmpsActual, "A"
-                )
 
         ltNow = time.localtime()
         hourNow = ltNow.tm_hour + (ltNow.tm_min / 60)
@@ -697,8 +697,34 @@ class TWCSlave:
 
         # Determine how many cars are charging and how many amps they're using
         numCarsCharging = self.master.num_cars_charging_now()
-        desiredAmpsOffered = self.master.getMaxAmpsToDivideAmongSlaves()
-        flex = self.master.getAllowedFlex()
+
+        # Phase 4: if the centralized EVSE power distributor has pre-computed a
+        # per-EVSE target (via Gen2TWC.setTargetPower), use it directly and skip
+        # the per-car fair-share calculation below.  All downstream logic (6A
+        # spike workaround, dampen, timing guards, send) still applies.
+        _centralized_target = getattr(self, "_evseTargetAmps", None)
+        if _centralized_target is not None:
+            desiredAmpsOffered = _centralized_target
+            flex = 0
+        else:
+            desiredAmpsOffered = self.master.getMaxAmpsToDivideAmongSlaves()
+            flex = self.master.getAllowedFlex()
+
+            if numCarsCharging > 0:
+                desiredAmpsOffered -= sum(
+                    slaveTWC.reportedAmpsActual
+                    for slaveTWC in self.master.getSlaveTWCs()
+                    if slaveTWC.TWCID != self.TWCID
+                )
+                flex = self.master.getAllowedFlex() / numCarsCharging
+
+                # Allocate this slave a fraction of maxAmpsToDivideAmongSlaves
+                # divided by the number of cars actually charging.
+                fairShareAmps = int(
+                    self.master.getMaxAmpsToDivideAmongSlaves() / numCarsCharging
+                )
+                if desiredAmpsOffered > fairShareAmps:
+                    desiredAmpsOffered = fairShareAmps
 
         # Get charge rate control mode from settings
         # 1 = Use TWC Exclusively to control Charge Rate
@@ -706,22 +732,7 @@ class TWCSlave:
         # 3 = Use TWC >= 6A + Tesla API < 6A to control Charge Rate
         chargeRateControl = int(self.master.settings.get("chargeRateControl", 1))
 
-        if numCarsCharging > 0:
-            desiredAmpsOffered -= sum(
-                slaveTWC.reportedAmpsActual
-                for slaveTWC in self.master.getSlaveTWCs()
-                if slaveTWC.TWCID != self.TWCID
-            )
-            flex = self.master.getAllowedFlex() / numCarsCharging
-
-            # Allocate this slave a fraction of maxAmpsToDivideAmongSlaves divided
-            # by the number of cars actually charging.
-            fairShareAmps = int(
-                self.master.getMaxAmpsToDivideAmongSlaves() / numCarsCharging
-            )
-            if desiredAmpsOffered > fairShareAmps:
-                desiredAmpsOffered = fairShareAmps
-
+        if _centralized_target is None and numCarsCharging > 0:
             logger.debug(
                 "desiredAmpsOffered TWC: "
                 + self.master.hex_str(self.TWCID)
@@ -852,6 +863,8 @@ class TWCSlave:
             # Control is given to the Tesla API to control Charge Rate
             # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
             self.APIcontrol = True
+            self.vehicleRateRaised = False
+            self.__vehicleRateRaiseAttemptTime = 0
 
             # Call the Tesla API to set the charge rate for vehicle connected to this TWC
             # TODO: Identify vehicle
@@ -881,13 +894,21 @@ class TWCSlave:
             desiredAmpsOffered = self.wiringMaxAmps
 
         else:
-            # If we just switched from API to TWC make sure the car is set to a
-            # high enough charge rate so it is not limiting the TWC control
-            if chargeRateControl == 3 and self.APIcontrol:
-                self.vehicleModule.setChargeRate(
+            # TWC is controlling the charge rate here. The car only ever
+            # charges at min(TWC offer, car's own charge rate limit), so make
+            # sure the car isn't left capped below what TWC is about to offer
+            # (e.g. leftover from API control, the Tesla app, or never raised
+            # since startup) before relying on the TWC-side value alone.
+            if not self.vehicleRateRaised and (
+                now - self.__vehicleRateRaiseAttemptTime >= 60
+            ):
+                self.__vehicleRateRaiseAttemptTime = now
+                result = self.vehicleModule.setChargeRate(
                     self.wiringMaxAmps, self.getLastVehicle()
                 )
-                self.APIcontrol = False
+                if result is not False:
+                    self.vehicleRateRaised = True
+            self.APIcontrol = False
 
             # We can tell the TWC how much power to use in 0.01A increments, but
             # the car will only alter its power in larger increments (somewhere

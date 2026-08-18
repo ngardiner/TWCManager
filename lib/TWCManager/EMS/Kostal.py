@@ -47,7 +47,7 @@ class Kostal:
         # try to read the config file
         try:
             self.configConfig = master.config["config"]
-            self.configKostal = master.config["sources"]["Kostal"]
+            self.configKostal = master.config.get("sources", {})["Kostal"]
         except KeyError:
             self.configConfig = {}
             self.configKostal = {}

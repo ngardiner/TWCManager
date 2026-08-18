@@ -138,24 +138,70 @@
         # you will need to un-comment it to have it take effect.
         #"minChargeLevel": 10,
 
-        # The client_id of the app registered with Tesla. Registration is
-        # required to use the FleetAPI and Vehicle Command protocol.
+        # When the car has its own Scheduled Charging or Scheduled Departure
+        # timer active and is waiting for it, TWCManager will not send a start
+        # charge command that would override the in-car schedule and begin
+        # charging immediately at full rate. Set to false to restore the old
+        # behaviour of starting the charge regardless of the car's schedule.
+        #"respectVehicleSchedule": true,
+
+        # The client_id of the app you register at developer.tesla.com. The
+        # legacy Owner API has been retired, so cloud control now requires your
+        # own registered application. When registering, choose the OAuth grant
+        # type "Authorization Code (Third-Party Tokens)" (NOT "Client
+        # Credentials", which is for partner/machine tokens). Local BLE control
+        # (TeslaBLE) does not require this.
         # See https://developer.tesla.com/docs/fleet-api#authentication
         #"teslaApiClientID": "client-id-of-registered-app",
 
-        # Since 2024 the Tesla Vehicle Command protocol is required for all
-        # vehicles manufacturered after 2021. The Tesla Vehicle Command proxy
-        # will automatically fall back to the FleetAPI for older vehicles.
+        # The redirect URI registered against your Tesla app. It must match
+        # exactly in both the login request and the token exchange, and it must
+        # be an HTTPS URL under the public domain you control (the app's allowed
+        # origin) - NOT TWCManager's LAN address.
         #
-        # TWCManager does not implement the Tesla Vehicle Command protocol.
-        # Instead it relies on the Tesla Vehicle Command proxy which translates
-        # the FleetAPI REST calls if the destination vehicle supports the
-        # new protocol. This requires the URL of the proxy to be set as
-        # "teslaProxy" and the proxy certificate for validation as
-        # "teslaProxyCert".
+        # Do NOT expose TWCManager to the internet. The redirect URI does not
+        # need to reach TWCManager: after logging in you simply paste the URL
+        # you were redirected to into the web UI (paste-back). Only set this to
+        # a callback that forwards to TWCManager (e.g. via a reverse proxy you
+        # control) if you specifically want the auto-capture flow.
+        #"teslaApiRedirectUri": "https://twc.yourdomain.com/teslaAccount/callback",
+
+        # OPTIONAL/ADVANCED. By default TWCManager logs in using PKCE (the
+        # standard public-client method) and needs NO client secret. Only set
+        # teslaApiClientSecret if you specifically want the client-secret token
+        # exchange; doing so also requires teslaApiRegion below. Keep config.json
+        # readable only by the twcmanager user if you set this.
+        #"teslaApiClientSecret": "client-secret-of-registered-app",
+
+        # Only used when teslaApiClientSecret is set (the secret-based exchange
+        # needs a regional audience). Your Tesla account region: NA, EU or CN.
+        # Not needed for the default PKCE login (the region is derived from the
+        # token). Defaults to NA.
+        #"teslaApiRegion": "NA",
+
+        # Optional override of the OAuth scopes requested at login. The default
+        # covers charging control, vehicle data and location (used for home
+        # geofencing):
+        # "openid offline_access vehicle_device_data vehicle_cmds vehicle_location vehicle_charging_cmds"
+        #"teslaApiScope": "openid offline_access vehicle_device_data vehicle_cmds vehicle_location vehicle_charging_cmds",
+
+        # REQUIRED TO DRIVE CHARGING over the FleetAPI. Tesla has deprecated the
+        # REST charge-command endpoints; charge_start/stop/set-rate now return
+        # 403 "Tesla Vehicle Command Protocol required" on essentially all
+        # vehicles (confirmed even on a 2019 Model 3). Without the proxy below,
+        # the FleetAPI login can still READ vehicle state, but cannot start,
+        # stop or rate-limit charging.
+        #
+        # TWCManager does not implement the Vehicle Command protocol itself; it
+        # relies on the Tesla Vehicle Command proxy, which signs commands with
+        # your app key and forwards them. Set the proxy URL as "teslaProxy" and
+        # its certificate as "teslaProxyCert".
         # See https://github.com/teslamotors/vehicle-command
         #
-        # The URL of the Tesla HTTP Proxy running locally
+        # (Alternatively, the TeslaBLE module drives charging locally over
+        # Bluetooth with no proxy - see docs/modules/Vehicle_TeslaBLE.md.)
+        #
+        # The URL of the Tesla HTTP Proxy
         # "teslaProxy": "https://localhost:4443",
         #
         # Only set "teslaProxyCert" when "teslaProxy" is set.
@@ -164,6 +210,12 @@
         # The cloudUpdateInterval determines how often to poll certain
         # data retrieved from the Tesla API to evaluate policy.
         "cloudUpdateInterval": 1800,
+
+        // wakeDelayMins: how long to wait (minutes) before issuing a Fleet API
+        // wake_up command when a vehicle needs to start charging.  During the
+        // delay the car may self-start in response to the TWC power offer.
+        // Increasing this reduces Fleet API usage; set to 0 to wake immediately.
+        //"wakeDelayMins": 3,
 
         # These parameters enable you to specify different charge limits
         # for different charging policies.  The car's 'outside' limit
@@ -607,6 +659,8 @@
         "P1Monitor":{
           # Support for P1 Monitor API (https://www.ztatz.nl/)
           # Reads /api/v1/phase
+          # REQUIRES: apt-get install python3-numpy python3-scipy
+          # (scipy is not included in default dependencies due to size/build complexity)
           "enabled": false,
           "serverIP":"192.168.1.2",
           # Amount of samples to take average from (min 1, max 10, default 1)
@@ -772,6 +826,21 @@
         }
     },
     "vehicle": {
+        # commandPolicy controls which modules may send state-changing commands
+        # (start/stop charging, set charge rate, charge limit, wake):
+        #   prefer_ble (default) - try TeslaBLE first, fall back to the Tesla API
+        #   ble_only             - commands go over BLE only, never the API.
+        #                          Fleet API commands are billed per call, so this
+        #                          caps API spend; reads still use the API.
+        #   api_only             - commands go to the Tesla API only, never BLE
+        #
+        # Normally you configure this from the web UI (Settings page), where it
+        # is stored in settings.json and can be changed at runtime. Only
+        # uncomment it here if you want to hard-set the policy: a value in
+        # config.json overrides whatever is set in the UI and disables the UI
+        # control until it is removed from config.json again.
+        #"commandPolicy": "prefer_ble",
+
         "teslaAPI": {
           "enabled": true,
         },
@@ -846,5 +915,52 @@
         #    "enabled": false,
         #    "token": "your-esios-api-token-here"
         #}
-    }
+    },
+
+    # Gen3 TWC (Wall Connector Generation 3) support via Neurio Modbus emulation.
+    #
+    # Gen3 TWCs self-regulate charge current by polling a Neurio energy meter over
+    # RS485. TWCManager emulates that meter on the same serial bus, serving a
+    # synthetic "house load" that creates exactly the headroom needed to charge at
+    # the desired rate: house_load = fuse_capacity - target_charge_power.
+    #
+    # Prerequisites:
+    #   - pymodbus >= 3.0.0 (pip install pymodbus)
+    #   - A dedicated RS485 adapter wired to the Gen3's Neurio meter port
+    #   - The Gen3 TWC must be configured (via its web UI) to use an external
+    #     Neurio meter at baud 115200
+    #   - Each Gen3's IP address must be reachable for the HTTP vitals readback
+    #
+    # Multiple Gen3 devices sharing the same Neurio RS485 bus are supported.
+    # Each device entry maps to one Gen3 TWC unit.  fuseAmps should match the
+    # circuit breaker rating x 0.8 (same convention as wiringMaxAmpsAllTWCs).
+    #
+    #"controller.Gen3TWCs": {
+    #    "enabled": false,
+    #
+    #    # Serial port connected to the Gen3 Neurio meter RS485 bus.
+    #    # Use 'dmesg | grep ttyUSB' to identify the correct adapter.
+    #    "port": "/dev/ttyUSB1",
+    #
+    #    # Neurio meter serial parameters - do not change unless advised.
+    #    "baudrate": 115200,
+    #    "stopbits": 1,
+    #    "bytesize": 8,
+    #    "parity": "N",
+    #
+    #    # List of Gen3 TWC devices on this bus.
+    #    "devices": [
+    #        {
+    #            # IP address of the Gen3 TWC (for vitals readback via HTTP).
+    #            "ip": "192.168.1.100",
+    #
+    #            # Circuit breaker rating x 0.8, in amps.
+    #            # Example: 60 A breaker -> 60 x 0.8 = 48
+    #            "fuseAmps": 48,
+    #
+    #            # Number of AC phases (1 for North America, 3 for most of Europe).
+    #            "phases": 1
+    #        }
+    #    ]
+    #}
 }

@@ -1,6 +1,3 @@
-# TWC Scenario Configuration Schema
-# This file defines test scenarios for the enhanced Dummy interface
-
 {
   "scenarios": {
     "single_slave_normal": {

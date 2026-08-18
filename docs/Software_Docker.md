@@ -6,26 +6,44 @@
 
 These instructions will result in the **latest** version of the TWCManager code being run. This is development code and may not be stable, but will provide access to the newer features. The **latest** image is automatically updated every time that new features or fixes are added to TWCManager, and will change regularly.
 
+> **Note for Raspberry Pi OS / Debian users:** Recent versions of Raspberry Pi OS enforce externally-managed Python environments, which prevents `pip3 install docker-compose` from working. The instructions below use the official Docker repository and the Docker Compose plugin instead.
+
 ```
 sudo apt-get update
 sudo apt-get install -y curl docker.io
 
-sudo pip3 install docker-compose
+curl -fsSL https://download.docker.com/linux/debian/gpg | \
+  sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/docker.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/trusted.gpg.d/docker.gpg] \
+  https://download.docker.com/linux/debian $(lsb_release -cs) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-compose-plugin
 
 curl https://raw.githubusercontent.com/ngardiner/TWCManager/main/contrib/docker/docker-compose.yml -o docker-compose.yml
 ```
 
 ### Using Stable Versions (Recommended)
 
-If you would like to opt for a more stable version, specify the version of TWCmanager that you would like to use. For example, to use the latest Stable version **v1.2.4**, use the following commands:
+If you would like to opt for a more stable version, specify the version of TWCmanager that you would like to use. For example, to use the latest Stable version **v1.3.4**, use the following commands:
 
 ```
 sudo apt-get update
-sudo apt-get install -y docker.io
+sudo apt-get install -y curl docker.io
 
-sudo pip3 install docker-compose
+curl -fsSL https://download.docker.com/linux/debian/gpg | \
+  sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/docker.gpg
 
-curl https://raw.githubusercontent.com/ngardiner/TWCManager/main/contrib/docker/docker-compose-v1.2.4.yml -o docker-compose.yml
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/trusted.gpg.d/docker.gpg] \
+  https://download.docker.com/linux/debian $(lsb_release -cs) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-compose-plugin
+
+curl https://raw.githubusercontent.com/ngardiner/TWCManager/main/contrib/docker/docker-compose-v1.3.4.yml -o docker-compose.yml
 ```
 
 ## Configuring TWCManager for Docker
@@ -47,13 +65,13 @@ On your first start of the TWCManager docker container, a directory on the host 
 To start up TWCManager in interactive mode, run the following command:
 
 ```
-sudo docker-compose -f docker-compose.yml up
+sudo docker compose -f docker-compose.yml up
 ```
 
 To start up TWCManager in background mode, run the following command:
 
 ```
-sudo docker-compose -f docker-compose.yml up -d
+sudo docker compose -f docker-compose.yml up -d
 ```
 
 ## Monitoring the container operation
@@ -86,9 +104,9 @@ The latest image gives you up to the minute access to TWCManager features and ch
 If you are using the ```latest``` Docker image instead of the current Stable version, you can fetch the latest TWCManager updates by executing the following commands:
 
 ```
-sudo docker-compose -f docker-compose.yml down
-sudo docker-compose -f docker-compose.yml pull
-sudo docker-compose -f docker-compose.yml up -d
+sudo docker compose -f docker-compose.yml down
+sudo docker compose -f docker-compose.yml pull
+sudo docker compose -f docker-compose.yml up -d
 ```
 
 You can tell if you are running the latest image vs a stable release with the following command:
@@ -99,14 +117,14 @@ grep -q :latest docker-compose.yml; [[ $? -eq 1 ]] && echo "Stable Version" || e
 
 ### Using a Stable version
 
-If you are running a stable version of the Docker Image, you can upgrade to the latest stable version **v1.2.4** with the following commands:
+If you are running a stable version of the Docker Image, you can upgrade to the latest stable version **v1.3.4** with the following commands:
 
 ```
-sudo docker-compose -f docker-compose.yml down
+sudo docker compose -f docker-compose.yml down
 
-curl https://raw.githubusercontent.com/ngardiner/TWCManager/main/contrib/docker/docker-compose-v1.2.4.yml -o docker-compose.yml
-sudo docker-compose -f docker-compose.yml pull
-sudo docker-compose -d -f docker-compose.yml up
+curl https://raw.githubusercontent.com/ngardiner/TWCManager/main/contrib/docker/docker-compose-v1.3.4.yml -o docker-compose.yml
+sudo docker compose -f docker-compose.yml pull
+sudo docker compose -f docker-compose.yml up -d
 ```
 
 ## Stopping TWCManager
@@ -122,7 +140,7 @@ Press ```Ctrl + C``` in the console of the Docker Container to stop TWCManager f
 Use the following command to stop TWCManager's docker container from running in Background Mode:
 
 ```
-sudo docker-compose -f docker-compose.yml down
+sudo docker compose -f docker-compose.yml down
 ```
 
 ## Starting TWCManager at Boot
@@ -131,7 +149,7 @@ The default restart policy for the Docker Container is to always restart the con
 
 ```restart: always```
 
-This means that by default, after a docker-compose up, TWCManager will start on boot automatiacally. 
+This means that by default, after a docker compose up, TWCManager will start on boot automatiacally.
 
 If you'd like to change the behaviour of TWCManager's restart policy, edit the docker-compose.yml file and refer to the following for available restart options:
 

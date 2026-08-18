@@ -16,8 +16,22 @@ The following packages are required to fetch and install the TWCManager project.
 
 ```
 sudo apt-get update
-sudo apt-get install -y git python3 python3-pip python3-setuptools python3-dev libatlas-base-dev lsb-release
+sudo apt-get install -y git python3 python3-pip python3-setuptools python3-venv python3-dev libatlas-base-dev lsb-release
 ```
+
+### Note for Raspberry Pi OS Bookworm / Debian Bookworm and later
+
+Recent versions of Raspberry Pi OS and Debian (Bookworm / version 12 and later) enforce PEP 668 "externally managed environments", which prevents `pip3 install` from installing packages into the system Python environment without an explicit override.
+
+`sudo make install` handles this automatically — it detects whether your pip supports `--break-system-packages` and passes it when needed, so no manual workaround is required.
+
+If you prefer to keep system Python untouched, use the venv-based install instead:
+
+```
+sudo make venv-install
+```
+
+This installs TWCManager into `/home/twcmanager/venv`. After running it, update the systemd service to use the venv interpreter (see [Running TWCManager as a Service](#running-twcmanager-as-a-service) below).
 
 ## Default to Python3
 
@@ -140,6 +154,19 @@ sudo systemctl enable twcmanager.service --now
 
    * Note: The ```systemd``` service file assumes that your TWCManager installation is in ```/home/pi/TWCManager```. If this is not the case, edit ```/etc/systemd/system/twcmanager.service``` and update the ```WorkingDirectory``` parameter to suit.
 
+### Using the venv-based install with systemd
+
+If you installed via `sudo make venv-install`, update the `ExecStart` line in the service file to use the venv interpreter before enabling it:
+
+```
+sudo cp contrib/twcmanager.service /etc/systemd/system/twcmanager.service
+sudo sed -i 's|ExecStart=.*|ExecStart=/home/twcmanager/venv/bin/python3 -u -m TWCManager.TWCManager|' /etc/systemd/system/twcmanager.service
+sudo systemctl daemon-reload
+sudo systemctl enable twcmanager.service --now
+```
+
+If you used a custom venv path (`make venv-install VENV_DIR=/path/to/venv`), substitute that path accordingly.
+
 To check the output of the TWCManager service as it runs in the background, use the following command:
 ```
 journalctl -f
@@ -159,6 +186,18 @@ To upgrade TWCManager to the latest version:
 
 ```
 sudo pip3 install --upgrade twcmanager
+```
+
+On Raspberry Pi OS Bookworm / Debian Bookworm and later, use:
+
+```
+sudo pip3 install --break-system-packages --upgrade twcmanager
+```
+
+Or if you installed via `sudo make venv-install`:
+
+```
+/home/twcmanager/venv/bin/pip install --upgrade twcmanager
 ```
 
 ### Development Version

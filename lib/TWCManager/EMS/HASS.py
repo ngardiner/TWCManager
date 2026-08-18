@@ -1,4 +1,5 @@
 import logging
+import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("HASS", "EMS")
@@ -9,7 +10,6 @@ class HASS:
     # Fetches Consumption and Generation details from HomeAssistant
 
     import requests
-    import time
 
     apiKey = None
     cacheTime = 10
@@ -37,7 +37,7 @@ class HASS:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configHASS = master.config["sources"]["HASS"]
+            self.configHASS = master.config.get("sources", {})["HASS"]
         except KeyError:
             self.configHASS = {}
         self.status = self.configHASS.get("enabled", False)
@@ -127,7 +127,7 @@ class HASS:
     def update(self):
         # Update function - determine if an update is required
 
-        if (int(self.time.time()) - self.lastFetch) > self.cacheTime:
+        if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from HomeAssistant sensor.
 
             if self.hassEntityConsumption:
@@ -152,7 +152,7 @@ class HASS:
 
             # Update last fetch time
             if self.fetchFailed is not True:
-                self.lastFetch = int(self.time.time())
+                self.lastFetch = int(time.time())
 
             return True
         else:

@@ -9,6 +9,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from datetime import datetime, timedelta
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -16,12 +17,13 @@ import time
 import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Control.APIValidator import APIValidator
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
 
 
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
-    pass
+    address_family = socket.AF_INET6
 
 
 class HTTPControl:
@@ -44,22 +46,80 @@ class HTTPControl:
         self.httpPort = self.configHTTP.get("listenPort", 8080)
         self.status = self.configHTTP.get("enabled", False)
 
+        logger.info(
+            "HTTPControl: Initializing (enabled=%s, port=%s)",
+            self.status,
+            self.httpPort,
+        )
+
         # Unload if this module is disabled or misconfigured
-        if (not self.status) or (int(self.httpPort) < 1):
+        if not self.status:
+            logger.info("HTTPControl: Disabled in config, unloading")
             self.master.releaseModule("lib.TWCManager.Control", self.__class__.__name__)
             return None
 
+        if int(self.httpPort) < 1:
+            logger.error("HTTPControl: Invalid port %s, unloading", self.httpPort)
+            self.master.releaseModule("lib.TWCManager.Control", self.__class__.__name__)
+            return None
+
+        logger.info("HTTPControl: Creating HTTP server on port %s", self.httpPort)
         HTTPHandler = CreateHTTPHandlerClass(master)
         httpd = None
-        try:
-            httpd = ThreadingSimpleServer(("", self.httpPort), HTTPHandler)
-        except OSError as e:
-            logger.error("Unable to start HTTP Server: " + str(e))
+
+        # Try to bind to the configured port, with auto-increment on conflict
+        max_port_attempts = 10
+        original_port = self.httpPort
+        port_attempt = 0
+
+        while port_attempt < max_port_attempts and httpd is None:
+            try:
+                httpd = ThreadingSimpleServer(("::", self.httpPort), HTTPHandler)
+                logger.info(
+                    "HTTPControl: HTTP server created successfully on port %s",
+                    self.httpPort,
+                )
+            except OSError as e:
+                if e.errno == 98 or "Address already in use" in str(e):
+                    # Port conflict - try next port
+                    port_attempt += 1
+                    if port_attempt < max_port_attempts:
+                        self.httpPort += 1
+                        logger.warning(
+                            f"Port {self.httpPort - 1} already in use. Trying port {self.httpPort}..."
+                        )
+                    else:
+                        logger.error(
+                            f"Unable to start HTTP Server after trying ports {original_port}-{self.httpPort}. "
+                            f"Please configure a different listenPort in config.json or stop other services using these ports."
+                        )
+                else:
+                    # Different error - don't retry
+                    logger.error(
+                        "HTTPControl: Unable to start HTTP Server on port %s: %s",
+                        self.httpPort,
+                        str(e),
+                    )
+                    break
 
         if httpd:
-            logger.info("Serving at port: " + str(self.httpPort))
-            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            if self.httpPort != original_port:
+                logger.info(
+                    f"HTTP Server started on port {self.httpPort} (originally configured for {original_port})"
+                )
+            else:
+                logger.info(
+                    "HTTPControl: Starting daemon thread to serve on port %s",
+                    self.httpPort,
+                )
+            server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            server_thread.start()
+            logger.info(
+                "HTTPControl: ✓ HTTP server is now serving at http://0.0.0.0:%s",
+                self.httpPort,
+            )
         else:
+            logger.error("HTTPControl: Failed to create HTTP server, unloading")
             self.master.releaseModule("lib.TWCManager.Control", self.__class__.__name__)
 
 
@@ -136,9 +196,6 @@ def CreateHTTPHandlerClass(master):
             # render HTML, we can keep using those even inside jinja2
             self.templateEnv.globals.update(addButton=self.addButton)
             self.templateEnv.globals.update(ampsList=self.ampsList)
-            self.templateEnv.globals.update(
-                apiChallenge=master.getModuleByName("TeslaAPI").getApiChallenge
-            )
             self.templateEnv.globals.update(chargeScheduleDay=self.chargeScheduleDay)
             self.templateEnv.globals.update(checkBox=self.checkBox)
             self.templateEnv.globals.update(checkForUpdates=master.checkForUpdates)
@@ -150,6 +207,14 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(timeList=self.timeList)
             self.templateEnv.globals.update(
                 vehicles=master.getModuleByName("TeslaAPI").getCarApiVehicles
+            )
+            teslaModule = master.getModuleByName("TeslaAPI")
+            self.templateEnv.globals.update(
+                teslaLogin=(
+                    teslaModule.teslaLoginInfo
+                    if teslaModule
+                    else (lambda: {"configured": False})
+                )
             )
 
             # Set master object
@@ -196,8 +261,8 @@ def CreateHTTPHandlerClass(master):
                         curday = settings.get(day, {})
                     if (
                         today.get("enabled", None) == "on"
-                        and (int(curday.get("start", 0)[:2]) <= int(i))
-                        and (int(curday.get("end", 0)[:2]) >= int(i))
+                        and (int(str(curday.get("start", "00"))[:2]) <= int(i))
+                        and (int(str(curday.get("end", "00"))[:2]) >= int(i))
                     ):
                         page += (
                             "<td bgcolor='#CFFAFF'>SC @ "
@@ -293,15 +358,15 @@ def CreateHTTPHandlerClass(master):
                 for slaveTWC in master.getSlaveTWCs():
                     TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
                     data[TWCID] = {
+                        "carsCharging": slaveTWC.isCharging,
+                        "chargerLoadInW": round(slaveTWC.getCurrentChargerLoad()),
                         "currentVIN": slaveTWC.currentVIN,
                         "lastAmpsOffered": round(slaveTWC.lastAmpsOffered, 2),
                         "lastHeartbeat": round(time.time() - slaveTWC.timeLastRx, 2),
-                        "carsCharging": slaveTWC.isCharging,
                         "lastVIN": slaveTWC.lastVIN,
                         "lifetimekWh": slaveTWC.lifetimekWh,
                         "maxAmps": float(slaveTWC.maxAmps),
                         "reportedAmpsActual": float(slaveTWC.reportedAmpsActual),
-                        "chargerLoadInW": round(slaveTWC.getCurrentChargerLoad()),
                         "state": slaveTWC.reportedState,
                         "version": slaveTWC.protocolVersion,
                         "voltsPhaseA": slaveTWC.voltsPhaseA,
@@ -321,16 +386,21 @@ def CreateHTTPHandlerClass(master):
 
                     # Adding some vehicle data
                     vehicle = slaveTWC.getLastVehicle()
-                    if vehicle != None:
+                    if vehicle is not None:
+                        data[TWCID]["lastAtHome"] = vehicle.atHome
                         data[TWCID]["lastBatterySOC"] = vehicle.batteryLevel
                         data[TWCID]["lastChargeLimit"] = vehicle.chargeLimit
-                        data[TWCID]["lastAtHome"] = vehicle.atHome
                         data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
 
                     totals["carsCharging"] += slaveTWC.isCharging
                     totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
-                    totals["maxAmps"] += slaveTWC.maxAmps
+                    # maxAmps should be the minimum across all TWCs (bottleneck), not sum
+                    totals["maxAmps"] = (
+                        slaveTWC.maxAmps
+                        if totals["maxAmps"] == 0
+                        else min(totals["maxAmps"], slaveTWC.maxAmps)
+                    )
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
 
                 data["total"] = {
@@ -435,17 +505,12 @@ def CreateHTTPHandlerClass(master):
             self.debugLogAPI("Starting API POST")
 
             if self.url.path == "/api/addConsumptionOffset":
-                data = {}
-                try:
-                    data = json.loads(self.post_data.decode("UTF-8"))
-                except (ValueError, UnicodeDecodeError):
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
                     self.send_response(400)
                     self.end_headers()
                     self.wfile.write("".encode("utf-8"))
-                except json.decoder.JSONDecodeError:
-                    self.send_response(400)
-                    self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    return
                 name = str(data.get("offsetName", None))
                 value = float(data.get("offsetValue", 0))
                 unit = str(data.get("offsetUnit", ""))
@@ -464,9 +529,19 @@ def CreateHTTPHandlerClass(master):
                     master.settings["consumptionOffset"][name]["unit"] = unit
                     master.queue_background_task({"cmd": "saveSettings"})
 
-                    self.send_response(204)
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps(
+                            {
+                                "status": "success",
+                                "offsetName": name,
+                                "offsetValue": value,
+                                "offsetUnit": unit,
+                            }
+                        ).encode("utf-8")
+                    )
 
                 else:
                     self.send_response(400)
@@ -474,41 +549,57 @@ def CreateHTTPHandlerClass(master):
                     self.wfile.write("".encode("utf-8"))
 
             elif self.url.path == "/api/chargeNow":
-                data = {}
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                    return
+
                 try:
-                    data = json.loads(self.post_data.decode("UTF-8"))
-                except (ValueError, UnicodeDecodeError):
+                    rate = int(data.get("chargeNowRate", 0))
+                    durn = int(data.get("chargeNowDuration", 0))
+                except (ValueError, TypeError):
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
-                except json.decoder.JSONDecodeError:
-                    self.send_response(400)
-                    self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
-                rate = int(data.get("chargeNowRate", 0))
-                durn = int(data.get("chargeNowDuration", 0))
+                    self.wfile.write(
+                        json.dumps({"error": "Invalid rate or duration"}).encode(
+                            "utf-8"
+                        )
+                    )
+                    return
 
                 if rate <= 0 or durn <= 0:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": "Rate and duration must be positive"}
+                        ).encode("utf-8")
+                    )
 
                 else:
                     master.setChargeNowAmps(rate)
                     master.setChargeNowTimeEnd(durn)
                     master.queue_background_task({"cmd": "saveSettings"})
                     master.getModuleByName("Policy").applyPolicyImmediately()
-                    self.send_response(204)
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    self.wfile.write(
+                        json.dumps(
+                            {"status": "success", "rate": rate, "duration": durn}
+                        ).encode("utf-8")
+                    )
 
             elif self.url.path == "/api/cancelChargeNow":
                 master.resetChargeNowAmps()
                 master.queue_background_task({"cmd": "saveSettings"})
                 master.getModuleByName("Policy").applyPolicyImmediately()
-                self.send_response(204)
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
                 self.end_headers()
-                self.wfile.write("".encode("utf-8"))
+                self.wfile.write(json.dumps({"status": "success"}).encode("utf-8"))
 
             elif self.url.path == "/api/checkArrival":
                 master.queue_background_task({"cmd": "checkArrival"})
@@ -523,31 +614,154 @@ def CreateHTTPHandlerClass(master):
                 self.wfile.write("".encode("utf-8"))
 
             elif self.url.path == "/api/deleteConsumptionOffset":
-                data = json.loads(self.post_data.decode("UTF-8"))
-                name = str(data.get("offsetName", None))
-
-                if master.settings.get("consumptionOffset", None):
-                    del master.settings["consumptionOffset"][name]
-
-                    self.send_response(204)
-                    self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
-
-                else:
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write("".encode("utf-8"))
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                    return
+
+                offset_name = data.get("offsetName", None)
+                if not offset_name or not isinstance(offset_name, str):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": "offsetName is required and must be a string"}
+                        ).encode("utf-8")
+                    )
+                    return
+
+                if master.settings.get("consumptionOffset", None):
+                    if offset_name in master.settings["consumptionOffset"]:
+                        del master.settings["consumptionOffset"][offset_name]
+                        master.queue_background_task({"cmd": "saveSettings"})
+                        self.send_response(200)
+                        self.send_header("Content-type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(
+                            json.dumps(
+                                {"status": "success", "offsetName": offset_name}
+                            ).encode("utf-8")
+                        )
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                        self.wfile.write(
+                            json.dumps({"error": "Offset not found"}).encode("utf-8")
+                        )
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": "No consumption offsets configured"}
+                        ).encode("utf-8")
+                    )
 
             elif self.url.path == "/api/saveSettings":
                 master.queue_background_task({"cmd": "saveSettings"})
                 self.send_response(204)
                 self.end_headers()
 
+            elif self.url.path == "/api/setPolicy":
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                    return
+
+                policy_name = data.get("policy", None)
+
+                # Validate policy field exists and is a string
+                if policy_name is None:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": "policy field is required"}).encode(
+                            "utf-8"
+                        )
+                    )
+                    return
+
+                if not isinstance(policy_name, str):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": "policy must be a string"}).encode("utf-8")
+                    )
+                    return
+
+                if not policy_name or len(policy_name.strip()) == 0:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": "policy cannot be empty"}).encode("utf-8")
+                    )
+                    return
+
+                # Check if policy exists
+                policy_module = master.getModuleByName("Policy")
+                if policy_module.getPolicyByName(policy_name) is None:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": f"Policy '{policy_name}' not found"}
+                        ).encode("utf-8")
+                    )
+                    return
+
+                # Set the policy
+                policy_module.active_policy = policy_name
+                master.queue_background_task({"cmd": "saveSettings"})
+                policy_module.applyPolicyImmediately()
+
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps({"status": "success", "policy": policy_name}).encode(
+                        "utf-8"
+                    )
+                )
+
             elif self.url.path == "/api/sendDebugCommand":
-                data = json.loads(self.post_data.decode("UTF-8"))
-                packet = {"Command": data.get("commandName", "")}
-                if data.get("commandName", "") == "Custom":
-                    packet["CustomCommand"] = data.get("customCommand", "")
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                    return
+
+                # Validate required field
+                command_name = data.get("commandName", "")
+                if not command_name or not isinstance(command_name, str):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps(
+                            {"error": "commandName is required and must be a string"}
+                        ).encode("utf-8")
+                    )
+                    return
+
+                packet = {"Command": command_name}
+                if command_name == "Custom":
+                    custom_cmd = data.get("customCommand", "")
+                    if not custom_cmd or not isinstance(custom_cmd, str):
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write(
+                            json.dumps(
+                                {
+                                    "error": "customCommand is required when Command is Custom"
+                                }
+                            ).encode("utf-8")
+                        )
+                        return
+                    packet["CustomCommand"] = custom_cmd
 
                 # Clear last TWC response, so we can grab the next response
                 master.lastTWCResponseMsg = bytearray()
@@ -562,16 +776,20 @@ def CreateHTTPHandlerClass(master):
 
             elif self.url.path == "/api/sendStartCommand":
                 master.sendStartCommand()
-                self.send_response(204)
+                self.send_response(200)
                 self.end_headers()
 
             elif self.url.path == "/api/sendStopCommand":
                 master.sendStopCommand()
-                self.send_response(204)
+                self.send_response(200)
                 self.end_headers()
 
             elif self.url.path == "/api/sendTeslaAPICommand":
-                data = json.loads(self.post_data.decode("UTF-8"))
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
                 command = str(data.get("commandName", None))
                 vehicle = str(data.get("vehicleID", None))
                 params = str(data.get("parameters", None))
@@ -587,7 +805,11 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
 
             elif self.url.path == "/api/setSetting":
-                data = json.loads(self.post_data.decode("UTF-8"))
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
                 setting = str(data.get("setting", None))
                 value = str(data.get("value", None))
 
@@ -602,7 +824,11 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
 
             elif self.url.path == "/api/setScheduledChargingSettings":
-                data = json.loads(self.post_data.decode("UTF-8"))
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
                 enabled = bool(data.get("enabled", False))
                 startingMinute = int(data.get("startingMinute", -1))
                 endingMinute = int(data.get("endingMinute", -1))
@@ -651,6 +877,74 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
 
+            elif self.url.path == "/api/setLatLon":
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
+                    return
+
+                lat = data.get("lat", None)
+                lon = data.get("lon", None)
+
+                if lat is not None and lon is not None:
+                    try:
+                        lat = float(lat)
+                        lon = float(lon)
+                        # Validate latitude and longitude ranges
+                        if -90 <= lat <= 90 and -180 <= lon <= 180:
+                            master.settings["homeLat"] = lat
+                            master.settings["homeLon"] = lon
+                            master.queue_background_task({"cmd": "saveSettings"})
+                            self.send_response(204)
+                            self.end_headers()
+                            self.wfile.write("".encode("utf-8"))
+                        else:
+                            self.send_response(400)
+                            self.end_headers()
+                            self.wfile.write("".encode("utf-8"))
+                    except (ValueError, TypeError):
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write("".encode("utf-8"))
+                else:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
+
+            elif self.url.path == "/api/setConsumptionOffset":
+                success, data, error_msg = APIValidator.validate_json(self.post_data)
+                if not success:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": error_msg}).encode("utf-8"))
+                    return
+
+                offset = data.get("offset", None)
+
+                if offset is not None:
+                    success, offset_val, error_msg = APIValidator.validate_float(offset)
+                    if not success:
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write(
+                            json.dumps({"error": error_msg}).encode("utf-8")
+                        )
+                        return
+
+                    master.settings["greenEnergyAmpsOffset"] = offset_val
+                    master.queue_background_task({"cmd": "saveSettings"})
+                    self.send_response(204)
+                    self.end_headers()
+                    self.wfile.write("".encode("utf-8"))
+                else:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps({"error": "offset is required"}).encode("utf-8")
+                    )
+
             else:
                 # All other routes missed, return 404
                 self.send_response(404)
@@ -660,55 +954,183 @@ def CreateHTTPHandlerClass(master):
             self.debugLogAPI("Ending API POST")
 
         def do_get_policy(self):
+            mod_policy = master.getModuleByName("Policy")
+
+            def render_leaf(match, condition, value):
+                match_result = mod_policy.policyValue(match)
+                value_result = mod_policy.policyValue(value)
+                result = mod_policy.doesConditionMatch(match, condition, value, False)
+
+                match_txt = str(match)
+                if match != match_result:
+                    match_txt += " (" + str(match_result) + ")"
+                value_txt = str(value)
+                if value != value_result:
+                    value_txt += " (" + str(value_result) + ")"
+
+                leaf = (
+                    '<div class="policy-leaf '
+                    + ("leaf-true" if result else "leaf-false")
+                    + '">'
+                    + '<span class="policy-match">'
+                    + match_txt
+                    + "</span>"
+                    + '<span class="policy-cond">'
+                    + str(condition)
+                    + "</span>"
+                    + '<span class="policy-value">'
+                    + value_txt
+                    + "</span>"
+                    + "</div>"
+                )
+                return leaf, result
+
+            def render_group(matches, conditions, values, exitOn):
+                items = []
+                results = []
+                for m, c, v in zip(matches, conditions, values):
+                    if all(isinstance(x, list) for x in (m, c, v)):
+                        sub_html, sub_result = render_group(m, c, v, not exitOn)
+                    else:
+                        sub_html, sub_result = render_leaf(m, c, v)
+                    items.append(sub_html)
+                    results.append(sub_result)
+                overall = all(results) if not exitOn else any(results)
+
+                if len(items) == 1:
+                    return items[0], overall
+
+                group = (
+                    '<div class="policy-group">'
+                    + '<div class="group-bar '
+                    + ("group-true" if overall else "group-false")
+                    + '">'
+                    + ("OR" if exitOn else "AND")
+                    + "</div>"
+                    + '<div class="group-body">'
+                    + "".join(items)
+                    + "</div>"
+                    + "</div>"
+                )
+                return group, overall
+
+            def render_policy_box(policy, cat=None):
+                is_active = str(policy["name"]) == str(mod_policy.active_policy)
+                box = (
+                    '<div class="policy-box active">'
+                    if is_active
+                    else '<div class="policy-box">'
+                )
+                box += '<div class="policy-header">' + policy["name"]
+                if cat:
+                    box += " (" + cat + ")"
+                if is_active:
+                    box += ' <span class="badge badge-primary">Active</span>'
+                box += "</div>"
+                group_html, _ = render_group(
+                    policy["match"], policy["condition"], policy["value"], False
+                )
+                box += group_html
+                box += "</div>"
+                return box
+
             page = """
-      <table>
+      <style>
+        .policy-group { display: flex; align-items: stretch; margin: 4px 0; border: 1px solid #ccc;
+                        border-radius: 4px; max-width: 100%; }
+        .group-bar { writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
+                     display: flex; align-items: center; justify-content: center; padding: 6px 3px;
+                     font-weight: bold; color: #fff; min-width: 22px; flex-shrink: 0; }
+        .group-bar.group-true { background: #28a745; }
+        .group-bar.group-false { background: #dc3545; }
+        .group-body { flex: 1; display: flex; flex-direction: column; padding: 4px; min-width: 0; }
+        .policy-leaf { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; border-left: 6px solid;
+                        padding: 4px 8px; margin: 2px 0; border-radius: 3px; min-width: 0; }
+        .policy-leaf.leaf-true { border-color: #28a745; background: #eaf7ec; }
+        .policy-leaf.leaf-false { border-color: #dc3545; background: #fbeaea; }
+        .policy-match, .policy-value { word-break: break-word; overflow-wrap: anywhere; }
+        .policy-cond { font-style: italic; color: #666; }
+        .policy-box { border: 2px solid #ccc; border-radius: 6px; margin: 10px 0; padding: 8px;
+                      max-width: 100%; box-sizing: border-box; }
+        .policy-box.active { border-color: #28a745; box-shadow: 0 0 0 2px rgba(40, 167, 69, 0.35); }
+        .policy-header { font-weight: bold; margin-bottom: 4px; }
+        .ext-box { border: 2px dashed #999; border-radius: 6px; margin: 14px 0; padding: 8px;
+                   max-width: 100%; box-sizing: border-box; }
+        .ext-title { font-weight: bold; color: #555; margin-bottom: 6px; }
+        .ext-marker { color: #999; font-size: 0.85em; font-style: italic; margin: 6px 0;
+                      padding: 2px 8px; border-left: 3px solid #ddd; }
+        @media (max-width: 576px) {
+          .policy-leaf { flex-direction: column; align-items: stretch; gap: 2px; }
+          .policy-match, .policy-cond, .policy-value { width: 100%; }
+          .group-bar { writing-mode: horizontal-tb; transform: none; min-width: 0;
+                       width: 100%; padding: 3px 6px; }
+          .policy-group { flex-direction: column; }
+        }
+      </style>
+      <div>
         """
             j = 0
-            mod_policy = master.getModuleByName("Policy")
             insertion_points = {0: "Emergency", 1: "Before", 3: "After"}
             replaced = all(
                 x not in mod_policy.default_policy for x in mod_policy.charge_policy
             )
-            for policy in mod_policy.charge_policy:
-                if policy in mod_policy.default_policy:
-                    cat = "Default"
-                    ext = insertion_points.get(j, None)
 
-                    if ext:
-                        page += "<tr><th>Policy Extension Point</th></tr>"
-                        page += "<tr><td>" + ext + "</td></tr>"
-
-                    j += 1
-                else:
-                    cat = "Custom" if replaced else insertion_points.get(j, "Unknown")
-                page += (
-                    "<tr><td>&nbsp;</td><td>"
-                    + policy["name"]
-                    + " ("
-                    + cat
-                    + ")</td></tr>"
+            def flush_bucket(ext_name, bucket):
+                if not ext_name:
+                    return "".join(bucket)
+                if bucket:
+                    return (
+                        '<div class="ext-box"><div class="ext-title">'
+                        + ext_name
+                        + " Extension Point</div>"
+                        + "".join(bucket)
+                        + "</div>"
+                    )
+                return (
+                    '<div class="ext-marker">'
+                    + ext_name
+                    + " Extension Point (no policies)</div>"
                 )
-                page += "<tr><th>&nbsp;</th><th>&nbsp;</th><th>Match Criteria</th><th>Condition</th><th>Value</th></tr>"
-                for match, condition, value in zip(
-                    policy["match"], policy["condition"], policy["value"]
-                ):
-                    page += "<tr><td>&nbsp;</td><td>&nbsp;</td>"
-                    page += "<td>" + str(match)
-                    match_result = mod_policy.policyValue(match)
-                    if match != match_result:
-                        page += " (" + str(match_result) + ")"
-                    page += "</td>"
 
-                    page += "<td>" + str(condition) + "</td>"
+            def conditions_match(a, b):
+                return (
+                    a.get("match") == b.get("match")
+                    and a.get("condition") == b.get("condition")
+                    and a.get("value") == b.get("value")
+                )
 
-                    page += "<td>" + str(value)
-                    value_result = mod_policy.policyValue(value)
-                    if value != value_result:
-                        page += " (" + str(value_result) + ")"
-                    page += "</td></tr>"
+            bucket = []
+            for policy in mod_policy.charge_policy:
+                default_slot = (
+                    mod_policy.default_policy[j]
+                    if j < len(mod_policy.default_policy)
+                    else None
+                )
+                is_default_slot = (
+                    not replaced
+                    and default_slot is not None
+                    and policy["name"] == default_slot["name"]
+                )
+                if is_default_slot and conditions_match(policy, default_slot):
+                    page += flush_bucket(insertion_points.get(j), bucket)
+                    bucket = []
+                    page += render_policy_box(policy, "Default")
+                    j += 1
+                elif is_default_slot:
+                    page += flush_bucket(insertion_points.get(j), bucket)
+                    bucket = []
+                    page += render_policy_box(policy, "Default, Modified")
+                    j += 1
+                elif replaced:
+                    page += render_policy_box(policy, "Custom")
+                else:
+                    bucket.append(render_policy_box(policy))
+
+            if not replaced:
+                page += flush_bucket(insertion_points.get(j), bucket)
 
             page += """
-      </table>
+      </div>
       </div>
     </body>
         """
@@ -780,9 +1202,11 @@ def CreateHTTPHandlerClass(master):
                 self.template = self.templateEnv.get_template("main.html.j2")
 
                 # Set some values that we use within the template
-                # Check if we're able to access the Tesla API
+                # The Tesla login form is hidden once we hold an API token.
                 teslaapi = master.getModuleByName("TeslaAPI")
-                self.apiAvailable = teslaapi.car_api_available() if teslaapi else False
+                self.apiAvailable = bool(
+                    teslaapi and teslaapi.getCarApiBearerToken() != ""
+                )
                 self.scheduledAmpsMax = master.getScheduledAmpsMax()
 
                 self.activeAction = master.getModuleByName(
@@ -793,6 +1217,36 @@ def CreateHTTPHandlerClass(master):
                 page = self.template.render(vars(self))
 
                 self.wfile.write(page.encode("utf-8"))
+                return
+
+            # Tesla FleetAPI login: redirect the browser to the Tesla consent
+            # page, building the authorization URL from configured credentials.
+            if self.url.path == "/teslaAccount/login":
+                teslaapi = master.getModuleByName("TeslaAPI")
+                qs = urllib.parse.parse_qs(self.url.query)
+                region = qs.get("region", [None])[0]
+                loginURL = teslaapi.getLoginURL(region) if teslaapi else ""
+                self.send_response(302)
+                self.send_header(
+                    "Location", loginURL if loginURL else "/teslaAccount/not_configured"
+                )
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            # Tesla FleetAPI login: auto-capture callback. Tesla redirects the
+            # browser here (when redirect_uri points at this instance) with the
+            # authorization code, which we exchange for tokens.
+            if self.url.path == "/teslaAccount/callback":
+                teslaapi = master.getModuleByName("TeslaAPI")
+                qs = urllib.parse.parse_qs(self.url.query)
+                code = qs.get("code", [None])[0]
+                state = qs.get("state", [None])[0]
+                res = teslaapi.fleetTokenExchange(code, state) if teslaapi else "error"
+                self.send_response(302)
+                self.send_header("Location", "/teslaAccount/" + res)
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
                 return
 
             # Match web routes to defined webroutes routing
@@ -983,26 +1437,16 @@ def CreateHTTPHandlerClass(master):
                 return
 
             if self.url.path == "/teslaAccount/saveToken":
-                # Check if we are skipping Tesla Login submission
-                later = False
-                try:
-                    later = len(self.fields["later"][0])
-                except KeyError:
-                    later = False
-
-                res = ""
+                # Paste-back path: the user pastes the redirect URL they were
+                # sent to after logging in; we extract the code and exchange it.
+                res = "error"
                 url = self.getFieldValue("url")
-
-                if later:
-                    master.teslaLoginAskLater = True
-                    res = "later"
-
-                else:
-                    res = master.getModuleByName("TeslaAPI").saveApiToken(url)
+                teslaapi = master.getModuleByName("TeslaAPI")
+                if teslaapi and url:
+                    res = teslaapi.saveApiToken(url)
 
                 self.send_response(302)
                 self.send_header("Location", "/teslaAccount/" + res)
-
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
                 return
@@ -1172,8 +1616,13 @@ def CreateHTTPHandlerClass(master):
             # If learn was selected, learn location
             if "learn" in self.fields:
                 loc = self.getFieldValue("vehicle").split(",")
-                master.setHomeLon(loc[0])
-                master.setHomeLat(loc[1])
+                if len(loc) >= 2:
+                    master.setHomeLon(loc[0])
+                    master.setHomeLat(loc[1])
+                else:
+                    logger.warning(
+                        f"Invalid vehicle location format: {self.getFieldValue('vehicle')}"
+                    )
 
             # Save Settings
             master.queue_background_task({"cmd": "saveSettings"})

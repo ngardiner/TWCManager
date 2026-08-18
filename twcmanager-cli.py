@@ -7,7 +7,8 @@ import sys
 
 # If we are being run as root, drop privileges to twcmanager user
 # This avoids any potential permissions issues if it is run as root and settings.json is created as root
-if os.getuid() == 0:
+# Only do this when running as the main script, not when imported as a module
+if __name__ == "__main__" and os.getuid() == 0:
     user = "twcmanager"
     groups = [g.gr_gid for g in grp.getgrall() if user in g.gr_mem]
 
@@ -31,4 +32,5 @@ if "." in sys.path:
 if os.path.dirname(os.path.realpath(__file__)) in sys.path:
     sys.path.remove(os.path.dirname(os.path.realpath(__file__)))
 
-import TWCManager.TWCManager
+if __name__ == "__main__":
+    import TWCManager.TWCManager

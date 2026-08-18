@@ -2,19 +2,80 @@
 
 This document logs the changes per release of TWCManager.
 
-## v1.4.0 - Upcoming Development release
-* (@deece) - Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
-* (@ngardiner) - Post-merge improvements: input validation, error handling, comprehensive logging, rate limiting, and thread safety for MQTT and Home Assistant modules
-* (@ngardiner) - Centralized LoggerFactory for configurable logging prefixes
-* (@ngardiner) - Vehicle priority abstraction proxy for module fallback with retry multiplier logic
-* (@RichieB2B) - Add Fleet Telemetry MQTT support with typed updates and online state tracking
-* (@ngardiner) - Initial commit of local Tesla BLE vehicle control module with stability improvements
-* (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
-* (@MikeBishop) - Dampen API calls to reduce unnecessary calls
-* (@RichieB2B) - Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
-* (@ngardiner) - Add support for decrypting TeslaMate API credentials using the encryption key
-* (@ngardiner) - Refactor maxAmpsToDivideFromGrid to global configuration parameter
-* (@VIDGuide) - Add Charge Now duration display with remaining minutes and current amps in web UI
+## v1.4.0 - Upcoming
+
+* Bugfixes
+    * Fix: Add missing module-level time import in HASS, EmonCMS, Growatt, IotaWatt, SmartMe and TCP modules, which crashed EMS polling and caused charge current oscillation (closes #644)
+    * Fix: Restore minInterval parameter on update_location, fixing TypeError that broke API start/stop charging and home location correction
+    * Fix: Correct invalid logging level in update_vehicle_data error handler which crashed when logging a failed API response
+    * Fix: VehiclePriority now treats TeslaAPI "error" string return as failure, enabling correct fallback to BLE and failure stat tracking
+    * Fix: Do not seed or reset home location from a stale GPS fix; check gps_as_of age and force a fresh fetch when a TWC-connected VIN corrects home (closes #423)
+    * Fix: Skip start-charge commands (API and BLE) when the car is waiting on its own Scheduled Charging/Departure timer; disable via respectVehicleSchedule (closes #493)
+    * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
+    * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
+    * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
+    * Fix: RS485 read returns empty bytes after reconnect instead of None, preventing crash on socket disconnect (closes #461)
+    * Fix: Stop flooding VIN queries when non-Tesla vehicle or CAN-disabled TWC returns all-zero VIN data (closes #296)
+    * Fix: WebIPCControl recovers from ExistentialError when IPC queue is removed at runtime (closes #192)
+    * Fix: Remove mislabeled "power" status update in TWCSlave that reported amps instead of watts (closes #325)
+    * Fix: Cast numeric strings from settings in policyValue() so non-scheduled charge rate is applied correctly (closes #370)
+    * Fix: Create the CSV and File logging output directory if it does not exist, instead of failing at startup
+    * Fix: MQTTControl no longer returns a value from __init__ when the broker connection fails
+    * Fix: Correct RecieverID key in TWCProtocol heartbeat parsing and build Dummy slave heartbeats via the protocol module
+    * Fix: BLE no longer re-sends charge start commands every poll cycle once the car reports it is already in the desired state (closes #652)
+* Features
+    * (@MikeBishop) - Apply charge limit over BLE
+    * (@MikeBishop) - Fetch charge and location state over BLE, falling back to Fleet API when BLE is unavailable
+    * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, ported from v1.3.4 (closes #639)
+    * Add vehicle commandPolicy (prefer_ble/ble_only/api_only) to restrict state-changing commands to BLE or API, capping billed Fleet API command spend; configurable from the Settings page, with optional hard override in config.json (closes #651)
+    * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
+* Architecture
+    * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
+* Bugfixes
+    * Fix: Remove dead Tesla email/password login path that called a non-existent apiLogin method
+    * Fix: Remove hardcoded /home/twcmanager fallback path for tesla-control binary; use PATH lookup only (closes #600)
+    * Fix: limitOverride no longer applies charge limit cap when charging has resumed, preventing 60% limit being set instead of stopping charge (closes #586)
+    * Fix: Skip start-charge commands (API and BLE) when the car is waiting on its own Scheduled Charging/Departure timer; disable via respectVehicleSchedule (closes #493)
+    * Fix: Transient API errors (vehicle unavailable, operation_timedout) no longer trigger full exponential backoff, preventing hour-long delays in stop-charge commands (closes #377)
+    * Fix: Negate negative generation values from EMS modules that report generation as negative watts (closes #442)
+    * Fix: Add "context deadline exceeded" to transient API errors so wake-up timeouts don't trigger full backoff (closes #593)
+    * Fix: Reset historyAvgAmps to 0 after each history snapshot so kWh counter doesn't accumulate across periods (closes #470)
+    * Fix: Log a clear error and stop retrying when Tesla Vehicle Command Protocol is required, instead of silently failing (closes #580)
+    * Fix: Skip waking vehicles known to be away from home to prevent unnecessary API calls draining the battery (closes #466, #209)
+    * Fix: RS485 interface now logs a clear error and unloads gracefully when no port is configured, allowing TCP interface to take over (closes #612)
+    * Fix: RS485 getBufferLen() and send() now handle SerialException and attempt reconnect, preventing crashes on socket disconnection (closes #461)
+    * Fix: Track Green Energy policy no longer activates when Non-Scheduled action is set to Do Not Charge (closes #527)
+    * Fix: Enphase local API now supports JWT Bearer token authentication required by Envoy firmware 7.x (closes #424)
+    * Fix: Publish charger_load_w status on every heartbeat so Home Assistant entities don't disappear after HA reboot (closes #462)
+    * Fix: Log a warning at startup when minAmpsPerTWC exceeds wiringMaxAmpsPerTWC, which would prevent charging from ever starting (closes #24)
+    * Fix: Set stopAskingToStartCharging=True when a vehicle departs home, preventing unnecessary wake attempts on absent vehicles (closes #590)
+    * Fix: Trust TeslaMate asleep/offline state in is_awake() to avoid Fleet API status polls when vehicle is confirmed sleeping
+    * Fix: Fleet API wake minimization - 3-minute pre-wake delay (configurable wakeDelayMins), 30-minute retry backoff, no API polls during hold windows
+
+* Architecture
+    * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
+    * (@ngardiner) Gen3 TWC support - new `Gen3TWCs` EVSEController and `Gen3TWC` EVSEInstance enable power control of Generation 3 Tesla Wall Connectors:
+        * Protocol implementation informed by @Klangen82/tesla-wall-connector-control and @LucaTNT's Neurio register map gist
+
+## v1.3.4 - 2026-04-24
+* Features
+    * Implement missing API endpoints: `setPolicy`, `setLatLon`, `setConsumptionOffset`
+    * Add centralized API input validation (`APIValidator`) across all endpoints
+* Architecture & Improvements
+    * (@MikeBishop) - Improve home location detection when vehicle is charging via TWC
+    * (@ngardiner) - Add aWATTar pricing module with dynamic rate-based charging optimization
+    * (@deece) - Tighter Home Assistant integration with MQTT autodiscovery, persistent connections, and vehicle control via Tesla Fleet integration
+    * (@ngardiner) - Post-merge improvements: input validation, error handling, comprehensive logging, rate limiting, and thread safety for MQTT and Home Assistant modules
+    * (@ngardiner) - Centralized LoggerFactory for configurable logging prefixes
+    * (@ngardiner) - Vehicle priority abstraction proxy for module fallback with retry multiplier logic
+    * (@RichieB2B) - Add Fleet Telemetry MQTT support with typed updates and online state tracking
+    * (@ngardiner) - Initial commit of local Tesla BLE vehicle control module with stability improvements
+    * (@MikeBishop) - Fall-back to VIN as vehicle name if API does not specify a name
+    * (@MikeBishop) - Dampen API calls to reduce unnecessary calls
+    * (@RichieB2B) - Allow limiting of maximum grid power import, introduce getConsumptionAmps for EMS modules
+    * (@ngardiner) - Add support for decrypting TeslaMate API credentials using the encryption key
+    * (@ngardiner) - Refactor maxAmpsToDivideFromGrid to global configuration parameter
+    * (@VIDGuide) - Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
     * (@MikeBishop) - Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
     * (@dtiefnig) - Specify access scope for token refresh
@@ -27,6 +88,7 @@ This document logs the changes per release of TWCManager.
     * (@ngardiner) - Atomic writes for settings file to avoid data loss
     * (@ngardiner) - BLE pipe management with state tracking and cleanup
     * (@ngardiner) - Subprocess timeout handling with graceful shutdown
+    * Update Docker documentation for Compose V2 and modern Raspberry Pi OS
 
 ## v1.3.2 - 2023-03-12
 * (@RichieB2B) - Nicer looking log prefixes for EMS modules

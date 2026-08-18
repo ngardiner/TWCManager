@@ -1,4 +1,5 @@
 import logging
+import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("EmonCMS", "EMS")
@@ -9,7 +10,6 @@ class EmonCMS:
     # Fetches Consumption and Generation details from Open Energy Monitor
 
     import requests
-    import time
 
     apiKey = None
     cacheTime = 10
@@ -38,7 +38,7 @@ class EmonCMS:
         except KeyError:
             self.configConfig = {}
         try:
-            self.configEmonCMS = master.config["sources"]["EmonCMS"]
+            self.configEmonCMS = master.config.get("sources", {})["EmonCMS"]
         except KeyError:
             self.configEmonCMS = {}
         self.status = self.configEmonCMS.get("enabled", False)
@@ -148,14 +148,14 @@ class EmonCMS:
     def update(self):
         # Update function - determine if an update is required
 
-        if (int(self.time.time()) - self.lastFetch) > self.cacheTime:
+        if (int(time.time()) - self.lastFetch) > self.cacheTime:
             # Cache has expired. Fetch values from EmonCMS
             feeds = []
 
             if self.consumptionFeed:
                 feeds.append(self.consumptionFeed)
 
-            if self.consumptionFeed:
+            if self.generationFeed:
                 feeds.append(self.generationFeed)
 
             vals = self.getFeeds(feeds)
@@ -168,7 +168,7 @@ class EmonCMS:
                     self.generatedW = float(vals.pop())
                     logger.debug("getGeneration returns " + str(self.generatedW))
 
-                self.lastFetch = int(self.time.time())
+                self.lastFetch = int(time.time())
 
             return True
         else:

@@ -1,26 +1,45 @@
-{% if url.path == "/teslaAccount/unknown" %}
-   <font color='red'>
-     <b>Sorry, an unknown error has occurred when trying to fetch your tokens.</b>
-   </font>
-{% elif url.path == "/teslaAccount/invalid_grant" %}
+{% if url.path == "/teslaAccount/success" %}
+  <font color="blue">
+    <b>Success, your Tesla FleetAPI tokens have been stored.</b>
+  </font>
+  <p>TWCManager can now read your vehicle state. To <b>drive charging</b>
+     (start/stop/rate-limit), you also need the Tesla Vehicle Command proxy
+     (set <code>teslaProxy</code>) or the TeslaBLE module - Tesla's REST charge
+     commands now require the Vehicle Command Protocol. See the
+     <a href="https://github.com/ngardiner/TWCManager/blob/main/docs/modules/Vehicle_TeslaAPI.md#driving-charging-proxy-or-ble" target="_blank">Driving charging</a> docs.</p>
+{% elif url.path == "/teslaAccount/state_mismatch" %}
   <font color='red'>
-    <b>Tesla API reports that the grant provided is invalid. This usually happens if you use an older URL response and restart TWCManager. Please perform the login process again.</b>
+    <b>Login security check failed (state mismatch). This usually happens if the
+       login was started a while ago or in another session. Please start the
+       login again.</b>
+  </font>
+{% elif url.path == "/teslaAccount/not_configured" %}
+  <font color='red'>
+    <b>Tesla FleetAPI is not configured. Set teslaApiClientID,
+       teslaApiClientSecret and teslaApiRedirectUri in config.json.</b>
   </font>
 {% elif url.path == "/teslaAccount/response_no_token" %}
   <font color='red'>
-    <b>The Tesla API did not provide an access token in the token response.</b>
+    <b>The Tesla API did not return an access token. Please try again.</b>
   </font>
-{% elif url.path == "/teslaAccount/success" %}
-  <font color="blue">
-    <b>Success, your Tesla API tokens have been stored.</b>
+{% elif url.path == "/teslaAccount/error" %}
+  <font color='red'>
+    <b>An error occurred during Tesla login. Please check the logs and try
+       again.</b>
+  </font>
+{% elif url.path.startswith("/teslaAccount/")
+        and url.path != "/teslaAccount/login"
+        and url.path != "/teslaAccount/callback"
+        and url.path != "/teslaAccount/saveToken" %}
+  <font color='red'>
+    <b>Tesla reported an error: {{ url.path.split('/')[-1] }}. Please try the
+       login again.</b>
   </font>
 {% endif %}
 
-{% if not master.teslaLoginAskLater
-      and not master.tokenSyncEnabled()
+{% if not master.tokenSyncEnabled()
       and url.path != "/teslaAccount/success" %}
-      <!-- Check if we have already stored the Tesla credentials
-           If we can access the Tesla API okay, don't prompt -->
+      <!-- Show the login form whenever we don't already hold an API token -->
       {% if not apiAvailable %}
           {% include 'request_teslalogin.html.j2' %}
       {% endif %}
