@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang='en'>
+  <head>
+    <title>TWCManager - Pricing</title>
+    {% include 'bootstrap.html.j2' %}
+    <style>
+      .pricing-card {
+        margin-bottom: 15px;
+      }
+      .price-high { color: #dc3545; }
+      .price-medium { color: #ffc107; }
+      .price-low { color: #28a745; }
+      .price-neutral { color: #6c757d; }
+      .spike-warning {
+        background-color: #fff3cd;
+        border: 1px solid #ffc107;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 15px;
+      }
+      .module-capability {
+        font-size: 0.85em;
+        margin-right: 5px;
+      }
+      #forecast-table th, #forecast-table td {
+        text-align: center;
+      }
+      .forecast-highlight {
+        background-color: #1a3d1a !important;
+      }
+    </style>
+    <script>
+      function formatPrice(price) {
+        if (price === null || price === undefined) return '--';
+        return parseFloat(price).toFixed(4);
+      }
+
+      function formatCurrency(price, currency) {
+        if (price === null || price === undefined) return '--';
+        currency = currency || '$';
+        return currency + parseFloat(price).toFixed(4);
+      }
+
+      function getPriceClass(price, avg) {
+        if (price === null || price === undefined) return 'price-neutral';
+        avg = avg || 0.25;
+        if (price < avg * 0.7) return 'price-low';
+        if (price > avg * 1.3) return 'price-high';
+        return 'price-medium';
+      }
+
+      function formatTimestamp(ts) {
+        if (!ts) return '--';
+        try {
+          var d = new Date(ts);
+          return d.toLocaleString();
+        } catch (e) {
+          return ts;
+        }
+      }
+
+      function formatHour(ts) {
+        if (!ts) return '--';
+        try {
+          var d = new Date(ts);
+          return d.getHours().toString().padStart(2, '0') + ':00';
+        } catch (e) {
+          return ts;
+        }
+      }
+    </script>
+  </head>
+  <body>
+    {% include 'navbar.html.j2' %}
+    
+    <div class="container-fluid">
+      <h2>Electricity Pricing</h2>
+      
+      <div id="pricing-modules-container">
+        <div class="d-flex justify-content-center">
+          <div class="spinner-border text-light" role="status">
+            <span class="sr-only">Loading...</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="spike-alert" class="spike-warning" style="display: none;">
+        <strong>Price Spike Detected!</strong> Current prices are unusually high. Consider delaying charging if possible.
+      </div>
+
+      <div class="row" id="pricing-panels">
+      </div>
+
+      <div class="row mt-4">
+        <div class="col-12">
+          <h3>Price Forecast <small class="text-muted" id="forecast-hours">(next 24 hours)</small></h3>
+          <div id="forecast-container">
+            <p class="text-muted">Forecast data requires a pricing module with forecasting capability (e.g., Amber).</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="row mt-4">
+        <div class="col-12">
+          <h3>Optimal Charging Window</h3>
+          <div id="optimal-window-container">
+            <p class="text-muted">Find the cheapest time to charge based on forecast data.</p>
+            
+            <form id="optimal-window-form" class="form-inline mb-3">
+              <div class="form-group mr-3">
+                <label for="opt-hours" class="mr-2">Hours needed:</label>
+                <input type="number" id="opt-hours" class="form-control bg-dark text-light" value="4" min="1" max="24" style="width: 80px;">
+              </div>
+              <div class="form-group mr-3">
+                <label for="opt-start" class="mr-2">Start hour:</label>
+                <input type="number" id="opt-start" class="form-control bg-dark text-light" placeholder="Any" min="0" max="23" style="width: 80px;">
+              </div>
+              <div class="form-group mr-3">
+                <label for="opt-end" class="mr-2">End hour:</label>
+                <input type="number" id="opt-end" class="form-control bg-dark text-light" placeholder="Any" min="0" max="23" style="width: 80px;">
+              </div>
+              <button type="submit" class="btn btn-primary">Find Cheapest</button>
+            </form>
+            
+            <div id="optimal-result" style="display: none;">
+              <div class="alert alert-success">
+                <strong>Best time to start:</strong> <span id="optimal-start-hour"></span>:00<br>
+                <strong>Average price:</strong> <span id="optimal-avg-price"></span>/kWh<br>
+                <strong>Estimated cost:</strong> <span id="optimal-total-cost"></span>
+              </div>
+            </div>
+            
+            <div id="optimal-error" class="alert alert-warning" style="display: none;">
+              <span id="optimal-error-msg"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      var forecastData = [];
+      var avgImportPrice = 0.25;
+
+      function updatePricingModules() {
+        $.ajax({
+          url: "/api/getPricingModules",
+          dataType: "json",
+          cache: false,
+          success: function(data) {
+            renderPricingModules(data);
+          },
+          error: function() {
+            $('#pricing-modules-container').html('<div class="alert alert-warning">Unable to load pricing module data.</div>');
+          }
+        });
+      }
+
+      function renderPricingModules(modules) {
+        if (!modules || modules.length === 0) {
+          $('#pricing-modules-container').html('<div class="alert alert-info">No pricing modules are currently enabled. Configure a pricing module in settings to see pricing information.</div>');
+          return;
+        }
+
+        var html = '';
+        var hasEnabled = false;
+        var spikeDetected = false;
+
+        modules.forEach(function(module) {
+          if (module.enabled) {
+            hasEnabled = true;
+            
+            if (module.spikeStatus === 'spike') {
+              spikeDetected = true;
+            }
+
+            html += '<div class="card pricing-card bg-dark">';
+            html += '<div class="card-header d-flex justify-content-between align-items-center">';
+            html += '<h5 class="mb-0">' + module.name + '</h5>';
+            html += '<span class="badge badge-' + (module.enabled ? 'success' : 'secondary') + '">' + (module.enabled ? 'Active' : 'Disabled') + '</span>';
+            html += '</div>';
+            html += '<div class="card-body">';
+            
+            html += '<div class="row">';
+            html += '<div class="col-md-6">';
+            html += '<table class="table table-dark table-sm">';
+            html += '<tr><th>Import Price</th><td class="' + getPriceClass(module.importPrice, avgImportPrice) + '">' + formatCurrency(module.importPrice) + '/kWh</td></tr>';
+            html += '<tr><th>Export Price</th><td>' + formatCurrency(module.exportPrice) + '/kWh</td></tr>';
+            
+            if (module.priceDescriptor) {
+              html += '<tr><th>Price Level</th><td>' + module.priceDescriptor + '</td></tr>';
+            }
+            
+            if (module.spikeStatus !== undefined && module.spikeStatus !== 'none') {
+              html += '<tr><th>Spike Status</th><td class="text-warning">' + module.spikeStatus + '</td></tr>';
+            }
+            
+            if (module.renewables !== undefined) {
+              html += '<tr><th>Renewables</th><td>' + module.renewables + '%</td></tr>';
+            }
+            
+            html += '</table>';
+            html += '</div>';
+            
+            html += '<div class="col-md-6">';
+            html += '<h6>Capabilities</h6>';
+            html += '<div>';
+            var caps = module.capabilities || {};
+            if (caps.AdvancePricing) html += '<span class="badge badge-info module-capability">Advance Pricing</span>';
+            if (caps.SpikeDetection) html += '<span class="badge badge-warning module-capability">Spike Detection</span>';
+            if (caps.Renewables) html += '<span class="badge badge-success module-capability">Renewables</span>';
+            if (caps.Forecasting) html += '<span class="badge badge-primary module-capability">Forecasting</span>';
+            if (Object.keys(caps).length === 0) html += '<span class="text-muted">None</span>';
+            html += '</div>';
+            html += '</div>';
+            
+            html += '</div>';
+            html += '</div>';
+            html += '</div>';
+          }
+        });
+
+        if (!hasEnabled) {
+          $('#pricing-modules-container').html('<div class="alert alert-info">No pricing modules are currently enabled. Enable a pricing module in settings to see pricing information.</div>');
+        } else {
+          $('#pricing-modules-container').html(html);
+        }
+
+        if (spikeDetected) {
+          $('#spike-alert').show();
+        } else {
+          $('#spike-alert').hide();
+        }
+      }
+
+      function updateForecast() {
+        $.ajax({
+          url: "/api/getPricingForecast?hours=24",
+          dataType: "json",
+          cache: false,
+          success: function(data) {
+            renderForecast(data);
+          },
+          error: function() {
+            $('#forecast-container').html('<p class="text-muted">Forecast data unavailable.</p>');
+          }
+        });
+      }
+
+      function renderForecast(data) {
+        if (!data || !data.forecast || data.forecast.length === 0) {
+          $('#forecast-container').html('<p class="text-muted">No forecast data available. This requires a pricing module with forecasting capability.</p>');
+          return;
+        }
+
+        forecastData = data.forecast;
+        var hours = data.hoursRequested || 24;
+        $('#forecast-hours').text('(next ' + hours + ' hours)');
+
+        var prices = forecastData.map(function(e) { return e.importPrice; });
+        avgImportPrice = prices.reduce(function(a, b) { return a + b; }, 0) / prices.length;
+
+        var html = '<div class="table-responsive"><table class="table table-dark table-sm table-striped" id="forecast-table">';
+        html += '<thead><tr><th>Time</th><th>Import ($/kWh)</th><th>Export ($/kWh)</th><th>Renewables</th><th>Status</th></tr></thead>';
+        html += '<tbody>';
+
+        forecastData.forEach(function(entry, index) {
+          var priceClass = getPriceClass(entry.importPrice, avgImportPrice);
+          var rowClass = entry.spikeStatus === 'spike' ? 'table-warning' : '';
+          var isHighlight = entry.importPrice === Math.min.apply(null, prices);
+          
+          html += '<tr class="' + rowClass + (isHighlight ? ' forecast-highlight' : '') + '">';
+          html += '<td>' + formatHour(entry.timestamp) + '</td>';
+          html += '<td class="' + priceClass + '">' + formatPrice(entry.importPrice) + '</td>';
+          html += '<td>' + formatPrice(entry.exportPrice) + '</td>';
+          html += '<td>' + (entry.renewables !== undefined ? entry.renewables + '%' : '--') + '</td>';
+          html += '<td>' + (entry.descriptor || entry.spikeStatus || '--') + '</td>';
+          html += '</tr>';
+        });
+
+        html += '</tbody></table></div>';
+        $('#forecast-container').html(html);
+      }
+
+      function findOptimalWindow(e) {
+        if (e) e.preventDefault();
+        
+        var hours = parseInt($('#opt-hours').val()) || 4;
+        var startHour = $('#opt-start').val() ? parseInt($('#opt-start').val()) : null;
+        var endHour = $('#opt-end').val() ? parseInt($('#opt-end').val()) : null;
+        
+        var url = '/api/getCheapestWindow?hours=' + hours;
+        if (startHour !== null) url += '&startHour=' + startHour;
+        if (endHour !== null) url += '&endHour=' + endHour;
+        
+        $.ajax({
+          url: url,
+          dataType: "json",
+          cache: false,
+          success: function(data) {
+            if (data.error) {
+              $('#optimal-result').hide();
+              $('#optimal-error-msg').text(data.error);
+              $('#optimal-error').show();
+            } else if (data.startHour !== undefined) {
+              $('#optimal-error').hide();
+              $('#optimal-start-hour').text(data.startHour);
+              $('#optimal-avg-price').text('$' + formatPrice(data.avgPrice));
+              $('#optimal-total-cost').text('$' + formatPrice(data.totalCost));
+              $('#optimal-result').show();
+            }
+          },
+          error: function() {
+            $('#optimal-result').hide();
+            $('#optimal-error-msg').text('Unable to determine optimal window. Forecast data may be unavailable.');
+            $('#optimal-error').show();
+          }
+        });
+      }
+
+      $(document).ready(function() {
+        updatePricingModules();
+        updateForecast();
+        
+        setInterval(updatePricingModules, 30000);
+        setInterval(updateForecast, 300000);
+        
+        $('#optimal-window-form').on('submit', findOptimalWindow);
+      });
+    </script>
+  </body>
+</html>

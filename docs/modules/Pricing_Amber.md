@@ -241,3 +241,131 @@ The module reports capabilities via `getCapabilities()`:
 - `SpikeDetection` - Supports spike status
 - `Renewables` - Provides renewable percentage
 - `Forecasting` - Supports price forecasting and window scheduling
+
+## API Endpoints
+
+The following API endpoints are available for pricing integration:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/getPricing` | GET | Returns current import and export prices |
+| `/api/getPricingModules` | GET | Lists all configured pricing modules with status |
+| `/api/getPricingDetails` | GET | Detailed info for modules (all or `?module=Amber`) |
+| `/api/getPricingForecast` | GET | Price forecast (`?hours=24`) |
+| `/api/getCheapestWindow` | GET | Find optimal charging window (`?hours=4&startHour=22&endHour=6`) |
+| `/api/refreshPricing` | POST | Force refresh pricing data |
+
+### Example API Responses
+
+**GET /api/getPricing**
+```json
+{
+    "import": 0.35,
+    "export": 0.12
+}
+```
+
+**GET /api/getPricingModules**
+```json
+[
+    {
+        "name": "Amber",
+        "enabled": true,
+        "capabilities": {
+            "AdvancePricing": true,
+            "SpikeDetection": true,
+            "Renewables": true,
+            "Forecasting": true
+        },
+        "importPrice": 0.35,
+        "exportPrice": 0.12
+    }
+]
+```
+
+**GET /api/getPricingDetails?module=Amber**
+```json
+{
+    "name": "Amber",
+    "enabled": true,
+    "capabilities": {
+        "AdvancePricing": true,
+        "SpikeDetection": true,
+        "Renewables": true,
+        "Forecasting": true
+    },
+    "importPrice": 0.35,
+    "exportPrice": 0.12,
+    "spikeStatus": "none",
+    "renewables": 55,
+    "priceDescriptor": "neutral",
+    "hasForecast": true
+}
+```
+
+**GET /api/getPricingForecast?hours=12**
+```json
+{
+    "hoursRequested": 12,
+    "forecast": [
+        {
+            "timestamp": "2025-01-15T14:00:00",
+            "importPrice": 0.32,
+            "exportPrice": 0.10,
+            "spikeStatus": "none",
+            "descriptor": "neutral",
+            "renewables": 45
+        }
+    ]
+}
+```
+
+**GET /api/getCheapestWindow?hours=4&startHour=22&endHour=6**
+```json
+{
+    "startHour": 1,
+    "startTimestamp": "2025-01-16T01:00:00",
+    "avgPrice": 0.12,
+    "totalCost": 0.48
+}
+```
+
+## Web UI
+
+When Amber (or any pricing module) is configured, a **Pricing** link appears in the navigation bar between Policy and Schedule. The dedicated pricing page provides:
+
+### Main Dashboard Enhancement
+- Import and export prices (refreshed every 30 seconds)
+- Price level descriptor (e.g., "neutral", "high", "spike")
+- Renewables percentage (when available)
+
+### Pricing Page Features
+
+**Module Overview**
+- Active pricing modules with current prices
+- Capability badges (Spike Detection, Renewables, Forecasting)
+- Price level color coding:
+  - 🟢 Green: Low prices (below 70% of average)
+  - 🟡 Yellow: Medium prices
+  - 🔴 Red: High prices (above 130% of average)
+
+**Price Spike Alerts**
+- Visual warning banner when prices spike
+- Spike status indicator per module
+
+**Price Forecast Table**
+- 24-hour price forecast (when module supports forecasting)
+- Import/export prices per 30-minute interval
+- Renewables percentage per interval
+- Cheapest intervals highlighted
+- Spike warnings displayed
+
+**Optimal Charging Window Finder**
+- Interactive form to find cheapest charging times
+- Specify hours needed and time window constraints
+- Handles overnight windows (e.g., 22:00 to 06:00)
+- Returns best start hour and estimated cost
+
+### UI Access Control
+
+The Pricing link in the navbar is only shown when at least one pricing module is configured and enabled. If no pricing modules are active, accessing `/pricing` redirects to the home page.

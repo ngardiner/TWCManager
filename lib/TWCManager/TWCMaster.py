@@ -652,6 +652,86 @@ class TWCMaster:
 
         return best_result
 
+    def getPricingModules(self):
+        """
+        Get list of all pricing modules with their status and capabilities.
+        Returns a list of dicts with module details.
+        """
+        modules = []
+        for module in self.getModulesByType("Pricing"):
+            ref = module["ref"]
+            mod_info = {
+                "name": module["name"],
+                "enabled": getattr(ref, "status", False),
+                "capabilities": getattr(ref, "capabilities", {}),
+                "importPrice": 0,
+                "exportPrice": 0,
+            }
+            if mod_info["enabled"]:
+                try:
+                    mod_info["importPrice"] = ref.getImportPrice()
+                except Exception:
+                    pass
+                try:
+                    mod_info["exportPrice"] = ref.getExportPrice()
+                except Exception:
+                    pass
+            modules.append(mod_info)
+        return modules
+
+    def getPricingModuleDetails(self, module_name):
+        """
+        Get detailed information for a specific pricing module.
+        Returns dict with module details or None if not found.
+        """
+        for module in self.getModulesByType("Pricing"):
+            if module["name"] == module_name:
+                ref = module["ref"]
+                details = {
+                    "name": module["name"],
+                    "enabled": getattr(ref, "status", False),
+                    "capabilities": getattr(ref, "capabilities", {}),
+                    "importPrice": 0,
+                    "exportPrice": 0,
+                }
+                if details["enabled"]:
+                    try:
+                        details["importPrice"] = ref.getImportPrice()
+                    except Exception:
+                        pass
+                    try:
+                        details["exportPrice"] = ref.getExportPrice()
+                    except Exception:
+                        pass
+                    if details["capabilities"].get("SpikeDetection"):
+                        try:
+                            details["spikeStatus"] = ref.getSpikeStatus()
+                        except Exception:
+                            details["spikeStatus"] = "none"
+                    if details["capabilities"].get("Renewables"):
+                        try:
+                            details["renewables"] = ref.getRenewables()
+                        except Exception:
+                            details["renewables"] = 0
+                    if details["capabilities"].get("Forecasting"):
+                        try:
+                            details["hasForecast"] = True
+                        except Exception:
+                            details["hasForecast"] = False
+                    try:
+                        details["priceDescriptor"] = ref.getPriceDescriptor()
+                    except Exception:
+                        details["priceDescriptor"] = "neutral"
+                return details
+        return None
+
+    def refreshPricing(self):
+        """
+        Force refresh of pricing data from all pricing modules.
+        """
+        self.getPricing()
+        return True
+
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
 
