@@ -68,8 +68,9 @@ $(document).ready(function() {
             cache: false,
             success: function(data) {
                 var json = $.parseJSON(data);
-                $('#importPrice').html(json['import']);
-                $('#exportPrice').html(json['export']);
+                var cur = json['currency'] || '';
+                $('#importPrice').html(cur + parseFloat(json['import']).toFixed(4));
+                $('#exportPrice').html(cur + parseFloat(json['export']).toFixed(4));
             }
         });
         setTimeout(requestPricing, 30000);

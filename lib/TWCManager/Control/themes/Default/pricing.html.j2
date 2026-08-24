@@ -28,6 +28,22 @@
       .forecast-highlight {
         background-color: #1a3d1a !important;
       }
+      .forecast-chart {
+        display: flex;
+        align-items: flex-end;
+        height: 140px;
+        gap: 2px;
+      }
+      .fc-bar {
+        flex: 1 1 auto;
+        min-width: 2px;
+        border-radius: 2px 2px 0 0;
+        opacity: 0.85;
+      }
+      .fc-bar.price-low { background-color: #28a745; }
+      .fc-bar.price-medium { background-color: #ffc107; }
+      .fc-bar.price-high { background-color: #dc3545; }
+      .fc-bar.price-neutral { background-color: #6c757d; }
     </style>
     <script>
       function formatPrice(price) {
@@ -94,6 +110,7 @@
       <div class="row mt-4">
         <div class="col-12">
           <h3>Price Forecast <small class="text-muted" id="forecast-hours">(next 24 hours)</small></h3>
+          <div id="forecast-chart-container"></div>
           <div id="forecast-container">
             <p class="text-muted">Forecast data requires a pricing module with forecasting capability (e.g., Amber).</p>
           </div>
@@ -141,6 +158,7 @@
     <script>
       var forecastData = [];
       var avgImportPrice = 0.25;
+      var pricingCurrency = '$';
 
       function updatePricingModules() {
         $.ajax({
@@ -169,7 +187,11 @@
         modules.forEach(function(module) {
           if (module.enabled) {
             hasEnabled = true;
-            
+
+            if (module.currency) {
+              pricingCurrency = module.currency;
+            }
+
             if (module.spikeStatus === 'spike') {
               spikeDetected = true;
             }
@@ -177,15 +199,15 @@
             html += '<div class="card pricing-card bg-dark">';
             html += '<div class="card-header d-flex justify-content-between align-items-center">';
             html += '<h5 class="mb-0">' + module.name + '</h5>';
-            html += '<span class="badge badge-' + (module.enabled ? 'success' : 'secondary') + '">' + (module.enabled ? 'Active' : 'Disabled') + '</span>';
+            html += '<span class="badge badge-success">Active</span>';
             html += '</div>';
             html += '<div class="card-body">';
-            
+
             html += '<div class="row">';
             html += '<div class="col-md-6">';
             html += '<table class="table table-dark table-sm">';
-            html += '<tr><th>Import Price</th><td class="' + getPriceClass(module.importPrice, avgImportPrice) + '">' + formatCurrency(module.importPrice) + '/kWh</td></tr>';
-            html += '<tr><th>Export Price</th><td>' + formatCurrency(module.exportPrice) + '/kWh</td></tr>';
+            html += '<tr><th>Import Price</th><td class="' + getPriceClass(module.importPrice, avgImportPrice) + '">' + formatCurrency(module.importPrice, pricingCurrency) + '/kWh</td></tr>';
+            html += '<tr><th>Export Price</th><td>' + formatCurrency(module.exportPrice, pricingCurrency) + '/kWh</td></tr>';
             
             if (module.priceDescriptor) {
               html += '<tr><th>Price Level</th><td>' + module.priceDescriptor + '</td></tr>';
@@ -247,8 +269,31 @@
         });
       }
 
+      function renderForecastChart() {
+        if (!forecastData || forecastData.length === 0) {
+          $('#forecast-chart-container').html('');
+          return;
+        }
+
+        var magnitudes = forecastData.map(function(e) { return Math.abs(e.importPrice); });
+        var max = Math.max.apply(null, magnitudes);
+        if (!max) max = 1;
+
+        var html = '<div class="forecast-chart mb-3">';
+        forecastData.forEach(function(entry) {
+          var pct = Math.max(Math.round(Math.abs(entry.importPrice) / max * 100), 3);
+          var cls = getPriceClass(entry.importPrice, avgImportPrice);
+          html += '<div class="fc-bar ' + cls + '" style="height:' + pct + '%" title="'
+            + formatHour(entry.timestamp) + ' - '
+            + formatCurrency(entry.importPrice, pricingCurrency) + '/kWh"></div>';
+        });
+        html += '</div>';
+        $('#forecast-chart-container').html(html);
+      }
+
       function renderForecast(data) {
         if (!data || !data.forecast || data.forecast.length === 0) {
+          $('#forecast-chart-container').html('');
           $('#forecast-container').html('<p class="text-muted">No forecast data available. This requires a pricing module with forecasting capability.</p>');
           return;
         }
@@ -261,14 +306,14 @@
         avgImportPrice = prices.reduce(function(a, b) { return a + b; }, 0) / prices.length;
 
         var html = '<div class="table-responsive"><table class="table table-dark table-sm table-striped" id="forecast-table">';
-        html += '<thead><tr><th>Time</th><th>Import ($/kWh)</th><th>Export ($/kWh)</th><th>Renewables</th><th>Status</th></tr></thead>';
+        html += '<thead><tr><th>Time</th><th>Import (' + pricingCurrency + '/kWh)</th><th>Export (' + pricingCurrency + '/kWh)</th><th>Renewables</th><th>Status</th></tr></thead>';
         html += '<tbody>';
 
         forecastData.forEach(function(entry, index) {
           var priceClass = getPriceClass(entry.importPrice, avgImportPrice);
           var rowClass = entry.spikeStatus === 'spike' ? 'table-warning' : '';
           var isHighlight = entry.importPrice === Math.min.apply(null, prices);
-          
+
           html += '<tr class="' + rowClass + (isHighlight ? ' forecast-highlight' : '') + '">';
           html += '<td>' + formatHour(entry.timestamp) + '</td>';
           html += '<td class="' + priceClass + '">' + formatPrice(entry.importPrice) + '</td>';
@@ -280,6 +325,8 @@
 
         html += '</tbody></table></div>';
         $('#forecast-container').html(html);
+
+        renderForecastChart();
       }
 
       function findOptimalWindow(e) {
@@ -305,8 +352,8 @@
             } else if (data.startHour !== undefined) {
               $('#optimal-error').hide();
               $('#optimal-start-hour').text(data.startHour);
-              $('#optimal-avg-price').text('$' + formatPrice(data.avgPrice));
-              $('#optimal-total-cost').text('$' + formatPrice(data.totalCost));
+              $('#optimal-avg-price').text(pricingCurrency + formatPrice(data.avgPrice));
+              $('#optimal-total-cost').text(pricingCurrency + formatPrice(data.totalCost));
               $('#optimal-result').show();
             }
           },
