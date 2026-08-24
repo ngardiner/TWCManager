@@ -11,6 +11,8 @@ The module uses supplied credentials to connect to the MQTT server, and publishe
 | MQTT Topic                       | Value                                  | Example |
 | -------------------------------- | -------------------------------------- | ------- |
 | *prefix*/all/totalAmpsInUse      | Float: Amps in use across all slaves   | 16.24 |
+| *prefix*/all/exportPrice         | Float: Current electricity export price per kWh (requires a [Pricing module](Pricing_Amber.md)) | 0.08 |
+| *prefix*/all/importPrice         | Float: Current electricity import price per kWh (requires a [Pricing module](Pricing_Amber.md)). May be negative for wholesale providers | 0.25 |
 | *prefix*/*charger*/ampsInUse     | Float: Amps in use for given Slave TWC | 8.52 |
 | *prefix*/*charger*/ampsMax       | Integer: Reported maximum amperage per Slave TWC | 32 |
 | *prefix*/*charger*/carsCharging  | Boolean: Will be 0 if Slave TWC does not have a connected charging vehicle, or 1 if it does. |

@@ -36,6 +36,7 @@ Add a `pricing` section to your `config.json`:
 | `enabled`         | *required* `true` or `false` |
 | `peak.import`     | *required* Import price per kWh (numeric) |
 | `peak.export`     | *required* Export price per kWh (numeric) |
+| `currency`        | *optional* Currency symbol reported to the web UI, MQTT and API (default: `$`) |
 
 ## Policy Integration
 

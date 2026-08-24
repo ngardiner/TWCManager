@@ -159,7 +159,7 @@ forecast = master.getPriceForecast(hoursAhead=12)
 
 # Each entry contains:
 # {
-#     "timestamp": datetime,
+#     "timestamp": "2025-01-15T14:00:00+00:00",  # ISO 8601 string with UTC offset
 #     "importPrice": 0.25,      # $/kWh
 #     "exportPrice": 0.08,      # $/kWh
 #     "spikeStatus": "none",    # none/potential/spike
@@ -167,6 +167,8 @@ forecast = master.getPriceForecast(hoursAhead=12)
 #     "renewables": 45          # percentage
 # }
 ```
+
+Timestamps are returned as ISO 8601 strings (with UTC offset) so they can be serialised directly to JSON. Forecast data is cached for 15 minutes and prefetched in the background by the policy engine.
 
 ### Cheapest Window Scheduling
 
@@ -176,18 +178,20 @@ Find the optimal time to charge using `getCheapestWindow(numHours, startHour, en
 # Find cheapest 5-hour charging window overnight
 result = master.getCheapestWindow(
     numHours=5,      # Need 5 hours of charging
-    startHour=22,    # After 10 PM
+    startHour=22,    # After 10 PM (local time)
     endHour=6        # Before 6 AM (crosses midnight)
 )
 
 # Returns:
 # {
-#     "startHour": 1,           # Start at 1 AM
-#     "startTimestamp": datetime,
-#     "avgPrice": 0.12,         # Average $/kWh for window
-#     "totalCost": 0.60         # Estimated total cost
+#     "startHour": 1,                        # Local-time hour to start charging
+#     "startTimestamp": "2025-01-16T01:00:00+00:00",
+#     "avgPrice": 0.12,                      # Average $/kWh for window
+#     "totalCost": 0.60                      # Estimated total cost
 # }
 ```
+
+`startHour`/`endHour` are interpreted in local time, and the returned `startHour` is a local-time hour. If `startHour` and `endHour` are both omitted, the entire forecast horizon is searched. Returns `None` if no suitable window exists.
 
 ### Use Case: Smart Overnight Charging
 

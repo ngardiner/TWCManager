@@ -23,7 +23,7 @@ GET /api/getPricingForecast?hours=24
     "hoursRequested": 24,
     "forecast": [
         {
-            "timestamp": "2025-01-15T14:00:00",
+            "timestamp": "2025-01-15T14:00:00+00:00",
             "importPrice": 0.32,
             "exportPrice": 0.10,
             "spikeStatus": "none",
@@ -31,7 +31,7 @@ GET /api/getPricingForecast?hours=24
             "renewables": 45
         },
         {
-            "timestamp": "2025-01-15T14:30:00",
+            "timestamp": "2025-01-15T14:30:00+00:00",
             "importPrice": 0.28,
             "exportPrice": 0.08,
             "spikeStatus": "none",
@@ -74,5 +74,5 @@ curl http://192.168.1.1:8080/api/getPricingForecast
 
 - Returns an empty forecast array if no forecasting-capable modules are configured
 - Forecast intervals are typically 30 minutes (varies by provider)
-- Forecast data is cached for 15 minutes to avoid excessive API calls
-- Timestamps are in UTC or local time depending on the pricing module
+- Forecast data is cached for 15 minutes and prefetched in the background by the policy engine
+- Timestamps are ISO 8601 strings including UTC offset (eg `2025-01-15T14:00:00+00:00`); web clients parsing them with `new Date()` will render them in the viewer's local timezone

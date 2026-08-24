@@ -64,8 +64,10 @@ curl "http://192.168.1.1:8080/api/getCheapestWindow?hours=3&startHour=9&endHour=
 
 ## Notes
 
-- Returns `null` or error if no forecasting-capable modules are available
+- Returns the error object if no forecasting-capable modules are available or no suitable window exists within the forecast horizon
+- When `startHour` is omitted, the entire forecast horizon (already limited to future intervals) is searched; an hour-only bound cannot distinguish "today at hour H" from "tomorrow at hour H"
 - Window crossing midnight: If `endHour < startHour`, the search window spans midnight (e.g., 22:00 to 06:00)
+- `startHour`/`endHour` are interpreted in local time, and the returned `startHour` is likewise a local-time hour; `startTimestamp` is an ISO 8601 string with UTC offset
 - The algorithm finds the contiguous window with the lowest average price
 - Results are based on forecast data and may differ from actual prices
 

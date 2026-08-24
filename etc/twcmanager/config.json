@@ -842,10 +842,10 @@
         #"commandPolicy": "prefer_ble",
 
         "teslaAPI": {
-          "enabled": true,
+          "enabled": true
         },
         "teslaBLE": {
-          "enabled": false,
+          "enabled": false
         },
         "teslaFleetTelemetryMQTT": {
           "enabled": false,
@@ -862,7 +862,7 @@
           "enabled": false,
           "url": "http://homeautomation.lan:8123",
           "longLivedToken": "abcdef123456-your-ha-token-here"
-        }
+        },
 
         # The TeslaMate integration allows TWCManager to fetch API key details directly from
         # your TeslaMate instance's database. This removes the need to manage multiple sets of API
@@ -887,7 +887,14 @@
     "pricing": {
         # Policy for combining prices when multiple pricing modules are active.
         # "add"   - sum prices from all active modules
-        # "first" - use the first non-zero price found
+        # "first" - use the first non-zero price found (zero is treated as an
+        #           unset value, so a failed fetch doesn't mask other modules)
+        #
+        # Notes:
+        #  - Only combine ("add") modules which report prices in the same
+        #    currency; mixing currencies produces a meaningless total.
+        #  - Negative wholesale prices (eg Amber Electric) are valid and are
+        #    preserved by both policies.
         "policy": {
             "multiPrice": "first"
         },

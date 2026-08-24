@@ -76,6 +76,17 @@ EMS Interfaces read solar generation and/or consumption values from an external 
 | [URL](docs/modules/EMS_URL.md)  | Available | Support for URL based generation/consumption values (eg Node-RED) |
 | [Volkszähler](docs/modules/EMS_Volkszahler.md)  | Available | Support for Volkszahler |
 
+### Pricing Interfaces
+
+Pricing Interfaces retrieve electricity pricing information, allowing charging policy to react to dynamic or wholesale prices, and exposing price forecasts for optimal charging window selection. Current Pricing interfaces are:
+
+| Platform                      | Details                 |
+| ----------------------------- | ----------------------- |
+| [Amber Electric](docs/modules/Pricing_Amber.md) | Australian wholesale pricing with forecasts, spike detection and renewables data |
+| [aWATTar](docs/modules/Pricing_aWATTar.md) | Austrian/German day-ahead spot market pricing |
+| [PVPC (Spain)](docs/modules/Pricing_PVPCes.md) | Spanish regulated PVPC tariff via REE e-sios |
+| [Static](docs/modules/Pricing_Static.md) | Statically configured import/export prices |
+
 ### Logging Interfaces
 
 Logging interfaces allow recording of statistics and values such as Green Energy data, Slave TWC status and Voltage and Amperage data to various interfaces.

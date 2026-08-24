@@ -15,7 +15,8 @@ GET /api/getPricing
 ```json
 {
     "import": 0.25,
-    "export": 0.08
+    "export": 0.08,
+    "currency": "$"
 }
 ```
 
@@ -25,6 +26,7 @@ GET /api/getPricing
 |-------|------|-------------|
 | `import` | float | Current import price per kWh in local currency |
 | `export` | float | Current export price per kWh in local currency |
+| `currency` | string | Currency symbol reported by the active pricing module (empty if unknown) |
 
 ## Example
 
@@ -36,4 +38,5 @@ curl http://192.168.1.1:8080/api/getPricing
 
 - Prices are aggregated from all active pricing modules according to the `multiPrice` policy
 - If no pricing modules are configured, both values will be `0`
-- Prices are cached and refreshed periodically (interval depends on module configuration)
+- Negative import prices are possible with wholesale providers (eg Amber Electric)
+- Values are refreshed periodically by the charging policy engine (default every 30 seconds)
