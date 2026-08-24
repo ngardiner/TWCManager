@@ -6,6 +6,7 @@ class aWATTarPricing:
     # aWATTar asks us to limit queries to once every 15 minutes
     cacheTime = 900
     capabilities = {"AdvancePricing": True}
+    currency = "€"
     config = None
     configConfig = None
     configAwattar = None
@@ -110,6 +111,7 @@ class aWATTarPricing:
                     + str(e.response.status_code)
                     + " connecting to aWATTar API to fetch market pricing",
                 )
+                return False
 
             if r.json():
                 try:
@@ -118,7 +120,7 @@ class aWATTarPricing:
                         # Convert MWh price to KWh
                         self.importPrice = self.importPrice / 1000
 
-                except (KeyError, TypeError) as e:
+                except (KeyError, TypeError, ValueError) as e:
                     self.master.debugLog(
                         4,
                         "$aWATTar",

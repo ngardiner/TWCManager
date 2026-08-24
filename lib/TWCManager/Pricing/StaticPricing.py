@@ -6,9 +6,8 @@ class StaticPricing:
 
     import time
 
-    capabilities = {
-        "AdvancePricing": True
-    }
+    capabilities = {"AdvancePricing": True}
+    currency = "$"
     config = None
     configConfig = None
     configStatic = None
@@ -31,6 +30,7 @@ class StaticPricing:
             self.configStatic = {}
 
         self.status = self.configStatic.get("enabled", self.status)
+        self.currency = self.configStatic.get("currency", self.currency)
         self.debugLevel = self.configConfig.get("debugLevel", 0)
 
         # Unload if this module is disabled or misconfigured
@@ -54,8 +54,8 @@ class StaticPricing:
 
         # For now, we just use the peak price
         try:
-            self.exportPrice = self.configStatic["peak"]["export"]
-        except ValueError:
+            self.exportPrice = float(self.configStatic["peak"]["export"])
+        except (KeyError, TypeError, ValueError):
             self.exportPrice = 0
 
         # Return current export price
@@ -73,9 +73,9 @@ class StaticPricing:
 
         # For now, we just use the peak price
         try:
-            self.importPrice = self.configStatic["peak"]["import"]
-        except ValueError:
-            self.exportPrice = 0
+            self.importPrice = float(self.configStatic["peak"]["import"])
+        except (KeyError, TypeError, ValueError):
+            self.importPrice = 0
 
         # Return current import price
         return float(self.importPrice)

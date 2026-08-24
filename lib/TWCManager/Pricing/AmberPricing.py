@@ -1,5 +1,6 @@
 from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 
 
 class AmberPricing:
@@ -13,6 +14,7 @@ class AmberPricing:
         "Renewables": True,
         "Forecasting": True,
     }
+    currency = "$"
     config = None
     configConfig = None
     configAmber = None
@@ -191,16 +193,18 @@ class AmberPricing:
                 self.master.debugLog(4, "$Amber", "No price data returned")
                 return
 
-            now_utc = datetime.utcnow()
+            # Timestamps from the Amber API include a UTC offset. Keep them
+            # timezone-aware so comparisons are unambiguous.
+            now_utc = datetime.now(timezone.utc)
 
             for interval in intervals:
                 channel_type = interval.get("channelType")
                 start_time = datetime.fromisoformat(
                     interval.get("startTime").replace("Z", "+00:00")
-                ).replace(tzinfo=None)
+                )
                 end_time = datetime.fromisoformat(
                     interval.get("endTime").replace("Z", "+00:00")
-                ).replace(tzinfo=None)
+                )
 
                 if start_time <= now_utc < end_time:
                     per_kwh = interval.get("perKwh", 0)
@@ -233,21 +237,23 @@ class AmberPricing:
 
         except (KeyError, TypeError, ValueError) as e:
             self.master.debugLog(4, "$Amber", f"Exception parsing Amber pricing: {e}")
-            self.master.debugLog(10, "$Amber", str(r.text[:500] if r.text else "No response"))
+            self.master.debugLog(
+                10, "$Amber", str(r.text[:500] if r.text else "No response")
+            )
             self.fetchFailed = True
 
     def getPriceForecast(self, hoursAhead=24):
         """
         Returns a list of price forecasts for the next N hours.
-        
+
         Each entry is a dict with:
-          - timestamp: datetime object for the interval start
+          - timestamp: ISO 8601 string (with UTC offset) for the interval start
           - importPrice: price in $/kWh
           - exportPrice: price in $/kWh
           - spikeStatus: "none", "potential", or "spike"
           - descriptor: human-readable price level
           - renewables: percentage of renewables in grid
-        
+
         Returns empty list if forecast unavailable or module disabled.
         """
         if not self.status:
@@ -255,21 +261,33 @@ class AmberPricing:
 
         self._updateForecast(hoursAhead)
 
-        return self.priceForecast[: hoursAhead * 2]
+        # Return a JSON-serialisable copy of the forecast. Timestamps are
+        # converted to ISO 8601 strings so the result can be passed directly
+        # to json.dumps and parsed by web clients as local time.
+        forecast = []
+        for entry in self.priceForecast[: hoursAhead * 2]:
+            serialised = dict(entry)
+            serialised["timestamp"] = entry["timestamp"].isoformat()
+            forecast.append(serialised)
+
+        return forecast
 
     def getCheapestWindow(self, numHours, startHour=None, endHour=None):
         """
         Find the cheapest contiguous window of numHours within a time range.
-        
+
         Args:
             numHours: Number of consecutive hours needed (e.g., 5 hours of charging)
-            startHour: Start of allowed window (0-23). If None, uses current hour.
-            endHour: End of allowed window (0-23). If None, searches next 24 hours.
-                     If endHour < startHour, window crosses midnight.
-        
+            startHour: Start of allowed window (0-23, local time). If None, the
+                       entire forecast horizon is searched.
+            endHour: End of allowed window (0-23, local time). If None, the
+                     horizon end applies. If endHour < startHour, window
+                     crosses midnight.
+
         Returns:
             dict with:
-              - startHour: Best hour to start (0-23)
+              - startHour: Best hour to start (0-23, local time)
+              - startTimestamp: Interval start as an ISO 8601 string
               - avgPrice: Average price for the window ($/kWh)
               - totalCost: Estimated total cost
             or None if no suitable window found.
@@ -282,9 +300,12 @@ class AmberPricing:
         if not self.priceForecast:
             return None
 
-        now = datetime.now()
-        if startHour is None:
-            startHour = now.hour
+        # Forecast intervals are timezone-aware UTC. Convert their hours to
+        # the local timezone so startHour/endHour arguments are interpreted
+        # and returned in local time.
+        local_hours = [
+            entry["timestamp"].astimezone().hour for entry in self.priceForecast
+        ]
 
         if numHours <= 0 or numHours > 24:
             return None
@@ -293,18 +314,22 @@ class AmberPricing:
 
         candidates = []
         for i, entry in enumerate(self.priceForecast):
-            entry_hour = entry["timestamp"].hour
+            entry_hour = local_hours[i]
 
-            if endHour is not None:
-                if startHour <= endHour:
-                    if not (startHour <= entry_hour < endHour):
-                        continue
+            # An hour-only filter cannot distinguish "today at hour H" from
+            # "tomorrow at hour H", so only apply it to explicit bounds. With
+            # no bounds the forecast horizon (already future-only) is searched.
+            if startHour is not None:
+                if endHour is not None:
+                    if startHour <= endHour:
+                        if not (startHour <= entry_hour < endHour):
+                            continue
+                    else:
+                        if not (entry_hour >= startHour or entry_hour < endHour):
+                            continue
                 else:
-                    if not (entry_hour >= startHour or entry_hour < endHour):
+                    if entry_hour < startHour:
                         continue
-            else:
-                if entry_hour < startHour:
-                    continue
 
             if i + window_slots > len(self.priceForecast):
                 break
@@ -331,10 +356,19 @@ class AmberPricing:
 
         return {
             "startHour": best["startHour"],
-            "startTimestamp": best["startTimestamp"],
+            "startTimestamp": best["startTimestamp"].isoformat(),
             "avgPrice": best["avgPrice"],
             "totalCost": best["totalCost"],
         }
+
+    def updateForecast(self, hoursAhead=48):
+        """
+        Fetch and cache forecast data. Safe to call from background tasks so
+        that API and UI requests can be served from cache.
+        """
+        if not self.status:
+            return
+        self._updateForecast(hoursAhead)
 
     def _updateForecast(self, hoursAhead=24):
         """Fetch and cache forecast data from Amber API."""
@@ -363,7 +397,9 @@ class AmberPricing:
             r.raise_for_status()
         except self.requests.exceptions.HTTPError as e:
             self.master.debugLog(
-                4, "$Amber", f"HTTP status {e.response.status_code} from Amber forecast API"
+                4,
+                "$Amber",
+                f"HTTP status {e.response.status_code} from Amber forecast API",
             )
             return
 
@@ -372,13 +408,13 @@ class AmberPricing:
             if not intervals:
                 return
 
-            now_utc = datetime.utcnow()
+            now_utc = datetime.now(timezone.utc)
             forecasts_by_time = {}
 
             for interval in intervals:
                 start_time = datetime.fromisoformat(
                     interval.get("startTime").replace("Z", "+00:00")
-                ).replace(tzinfo=None)
+                )
 
                 if start_time < now_utc:
                     continue
@@ -426,4 +462,6 @@ class AmberPricing:
 
         except (KeyError, TypeError, ValueError) as e:
             self.master.debugLog(4, "$Amber", f"Exception parsing Amber forecast: {e}")
-            self.master.debugLog(10, "$Amber", str(r.text[:500] if r.text else "No response"))
+            self.master.debugLog(
+                10, "$Amber", str(r.text[:500] if r.text else "No response")
+            )

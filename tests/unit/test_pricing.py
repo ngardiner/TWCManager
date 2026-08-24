@@ -16,9 +16,8 @@ if _lib_path not in sys.path:
 
 import pytest
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, MagicMock, patch
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -153,7 +152,9 @@ class TestAWATTarPricing:
             "data": [{"marketprice": 150.0, "unit": "Eur/MWh"}]
         }
 
-        with patch.object(module.requests, "get", return_value=mock_response) as mock_get:
+        with patch.object(
+            module.requests, "get", return_value=mock_response
+        ) as mock_get:
             module.update()
             first_fetch_time = module.lastFetch
             assert first_fetch_time > 0
@@ -225,9 +226,7 @@ class TestPVPCesPricing:
 
     @pytest.fixture
     def master_enabled(self):
-        return make_master(
-            {"PVPCes": {"enabled": True, "token": "test-token-123"}}
-        )
+        return make_master({"PVPCes": {"enabled": True, "token": "test-token-123"}})
 
     @pytest.fixture
     def master_disabled(self):
@@ -278,7 +277,9 @@ class TestPVPCesPricing:
         mock_response = Mock()
         mock_response.json.return_value = response_data
 
-        with patch.object(module.requests, "get", return_value=mock_response) as mock_get:
+        with patch.object(
+            module.requests, "get", return_value=mock_response
+        ) as mock_get:
             module.update()
             module.update()
             assert mock_get.call_count == 1
@@ -313,7 +314,11 @@ class TestPVPCesPricing:
         prices = {h: 100000.0 for h in range(48)}
         prices[25] = 5000.0  # cheapest slot is hour 1 of next day (slot 25)
         prices[26] = 5000.0
-        response = {"indicator": {"values": [{"value": prices.get(h, 100000.0)} for h in range(48)]}}
+        response = {
+            "indicator": {
+                "values": [{"value": prices.get(h, 100000.0)} for h in range(48)]
+            }
+        }
         module.todayImportPrice = response
 
         # Window: 22:00 to 04:00 (ini=22, end=4), needing 2 hours
@@ -343,8 +348,14 @@ class TestTWCMasterPricingAggregation:
 
         # Register the custom log levels that TWCManager.py normally installs.
         for name, level in [
-            ("INFO2", 19), ("INFO3", 18), ("INFO4", 17), ("INFO5", 16),
-            ("INFO6", 15), ("INFO7", 14), ("INFO8", 13), ("INFO9", 12),
+            ("INFO2", 19),
+            ("INFO3", 18),
+            ("INFO4", 17),
+            ("INFO5", 16),
+            ("INFO6", 15),
+            ("INFO7", 14),
+            ("INFO8", 13),
+            ("INFO9", 12),
             ("DEBUG2", 9),
         ]:
             if not hasattr(logging, name):
@@ -406,9 +417,7 @@ class TestAmberPricing:
 
     @pytest.fixture
     def master_enabled(self):
-        return make_master(
-            {"Amber": {"enabled": True, "token": "test-amber-token"}}
-        )
+        return make_master({"Amber": {"enabled": True, "token": "test-amber-token"}})
 
     @pytest.fixture
     def master_disabled(self):
@@ -418,7 +427,14 @@ class TestAmberPricing:
     def master_no_token(self):
         return make_master({"Amber": {"enabled": True}})
 
-    def _make_current_price_response(self, general_price=25.0, feedin_price=8.0, spike_status="none", descriptor="neutral", renewables=45):
+    def _make_current_price_response(
+        self,
+        general_price=25.0,
+        feedin_price=8.0,
+        spike_status="none",
+        descriptor="neutral",
+        renewables=45,
+    ):
         """Build a minimal Amber API /prices/current response that covers current time."""
         now_utc = datetime.utcnow()
         minute = now_utc.minute
@@ -427,7 +443,9 @@ class TestAmberPricing:
             end = now_utc.replace(minute=30, second=0, microsecond=0)
         else:
             start = now_utc.replace(minute=30, second=0, microsecond=0)
-            end = (now_utc + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            end = (now_utc + timedelta(hours=1)).replace(
+                minute=0, second=0, microsecond=0
+            )
 
         return [
             {
@@ -579,7 +597,9 @@ class TestAmberPricing:
         mock_response = Mock()
         mock_response.json.return_value = self._make_current_price_response()
 
-        with patch.object(module.requests, "get", return_value=mock_response) as mock_get:
+        with patch.object(
+            module.requests, "get", return_value=mock_response
+        ) as mock_get:
             module.update()
             first_fetch_time = module.lastFetch
             assert first_fetch_time > 0
@@ -594,14 +614,11 @@ class TestAmberPricing:
         module = AmberPricing(master_enabled)
         assert module.siteId is None
 
-        sites_response = [
-            {"id": "site-123", "status": "active", "nmi": "1234567890"}
-        ]
+        sites_response = [{"id": "site-123", "status": "active", "nmi": "1234567890"}]
 
         with patch.object(module.requests, "get") as mock_get:
             mock_get.return_value = Mock(
-                json=lambda: sites_response,
-                raise_for_status=Mock()
+                json=lambda: sites_response, raise_for_status=Mock()
             )
             module.discoverSiteId()
 
@@ -633,50 +650,58 @@ class TestAmberPricing:
 
         assert price == pytest.approx(-0.05)
 
-    def _make_forecast_response(self, num_intervals=48, base_price=25.0, price_pattern=None):
+    def _make_forecast_response(
+        self, num_intervals=48, base_price=25.0, price_pattern=None
+    ):
         """Build a forecast response with multiple future intervals."""
         now_utc = datetime.utcnow()
         intervals = []
-        
+
         for i in range(num_intervals):
-            start = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=30 * i)
+            start = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(
+                minutes=30 * i
+            )
             end = start + timedelta(minutes=30)
-            
+
             if price_pattern:
                 price = price_pattern(i)
             else:
                 price = base_price + (i % 10) * 2
-            
-            intervals.append({
-                "type": "ForecastInterval",
-                "duration": 30,
-                "spotPerKwh": price - 5,
-                "perKwh": price,
-                "date": start.strftime("%Y-%m-%d"),
-                "nemTime": end.strftime("%Y-%m-%dT%H:%M:%S+10:00"),
-                "startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "renewables": 40 + (i % 30),
-                "channelType": "general",
-                "spikeStatus": "spike" if price > 50 else "none",
-                "descriptor": "high" if price > 40 else "neutral",
-            })
-            
-            intervals.append({
-                "type": "ForecastInterval",
-                "duration": 30,
-                "spotPerKwh": 8,
-                "perKwh": 8,
-                "date": start.strftime("%Y-%m-%d"),
-                "nemTime": end.strftime("%Y-%m-%dT%H:%M:%S+10:00"),
-                "startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "renewables": 40 + (i % 30),
-                "channelType": "feedIn",
-                "spikeStatus": "none",
-                "descriptor": "neutral",
-            })
-        
+
+            intervals.append(
+                {
+                    "type": "ForecastInterval",
+                    "duration": 30,
+                    "spotPerKwh": price - 5,
+                    "perKwh": price,
+                    "date": start.strftime("%Y-%m-%d"),
+                    "nemTime": end.strftime("%Y-%m-%dT%H:%M:%S+10:00"),
+                    "startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "renewables": 40 + (i % 30),
+                    "channelType": "general",
+                    "spikeStatus": "spike" if price > 50 else "none",
+                    "descriptor": "high" if price > 40 else "neutral",
+                }
+            )
+
+            intervals.append(
+                {
+                    "type": "ForecastInterval",
+                    "duration": 30,
+                    "spotPerKwh": 8,
+                    "perKwh": 8,
+                    "date": start.strftime("%Y-%m-%d"),
+                    "nemTime": end.strftime("%Y-%m-%dT%H:%M:%S+10:00"),
+                    "startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "renewables": 40 + (i % 30),
+                    "channelType": "feedIn",
+                    "spikeStatus": "none",
+                    "descriptor": "neutral",
+                }
+            )
+
         return intervals
 
     def test_get_price_forecast_returns_list(self, master_enabled):
@@ -808,10 +833,12 @@ class TestAmberPricing:
         mock_response = Mock()
         mock_response.json.return_value = self._make_forecast_response(num_intervals=10)
 
-        with patch.object(module.requests, "get", return_value=mock_response) as mock_get:
+        with patch.object(
+            module.requests, "get", return_value=mock_response
+        ) as mock_get:
             module._updateForecast(5)
             assert len(module.priceForecast) > 0
-            
+
             module._updateForecast(5)
             assert mock_get.call_count == 1
 
@@ -838,8 +865,14 @@ class TestTWCMasterForecasting:
         from TWCManager.TWCMaster import TWCMaster
 
         for name, level in [
-            ("INFO2", 19), ("INFO3", 18), ("INFO4", 17), ("INFO5", 16),
-            ("INFO6", 15), ("INFO7", 14), ("INFO8", 13), ("INFO9", 12),
+            ("INFO2", 19),
+            ("INFO3", 18),
+            ("INFO4", 17),
+            ("INFO5", 16),
+            ("INFO6", 15),
+            ("INFO7", 14),
+            ("INFO8", 13),
+            ("INFO9", 12),
             ("DEBUG2", 9),
         ]:
             if not hasattr(logging, name):
@@ -875,7 +908,7 @@ class TestTWCMasterForecasting:
         mock_module.getPriceForecast.return_value = [
             {"timestamp": datetime.now(), "importPrice": 0.25, "exportPrice": 0.08}
         ]
-        
+
         master.modules = {
             "Amber": {
                 "type": "Pricing",
@@ -883,9 +916,9 @@ class TestTWCMasterForecasting:
                 "priority": 0,
             }
         }
-        
+
         result = master.getPriceForecast(hoursAhead=12)
-        
+
         assert len(result) == 1
         mock_module.getPriceForecast.assert_called_once_with(12)
 
@@ -898,7 +931,7 @@ class TestTWCMasterForecasting:
             "avgPrice": 0.15,
             "totalCost": 0.60,
         }
-        
+
         mock_module2 = Mock()
         mock_module2.getCapabilities.return_value = True
         mock_module2.getCheapestWindow.return_value = {
@@ -906,7 +939,7 @@ class TestTWCMasterForecasting:
             "avgPrice": 0.10,
             "totalCost": 0.40,
         }
-        
+
         master.modules = {
             "Amber1": {
                 "type": "Pricing",
@@ -919,9 +952,9 @@ class TestTWCMasterForecasting:
                 "priority": 1,
             },
         }
-        
+
         result = master.getCheapestWindow(numHours=4)
-        
+
         assert result["avgPrice"] == pytest.approx(0.10)
         assert result["startHour"] == 14
 
@@ -929,7 +962,7 @@ class TestTWCMasterForecasting:
         """getCheapestWindow should skip modules without Forecasting capability."""
         mock_module_no_forecast = Mock()
         mock_module_no_forecast.getCapabilities.return_value = False
-        
+
         master.modules = {
             "Static": {
                 "type": "Pricing",
@@ -937,6 +970,395 @@ class TestTWCMasterForecasting:
                 "priority": 0,
             }
         }
-        
+
         result = master.getCheapestWindow(numHours=4)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: bug fixes identified in feature review
+# ---------------------------------------------------------------------------
+
+
+class TestStaticPricingConfigRobustness:
+    """StaticPricing must not crash on incomplete configuration."""
+
+    def test_missing_peak_key_returns_zero_import(self):
+        from TWCManager.Pricing.StaticPricing import StaticPricing
+
+        module = StaticPricing(make_master({"Static": {"enabled": True}}))
+        assert module.getImportPrice() == 0
+
+    def test_missing_peak_key_returns_zero_export(self):
+        from TWCManager.Pricing.StaticPricing import StaticPricing
+
+        module = StaticPricing(make_master({"Static": {"enabled": True}}))
+        assert module.getExportPrice() == 0
+
+    def test_missing_price_keys_return_zero(self):
+        from TWCManager.Pricing.StaticPricing import StaticPricing
+
+        module = StaticPricing(make_master({"Static": {"enabled": True, "peak": {}}}))
+        assert module.getImportPrice() == 0
+        assert module.getExportPrice() == 0
+
+
+class TestPVPCesMissingToken:
+    """PVPCes enabled without a token must disable gracefully."""
+
+    def test_missing_token_unloads(self):
+        from TWCManager.Pricing.PVPCesPricing import PVPCesPricing
+
+        master = make_master({"PVPCes": {"enabled": True}})
+        module = PVPCesPricing(master)
+        master.releaseModule.assert_called_once()
+        assert module.status is False
+
+    def test_missing_token_returns_zero(self):
+        from TWCManager.Pricing.PVPCesPricing import PVPCesPricing
+
+        module = PVPCesPricing(make_master({"PVPCes": {"enabled": True}}))
+        assert module.getImportPrice() == 0
+        assert module.getExportPrice() == 0
+
+
+class TestNegativePricesPreserved:
+    """multiPrice=first must not discard negative (wholesale) prices."""
+
+    @pytest.fixture
+    def master(self):
+        import logging
+        from TWCManager.TWCMaster import TWCMaster
+
+        for name, level in [
+            ("INFO2", 19),
+            ("INFO3", 18),
+            ("INFO4", 17),
+            ("INFO5", 16),
+            ("INFO6", 15),
+            ("INFO7", 14),
+            ("INFO8", 13),
+            ("INFO9", 12),
+            ("DEBUG2", 9),
+        ]:
+            if not hasattr(logging, name):
+                logging.addLevelName(level, name)
+                setattr(logging, name, level)
+
+        config = {
+            "config": {
+                "wiringMaxAmpsAllTWCs": 48,
+                "wiringMaxAmpsPerTWC": 48,
+                "minAmpsPerTWC": 6,
+                "debugLevel": 0,
+                "displayMilliseconds": False,
+            }
+        }
+        return TWCMaster(b"\x77\x78", config)
+
+    def test_negative_import_price_first_policy(self, master):
+        master.importPricingValues = {"Amber": -0.05}
+        master.config["config"]["pricing"] = {"policy": {"multiPrice": "first"}}
+        assert master.getImportPrice() == pytest.approx(-0.05)
+
+    def test_zero_then_negative_selects_negative(self, master):
+        """A zero value (failed fetch) is skipped; the next module wins."""
+        master.importPricingValues = {"Static": 0.0, "Amber": -0.05}
+        master.config["config"]["pricing"] = {"policy": {"multiPrice": "first"}}
+        assert master.getImportPrice() == pytest.approx(-0.05)
+
+    def test_negative_export_price_first_policy(self, master):
+        master.exportPricingValues = {"Amber": -0.02}
+        master.config["config"]["pricing"] = {"policy": {"multiPrice": "first"}}
+        assert master.getExportPrice() == pytest.approx(-0.02)
+
+    def test_add_policy_with_negatives_sums(self, master):
+        master.importPricingValues = {"A": -0.05, "B": 0.10}
+        master.config["config"]["pricing"] = {"policy": {"multiPrice": "add"}}
+        assert master.getImportPrice() == pytest.approx(0.05)
+
+
+class TestModuleCurrency:
+    """Each pricing module reports its currency symbol."""
+
+    def test_amber_currency(self):
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        module = AmberPricing(make_master({"Amber": {"enabled": True, "token": "t"}}))
+        assert module.currency == "$"
+
+    def test_awattar_currency(self):
+        from TWCManager.Pricing.aWATTarPricing import aWATTarPricing
+
+        module = aWATTarPricing(make_master({"aWATTar": {"enabled": True}}))
+        assert module.currency == "€"
+
+    def test_pvpc_currency(self):
+        from TWCManager.Pricing.PVPCesPricing import PVPCesPricing
+
+        module = PVPCesPricing(make_master({"PVPCes": {"enabled": True, "token": "t"}}))
+        assert module.currency == "€"
+
+    def test_static_currency_default_and_override(self):
+        from TWCManager.Pricing.StaticPricing import StaticPricing
+
+        module = StaticPricing(
+            make_master(
+                {"Static": {"enabled": True, "peak": {"import": 1, "export": 1}}}
+            )
+        )
+        assert module.currency == "$"
+
+        module = StaticPricing(
+            make_master(
+                {
+                    "Static": {
+                        "enabled": True,
+                        "currency": "£",
+                        "peak": {"import": 1, "export": 1},
+                    }
+                }
+            )
+        )
+        assert module.currency == "£"
+
+
+class TestForecastSerialization:
+    """Forecast results must be JSON-serialisable (ISO 8601 timestamps)."""
+
+    @pytest.fixture
+    def module(self):
+        from TWCManager.Pricing.AmberPricing import AmberPricing
+
+        mod = AmberPricing(
+            make_master({"Amber": {"enabled": True, "token": "test-amber-token"}})
+        )
+        mod.siteId = "test-site-id"
+        return mod
+
+    def _seed_forecast(self, module):
+        """Populate an in-memory forecast without hitting the network."""
+        module.priceForecast = [
+            {
+                "timestamp": datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc),
+                "importPrice": 0.50,
+                "exportPrice": 0.10,
+                "spikeStatus": "none",
+                "descriptor": "neutral",
+                "renewables": 40,
+            },
+            {
+                "timestamp": datetime(2026, 6, 1, 11, 0, tzinfo=timezone.utc),
+                "importPrice": 0.20,
+                "exportPrice": 0.10,
+                "spikeStatus": "none",
+                "descriptor": "neutral",
+                "renewables": 40,
+            },
+            {
+                "timestamp": datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+                "importPrice": 0.30,
+                "exportPrice": 0.10,
+                "spikeStatus": "none",
+                "descriptor": "neutral",
+                "renewables": 40,
+            },
+        ]
+        module.lastForecastFetch = int(time.time())
+
+    def test_get_price_forecast_json_serializable(self, module):
+        import json
+
+        self._seed_forecast(module)
+        forecast = module.getPriceForecast(hoursAhead=2)
+
+        # This raised TypeError before the fix
+        data = json.dumps(forecast)
+        assert isinstance(data, str)
+        assert '"timestamp": "2026-06-01T10:00:00+00:00"' in data
+
+    def test_get_cheapest_window_json_serializable(self, module):
+        import json
+
+        self._seed_forecast(module)
+        result = module.getCheapestWindow(numHours=1, startHour=0)
+
+        assert result is not None
+        # This raised TypeError before the fix
+        data = json.dumps(result)
+        assert isinstance(data, str)
+
+    def test_timestamp_is_iso_string(self, module):
+        self._seed_forecast(module)
+        forecast = module.getPriceForecast(hoursAhead=3)
+
+        assert len(forecast) > 0
+        assert isinstance(forecast[0]["timestamp"], str)
+        assert "+00:00" in forecast[0]["timestamp"]
+
+    def test_start_hour_reported_in_local_time(self, module):
+        """startHour/startTimestamp must be expressed in the local timezone."""
+        from datetime import datetime as dt
+        from datetime import timezone as tz
+
+        self._seed_forecast(module)
+        result = module.getCheapestWindow(numHours=1, startHour=0)
+
+        expected_local_hour = dt(2026, 6, 1, 11, 0, tzinfo=tz.utc).astimezone().hour
+        assert result["startHour"] == expected_local_hour
+
+        parsed = dt.fromisoformat(result["startTimestamp"])
+        assert parsed == dt(2026, 6, 1, 11, 0, tzinfo=tz.utc)
+
+    def test_utcnow_not_used(self):
+        """datetime.utcnow() is deprecated in Python 3.12+."""
+        import inspect
+        from TWCManager.Pricing import AmberPricing
+
+        source = inspect.getsource(AmberPricing)
+        assert "utcnow" not in source
+
+
+class TestCachedModuleServing:
+    """getPricingModules/Details serve cached values without API fetches."""
+
+    class StubModule:
+        status = True
+        capabilities = {"AdvancePricing": True}
+        currency = "$"
+        importPrice = -0.05
+        exportPrice = 0.08
+
+        def __init__(self):
+            self.fetchCount = 0
+
+        def getCapabilities(self, capability):
+            return self.capabilities.get(capability, False)
+
+        def getImportPrice(self):
+            self.fetchCount += 1
+            return self.importPrice
+
+        def getExportPrice(self):
+            self.fetchCount += 1
+            return self.exportPrice
+
+    @pytest.fixture
+    def master(self):
+        import logging
+        from TWCManager.TWCMaster import TWCMaster
+
+        for name, level in [
+            ("INFO2", 19),
+            ("INFO3", 18),
+            ("INFO4", 17),
+            ("INFO5", 16),
+            ("INFO6", 15),
+            ("INFO7", 14),
+            ("INFO8", 13),
+            ("INFO9", 12),
+            ("DEBUG2", 9),
+        ]:
+            if not hasattr(logging, name):
+                logging.addLevelName(level, name)
+                setattr(logging, name, level)
+
+        config = {
+            "config": {
+                "wiringMaxAmpsAllTWCs": 48,
+                "wiringMaxAmpsPerTWC": 48,
+                "minAmpsPerTWC": 6,
+                "debugLevel": 0,
+                "displayMilliseconds": False,
+            }
+        }
+        m = TWCMaster(b"\x77\x78", config)
+        stub = self.StubModule()
+        m.modules = {"Amber": {"type": "Pricing", "ref": stub, "priority": 0}}
+        m.stub = stub
+        return m
+
+    def test_get_pricing_modules_does_not_fetch(self, master):
+        modules = master.getPricingModules()
+
+        assert len(modules) == 1
+        assert modules[0]["importPrice"] == pytest.approx(-0.05)
+        assert modules[0]["exportPrice"] == pytest.approx(0.08)
+        assert modules[0]["currency"] == "$"
+        assert master.stub.fetchCount == 0
+
+    def test_get_pricing_module_details_does_not_fetch(self, master):
+        details = master.getPricingModuleDetails("Amber")
+
+        assert details["importPrice"] == pytest.approx(-0.05)
+        assert details["currency"] == "$"
+        assert master.stub.fetchCount == 0
+
+
+class TestStatusPublication:
+    """Aggregated prices are published to Status modules (eg MQTT)."""
+
+    class StubPricing:
+        status = True
+        capabilities = {}
+        currency = "$"
+
+        def getImportPrice(self):
+            return -0.05
+
+        def getExportPrice(self):
+            return 0.08
+
+    @pytest.fixture
+    def master(self):
+        import logging
+        from TWCManager.TWCMaster import TWCMaster
+
+        for name, level in [
+            ("INFO2", 19),
+            ("INFO3", 18),
+            ("INFO4", 17),
+            ("INFO5", 16),
+            ("INFO6", 15),
+            ("INFO7", 14),
+            ("INFO8", 13),
+            ("INFO9", 12),
+            ("DEBUG2", 9),
+        ]:
+            if not hasattr(logging, name):
+                logging.addLevelName(level, name)
+                setattr(logging, name, level)
+
+        config = {
+            "config": {
+                "wiringMaxAmpsAllTWCs": 48,
+                "wiringMaxAmpsPerTWC": 48,
+                "minAmpsPerTWC": 6,
+                "debugLevel": 0,
+                "displayMilliseconds": False,
+            }
+        }
+        m = TWCMaster(b"\x77\x78", config)
+        status_ref = Mock()
+        m.modules = {
+            "Amber": {
+                "type": "Pricing",
+                "ref": self.StubPricing(),
+                "priority": 0,
+            },
+            "MQTTStatus": {"type": "Status", "ref": status_ref, "priority": 0},
+        }
+        m.status_ref = status_ref
+        return m
+
+    def test_get_pricing_publishes_to_status_modules(self, master):
+        master.getPricing()
+
+        assert master.status_ref.setStatus.call_count == 2
+        calls = {c.args[1]: c for c in master.status_ref.setStatus.call_args_list}
+        assert calls["import_price"].args[0] == b"all"
+        assert calls["import_price"].args[2] == "importPrice"
+        assert calls["import_price"].args[3] == pytest.approx(-0.05)
+        assert calls["import_price"].args[4] == "$/kWh"
+        assert calls["export_price"].args[2] == "exportPrice"
+        assert calls["export_price"].args[3] == pytest.approx(0.08)

@@ -9,9 +9,8 @@ class PVPCesPricing:
 
     # https://www.esios.ree.es/es/pvpc publishes at 20:30CET eveyday the prices for next day
     # Prices are fetched once per day; the cache expires at midnight (detected via lastFetch.hour)
-    capabilities = {
-        "AdvancePricing": True
-    }
+    capabilities = {"AdvancePricing": True}
+    currency = "€"
     config = None
     configConfig = None
     configPvpc = None
@@ -42,6 +41,14 @@ class PVPCesPricing:
         self.debugLevel = self.configConfig.get("debugLevel", 0)
 
         token = self.configPvpc.get("token")
+        if self.status and not token:
+            self.master.debugLog(
+                1,
+                "$PVPCes",
+                "PVPCes API token not configured. Module will be disabled.",
+            )
+            self.status = False
+
         if self.status:
             self.headers = {
                 "Accept": "application/json; application/vnd.esios-api-v1+json",

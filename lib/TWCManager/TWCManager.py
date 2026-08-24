@@ -379,6 +379,8 @@ def background_tasks_thread(master):
                     master.getSlaveLifetimekWh()
                 elif task["cmd"] == "getPricing":
                     master.getPricing()
+                elif task["cmd"] == "getPricingForecast":
+                    master.refreshPricingForecasts()
                 elif task["cmd"] == "getVehicleVIN":
                     master.getVehicleVIN(task["slaveTWC"], task["vinPart"])
                 elif task["cmd"] == "snapHistoryData":

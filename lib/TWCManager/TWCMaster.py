@@ -98,6 +98,8 @@ class TWCMaster:
         self.modules = {}
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
+        self.exportPricingValues = {}
+        self.importPricingValues = {}
         self.stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
         self.settings = {
             "chargeNowAmps": 0,
@@ -581,8 +583,18 @@ class TWCMaster:
             self.exportPricingValues[module["name"]] = module["ref"].getExportPrice()
             self.importPricingValues[module["name"]] = module["ref"].getImportPrice()
 
+        # Publish current pricing information to Status modules (eg MQTT)
+        unit = self.getPricingCurrency() + "/kWh"
+        for module in self.getModulesByType("Status"):
+            module["ref"].setStatus(
+                b"all", "import_price", "importPrice", self.getImportPrice(), unit
+            )
+            module["ref"].setStatus(
+                b"all", "export_price", "exportPrice", self.getExportPrice(), unit
+            )
+
     def getExportPrice(self):
-        price = 0
+        price = None
         multiPrice = ""
 
         # The policy for how we should deal with multiple export
@@ -596,15 +608,24 @@ class TWCMaster:
         # Iterate through values and apply multiPrice policy
         for key in self.exportPricingValues:
             if multiPrice == "add":
+                if price is None:
+                    price = 0
                 price += float(self.exportPricingValues[key])
             elif multiPrice == "first":
-                if price == 0 and self.exportPricingValues[key] > 0:
+                # The first non-zero price wins. Zero is treated as unset so a
+                # failed fetch from one module doesn't mask another module's
+                # value. Negative prices (eg wholesale feed-in tariffs) are
+                # valid and must be preserved.
+                if price is None and float(self.exportPricingValues[key]) != 0:
                     price = float(self.exportPricingValues[key])
+
+        if price is None:
+            price = 0
 
         return float(price)
 
     def getImportPrice(self):
-        price = 0
+        price = None
         multiPrice = ""
 
         # The policy for how we should deal with multiple import
@@ -618,12 +639,31 @@ class TWCMaster:
         # Iterate through values and apply multiPrice policy
         for key in self.importPricingValues:
             if multiPrice == "add":
+                if price is None:
+                    price = 0
                 price += float(self.importPricingValues[key])
             elif multiPrice == "first":
-                if price == 0 and self.importPricingValues[key] > 0:
+                # See getExportPrice - zero is treated as unset; negative
+                # prices are valid and must be preserved.
+                if price is None and float(self.importPricingValues[key]) != 0:
                     price = float(self.importPricingValues[key])
 
+        if price is None:
+            price = 0
+
         return float(price)
+
+    def getPricingCurrency(self):
+        """
+        Return the currency symbol reported by the first pricing module which
+        provides one, or an empty string if none do. Only meaningful when all
+        active modules report the same currency.
+        """
+        for module in self.getModulesByType("Pricing"):
+            currency = getattr(module["ref"], "currency", "")
+            if currency:
+                return currency
+        return ""
 
     def getPriceForecast(self, hoursAhead=24):
         """
@@ -656,6 +696,9 @@ class TWCMaster:
         """
         Get list of all pricing modules with their status and capabilities.
         Returns a list of dicts with module details.
+
+        Values are served from each module's cached state so this can be
+        called from request handlers without triggering upstream API fetches.
         """
         modules = []
         for module in self.getModulesByType("Pricing"):
@@ -664,18 +707,10 @@ class TWCMaster:
                 "name": module["name"],
                 "enabled": getattr(ref, "status", False),
                 "capabilities": getattr(ref, "capabilities", {}),
-                "importPrice": 0,
-                "exportPrice": 0,
+                "currency": getattr(ref, "currency", ""),
+                "importPrice": float(getattr(ref, "importPrice", 0) or 0),
+                "exportPrice": float(getattr(ref, "exportPrice", 0) or 0),
             }
-            if mod_info["enabled"]:
-                try:
-                    mod_info["importPrice"] = ref.getImportPrice()
-                except Exception:
-                    pass
-                try:
-                    mod_info["exportPrice"] = ref.getExportPrice()
-                except Exception:
-                    pass
             modules.append(mod_info)
         return modules
 
@@ -683,6 +718,9 @@ class TWCMaster:
         """
         Get detailed information for a specific pricing module.
         Returns dict with module details or None if not found.
+
+        Prices are served from the module's cached state so this can be
+        called from request handlers without triggering upstream API fetches.
         """
         for module in self.getModulesByType("Pricing"):
             if module["name"] == module_name:
@@ -691,18 +729,11 @@ class TWCMaster:
                     "name": module["name"],
                     "enabled": getattr(ref, "status", False),
                     "capabilities": getattr(ref, "capabilities", {}),
-                    "importPrice": 0,
-                    "exportPrice": 0,
+                    "currency": getattr(ref, "currency", ""),
+                    "importPrice": float(getattr(ref, "importPrice", 0) or 0),
+                    "exportPrice": float(getattr(ref, "exportPrice", 0) or 0),
                 }
                 if details["enabled"]:
-                    try:
-                        details["importPrice"] = ref.getImportPrice()
-                    except Exception:
-                        pass
-                    try:
-                        details["exportPrice"] = ref.getExportPrice()
-                    except Exception:
-                        pass
                     if details["capabilities"].get("SpikeDetection"):
                         try:
                             details["spikeStatus"] = ref.getSpikeStatus()
@@ -714,10 +745,7 @@ class TWCMaster:
                         except Exception:
                             details["renewables"] = 0
                     if details["capabilities"].get("Forecasting"):
-                        try:
-                            details["hasForecast"] = True
-                        except Exception:
-                            details["hasForecast"] = False
+                        details["hasForecast"] = True
                     try:
                         details["priceDescriptor"] = ref.getPriceDescriptor()
                     except Exception:
@@ -731,6 +759,24 @@ class TWCMaster:
         """
         self.getPricing()
         return True
+
+    def refreshPricingForecasts(self):
+        """
+        Refresh cached price forecasts from all pricing modules which support
+        forecasting. Intended to be run as a background task so that API and
+        UI requests can be served from cache without blocking on upstream
+        APIs.
+        """
+        for module in self.getModulesByType("Pricing"):
+            ref = module["ref"]
+            if ref.getCapabilities("Forecasting") and hasattr(ref, "updateForecast"):
+                try:
+                    ref.updateForecast(48)
+                except Exception as e:
+                    self.debugLog(
+                        4, "Master", f"Error refreshing forecast from {module['name']}"
+                    )
+                    self.debugLog(10, "Master", str(e))
 
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)

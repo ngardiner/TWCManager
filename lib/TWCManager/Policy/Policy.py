@@ -258,6 +258,14 @@ class Policy:
         if len(self.master.getModulesByType("Pricing")) > 0:
             self.master.queue_background_task({"cmd": "getPricing"})
 
+            # Prefetch price forecasts in the background so pricing API and UI
+            # requests can be served from cache without blocking on upstream
+            # APIs
+            for module in self.master.getModulesByType("Pricing"):
+                if module["ref"].getCapabilities("Forecasting"):
+                    self.master.queue_background_task({"cmd": "getPricingForecast"})
+                    break
+
         # Report current policy via Status modules
         for module in self.master.getModulesByType("Status"):
             module["ref"].setStatus(
@@ -335,7 +343,10 @@ class Policy:
             return self.master.getExportPrice()
         elif value.startswith("getCheapestWindow"):
             import re
-            match = re.match(r"getCheapestWindow\((\d+)(?:,\s*(\d+),\s*(\d+))?\)", value)
+
+            match = re.match(
+                r"getCheapestWindow\((\d+)(?:,\s*(\d+),\s*(\d+))?\)", value
+            )
             if match:
                 numHours = int(match.group(1))
                 startHour = int(match.group(2)) if match.group(2) else None

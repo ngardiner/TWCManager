@@ -342,6 +342,7 @@ def CreateHTTPHandlerClass(master):
                     {
                         "export": master.getExportPrice(),
                         "import": master.getImportPrice(),
+                        "currency": master.getPricingCurrency(),
                     }
                 )
                 self.wfile.write(json_data.encode("utf-8"))
@@ -1057,6 +1058,7 @@ def CreateHTTPHandlerClass(master):
                             "status": "success",
                             "import": master.getImportPrice(),
                             "export": master.getExportPrice(),
+                            "currency": master.getPricingCurrency(),
                         }
                     ).encode("utf-8")
                 )
@@ -1254,6 +1256,10 @@ def CreateHTTPHandlerClass(master):
 
         def do_GET(self):
             self.url = urllib.parse.urlparse(self.path)
+
+            # Parse query string parameters into a dict of lists, so that API
+            # handlers can access them via self.querydict
+            self.querydict = urllib.parse.parse_qs(self.url.query)
 
             # Determine host header entry
             try:
