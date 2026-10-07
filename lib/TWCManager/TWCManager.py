@@ -1968,19 +1968,34 @@ while True:
         except KeyboardInterrupt:
             logger.info("Exiting after background tasks complete...")
             break
+        # The 5 s sleep was deliberate; don't report it as a main loop stall.
+        timeLastLoopTop = time.time()
+
+# Whole shutdown must finish inside systemd's 90 s stop timeout.
+shutdownDeadline = time.time() + 80
+
+# Make sure any volatile data is written to disk before exiting. Queue this
+# first so the background thread can work on it during the drain below.
+master.queue_background_task({"cmd": "saveSettings"})
 
 # Let pending stop-charging commands reach the car; other pending vehicle
 # commands are dropped rather than holding up shutdown.
 master.vehicleCommandQueue.drain_high_priority(timeout=60)
 
-# Make sure any volatile data is written to disk before exiting
-master.queue_background_task({"cmd": "saveSettings"})
-
-# Wait for background tasks thread to finish all tasks.
+# Wait for the background tasks thread to finish its queued tasks, but only
+# until the shutdown deadline: a task blocked on the BLE lock must not hold
+# up exit until systemd SIGKILLs us.
 # Note that there is no such thing as backgroundTasksThread.stop(). Because we
 # set the thread type to daemon, it will be automatically killed when we exit
 # this program.
-master.backgroundTasksQueue.join()
+while master.backgroundTasksQueue.unfinished_tasks > 0:
+    if time.time() >= shutdownDeadline:
+        logger.warning(
+            "Background tasks still pending at exit (%d unfinished)",
+            master.backgroundTasksQueue.unfinished_tasks,
+        )
+        break
+    time.sleep(0.1)
 
 # Close the input module
 master.getInterfaceModule().close()
