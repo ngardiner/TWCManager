@@ -436,3 +436,78 @@ class TestTWCSlaveConfiguration:
         slave = TWCSlave(bytearray(b"AB"), 80, config, mock_master)
         
         assert slave.APIcontrol is False
+
+
+class TestVehicleChargeRateQueueing:
+    """setChargeRate is queued to the vehicle worker, never called inline."""
+
+    @pytest.fixture
+    def vehicle(self):
+        v = Mock()
+        v.VIN = "5YJ3E1EA1KF000001"
+        return v
+
+    @pytest.fixture
+    def slave(self, vehicle):
+        from TWCManager.TWCSlave import TWCSlave
+
+        master = Mock()
+        master.getModuleByName = Mock(return_value=None)
+        config = {
+            "config": {
+                "wiringMaxAmpsPerTWC": 32,
+                "useFlexAmpsToStartCharge": False,
+                "startStopDelay": 60,
+                "fakeMaster": False,
+            }
+        }
+        s = TWCSlave(bytearray(b"AB"), 80, config, master)
+        s.getLastVehicle = Mock(return_value=vehicle)
+        return s
+
+    def test_queue_charge_rate(self, slave, vehicle):
+        slave._queueChargeRate(16.7)
+        slave.master.queue_vehicle_command.assert_called_once_with(
+            {"cmd": "setChargeRate", "amps": 16, "vehicle": vehicle}, None
+        )
+
+    def test_raise_queues_wiring_max_with_callback(self, slave, vehicle):
+        slave._requestVehicleRateRaise()
+        task, callback = slave.master.queue_vehicle_command.call_args[0]
+        assert task == {"cmd": "setChargeRate", "amps": 32, "vehicle": vehicle}
+        assert callable(callback)
+        assert slave.vehicleRateRaised is False
+
+    @pytest.mark.parametrize("result", [True, "success", None])
+    def test_raise_success_sets_flag(self, slave, result):
+        slave._requestVehicleRateRaise()
+        _, callback = slave.master.queue_vehicle_command.call_args[0]
+        callback(result)
+        assert slave.vehicleRateRaised is True
+
+    def test_raise_failure_leaves_flag(self, slave):
+        slave._requestVehicleRateRaise()
+        _, callback = slave.master.queue_vehicle_command.call_args[0]
+        callback(False)
+        assert slave.vehicleRateRaised is False
+
+    def test_stale_raise_ignored_after_reset(self, slave):
+        slave._requestVehicleRateRaise()
+        _, callback = slave.master.queue_vehicle_command.call_args[0]
+        slave._resetVehicleRateRaised()
+        callback(True)
+        assert slave.vehicleRateRaised is False
+
+    def test_reset_clears_flag_and_bumps_generation(self, slave):
+        slave.vehicleRateRaised = True
+        gen = slave._vehicleRateRaiseGen
+        slave._resetVehicleRateRaised()
+        assert slave.vehicleRateRaised is False
+        assert slave._vehicleRateRaiseGen == gen + 1
+
+    def test_heartbeat_code_never_calls_set_charge_rate_inline(self):
+        import inspect
+        from TWCManager.TWCSlave import TWCSlave
+
+        source = inspect.getsource(TWCSlave)
+        assert "vehicleModule.setChargeRate" not in source

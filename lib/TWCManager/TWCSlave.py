@@ -80,6 +80,10 @@ class TWCSlave:
         self.maxAmps = maxAmps
         self.APIcontrol = False
         self.vehicleRateRaised = False
+        # Bumped whenever vehicleRateRaised is reset, so a raise request that
+        # completes on the vehicle worker after control moved elsewhere
+        # can't set the flag back.
+        self._vehicleRateRaiseGen = 0
         self.__vehicleRateRaiseAttemptTime = 0
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
@@ -110,6 +114,31 @@ class TWCSlave:
 
         logger.error("No vehicle module enabled")
         return None
+
+    def _queueChargeRate(self, amps, callback=None):
+        # Vehicle commands can take minutes over BLE; hand them to the
+        # vehicle worker so this (main, serial) thread keeps running.
+        self.master.queue_vehicle_command(
+            {
+                "cmd": "setChargeRate",
+                "amps": int(amps),
+                "vehicle": self.getLastVehicle(),
+            },
+            callback,
+        )
+
+    def _requestVehicleRateRaise(self):
+        gen = self._vehicleRateRaiseGen
+
+        def done(result):
+            if result is not False and gen == self._vehicleRateRaiseGen:
+                self.vehicleRateRaised = True
+
+        self._queueChargeRate(self.wiringMaxAmps, done)
+
+    def _resetVehicleRateRaised(self):
+        self.vehicleRateRaised = False
+        self._vehicleRateRaiseGen += 1
 
     def print_status(self, heartbeatData):
         try:
@@ -863,7 +892,7 @@ class TWCSlave:
             # Control is given to the Tesla API to control Charge Rate
             # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
             self.APIcontrol = True
-            self.vehicleRateRaised = False
+            self._resetVehicleRateRaised()
             self.__vehicleRateRaiseAttemptTime = 0
 
             # Call the Tesla API to set the charge rate for vehicle connected to this TWC
@@ -884,12 +913,7 @@ class TWCSlave:
                 self.__lastAPIAmpsRepeat = 0
                 self.__lastAPIAmpsValue = int(desiredAmpsOffered)
 
-                # Determine vehicle to control
-                targetVehicle = (
-                    None if self.getLastVehicle() is None else self.getLastVehicle()
-                )
-
-                self.vehicleModule.setChargeRate(int(desiredAmpsOffered), targetVehicle)
+                self._queueChargeRate(desiredAmpsOffered)
 
             desiredAmpsOffered = self.wiringMaxAmps
 
@@ -902,12 +926,9 @@ class TWCSlave:
             if not self.vehicleRateRaised and (
                 now - self.__vehicleRateRaiseAttemptTime >= 60
             ):
+                # The 60s window also stops re-requesting while one is queued.
                 self.__vehicleRateRaiseAttemptTime = now
-                result = self.vehicleModule.setChargeRate(
-                    self.wiringMaxAmps, self.getLastVehicle()
-                )
-                if result is not False:
-                    self.vehicleRateRaised = True
+                self._requestVehicleRateRaise()
             self.APIcontrol = False
 
             # We can tell the TWC how much power to use in 0.01A increments, but
