@@ -827,6 +827,7 @@ if "PYTEST_CURRENT_TEST" in os.environ:
 
     sys.exit(0)
 
+timeLastLoopTop = time.time()
 while True:
     try:
         # In this area, we always send a linkready message when we first start.
@@ -842,6 +843,13 @@ while True:
         time.sleep(0.025)
 
         now = time.time()
+
+        # Diagnostic: the serial link must be serviced several times a second.
+        # Anything holding this thread for over a second risks losing sync
+        # with the slave TWCs.
+        if now - timeLastLoopTop > 1.0:
+            logger.warning("Main loop stalled for %.1fs", now - timeLastLoopTop)
+        timeLastLoopTop = now
 
         if config["config"]["fakeMaster"] == 1:
             # A real master sends 5 copies of linkready1 and linkready2 whenever
