@@ -32,6 +32,7 @@ import logging
 import os.path
 import math
 import re
+import signal
 import sys
 import time
 import traceback
@@ -827,6 +828,17 @@ if "PYTEST_CURRENT_TEST" in os.environ:
     import sys
 
     sys.exit(0)
+
+
+def sigterm_to_keyboard_interrupt(signum, frame):
+    # systemd stop/restart sends SIGTERM. Take the same graceful shutdown
+    # path as Ctrl-C: drain stop-charging commands, save settings, and
+    # finish background tasks. A second SIGTERM kills immediately.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    raise KeyboardInterrupt
+
+
+signal.signal(signal.SIGTERM, sigterm_to_keyboard_interrupt)
 
 timeLastLoopTop = time.time()
 while True:
