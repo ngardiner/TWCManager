@@ -709,3 +709,98 @@ class TestSubtractChargerLoadGetMaxAmps:
         assert result > 0
         assert result < 12, f"Offer {result} A seems too high for available solar"
 
+
+
+class TestVehicleCommandRouting:
+    """Vehicle commands go to the VehicleCommandQueue, not the background queue."""
+
+    @pytest.fixture
+    def master(self):
+        from TWCManager.TWCMaster import TWCMaster
+
+        m = TWCMaster(
+            "AB",
+            {
+                "config": {
+                    "debugOutputToFile": False,
+                    "subtractChargerLoad": False,
+                    "treatGenerationAsGridDelivery": False,
+                    "wiringMaxAmpsAllTWCs": 80,
+                    "maxAmpsAllowedFromGrid": None,
+                }
+            },
+        )
+        m.vehicleCommandQueue = Mock()
+        # The background queue state is class-level; isolate it per test.
+        m.backgroundTasksQueue = Mock()
+        m.backgroundTasksCmds = {}
+        m.backgroundTasksDelayed = []
+        return m
+
+    def test_master_creates_unstarted_queue(self):
+        from TWCManager.TWCMaster import TWCMaster
+        from TWCManager.VehicleCommandQueue import VehicleCommandQueue
+
+        m = TWCMaster(
+            "AB",
+            {
+                "config": {
+                    "wiringMaxAmpsAllTWCs": 80,
+                    "maxAmpsAllowedFromGrid": None,
+                }
+            },
+        )
+        assert isinstance(m.vehicleCommandQueue, VehicleCommandQueue)
+        assert m.vehicleCommandQueue._thread is None
+
+    @pytest.mark.parametrize(
+        "task",
+        [
+            {"cmd": "charge", "charge": True},
+            {"cmd": "charge", "charge": False, "vin": "V1"},
+            {"cmd": "applyChargeLimit", "limit": 80},
+        ],
+    )
+    def test_vehicle_commands_routed(self, master, task):
+        master.queue_background_task(task)
+        master.vehicleCommandQueue.put.assert_called_once_with(task, None)
+        master.backgroundTasksQueue.put.assert_not_called()
+        assert task["cmd"] not in master.backgroundTasksCmds
+
+    def test_other_tasks_stay_on_background_queue(self, master):
+        task = {"cmd": "saveSettings"}
+        master.queue_background_task(task)
+        master.backgroundTasksQueue.put.assert_called_once_with(task)
+        master.vehicleCommandQueue.put.assert_not_called()
+
+    def test_delayed_charge_routed_when_due(self, master):
+        task = {"cmd": "charge", "charge": True}
+        master.queue_background_task(task, delay=60)
+        master.vehicleCommandQueue.put.assert_not_called()
+        assert len(master.backgroundTasksDelayed) == 1
+
+        master.backgroundTasksDelayed[0] = (datetime.now() - timedelta(seconds=1), task)
+        master.getBackgroundTask()
+        master.vehicleCommandQueue.put.assert_called_once_with(task, None)
+
+    def test_queue_vehicle_command_forwards_callback(self, master):
+        task = {"cmd": "setChargeRate", "amps": 16, "vehicle": None}
+        callback = Mock()
+        master.queue_vehicle_command(task, callback)
+        master.vehicleCommandQueue.put.assert_called_once_with(task, callback)
+
+    @pytest.mark.parametrize(
+        "loaded, expected",
+        [
+            (["VehiclePriority", "HomeAssistant", "TeslaBLE", "TeslaAPI"], "VehiclePriority"),
+            (["HomeAssistant", "TeslaBLE", "TeslaAPI"], "HomeAssistant"),
+            (["TeslaBLE", "TeslaAPI"], "TeslaBLE"),
+            (["TeslaAPI"], "TeslaAPI"),
+            ([], None),
+        ],
+    )
+    def test_resolve_vehicle_command_module(self, master, loaded, expected):
+        modules = {name: Mock(name=name) for name in loaded}
+        master.getModuleByName = Mock(side_effect=lambda n: modules.get(n))
+        resolved = master._resolveVehicleCommandModule()
+        assert resolved is (modules[expected] if expected else None)

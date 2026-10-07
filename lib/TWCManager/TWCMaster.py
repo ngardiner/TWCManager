@@ -15,8 +15,14 @@ import random
 import requests
 import bisect
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 
 logger = LoggerFactory.get_logger("Master", "Master")
+
+# Background task commands that are vehicle commands. They run on the
+# VehicleCommandQueue worker so slow BLE retries don't stall other
+# background work.
+VEHICLE_COMMANDS = frozenset(["charge", "applyChargeLimit"])
 
 
 class TWCMaster:
@@ -97,6 +103,9 @@ class TWCMaster:
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
         self.stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
+        self.vehicleCommandQueue = VehicleCommandQueue(
+            self._resolveVehicleCommandModule
+        )
         self.settings = {
             "chargeNowAmps": 0,
             "chargeStopMode": "1",
@@ -1243,6 +1252,10 @@ class TWCMaster:
             )
             return
 
+        if task["cmd"] in VEHICLE_COMMANDS:
+            self.queue_vehicle_command(task)
+            return
+
         self.getBackgroundTasksLock()
         try:
             if task["cmd"] in self.backgroundTasksCmds:
@@ -1261,6 +1274,19 @@ class TWCMaster:
 
         # Queue the task to be handled by background_tasks_thread.
         self.backgroundTasksQueue.put(task)
+
+    def queue_vehicle_command(self, task, callback=None):
+        # Hand a vehicle command to the vehicle command worker. Returns
+        # immediately; callback(result) runs on the worker when done.
+        self.vehicleCommandQueue.put(task, callback)
+
+    def _resolveVehicleCommandModule(self):
+        # Same preference order as TWCSlave.get_vehicle_module.
+        for name in ("VehiclePriority", "HomeAssistant", "TeslaBLE", "TeslaAPI"):
+            module = self.getModuleByName(name)
+            if module:
+                return module
+        return None
 
     def registerModule(self, module):
         # This function is used during module instantiation to either reference a

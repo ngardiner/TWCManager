@@ -317,11 +317,7 @@ def background_tasks_thread(master):
                 vehicleModule = get_vehicle_module()
 
             if "cmd" in task:
-                if task["cmd"] == "applyChargeLimit":
-                    vehicleModule.applyChargeLimit(limit=task["limit"])
-                elif task["cmd"] == "charge":
-                    vehicleModule.car_api_charge(task)
-                elif task["cmd"] == "checkArrival":
+                if task["cmd"] == "checkArrival":
                     # Use the policy-tracked limit, not TeslaAPI's own
                     # lastChargeLimitApplied: that attribute is only updated
                     # when TeslaAPI itself applies a limit, so it stays 0
@@ -801,6 +797,11 @@ master.loadSettings()
 backgroundTasksThread = threading.Thread(target=background_tasks_thread, args=(master,))
 backgroundTasksThread.daemon = True
 backgroundTasksThread.start()
+
+# Vehicle commands (charge start/stop, charge limit, charge rate) run on
+# their own worker so slow BLE retries never block this thread or the
+# background thread.
+master.vehicleCommandQueue.start()
 
 master.queue_background_task({"cmd": "sunrise"}, 30)
 
@@ -1951,6 +1952,10 @@ while True:
         logger.info("Unhandled Exception:" + traceback.format_exc())
         # Sleep 5 seconds so the user might see the error.
         time.sleep(5)
+
+# Let pending stop-charging commands reach the car; other pending vehicle
+# commands are dropped rather than holding up shutdown.
+master.vehicleCommandQueue.drain_high_priority(timeout=60)
 
 # Make sure any volatile data is written to disk before exiting
 master.queue_background_task({"cmd": "saveSettings"})
