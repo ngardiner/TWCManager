@@ -1963,7 +1963,11 @@ while True:
         traceback.print_exc()
         logger.info("Unhandled Exception:" + traceback.format_exc())
         # Sleep 5 seconds so the user might see the error.
-        time.sleep(5)
+        try:
+            time.sleep(5)
+        except KeyboardInterrupt:
+            logger.info("Exiting after background tasks complete...")
+            break
 
 # Let pending stop-charging commands reach the car; other pending vehicle
 # commands are dropped rather than holding up shutdown.
