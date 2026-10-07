@@ -237,6 +237,27 @@ class TestCallbacksAndErrors:
         assert results == [False]
         assert module.calls == []
 
+    # The worker re-raises SystemExit, which pytest reports as an unhandled
+    # thread exception; that is the behaviour under test, not a failure.
+    @pytest.mark.filterwarnings(
+        "ignore::pytest.PytestUnhandledThreadExceptionWarning"
+    )
+    def test_base_exception_in_dispatch_clears_busy(self, q, module):
+        raised = threading.Event()
+
+        def exit_now(limit):
+            raised.set()
+            raise SystemExit("module called sys.exit")
+
+        module.applyChargeLimit = exit_now
+        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        assert raised.wait(WAIT)
+        start = time.monotonic()
+        assert q.drain_high_priority(timeout=WAIT) is True
+        assert time.monotonic() - start < 0.5
+        # Let the thread finish exiting inside this test.
+        q._thread.join(WAIT)
+
     @pytest.mark.parametrize("task", [None, "charge", {}, {"charge": True}])
     def test_malformed_put_is_dropped_without_raising(self, q, module, task):
         q.put(task)

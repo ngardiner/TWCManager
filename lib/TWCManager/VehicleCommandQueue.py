@@ -126,16 +126,29 @@ class VehicleCommandQueue:
             return False
 
     def _run(self):
-        while True:
-            task, callback = self._next()
-            result = self._execute(task)
-            if callback is not None:
+        try:
+            while True:
+                task, callback = self._next()
                 try:
-                    callback(result)
-                except Exception:
-                    logger.error(
-                        "Vehicle command callback failed: %s", traceback.format_exc()
-                    )
-            with self._cond:
-                self._busy = False
-                self._cond.notify_all()
+                    result = self._execute(task)
+                    if callback is not None:
+                        try:
+                            callback(result)
+                        except Exception:
+                            logger.error(
+                                "Vehicle command callback failed: %s",
+                                traceback.format_exc(),
+                            )
+                finally:
+                    # Clear even on BaseException so drain_high_priority and
+                    # waiters aren't left blocked on a dead worker.
+                    with self._cond:
+                        self._busy = False
+                        self._cond.notify_all()
+        except BaseException:
+            logger.error(
+                "Vehicle command worker thread %s exiting: %s",
+                threading.current_thread().name,
+                traceback.format_exc(),
+            )
+            raise
