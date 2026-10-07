@@ -96,19 +96,22 @@ class VehicleCommandQueue:
 |--------------------|------------------------------|-------------------------------------------------------|
 | `charge`           | `charge` (bool), `vin` opt.  | `module.car_api_charge(task)`                         |
 | `applyChargeLimit` | `limit`                      | `module.applyChargeLimit(limit=task["limit"])`        |
-| `setChargeRate`    | `amps` (int), `vin` opt.     | `module.setChargeRate(task["amps"], task["vehicle"])` |
+| `setChargeRate`    | `amps` (int), `vehicle` opt. | `module.setChargeRate(task["amps"], task.get("vehicle"))` |
 
-For `setChargeRate`, the task carries both `vehicle` (whatever
-`TWCSlave.getLastVehicle()` returned, passed through untouched) and `vin`
-(the coalescing key: `getattr(vehicle, "VIN", vehicle)`).
+`setChargeRate` carries `vehicle` exactly as `TWCSlave.getLastVehicle()`
+returned it (a vehicle object or `None`), because module implementations
+such as `TeslaAPI.setChargeRate` need the object, not just the VIN. The task
+does not duplicate the VIN; the queue derives it when computing the
+coalescing key.
 
 Unknown `cmd` values are logged at error level and dropped (callback invoked
 with `False`).
 
 **Coalescing**
 
-Pending commands are keyed by `(cmd, vin)` where `vin` is `task.get("vin")`
-(may be `None`). Putting a task whose key is already *pending* replaces that
+Pending commands are keyed by `(cmd, vin)`, where `vin` is `task["vin"]` if
+present, else `task["vehicle"].VIN` if a vehicle object is present, else
+`None`. Putting a task whose key is already *pending* replaces that
 pending task's payload and callback in place (latest wins) and keeps its queue
 position, except as described under priority below. A task already being
 executed by the worker is not pending; a new put with the same key creates a
@@ -169,7 +172,7 @@ The lock is never held while dispatching or running the callback.
 
 - `TWCSlave.py:892` (API-controlled rate): replace the direct call with
   `self.master.queue_vehicle_command({"cmd": "setChargeRate", "amps":
-  int(desiredAmpsOffered), "vehicle": targetVehicle, "vin": <key>})`. The
+  int(desiredAmpsOffered), "vehicle": targetVehicle})`. The
   existing 15 s / repeat-count throttling stays as is. No callback — the
   return value was already ignored.
 - `TWCSlave.py:906` (raise car limit to wiring max): queue
@@ -187,7 +190,18 @@ The lock is never held while dispatching or running the callback.
   `vehicleRateRaised` is reset) and only sets the flag if the counter is
   unchanged.
 
-### Component 4: BLE lock in TeslaBLE
+### Component 4: Main-loop stall warning (`TWCManager.py`)
+
+Needed to verify the goal on real hardware. SHB lines are logged only on
+change or every 10 minutes, so they cannot show stalls.
+
+At the top of the outer `while True` loop, record `time.time()`. If the gap
+since the previous iteration's top exceeds 1.0 s, log a warning:
+`Main loop stalled for X.Xs`. In normal operation an iteration takes the
+25 ms sleep plus processing, so this does not fire. It stays in the code
+permanently as a diagnostic.
+
+### Component 5: BLE lock in TeslaBLE
 
 - Add `self._bleLock = threading.Lock()` in `TeslaBLE.__init__`.
 - Hold it around each "write key file → run `tesla-control` → unlink key
@@ -207,8 +221,24 @@ The lock is never held while dispatching or running the callback.
 - Worker survives any exception from dispatch or callback (logged with
   traceback, matching `background_tasks_thread` style).
 - Module resolution failure → logged error, `callback(False)`.
-- Worker thread is a daemon, like `backgroundTasksThread`; no explicit
-  shutdown.
+
+## Shutdown
+
+On `KeyboardInterrupt`, `TWCManager.py` queues `saveSettings` and calls
+`master.backgroundTasksQueue.join()`, so the background queue is drained
+before exit. The vehicle command queue is deliberately **not** drained:
+
+- its worker is a daemon thread and is killed at interpreter exit;
+- pending commands are dropped.
+
+Rationale: draining could hold shutdown for minutes on BLE retries, and
+pending rate or limit changes are meaningless once TWCManager stops managing
+the charger.
+
+This changes behavior for one case. Today a `charge` / `applyChargeLimit`
+task pending at Ctrl-C runs during the drain; after this change it is
+dropped. That includes a pending stop-charging command. This was accepted in
+design review: a shutdown should not wait on BLE.
 
 ## Behavior changes visible to users
 
@@ -250,3 +280,37 @@ Unit tests (pytest, `tests/unit/`):
     `_run_command_with_timeout` that records entry/exit; assert no overlap;
   - same for `_fetch_state_json` vs `_sendCommand_internal`.
 - Existing `test_vehicle_priority.py` passes unchanged.
+
+### Live testing (`ssh twcmanager`)
+
+The live box runs TWCManager as `twcmanager.service` (systemd, user
+`mbishop`) from `~/TWCManager` with a venv. It is currently at `a7c84f4` and
+uses `chargeStopMode` 1. Its journal already shows the contention bug:
+overlapping retry sequences for one VIN (two "retrying in 4s (attempt 2/4)"
+lines one second apart, 18:32:51 and 18:32:52 on 2026-10-07).
+
+Procedure. Each deploy or restart is confirmed with the user first.
+
+1. **Baseline.** Deploy only Component 4 (the stall warning) on top of
+   the box's current code and restart. Collect for a period that includes
+   BLE activity:
+   - count and maximum of `Main loop stalled` warnings;
+   - number of overlapping BLE retry sequences (more than one
+     `_execute_with_retry` chain in flight for a VIN, visible as interleaved
+     attempt counters);
+   - `tesla-control` "no such file or directory" failures.
+2. **Deploy the branch.** Record the box's prior commit for rollback, then
+   restart.
+3. **Measure the same metrics.** Expect:
+   - no stall warnings attributable to BLE;
+   - no overlapping BLE operations;
+   - no "no such file or directory" key-file failures.
+4. **Exercise the paths:**
+   - plug in a car, or use the web UI start/stop, so `charge` commands run;
+   - change policy to trigger `applyChargeLimit`;
+   - let charge-rate control run so `setChargeRate` is queued from the
+     heartbeat path;
+   - while one BLE command is retrying, issue a stop and confirm from the
+     logs that it runs next.
+5. **Rollback:** `git checkout <prior>` in `~/TWCManager`, then
+   `sudo systemctl restart twcmanager`.
