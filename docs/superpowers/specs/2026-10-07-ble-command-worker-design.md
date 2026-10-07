@@ -58,8 +58,13 @@ work on that thread (`checkGreenEnergy`, `getVehicleVIN`, `saveSettings`,
 - Changing retry budgets. `VehiclePriority` retry counts and TeslaBLE's
   internal retry/backoff/circuit breaker are unchanged.
 - Moving state reads (`checkCharge` / `updateChargeAtHome`,
-  `checkArrival`, `checkDeparture`) off `background_tasks_thread`. The BLE
-  lock makes them safe; they stay where they are.
+  `checkArrival`, `checkDeparture`) off `background_tasks_thread`. They stay
+  where they are. The BLE lock serializes their use of the adapter, but it
+  does not make them race-free: `checkArrival` / `checkDeparture` on the
+  background thread can now interleave with Policy's `applyChargeLimit` on
+  the vehicle worker. Both touch module bookkeeping (charge-limit flags,
+  saving and removing the normal charge limit) and can trigger a TeslaAPI
+  token refresh. This is a known race, deferred.
 - Moving HTTP-initiated pairing off the request thread. It takes the BLE lock
   and blocks only its own HTTP request, as today.
 - Fixing the pre-existing unlocked access to `backgroundTasksDelayed` or the
@@ -198,14 +203,18 @@ The lock is never held while dispatching or running the callback.
   (preserving the existing success test). `__vehicleRateRaiseAttemptTime` is
   still set at enqueue time, so the existing 60 s window prevents
   re-submitting while a request is outstanding. The callback runs on the
-  worker thread; it performs a single attribute assignment, which is safe
-  under the GIL.
+  worker thread.
 - The API-control branch resets `vehicleRateRaised = False` on the main
   thread. A raise callback that completes after control has switched to API
   mode could set it back to `True`. To prevent that, the callback captures a
-  generation counter (`self.__vehicleRateRaiseGen`, incremented whenever
+  generation counter (`self._vehicleRateRaiseGen`, incremented whenever
   `vehicleRateRaised` is reset) and only sets the flag if the counter is
   unchanged.
+- The generation check narrows the race but does not close it: the callback's
+  check and its set are not atomic with the main thread's reset, so a reset
+  that lands between them can still leave a stale `True`. This self-corrects,
+  because the API-control branch resets the flag on every heartbeat. The only
+  cost is that one raise may be skipped.
 
 ### Component 4: Main-loop stall warning (`TWCManager.py`)
 
@@ -241,13 +250,23 @@ permanently as a diagnostic.
 
 ## Shutdown
 
-On `KeyboardInterrupt`, `TWCManager.py` queues `saveSettings` and calls
-`master.backgroundTasksQueue.join()`, so the background queue is drained
-before exit. The vehicle command queue is **partly** drained: stop-charging
-commands still run, everything else is dropped.
+On `KeyboardInterrupt`, `TWCManager.py` shuts down in this order, with the
+whole sequence bounded at 80 s from the start of shutdown:
 
-Before the background-queue `join()`, `TWCManager.py` calls
-`master.vehicleCommandQueue.drain_high_priority(timeout=60)`, which:
+1. Queue `saveSettings` on the background queue first, so the background
+   thread can work on it while the vehicle queue drains.
+2. Call `master.vehicleCommandQueue.drain_high_priority(timeout=60)` (at most
+   60 s).
+3. Wait for the background queue to empty by polling its `unfinished_tasks`
+   every 0.1 s, until it reaches 0 or the 80 s deadline passes. On the
+   deadline, log a warning that background tasks were still pending at exit.
+   (A background task such as `checkCharge` can be blocked on the BLE lock
+   behind a retrying vehicle command, so an unbounded `join()` could run past
+   systemd's SIGKILL.)
+4. Close the interface module.
+
+The vehicle command queue is **partly** drained: stop-charging commands still
+run, everything else is dropped. `drain_high_priority`:
 
 1. Under the lock, sets a `draining` flag and clears the low-priority table.
    While `draining` is set, `put` accepts only high-priority tasks; other
@@ -267,15 +286,16 @@ background-queue drain nor `saveSettings` runs. This change installs a
 SIGTERM handler, just before the main loop, that restores the default
 SIGTERM disposition (so a second SIGTERM kills immediately) and raises
 `KeyboardInterrupt` in the main thread. `systemctl stop` and `restart` then
-take the same shutdown path as Ctrl-C. The 60 s drain cap fits inside
-systemd's 90 s SIGKILL backstop. systemd also sends SIGTERM to any running
+take the same shutdown path as Ctrl-C. The total shutdown (60 s drain plus
+the bounded background wait, under 80 s in all) fits inside systemd's 90 s
+SIGKILL backstop. systemd also sends SIGTERM to any running
 `tesla-control` child, so an in-flight BLE command dies; a stop command then
 retries inside the drain window.
 
 Rationale: a stop the user or policy asked for should still reach the car,
 but rate and limit changes are meaningless once TWCManager stops managing
 the charger, and shutdown should not wait minutes on BLE retries for them.
-The 60 s cap bounds shutdown time even if a stop is retrying. A `charge`
+The 60 s cap bounds the drain even if a stop is retrying. A `charge`
 False task that is still being retried can, in the worst case, take longer
 than that.
 
@@ -288,6 +308,15 @@ than that.
 - `background_tasks_thread`'s fallback when `VehiclePriority` is absent did
   not include `TeslaBLE`; the vehicle worker's resolution order does. In
   practice `VehiclePriority` is always in `modules_available`.
+- Pending `charge` tasks are replaced, not field-merged, when coalesced. On
+  main, a start queued after a pending stop-with-VIN inherited that VIN; now
+  the start applies to all vehicles, as intended.
+- A `charge` task put while another is executing now queues a fresh pending
+  entry. On main it mutated the in-flight dict and was effectively lost.
+- The raise-to-wiring-max path `int()`-truncates a fractional
+  `wiringMaxAmpsPerTWC`.
+- SIGTERM (`systemctl stop` / `restart`) now runs the graceful shutdown
+  instead of killing the process outright.
 
 ## Testing
 
