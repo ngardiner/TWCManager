@@ -111,9 +111,16 @@ with `False`).
 
 **Coalescing**
 
-Pending commands are keyed by `(cmd, vin)`, where `vin` is `task["vin"]` if
-present, else `task["vehicle"].VIN` if a vehicle object is present, else
-`None`. Putting a task whose key is already *pending* replaces that
+Pending `setChargeRate` commands are keyed by `(cmd, vin)`, where `vin` is
+`task["vehicle"].VIN` (or `None` when no vehicle is given). `charge` and
+`applyChargeLimit` are keyed by `cmd` alone, exactly as the background queue
+coalesces them today.
+
+Why `charge` is not keyed by VIN: in `chargeStopMode` 1, `startCarsCharging`
+queues `charge` without a VIN (meaning all vehicles), while
+`stopCarsCharging` queues it with the slave's VIN. Keyed by VIN, a pending
+start and a later stop would both run, stop first and then start, which
+re-starts the car. Keyed by `cmd`, the later stop replaces the start. Putting a task whose key is already *pending* replaces that
 pending task's payload and callback in place (latest wins) and keeps its queue
 position, except as described under priority below. A task already being
 executed by the worker is not pending; a new put with the same key creates a
@@ -121,9 +128,11 @@ new pending entry.
 
 Consequences:
 - Repeated `setChargeRate` for one vehicle collapses to the newest amps value.
-- `charge` start and stop for the same VIN share a key, so a stop issued while
-  a start is still pending replaces it (and vice versa).
-- Commands for different VINs never clobber each other.
+- `setChargeRate` for different vehicles never clobber each other.
+- A pending `charge` is replaced by any later `charge`, so a stop issued while
+  a start is still pending replaces it (and vice versa). This matches today's
+  behavior.
+- A replaced entry's callback is discarded without being called.
 
 **Priority**
 
@@ -274,9 +283,9 @@ Unit tests (pytest, `tests/unit/`):
 
 - `test_vehicle_command_queue.py`
   - dispatches each supported `cmd` to the right method with the right args;
-  - coalescing: two pending puts with the same `(cmd, vin)` → one dispatch
-    with the latest payload; different VINs → two dispatches;
-  - start-then-stop for one VIN while pending → single stop dispatched;
+  - coalescing: two pending `setChargeRate` for one VIN → one dispatch
+    with the latest amps; different VINs → two dispatches;
+  - pending vehicle-less start, then stop with a VIN → single stop dispatched;
   - priority: with a slow in-flight task, queued `[setChargeRate, charge
     start, charge stop]` → stop dispatched first after the in-flight task;
   - callback receives result; callback receives `False` on dispatch
