@@ -4,6 +4,9 @@ services:
   twcmanager:
     image: twcmanager/twcmanager:latest
     restart: always
+    # Shutdown drains stop-charging commands for up to 60 s and finishes
+    # within 80 s; Docker's 10 s default would SIGKILL it mid-drain.
+    stop_grace_period: 90s
     devices:
       - "/dev/bus/usb:/dev/bus/usb"
       - "/dev/ttyUSB0:/dev/ttyUSB0"
