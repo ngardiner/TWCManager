@@ -260,6 +260,18 @@ Before the background-queue `join()`, `TWCManager.py` calls
 3. On timeout, logs a warning naming the commands still pending and
    returns. The daemon worker is then killed at interpreter exit.
 
+**systemd stop/restart.** Today nothing installs a SIGTERM handler. Under
+systemd (`KillMode=control-group`, SIGKILL after `TimeoutStopSec`, 90 s by
+default), Python dies on SIGTERM without unwinding, so neither the
+background-queue drain nor `saveSettings` runs. This change installs a
+SIGTERM handler, just before the main loop, that restores the default
+SIGTERM disposition (so a second SIGTERM kills immediately) and raises
+`KeyboardInterrupt` in the main thread. `systemctl stop` and `restart` then
+take the same shutdown path as Ctrl-C. The 60 s drain cap fits inside
+systemd's 90 s SIGKILL backstop. systemd also sends SIGTERM to any running
+`tesla-control` child, so an in-flight BLE command dies; a stop command then
+retries inside the drain window.
+
 Rationale: a stop the user or policy asked for should still reach the car,
 but rate and limit changes are meaningless once TWCManager stops managing
 the charger, and shutdown should not wait minutes on BLE retries for them.

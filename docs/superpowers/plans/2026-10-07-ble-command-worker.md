@@ -28,7 +28,7 @@
 |---|---|
 | `lib/TWCManager/VehicleCommandQueue.py` (new) | Pending-command tables, coalescing, priority, worker thread, drain. No TWCManager imports except the logger. |
 | `lib/TWCManager/TWCMaster.py` | Owns the queue instance; resolves the vehicle module; routes `charge` and `applyChargeLimit` from `queue_background_task`. |
-| `lib/TWCManager/TWCManager.py` | Starts the worker; drops the moved background branches; drains stops on Ctrl-C; main-loop stall warning. |
+| `lib/TWCManager/TWCManager.py` | Starts the worker; drops the moved background branches; drains stops on shutdown; SIGTERM → graceful shutdown; main-loop stall warning. |
 | `lib/TWCManager/TWCSlave.py` | Queues `setChargeRate` instead of calling it; callback-driven `vehicleRateRaised` with a generation guard. |
 | `lib/TWCManager/Vehicle/TeslaBLE.py` | `_bleLock` and a `_serialized` decorator on the three adapter-using methods. |
 | `tests/unit/test_vehicle_command_queue.py` (new) | Queue behavior. |
@@ -46,7 +46,7 @@ There is no unit test for this. The main loop is module-level code that exits un
 - Modify: `lib/TWCManager/TWCManager.py` (the `while True:` main loop, about lines 830-845)
 
 **Interfaces:**
-- Produces: log line `Main loop stalled for X.Xs` at WARNING level from the `Manager` logger. Tasks 2 and 8 grep for the exact text `Main loop stalled for`.
+- Produces: log line `Main loop stalled for X.Xs` at WARNING level from the `Manager` logger. Tasks 2 and 9 grep for the exact text `Main loop stalled for`.
 
 - [ ] **Step 1: Add the timestamp before the loop and the check after the existing `now = time.time()`**
 
@@ -108,7 +108,7 @@ Deploy only Task 1 (on top of current `main`), then collect metrics while the re
 - Create: `$SCRATCH/live-metrics.sh` (not committed)
 
 **Interfaces:**
-- Produces: `$SCRATCH/baseline-pgrep.txt`, `$SCRATCH/baseline-metrics.txt`, and `$SCRATCH/baseline-since.txt` (the restart timestamp). Task 8 produces the same files with an `after-` prefix and compares them.
+- Produces: `$SCRATCH/baseline-pgrep.txt`, `$SCRATCH/baseline-metrics.txt`, and `$SCRATCH/baseline-since.txt` (the restart timestamp). Task 9 produces the same files with an `after-` prefix and compares them.
 
 - [ ] **Step 1: Write the metrics script**
 
@@ -1142,7 +1142,79 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 6: TWCSlave queues setChargeRate
+### Task 6: Graceful shutdown on SIGTERM
+
+`systemctl stop` and `restart` send SIGTERM. Nothing handles it today, so Python exits without running the `KeyboardInterrupt` shutdown path. That means no stop-command drain, no `saveSettings`, and no background-queue join. Map SIGTERM to `KeyboardInterrupt` so that path runs. There is no unit test: the handler is installed in module-level startup code, which exits under pytest. Task 9 verifies it live.
+
+**Files:**
+- Modify: `lib/TWCManager/TWCManager.py` (imports at lines 30-42; just before `timeLastLoopTop = time.time()` / `while True:` from Task 1)
+
+**Interfaces:**
+- Produces: on SIGTERM, the log line `Exiting after background tasks complete...` (already emitted by the existing `except KeyboardInterrupt:` branch). Task 9 greps for it.
+
+- [ ] **Step 1: Add the import**
+
+Add `import signal` to the import block in `lib/TWCManager/TWCManager.py`, after `import re`.
+
+- [ ] **Step 2: Install the handler just before the main loop**
+
+Directly before the `timeLastLoopTop = time.time()` line added in Task 1:
+
+```python
+def sigterm_to_keyboard_interrupt(signum, frame):
+    # systemd stop/restart sends SIGTERM. Take the same graceful shutdown
+    # path as Ctrl-C: drain stop-charging commands, save settings, and
+    # finish background tasks. A second SIGTERM kills immediately.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    raise KeyboardInterrupt
+
+
+signal.signal(signal.SIGTERM, sigterm_to_keyboard_interrupt)
+
+```
+
+Python delivers signals to the main thread only, so this raises inside the main loop's `try`, and the existing `except KeyboardInterrupt:` branch handles it. Do not change that branch.
+
+- [ ] **Step 3: Check it by hand locally**
+
+Run:
+
+```bash
+PYTHONPATH=lib $SCRATCH/venv/bin/python - <<'PY'
+import os, signal, time
+def h(signum, frame):
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    raise KeyboardInterrupt
+signal.signal(signal.SIGTERM, h)
+try:
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(1)
+except KeyboardInterrupt:
+    print("graceful", signal.getsignal(signal.SIGTERM) == signal.SIG_DFL)
+PY
+```
+
+Expected: `graceful True`. This checks the mechanism; the real check is Task 9.
+
+- [ ] **Step 4: Format, run the full suite, and commit**
+
+Run: `$SCRATCH/venv/bin/black lib/ && $SCRATCH/venv/bin/python -m pytest tests/unit -q -p no:cacheprovider 2>&1 | tail -2`
+Expected: `493 passed`
+
+```bash
+git add lib/TWCManager/TWCManager.py
+git commit -m "Shut down gracefully on SIGTERM
+
+systemctl stop/restart sends SIGTERM, which killed Python without running
+the KeyboardInterrupt shutdown path: no settings save, no background-queue
+drain. Map the first SIGTERM to KeyboardInterrupt; a second one kills.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 7: TWCSlave queues setChargeRate
 
 **Files:**
 - Modify: `lib/TWCManager/TWCSlave.py` (`__init__` line 82-83; API-control branch lines 860-893; TWC-control raise lines 895-911; add helpers after `get_vehicle_module`)
@@ -1362,7 +1434,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Whole-branch check
+### Task 8: Whole-branch check
 
 **Files:** none modified unless checks fail.
 
@@ -1383,7 +1455,7 @@ Expected: `ok`
 
 ---
 
-### Task 8: Live verification on the box
+### Task 9: Live verification on the box
 
 **Files:** none committed.
 
@@ -1415,7 +1487,18 @@ Expected: `active`, `Starting main event loop...`, no Traceback and no VehicleCo
 
 Repeat Task 2 Steps 4-6 exactly, writing `$SCRATCH/after-pgrep.txt` and `$SCRATCH/after-metrics.txt` and sending `checkArrival` three times. In addition, at any point when a BLE command is visibly retrying (`retrying in` in `journalctl -f`), confirm from the log that the main loop is not stalled at the same time: no `Main loop stalled for` lines within the retry span.
 
-- [ ] **Step 5: Compare and report**
+- [ ] **Step 5: Verify graceful restart**
+
+Run: `ssh twcmanager 'sudo systemctl restart twcmanager; sleep 5; journalctl -u twcmanager --since "-2min" --no-pager | grep -E "Exiting after background tasks complete|dropping .* pending vehicle command|still pending|Traceback|Stopped|Started" | tail -10; systemctl is-active twcmanager'`
+Expected:
+- `Exiting after background tasks complete...` appears before systemd's `Stopped` line;
+- no Traceback;
+- the restart completes well under 90 s (no `State 'stop-sigterm' timed out` line);
+- the service ends `active`.
+
+If `Exiting after...` is missing, the SIGTERM handler is not working: report it, and do not mark the task done.
+
+- [ ] **Step 6: Compare and report**
 
 Run: `paste $SCRATCH/baseline-metrics.txt $SCRATCH/after-metrics.txt; echo; echo baseline; cat $SCRATCH/baseline-pgrep.txt; echo after; cat $SCRATCH/after-pgrep.txt`
 
@@ -1426,8 +1509,7 @@ Expected after the change:
 
 Report both sets of numbers to the user, as observed. If the baseline window had no BLE activity, say so: the comparison is then inconclusive, not a pass.
 
-- [ ] **Step 6: Leave the box on the branch**
+- [ ] **Step 7: Leave the box on the branch**
 
 Do not roll back if healthy. Tell the user the box is on a detached checkout of the branch, and give the rollback command from Global Constraints.
 
-Note: `systemctl stop` sends SIGTERM, which does not reach the `KeyboardInterrupt` shutdown path, so the high-priority drain (and the existing background-queue drain) only runs on Ctrl-C. Unit tests cover the drain. Mention this in the report as a pre-existing limitation; do not change it.
