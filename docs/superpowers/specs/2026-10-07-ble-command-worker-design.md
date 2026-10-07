@@ -69,7 +69,8 @@ work on that thread (`checkGreenEnergy`, `getVehicleVIN`, `saveSettings`,
 
 ### Component 1: `VehicleCommandQueue` (new, `lib/TWCManager/VehicleCommandQueue.py`)
 
-A small, self-contained class owning a pending-command table, a
+A small, self-contained class owning two pending-command tables (high and
+low priority, each a `collections.OrderedDict` keyed by coalescing key), a
 `threading.Condition`, and one daemon worker thread.
 
 **Interface**
@@ -79,6 +80,7 @@ class VehicleCommandQueue:
     def __init__(self, resolve_module): ...
     def start(self): ...                      # spawns daemon worker thread
     def put(self, task, callback=None): ...   # non-blocking; never raises
+    def drain_high_priority(self, timeout): ... # shutdown; see Shutdown
 ```
 
 - `resolve_module` is a zero-argument callable returning the vehicle module
@@ -125,11 +127,17 @@ Consequences:
 
 **Priority**
 
-A `charge` task with `charge == False` is high priority. When the worker
-picks the next task it takes the oldest high-priority pending task if any,
-otherwise the oldest pending task. When a put replaces a pending entry, the
-entry's priority is recomputed from the new payload (so a pending start
-replaced by a stop becomes high priority).
+A `charge` task with `charge == False` is high priority. Everything else is
+low priority. Each task lives in the table for its priority. The worker
+takes the oldest entry from the high table if it has any, otherwise the
+oldest entry from the low table.
+
+On put, the key is looked up in both tables:
+- If the existing entry is in the same table as the new task's priority, its
+  payload and callback are replaced and it keeps its position.
+- If the existing entry is in the other table (for example, a pending start
+  replaced by a stop), it is removed there and the new task is appended to
+  the end of its own table.
 
 There is no pre-emption: a command already executing runs to completion.
 
@@ -226,19 +234,29 @@ permanently as a diagnostic.
 
 On `KeyboardInterrupt`, `TWCManager.py` queues `saveSettings` and calls
 `master.backgroundTasksQueue.join()`, so the background queue is drained
-before exit. The vehicle command queue is deliberately **not** drained:
+before exit. The vehicle command queue is **partly** drained: stop-charging
+commands still run, everything else is dropped.
 
-- its worker is a daemon thread and is killed at interpreter exit;
-- pending commands are dropped.
+Before the background-queue `join()`, `TWCManager.py` calls
+`master.vehicleCommandQueue.drain_high_priority(timeout=60)`, which:
 
-Rationale: draining could hold shutdown for minutes on BLE retries, and
-pending rate or limit changes are meaningless once TWCManager stops managing
-the charger.
+1. Under the lock, sets a `draining` flag and clears the low-priority table.
+   While `draining` is set, `put` accepts only high-priority tasks; other
+   tasks are logged at debug level and dropped (their callbacks are not
+   called).
+2. Waits on the condition until the high table is empty and the worker is
+   not executing anything, or until `timeout` expires. If a low-priority
+   command is already executing, the wait includes letting it finish,
+   because there is no pre-emption.
+3. On timeout, logs a warning naming the commands still pending and
+   returns. The daemon worker is then killed at interpreter exit.
 
-This changes behavior for one case. Today a `charge` / `applyChargeLimit`
-task pending at Ctrl-C runs during the drain; after this change it is
-dropped. That includes a pending stop-charging command. This was accepted in
-design review: a shutdown should not wait on BLE.
+Rationale: a stop the user or policy asked for should still reach the car,
+but rate and limit changes are meaningless once TWCManager stops managing
+the charger, and shutdown should not wait minutes on BLE retries for them.
+The 60 s cap bounds shutdown time even if a stop is retrying. A `charge`
+False task that is still being retried can, in the worst case, take longer
+than that.
 
 ## Behavior changes visible to users
 
@@ -264,7 +282,11 @@ Unit tests (pytest, `tests/unit/`):
   - callback receives result; callback receives `False` on dispatch
     exception; callback exception does not kill worker;
   - `resolve_module` returning `None` → callback `False`, worker continues;
-  - `put` returns immediately while worker is blocked in a slow dispatch.
+  - `put` returns immediately while worker is blocked in a slow dispatch;
+  - `drain_high_priority`: pending stop runs, pending low-priority tasks are
+    dropped and never dispatched; low-priority puts made while draining are
+    dropped; it waits for an executing low-priority command to finish; it
+    returns after `timeout` with a stuck dispatch.
 - `test_twcslave.py` updates
   - heartbeat path enqueues `setChargeRate` via `queue_vehicle_command`
     instead of calling the vehicle module;
