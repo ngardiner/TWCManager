@@ -392,58 +392,6 @@ class TestPolicyInitialization:
         assert policy.policyCheckInterval == 60
 
 
-class TestPolicyThrottling:
-    """Test policy check throttling."""
-    
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.config = {"config": {}, "policy": {}}
-        master.settings = {}
-        master.getModuleByName = Mock(return_value=Mock())
-        master.getModulesByType = Mock(return_value=[])
-        master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.setAllowedFlex = Mock()
-        master.queue_background_task = Mock()
-        return master
-    
-    @pytest.fixture
-    def policy(self, mock_master):
-        """Create a Policy instance with mock master."""
-        from TWCManager.Policy.Policy import Policy
-        return Policy(mock_master)
-    
-    def test_apply_policy_immediately(self, policy):
-        """Test applyPolicyImmediately resets throttle."""
-        policy.lastPolicyCheck = time.time()
-        policy.applyPolicyImmediately()
-        assert policy.lastPolicyCheck == 0
-    
-    def test_policy_check_throttled(self, policy):
-        """Test policy check is throttled within interval."""
-        policy.policyCheckInterval = 30
-        policy.lastPolicyCheck = time.time()
-        policy.active_policy = "Charge Now"
-        
-        # Should return early without checking
-        policy.setChargingPerPolicy()
-        
-        # setMaxAmpsToDivideAmongSlaves should not be called
-        policy.master.setMaxAmpsToDivideAmongSlaves.assert_not_called()
-    
-    def test_policy_check_not_throttled(self, policy):
-        """Test policy check runs after throttle interval."""
-        policy.policyCheckInterval = 0
-        policy.lastPolicyCheck = 0
-        policy.active_policy = None
-        
-        policy.setChargingPerPolicy()
-        
-        # Should have called setMaxAmpsToDivideAmongSlaves
-        assert policy.master.setMaxAmpsToDivideAmongSlaves.called
-
-
 class TestPolicyEdgeCases:
     """Test suite for policy edge cases."""
     
@@ -654,7 +602,7 @@ class TestPolicyThrottling:
         from TWCManager.Policy.Policy import Policy
         return Policy(mock_master)
     
-    def test_policy_zero_throttle_interval(self, policy):
+    def test_direct_call_evaluates_with_zero_interval(self, policy):
         """Test policy with zero throttle interval."""
         policy.policyCheckInterval = 0
         policy.lastPolicyCheck = 0
@@ -812,3 +760,35 @@ class TestPolicyThread:
         policy.stop()
         policy.setChargingPerPolicy()
         assert policy.enforcePolicy.call_count == 2
+
+
+class TestPolicyIntervalConfig:
+    """policyCheckInterval from config is sanitised before the thread uses it."""
+
+    def make(self, value):
+        from TWCManager.Policy.Policy import Policy
+
+        master = Mock()
+        master.config = {
+            "config": {},
+            "policy": {"engine": {"policyCheckInterval": value}},
+        }
+        master.settings = {}
+        master.getModuleByName = Mock(return_value=Mock())
+        master.getModulesByType = Mock(return_value=[])
+        return Policy(master)
+
+    def test_numeric_string_is_coerced(self):
+        assert self.make("45").policyCheckInterval == 45.0
+
+    def test_non_numeric_logs_error_and_uses_default(self):
+        with patch("TWCManager.Policy.Policy.logger") as log:
+            p = self.make("bogus")
+        assert p.policyCheckInterval == 30
+        assert log.error.called
+
+    def test_negative_is_clamped(self):
+        with patch("TWCManager.Policy.Policy.logger") as log:
+            p = self.make(-5)
+        assert p.policyCheckInterval == 1.0
+        assert log.warning.called
