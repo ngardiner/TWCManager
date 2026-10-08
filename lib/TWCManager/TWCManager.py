@@ -832,8 +832,8 @@ if "PYTEST_CURRENT_TEST" in os.environ:
 
 def sigterm_to_keyboard_interrupt(signum, frame):
     # systemd stop/restart sends SIGTERM. Take the same graceful shutdown
-    # path as Ctrl-C: drain stop-charging commands, save settings, and
-    # finish background tasks. A second SIGTERM kills immediately.
+    # path as Ctrl-C: save settings, drain stop-charging commands, then wait
+    # (bounded) for background tasks. A second SIGTERM kills immediately.
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     raise KeyboardInterrupt
 
@@ -1999,6 +1999,13 @@ while master.backgroundTasksQueue.unfinished_tasks > 0:
 
 # Close the input module
 master.getInterfaceModule().close()
+
+# Backstop: any stray non-daemon thread (paho, future modules) would otherwise
+# keep the interpreter alive until systemd SIGKILLs us. Exit now that shutdown
+# work is done.
+logger.info("Shutdown complete")
+logging.shutdown()
+os._exit(0)
 
 #
 # End main program
