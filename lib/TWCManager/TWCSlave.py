@@ -70,8 +70,6 @@ class TWCSlave:
     currentVIN = ""
     lastVIN = ""
 
-    vehicleModule = None
-
     def __init__(self, TWCID, maxAmps, config, master):
         self.config = config
         self.configConfig = self.config.get("config", {})
@@ -91,29 +89,6 @@ class TWCSlave:
             "useFlexAmpsToStartCharge", False
         )
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
-        self.vehicleModule = self.get_vehicle_module()
-
-    def get_vehicle_module(self):
-        # Try to use VehiclePriority proxy for fallback logic
-        vehiclePriority = self.master.getModuleByName("VehiclePriority")
-        if vehiclePriority:
-            return vehiclePriority
-
-        # Fallback to direct module selection if VehiclePriority not available
-        carHass = self.master.getModuleByName("HomeAssistant")
-        if carHass:
-            return carHass
-
-        carble = self.master.getModuleByName("TeslaBLE")
-        if carble:
-            return carble
-
-        carapi = self.master.getModuleByName("TeslaAPI")
-        if carapi:
-            return carapi
-
-        logger.error("No vehicle module enabled")
-        return None
 
     def _queueChargeRate(self, amps, callback=None):
         # Vehicle commands can take minutes over BLE; hand them to the

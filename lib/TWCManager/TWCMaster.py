@@ -1281,7 +1281,8 @@ class TWCMaster:
         self.vehicleCommandQueue.put(task, callback)
 
     def _resolveVehicleCommandModule(self):
-        # Same preference order as TWCSlave.get_vehicle_module.
+        # Preference order: VehiclePriority (priority/fallback proxy), then
+        # HomeAssistant, TeslaBLE, TeslaAPI.
         for name in ("VehiclePriority", "HomeAssistant", "TeslaBLE", "TeslaAPI"):
             module = self.getModuleByName(name)
             if module:
