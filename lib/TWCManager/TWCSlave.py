@@ -679,10 +679,8 @@ class TWCSlave:
         if yesterday < 0:
             yesterday += 7
 
-        # Determine our charging policy. This is the policy engine of the
-        # TWCManager application. Using defined rules, we can determine how
-        # we charge.
-        self.master.getModuleByName("Policy").setChargingPerPolicy()
+        # Charging policy is evaluated on the Policy module's own thread;
+        # here we only read its results (getMaxAmpsToDivideAmongSlaves etc.).
 
         # Determine how many cars are charging and how many amps they're using
         numCarsCharging = self.master.num_cars_charging_now()

@@ -436,3 +436,13 @@ class TestTWCSlaveConfiguration:
         slave = TWCSlave(bytearray(b"AB"), 80, config, mock_master)
         
         assert slave.APIcontrol is False
+
+
+class TestPolicyNotOnMainLoop:
+    """The serial main loop must not evaluate charging policy inline."""
+
+    def test_twcslave_never_calls_set_charging_per_policy(self):
+        import inspect
+        from TWCManager.TWCSlave import TWCSlave
+
+        assert "setChargingPerPolicy" not in inspect.getsource(TWCSlave)
