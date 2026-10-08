@@ -158,6 +158,12 @@ class Policy:
                 f"policyCheckInterval {value!r} is below 1 second; using 1 second"
             )
             return 1.0
+        if interval > threading.TIMEOUT_MAX:
+            logger.warning(
+                f"policyCheckInterval {value!r} is too large; "
+                f"using {threading.TIMEOUT_MAX} seconds"
+            )
+            return threading.TIMEOUT_MAX
         return interval
 
     def start(self):
@@ -180,16 +186,23 @@ class Policy:
             self._wake.set()
 
     def _run(self):
-        while not self._stopping.is_set():
-            try:
-                self.setChargingPerPolicy()
-            except Exception as e:
-                logger.error(
-                    f"PolicyError: {traceback.format_exc()}, occurred when evaluating policy: {e}",
-                    extra={"colored": "red"},
-                )
-            self._wake.wait(timeout=self.policyCheckInterval)
-            self._wake.clear()
+        try:
+            while not self._stopping.is_set():
+                try:
+                    self.setChargingPerPolicy()
+                except Exception as e:
+                    logger.error(
+                        f"PolicyError: {traceback.format_exc()}, occurred when evaluating policy: {e}",
+                        extra={"colored": "red"},
+                    )
+                self._wake.wait(timeout=self.policyCheckInterval)
+                self._wake.clear()
+        except BaseException:
+            logger.error(
+                f"Policy evaluation thread died: {traceback.format_exc()}",
+                extra={"colored": "red"},
+            )
+            raise
 
     def setChargingPerPolicy(self):
         # This function is called for the purpose of evaluating the charging

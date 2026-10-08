@@ -568,7 +568,7 @@ class TestPolicyIntegration:
         assert call_counts[2] > call_counts[1]
 
 
-class TestPolicyThrottling:
+class TestDirectPolicyEvaluation:
     """Test suite for policy throttling mechanism."""
     
     @pytest.fixture
@@ -761,6 +761,43 @@ class TestPolicyThread:
         policy.setChargingPerPolicy()
         assert policy.enforcePolicy.call_count == 2
 
+    def test_eval_lock_serializes_direct_calls(self, policy):
+        import threading
+
+        gate = threading.Event()
+        first_in = threading.Event()
+        counter_lock = threading.Lock()
+        state = {"inside": 0, "max": 0, "done": 0}
+
+        def fake():
+            with counter_lock:
+                state["inside"] += 1
+                state["max"] = max(state["max"], state["inside"])
+            first_in.set()
+            gate.wait(timeout=5)
+            with counter_lock:
+                state["inside"] -= 1
+                state["done"] += 1
+
+        policy._evaluate = fake
+        threads = [
+            threading.Thread(target=policy.setChargingPerPolicy, daemon=True)
+            for _ in range(2)
+        ]
+        for t in threads:
+            t.start()
+        assert first_in.wait(timeout=self.WAIT)
+        # Give the second caller time to (wrongly) enter alongside the first.
+        time.sleep(0.2)
+        with counter_lock:
+            assert state["inside"] == 1
+        gate.set()
+        for t in threads:
+            t.join(timeout=self.WAIT)
+            assert not t.is_alive()
+        assert state["max"] == 1
+        assert state["done"] == 2
+
 
 class TestPolicyIntervalConfig:
     """policyCheckInterval from config is sanitised before the thread uses it."""
@@ -791,4 +828,13 @@ class TestPolicyIntervalConfig:
         with patch("TWCManager.Policy.Policy.logger") as log:
             p = self.make(-5)
         assert p.policyCheckInterval == 1.0
+        assert log.warning.called
+
+    @pytest.mark.parametrize("value", ["inf", 1e10])
+    def test_huge_is_capped_to_timeout_max(self, value):
+        import threading
+
+        with patch("TWCManager.Policy.Policy.logger") as log:
+            p = self.make(value)
+        assert p.policyCheckInterval == threading.TIMEOUT_MAX
         assert log.warning.called
