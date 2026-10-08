@@ -741,7 +741,13 @@ backgroundTasksThread.start()
 # Charging policy is evaluated on its own thread so module I/O done by
 # policy conditions never stalls serial servicing. The first evaluation
 # runs now, usually before the first slave heartbeat.
-master.getModuleByName("Policy").start()
+#
+# Only when acting as master (fakeMaster == 1): in the other modes the
+# heartbeat code that consumes policy results never runs, and evaluating
+# anyway would still send charge-limit commands to cars, fire webhooks and
+# poll EMS. Without the thread, applyPolicyImmediately() is a no-op there.
+if config["config"]["fakeMaster"] == 1:
+    master.getModuleByName("Policy").start()
 
 master.queue_background_task({"cmd": "sunrise"}, 30)
 
