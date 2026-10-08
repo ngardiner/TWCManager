@@ -819,8 +819,6 @@ logger.info(
 logger.info("=" * 70)
 logger.info("✓ TWCManager initialization complete and ready")
 logger.info("=" * 70)
-logger.info("Starting main event loop...")
-logger.info("=" * 70)
 
 if "PYTEST_CURRENT_TEST" in os.environ:
     # Running under pytest - skip the blocking event loop so that
@@ -839,6 +837,9 @@ def sigterm_to_keyboard_interrupt(signum, frame):
 
 
 signal.signal(signal.SIGTERM, sigterm_to_keyboard_interrupt)
+
+logger.info("Starting main event loop...")
+logger.info("=" * 70)
 
 timeLastLoopTop = time.time()
 while True:

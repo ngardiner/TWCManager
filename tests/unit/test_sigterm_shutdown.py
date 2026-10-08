@@ -66,6 +66,9 @@ def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
     )
     # Avoid a 10 s connect timeout to a MySQL server that isn't there.
     cfg["logging"]["MySQL"]["enabled"] = False
+    # Keep the run hermetic: no MQTT clients dialing 127.0.0.1:1883.
+    for section in ("control", "sources", "status"):
+        cfg[section]["MQTT"]["enabled"] = False
     (tmp_path / "config.json").write_text(json.dumps(cfg))
 
     env = dict(os.environ)
@@ -103,8 +106,6 @@ def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
             if proc.poll() is not None:
                 break
             time.sleep(0.1)
-        else:
-            pass
         if "Starting main event loop" not in output():
             proc.kill()
             pytest.fail("main loop never started; output:\n" + output())
@@ -126,3 +127,4 @@ def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+        proc.stdout.close()
