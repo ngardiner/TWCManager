@@ -130,7 +130,28 @@ class Policy:
             policy_engine = config_policy.get("engine")
             if policy_engine:
                 if policy_engine.get("policyCheckInterval"):
-                    self.policyCheckInterval = policy_engine.get("policyCheckInterval")
+                    self.policyCheckInterval = self._parseInterval(
+                        policy_engine.get("policyCheckInterval")
+                    )
+
+    @staticmethod
+    def _parseInterval(value):
+        # The interval feeds Event.wait(); a non-numeric value would kill the
+        # policy thread and a tiny/negative one would busy-loop it.
+        try:
+            interval = float(value)
+        except (TypeError, ValueError):
+            logger.error(
+                f"Invalid policyCheckInterval {value!r}; using 30 seconds",
+                extra={"colored": "red"},
+            )
+            return 30
+        if not interval >= 1.0:
+            logger.warning(
+                f"policyCheckInterval {value!r} is below 1 second; using 1 second"
+            )
+            return 1.0
+        return interval
 
     def start(self):
         if self._thread is not None:
@@ -176,6 +197,8 @@ class Policy:
         if self._stopping.is_set():
             return
         with self._evalLock:
+            if self._stopping.is_set():
+                return
             self.lastPolicyCheck = time.time()
             self._evaluate()
 
