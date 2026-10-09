@@ -45,21 +45,72 @@ class TeslaAPIController(EVSEController):
             return None
         return carapi
 
+    # A TWC drawing more than this is charging a car (TWCSlave's power-start
+    # threshold).
+    POWER_FLOWING_AMPS = 3
+
+    def _twcServedVINs(self):
+        """VINs a local TWC serves, and whether one may be serving any car.
+
+        Returns (vins, blind): vins are the cars TWCs report (currentVIN, or
+        the plug session's VIN), and blind is True when a TWC that can't
+        name its car is drawing power, so it might be any of them.
+        """
+        vins = set()
+        blind = False
+        try:
+            for slave in self.master.getSlaveTWCs():
+                current = slave.currentVIN
+                # plugVIN and NON_TESLA are absent on older TWCSlave.
+                plug = getattr(slave, "plugVIN", None)
+                if plug is not None and plug == getattr(slave, "NON_TESLA", None):
+                    plug = None
+                if current:
+                    vins.add(current)
+                if plug:
+                    vins.add(plug)
+                if (
+                    not current
+                    and not plug
+                    and slave.reportedAmpsActual > self.POWER_FLOWING_AMPS
+                ):
+                    blind = True
+        except Exception:
+            # No TWC information: treat as no TWC serving anything.
+            return set(), False
+        return vins, blind
+
     # ------------------------------------------------------------------
     # EVSEController interface
     # ------------------------------------------------------------------
 
     @property
     def allEVSEs(self) -> list:
-        """Return TeslaAPIEVSE instances for each vehicle currently at home."""
+        """Return TeslaAPIEVSE instances for each vehicle at home that no
+        local TWC serves.
+
+        A car on a local TWC is controlled through the TWC; an EVSE here
+        would get its own power share and send paid Fleet API charge-rate
+        commands. While a TWC that can't name its car draws power, it might
+        be any of them, so none is listed. Dropping an EVSE strands nothing:
+        it holds no state, and stops go to master.stopCarsCharging by VIN.
+        """
         carapi = self._get_carapi()
         if carapi is None:
             return []
 
-        vehicles_at_home = [v for v in carapi.getCarApiVehicles() if v.atHome]
+        served, blind = self._twcServedVINs()
+        if blind:
+            vehicles_at_home = []
+        else:
+            vehicles_at_home = [
+                v
+                for v in carapi.getCarApiVehicles()
+                if v.atHome and v.VIN not in served
+            ]
         current_vins = {v.VIN for v in vehicles_at_home}
 
-        # Remove departed vehicles from cache
+        # Remove departed (or now TWC-served) vehicles from cache
         for vin in list(self._evse_cache):
             if vin not in current_vins:
                 del self._evse_cache[vin]
