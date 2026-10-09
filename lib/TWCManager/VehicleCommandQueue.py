@@ -20,10 +20,12 @@ logger = LoggerFactory.get_logger("VehicleCommandQueue", "Vehicle")
 
 
 def _applyChargeLimitKwargs(task):
-    kwargs = {"limit": task["limit"], "vin": task.get("vin")}
+    kwargs = {"limit": task["limit"]}
+    # Pass vin and remoteOnly only when set, so a plain apply is unchanged for
+    # any module that still has the old signature.
+    if task.get("vin") is not None:
+        kwargs["vin"] = task["vin"]
     if task.get("remoteOnly"):
-        # Pass remoteOnly only when set, so a plain apply is unchanged for
-        # any module that still has the old signature.
         kwargs["remoteOnly"] = True
     return kwargs
 
