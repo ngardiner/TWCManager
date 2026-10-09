@@ -102,10 +102,10 @@ def test_post_has_timeout():
     api, v = make_api(), make_vehicle()
     with patch(POST, return_value=response()) as post:
         api.setChargeRate(16, v)
-    assert post.call_args.kwargs["timeout"] == 30
+    assert post.call_args.kwargs["timeout"] == 10
 
 
-CLOCK = "TWCManager.Vehicle.TeslaAPI.time.time"
+CLOCK = "TWCManager.Vehicle.TeslaAPI.time.monotonic"
 
 
 def test_same_rate_skipped_inside_resend_window():
@@ -131,3 +131,45 @@ def test_same_rate_resent_after_resend_window():
         clock.return_value += 1
         api.setChargeRate(16, v)
     assert post.call_count == 2
+
+
+SLEEP = "TWCManager.Vehicle.TeslaAPI.time.sleep"
+
+
+def test_low_rate_not_recorded_when_resend_fails():
+    api, v = make_api(), make_vehicle()
+    with patch(
+        POST, side_effect=[response(), requests.exceptions.ConnectionError()]
+    ), patch(SLEEP):
+        assert api.setChargeRate(3, v) is False
+    assert v.lastChargeRateSent is None
+
+
+def test_low_rate_not_recorded_when_resend_rejected():
+    api, v = make_api(), make_vehicle()
+    with patch(POST, side_effect=[response(), response(result=False)]), patch(SLEEP):
+        api.setChargeRate(3, v)
+    assert v.lastChargeRateSent is None
+
+
+def test_low_rate_recorded_after_both_sends_succeed():
+    api, v = make_api(), make_vehicle()
+    with patch(POST, return_value=response()), patch(SLEEP):
+        api.setChargeRate(3, v)
+    assert v.lastChargeRateSent == 3
+
+
+def test_numeric_string_rate_is_accepted():
+    api, v = make_api(), make_vehicle()
+    with patch(POST, return_value=response()) as post:
+        api.setChargeRate("16.5", v)
+    assert post.call_args.kwargs["json"] == {"charging_amps": 16}
+
+
+def test_garbage_rate_is_rejected():
+    api, v = make_api(), make_vehicle()
+    with patch(POST, return_value=response()) as post:
+        assert api.setChargeRate("lots", v) is False
+        assert api.setChargeRate(None, v) is False
+        assert api.setChargeRate(float("nan"), v) is False
+    post.assert_not_called()
