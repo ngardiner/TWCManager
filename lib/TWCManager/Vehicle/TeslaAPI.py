@@ -1530,9 +1530,19 @@ class TeslaAPI:
             # logged why).
             return False
 
+        # The Fleet API takes whole amps.
+        charge_rate = int(charge_rate)
         # Do not set charge_rate to 0 as this will effectively stop the car from charging all together
         if charge_rate < 1:
             charge_rate = 1
+
+        # set_charging_amps is a paid command: don't resend the rate this
+        # car last accepted. set_again (the low-rate repeat) always sends.
+        if (
+            not set_again
+            and getattr(vehicle, "lastChargeRateSent", None) == charge_rate
+        ):
+            return True
 
         vehicle.lastAPIAccessTime = time.time()
 
@@ -1547,7 +1557,9 @@ class TeslaAPI:
         body = {"charging_amps": charge_rate}
 
         try:
-            req = requests.post(url, headers=headers, json=body, verify=self.verifyCert)
+            req = requests.post(
+                url, headers=headers, json=body, verify=self.verifyCert, timeout=30
+            )
             logger.log(
                 logging.INFO8,
                 f"Car API cmd set_charging_amps {charge_rate}A {str(req)}",
@@ -1557,6 +1569,12 @@ class TeslaAPI:
             return False
         except json.decoder.JSONDecodeError:
             return False
+
+        try:
+            if apiResponseDict["response"]["result"] == True:
+                vehicle.lastChargeRateSent = charge_rate
+        except (KeyError, TypeError):
+            pass
 
         # Set charge rates < 5 twice, see https://github.com/tdorssers/TeslaPy/pull/42
         if charge_rate < 5 and not set_again:
@@ -1736,6 +1754,8 @@ class CarApiVehicle:
     scheduledChargingPending = False
     timeToFullCharge = 0.0
     availableCurrent = 0
+    # The last rate set_charging_amps succeeded with, so it isn't resent.
+    lastChargeRateSent = None
     _actualCurrent = 0
     lastCurrentChangeTime = 0
     phases = 0
