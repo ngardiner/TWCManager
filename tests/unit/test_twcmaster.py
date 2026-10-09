@@ -804,3 +804,76 @@ class TestVehicleCommandRouting:
         master.getModuleByName = Mock(side_effect=lambda n: modules.get(n))
         resolved = master._resolveVehicleCommandModule()
         assert resolved is (modules[expected] if expected else None)
+
+
+class TestChargeStartStopCancelRules:
+    """startCarsCharging / stopCarsCharging / cancelStopCarsCharging keep the
+    vehicle queue consistent: a stop cancels pending starts for that car, and
+    cancelStopCarsCharging really removes pending stops (#667)."""
+
+    @pytest.fixture
+    def master(self):
+        from TWCManager.TWCMaster import TWCMaster
+
+        m = TWCMaster(
+            "AB",
+            {
+                "config": {
+                    "debugOutputToFile": False,
+                    "subtractChargerLoad": False,
+                    "treatGenerationAsGridDelivery": False,
+                    "wiringMaxAmpsAllTWCs": 80,
+                    "maxAmpsAllowedFromGrid": None,
+                }
+            },
+        )
+        # Policy.clearOverride()/overrideLimit() are called; a Mock is enough.
+        m.getModuleByName = Mock(return_value=Mock())
+        m.settings["chargeStopMode"] = "1"
+        # The queue is never started, so put() only records entries.
+        return m
+
+    @staticmethod
+    def pending(master):
+        q = master.vehicleCommandQueue
+        return [task for task, _ in list(q._high.values()) + list(q._low.values())]
+
+    def test_start_passes_vin_in_stop_mode_1(self, master):
+        master.startCarsCharging("V1")
+        assert self.pending(master) == [{"cmd": "charge", "charge": True, "vin": "V1"}]
+
+    def test_stop_cancels_pending_start_for_that_vin_and_vehicleless(self, master):
+        master.startCarsCharging("V1")
+        master.startCarsCharging(None)
+        master.startCarsCharging("V2")
+        master.stopCarsCharging("V1")
+        assert self.pending(master) == [
+            {"cmd": "charge", "charge": False, "vin": "V1"},
+            {"cmd": "charge", "charge": True, "vin": "V2"},
+        ]
+
+    def test_stop_for_all_cancels_every_pending_start(self, master):
+        master.startCarsCharging("V1")
+        master.startCarsCharging("V2")
+        master.stopCarsCharging(None)
+        assert self.pending(master) == [{"cmd": "charge", "charge": False, "vin": None}]
+
+    def test_cancel_stop_for_vin_leaves_other_stops(self, master):
+        master.stopCarsCharging("V1")
+        master.stopCarsCharging("V2")
+        assert master.cancelStopCarsCharging("V1") == 1
+        assert self.pending(master) == [{"cmd": "charge", "charge": False, "vin": "V2"}]
+
+    def test_cancel_stop_for_all(self, master):
+        master.stopCarsCharging("V1")
+        master.stopCarsCharging("V2")
+        assert master.cancelStopCarsCharging() == 2
+        assert self.pending(master) == []
+
+    def test_empty_vin_is_treated_as_none(self, master):
+        master.startCarsCharging("")
+        assert self.pending(master) == [{"cmd": "charge", "charge": True, "vin": None}]
+        master.stopCarsCharging("")
+        assert self.pending(master) == [{"cmd": "charge", "charge": False, "vin": None}]
+        assert master.cancelStopCarsCharging("") == 1
+        assert self.pending(master) == []

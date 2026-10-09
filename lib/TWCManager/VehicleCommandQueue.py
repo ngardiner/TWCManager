@@ -6,10 +6,13 @@
 # time against the vehicle module (normally VehiclePriority), which keeps
 # its synchronous BLE -> Fleet API fallback.
 #
-# Pending commands coalesce: setChargeRate and charge per vehicle,
-# applyChargeLimit per command. A charge command without a vin applies to
-# every car, so it replaces, and is replaced by, any pending charge command.
-# Stop-charging commands run before anything else.
+# Pending commands coalesce per (cmd, vin): a later command for the same
+# vehicle replaces the pending one. A charge command without a vin applies
+# to every car, so it replaces, and is replaced by, any pending charge
+# command; for applyChargeLimit, None is a distinct "every vehicle" target
+# beside the per-car ones. Stop-charging commands run before anything else.
+# cancel() lets the master drop pending entries that a newer decision has
+# made moot.
 #
 # A car gets at most one charge start/stop attempt per
 # CHARGE_COMMAND_INTERVAL. Callers re-request every loop while they want a
@@ -24,13 +27,24 @@ from TWCManager.Logging.LoggerFactory import LoggerFactory
 logger = LoggerFactory.get_logger("VehicleCommandQueue", "Vehicle")
 
 
+def _applyChargeLimitKwargs(task):
+    kwargs = {"limit": task["limit"]}
+    # Pass vin and remoteOnly only when set, so a plain apply is unchanged for
+    # any module that still has the old signature.
+    if task.get("vin") is not None:
+        kwargs["vin"] = task["vin"]
+    if task.get("remoteOnly"):
+        kwargs["remoteOnly"] = True
+    return kwargs
+
+
 class VehicleCommandQueue:
     CHARGE_COMMAND_INTERVAL = 60
 
     _DISPATCH = {
         "charge": lambda module, task: module.car_api_charge(task),
         "applyChargeLimit": lambda module, task: module.applyChargeLimit(
-            limit=task["limit"]
+            **_applyChargeLimitKwargs(task)
         ),
         "setChargeRate": lambda module, task: module.setChargeRate(
             task["amps"], task.get("vehicle")
@@ -51,13 +65,14 @@ class VehicleCommandQueue:
     @staticmethod
     def _key(task):
         cmd = task["cmd"]
+        if cmd == "setChargeRate":
+            vehicle = task.get("vehicle")
+            return (cmd, getattr(vehicle, "VIN", vehicle))
         if cmd == "charge":
             # TWCSlave passes "" when it hasn't read the car's VIN
             return (cmd, task.get("vin") or None)
-        if cmd != "setChargeRate":
-            return (cmd, None)
-        vehicle = task.get("vehicle")
-        return (cmd, getattr(vehicle, "VIN", vehicle))
+        # None is a distinct target meaning "every vehicle".
+        return (cmd, task.get("vin"))
 
     @staticmethod
     def _replaces(key, other):
@@ -117,21 +132,26 @@ class VehicleCommandQueue:
         except Exception:
             logger.error("Failed to queue vehicle command: %s", traceback.format_exc())
 
-    def cancel_stop(self, vin=None):
-        # Drop pending stop-charging commands for this car, and any stop for
-        # every car; with no vin, drop every pending stop. A stop already
-        # running can't be cancelled. Not during shutdown, which must send
-        # its stops.
-        vin = vin or None
+    def cancel(self, cmd, match):
+        # Drop pending (not running) entries for `cmd` whose task satisfies
+        # `match`. Returns how many were removed. The running entry is left
+        # alone: it may already be talking to the car. Stops are kept during
+        # shutdown, which must send them.
+        removed = 0
         with self._cond:
-            if self._draining:
-                return 0
-            keys = [k for k in self._high if vin is None or k[1] is None or k[1] == vin]
-            for k in keys:
-                del self._high[k]
-            if keys:
-                logger.debug("Cancelled %d pending stop command(s)", len(keys))
-            return len(keys)
+            tables = (self._low,) if self._draining else (self._high, self._low)
+            for table in tables:
+                doomed = [
+                    key
+                    for key, (task, _) in table.items()
+                    if task["cmd"] == cmd and match(task)
+                ]
+                for key in doomed:
+                    del table[key]
+                    removed += 1
+        if removed:
+            logger.debug("Cancelled %d pending %s command(s)", removed, cmd)
+        return removed
 
     def drain_high_priority(self, timeout):
         with self._cond:

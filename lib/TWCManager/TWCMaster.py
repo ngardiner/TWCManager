@@ -164,9 +164,16 @@ class TWCMaster:
             return 0
 
     def cancelStopCarsCharging(self, vin=None):
-        # Charge commands go to the vehicle command queue, not the background
-        # task table, so a pending stop is cancelled there (closes #667).
-        self.vehicleCommandQueue.cancel_stop(vin)
+        # Drop pending stop-charging commands for this VIN (or every VIN when
+        # vin is None). A vehicle-less stop applies to every car, so it is
+        # cancelled too. Returns how many were removed. Closes #667 for the
+        # vehicle queue path.
+        vin = vin or None
+        return self.vehicleCommandQueue.cancel(
+            "charge",
+            lambda task: not task.get("charge")
+            and (vin is None or task.get("vin") in (vin, None)),
+        )
 
     def checkForUpdates(self):
         # This function is used by the Web UI and later on will be used by the console to detect TWCManager Updates
@@ -1891,6 +1898,7 @@ class TWCMaster:
     def startCarsCharging(self, vin=None):
         # This function is the opposite functionality to the stopCarsCharging function
         # below
+        vin = vin or None
         stopMode = int(self.settings.get("chargeStopMode", 1))
         if stopMode == 1:
             self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
@@ -1910,6 +1918,7 @@ class TWCMaster:
         # 1 = Stop the car(s) charging via the Tesla API
         # 2 = Stop the car(s) charging by refusing to respond to slave TWCs
         # 3 = Send TWC Stop command to each slave
+        vin = vin or None
         stopMode = int(self.settings.get("chargeStopMode", 1))
         if stopMode == 1:
             self.queue_background_task({"cmd": "charge", "charge": False, "vin": vin})
