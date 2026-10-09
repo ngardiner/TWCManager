@@ -163,8 +163,17 @@ class TWCMaster:
         else:
             return 0
 
-    def cancelStopCarsCharging(self):
-        self.delete_background_task({"cmd": "charge", "charge": False})
+    def cancelStopCarsCharging(self, vin=None):
+        # Drop pending stop-charging commands for this VIN (or every VIN when
+        # vin is None). A vehicle-less stop applies to every car, so it is
+        # cancelled too. Returns how many were removed. Closes #667 for the
+        # vehicle queue path.
+        vin = vin or None
+        return self.vehicleCommandQueue.cancel(
+            "charge",
+            lambda task: not task.get("charge")
+            and (vin is None or task.get("vin") in (vin, None)),
+        )
 
     def checkForUpdates(self):
         # This function is used by the Web UI and later on will be used by the console to detect TWCManager Updates
@@ -1889,9 +1898,10 @@ class TWCMaster:
     def startCarsCharging(self, vin=None):
         # This function is the opposite functionality to the stopCarsCharging function
         # below
+        vin = vin or None
         stopMode = int(self.settings.get("chargeStopMode", 1))
         if stopMode == 1:
-            self.queue_background_task({"cmd": "charge", "charge": True})
+            self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
             self.getModuleByName("Policy").clearOverride()
         elif stopMode == 2:
             self.settings["respondToSlaves"] = 1
@@ -1908,8 +1918,15 @@ class TWCMaster:
         # 1 = Stop the car(s) charging via the Tesla API
         # 2 = Stop the car(s) charging by refusing to respond to slave TWCs
         # 3 = Send TWC Stop command to each slave
+        vin = vin or None
         stopMode = int(self.settings.get("chargeStopMode", 1))
         if stopMode == 1:
+            # A pending start for this car (or for every car) is now moot.
+            self.vehicleCommandQueue.cancel(
+                "charge",
+                lambda task: bool(task.get("charge"))
+                and (vin is None or task.get("vin") in (vin, None)),
+            )
             self.queue_background_task({"cmd": "charge", "charge": False, "vin": vin})
             if self.stopTimeout == datetime.max:
                 self.stopTimeout = datetime.now() + timedelta(seconds=10)

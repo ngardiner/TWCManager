@@ -40,8 +40,8 @@ class RecordingModule:
     def car_api_charge(self, task):
         return self._record("charge", task.get("charge"), task.get("vin"))
 
-    def applyChargeLimit(self, limit):
-        return self._record("applyChargeLimit", limit)
+    def applyChargeLimit(self, limit, vin=None, remoteOnly=False):
+        return self._record("applyChargeLimit", limit, vin, remoteOnly)
 
     def setChargeRate(self, amps, vehicle=None):
         return self._record("setChargeRate", amps, getattr(vehicle, "VIN", vehicle))
@@ -83,7 +83,7 @@ class TestDispatch:
     def test_apply_charge_limit(self, q, module):
         q.put({"cmd": "applyChargeLimit", "limit": 80})
         wait_idle(q)
-        assert module.calls == [("applyChargeLimit", 80)]
+        assert module.calls == [("applyChargeLimit", 80, None, False)]
 
     def test_set_charge_rate(self, q, module):
         q.put({"cmd": "setChargeRate", "amps": 16, "vehicle": Vehicle("V1")})
@@ -113,26 +113,10 @@ class TestCoalescing:
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
-            ("applyChargeLimit", 80),
+            ("applyChargeLimit", 80, None, False),
             ("setChargeRate", 12, "V1"),
             ("setChargeRate", 8, "V2"),
         ]
-
-    def test_stop_replaces_pending_vehicleless_start(self, q, module):
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
-        q.put({"cmd": "charge", "charge": True})
-        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
-        module.gate.set()
-        wait_idle(q)
-        assert module.calls == [("applyChargeLimit", 80), ("charge", False, "V1")]
-
-    def test_start_replaces_pending_stop(self, q, module):
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
-        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
-        q.put({"cmd": "charge", "charge": True})
-        module.gate.set()
-        wait_idle(q)
-        assert module.calls == [("applyChargeLimit", 80), ("charge", True, None)]
 
     def test_apply_charge_limit_latest_wins(self, q, module):
         block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
@@ -142,7 +126,7 @@ class TestCoalescing:
         wait_idle(q)
         assert module.calls == [
             ("setChargeRate", 6, None),
-            ("applyChargeLimit", 90),
+            ("applyChargeLimit", 90, None, False),
         ]
 
     def test_replaced_callback_not_called(self, q, module):
@@ -168,7 +152,7 @@ class TestPriority:
             ("setChargeRate", 6, None),
             ("charge", False, "V1"),
             ("setChargeRate", 16, "V1"),
-            ("applyChargeLimit", 80),
+            ("applyChargeLimit", 80, None, False),
         ]
 
     def test_start_is_not_high_priority(self, q, module):
@@ -179,7 +163,7 @@ class TestPriority:
         wait_idle(q)
         assert module.calls == [
             ("setChargeRate", 6, None),
-            ("applyChargeLimit", 80),
+            ("applyChargeLimit", 80, None, False),
             ("charge", True, None),
         ]
 
@@ -195,7 +179,7 @@ class TestCallbacksAndErrors:
         assert results == [True, False]
 
     def test_dispatch_exception_gives_false_and_worker_survives(self, q, module):
-        def boom(limit):
+        def boom(limit, vin=None):
             raise RuntimeError("adapter on fire")
 
         module.applyChargeLimit = boom
@@ -215,7 +199,7 @@ class TestCallbacksAndErrors:
         wait_idle(q)
         q.put({"cmd": "setChargeRate", "amps": 16, "vehicle": None})
         wait_idle(q)
-        assert module.calls == [("applyChargeLimit", 80), ("setChargeRate", 16, None)]
+        assert module.calls == [("applyChargeLimit", 80, None, False), ("setChargeRate", 16, None)]
 
     def test_no_module_gives_false_and_worker_survives(self, module):
         available = []
@@ -228,7 +212,7 @@ class TestCallbacksAndErrors:
         q.put({"cmd": "applyChargeLimit", "limit": 70}, results.append)
         wait_idle(q)
         assert results == [False, True]
-        assert module.calls == [("applyChargeLimit", 70)]
+        assert module.calls == [("applyChargeLimit", 70, None, False)]
 
     def test_unknown_command_gives_false(self, q, module):
         results = []
@@ -245,7 +229,7 @@ class TestCallbacksAndErrors:
     def test_base_exception_in_dispatch_clears_busy(self, q, module):
         raised = threading.Event()
 
-        def exit_now(limit):
+        def exit_now(limit, vin=None):
             raised.set()
             raise SystemExit("module called sys.exit")
 
@@ -313,3 +297,82 @@ class TestDrain:
         start = time.monotonic()
         assert q.drain_high_priority(timeout=WAIT) is True
         assert time.monotonic() - start < 0.5
+
+
+class TestKeying:
+    def test_charge_keyed_per_vin(self, q, module):
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "charge", "charge": True, "vin": "V1"})
+        q.put({"cmd": "charge", "charge": True, "vin": "V2"})
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        module.gate.set()
+        wait_idle(q)
+        # V1's start was replaced by V1's stop (same key); V2's start survives.
+        assert module.calls == [
+            ("applyChargeLimit", 80, None, False),
+            ("charge", False, "V1"),
+            ("charge", True, "V2"),
+        ]
+
+    def test_none_vin_is_distinct_from_named_vin(self, q, module):
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "charge", "charge": True})
+        q.put({"cmd": "charge", "charge": True, "vin": "V1"})
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [
+            ("applyChargeLimit", 80, None, False),
+            ("charge", True, None),
+            ("charge", True, "V1"),
+        ]
+
+    def test_apply_charge_limit_per_vin_does_not_merge_with_policy_wide(
+        self, q, module
+    ):
+        block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
+        q.put({"cmd": "applyChargeLimit", "limit": 70})
+        q.put({"cmd": "applyChargeLimit", "limit": 90, "vin": "V1"})
+        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [
+            ("setChargeRate", 6, None),
+            ("applyChargeLimit", 80, None, False),
+            ("applyChargeLimit", 90, "V1", False),
+        ]
+
+    def test_apply_charge_limit_passes_vin_and_remote_only(self, q, module):
+        q.put({"cmd": "applyChargeLimit", "limit": -1, "vin": "V1", "remoteOnly": True})
+        wait_idle(q)
+        assert module.calls == [("applyChargeLimit", -1, "V1", True)]
+
+
+class TestCancel:
+    def test_cancel_removes_matching_pending_entries(self, q, module):
+        block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        q.put({"cmd": "charge", "charge": False, "vin": "V2"})
+        q.put({"cmd": "charge", "charge": True, "vin": "V3"})
+        removed = q.cancel("charge", lambda task: not task.get("charge"))
+        assert removed == 2
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [("setChargeRate", 6, None), ("charge", True, "V3")]
+
+    def test_cancel_leaves_running_entry_alone(self, q, module):
+        block_worker(q, module, {"cmd": "charge", "charge": False, "vin": "V1"})
+        assert q.cancel("charge", lambda task: True) == 0
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [("charge", False, "V1")]
+
+    def test_cancel_matches_command_name(self, q, module):
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "setChargeRate", "amps": 10, "vehicle": None})
+        assert q.cancel("charge", lambda task: True) == 0
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [
+            ("applyChargeLimit", 80, None, False),
+            ("setChargeRate", 10, None),
+        ]
