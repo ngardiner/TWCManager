@@ -346,6 +346,17 @@ class TestKeying:
         wait_idle(q)
         assert module.calls == [("applyChargeLimit", -1, "V1", True)]
 
+    def test_apply_charge_limit_without_vin_omits_vin_kwarg(self, q, module):
+        calls = []
+
+        def legacy(limit):
+            calls.append(limit)
+
+        module.applyChargeLimit = legacy
+        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        wait_idle(q)
+        assert calls == [80]
+
 
 class TestCancel:
     def test_cancel_removes_matching_pending_entries(self, q, module):
