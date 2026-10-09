@@ -45,19 +45,22 @@ class TeslaAPIController(EVSEController):
             return None
         return carapi
 
-    # A TWC drawing more than this is charging a car (TWCSlave's power-start
-    # threshold).
-    POWER_FLOWING_AMPS = 3
+    # A TWC drawing at least this is charging a car: the threshold at
+    # which TWCSlave flags isCharging and queries the VIN.
+    POWER_FLOWING_AMPS = 1.0
 
     def _twcServedVINs(self):
-        """VINs a local TWC serves, and whether one may be serving any car.
+        """VINs a local TWC serves, and how far an unnamed car may reach.
 
-        Returns (vins, blind): vins are the cars TWCs report (currentVIN, or
-        the plug session's VIN), and blind is True when a TWC that can't
-        name its car is drawing power, so it might be any of them.
+        Returns (vins, blind, unknown): vins are the cars TWCs report
+        (currentVIN, or the plug session's VIN); unknown is True when some
+        TWC can't name its car; blind is True when such a TWC reports a
+        plugged state (non-00) or draws power, so it might be serving any
+        of them. A failed scan fails closed (blind).
         """
         vins = set()
         blind = False
+        unknown = False
         try:
             for slave in self.master.getSlaveTWCs():
                 current = slave.currentVIN
@@ -69,16 +72,26 @@ class TeslaAPIController(EVSEController):
                     vins.add(current)
                 if plug:
                     vins.add(plug)
-                if (
-                    not current
-                    and not plug
-                    and slave.reportedAmpsActual > self.POWER_FLOWING_AMPS
-                ):
-                    blind = True
+                if not current and not plug:
+                    unknown = True
+                    if (
+                        slave.reportedState != 0x00
+                        or slave.reportedAmpsActual >= self.POWER_FLOWING_AMPS
+                    ):
+                        blind = True
         except Exception:
-            # No TWC information: treat as no TWC serving anything.
-            return set(), False
-        return vins, blind
+            return set(), True, True
+        return vins, blind, unknown
+
+    @staticmethod
+    def _telemetryPluggedIn(vehicle):
+        # A live telemetry feed (TeslaMate) says the cable is plugged in.
+        # Live is the telemetryChargeLimit criterion: syncSource is the
+        # telemetry module, which reverts to "TeslaAPI" after syncTimeout.
+        return (
+            getattr(vehicle, "syncSource", "TeslaAPI") != "TeslaAPI"
+            and getattr(vehicle, "pluggedIn", None) is True
+        )
 
     # ------------------------------------------------------------------
     # EVSEController interface
@@ -91,22 +104,27 @@ class TeslaAPIController(EVSEController):
 
         A car on a local TWC is controlled through the TWC; an EVSE here
         would get its own power share and send paid Fleet API charge-rate
-        commands. While a TWC that can't name its car draws power, it might
-        be any of them, so none is listed. Dropping an EVSE strands nothing:
+        commands. While a TWC that can't name its car is plugged in or draws
+        power, it might be any of them, so none is listed. A TWC idle at 00
+        may still hide a plugged-in car (Gen2 reports 00 for one), so while
+        any TWC can't name its car, a car live telemetry says is plugged in
+        is not listed either. Dropping an EVSE strands nothing:
         it holds no state, and stops go to master.stopCarsCharging by VIN.
         """
         carapi = self._get_carapi()
         if carapi is None:
             return []
 
-        served, blind = self._twcServedVINs()
+        served, blind, unknown = self._twcServedVINs()
         if blind:
             vehicles_at_home = []
         else:
             vehicles_at_home = [
                 v
                 for v in carapi.getCarApiVehicles()
-                if v.atHome and v.VIN not in served
+                if v.atHome
+                and v.VIN not in served
+                and not (unknown and self._telemetryPluggedIn(v))
             ]
         current_vins = {v.VIN for v in vehicles_at_home}
 
