@@ -128,3 +128,15 @@ def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
             proc.kill()
             proc.wait()
         proc.stdout.close()
+
+
+def test_main_loop_exits_when_a_handler_swallows_the_interrupt():
+    # Backstop: SIGTERM also sets a flag that the catch-all checks, so an
+    # except clause that fails while KeyboardInterrupt is in flight can't
+    # turn the shutdown into a logged error.
+    with open(os.path.join(REPO, "lib", "TWCManager", "TWCManager.py")) as f:
+        source = f.read()
+    handler = source[source.index("def sigterm_to_keyboard_interrupt") :]
+    assert "shutdownRequested = True" in handler[: handler.index("signal.signal(")]
+    catch_all = source[source.index('logger.info("Unhandled Exception:"') :]
+    assert "if shutdownRequested:" in catch_all[: catch_all.index("time.sleep(5)")]

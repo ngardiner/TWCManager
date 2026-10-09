@@ -828,10 +828,17 @@ if "PYTEST_CURRENT_TEST" in os.environ:
     sys.exit(0)
 
 
+shutdownRequested = False
+
+
 def sigterm_to_keyboard_interrupt(signum, frame):
     # systemd stop/restart sends SIGTERM. Take the same graceful shutdown
     # path as Ctrl-C: save settings, drain stop-charging commands, then wait
     # (bounded) for background tasks. A second SIGTERM kills immediately.
+    # The flag backs up the exception: an except clause that fails while
+    # handling it would otherwise turn the shutdown into an ordinary error.
+    global shutdownRequested
+    shutdownRequested = True
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     raise KeyboardInterrupt
 
@@ -1963,6 +1970,10 @@ while True:
         # 'Traceback' to find these in the log.
         traceback.print_exc()
         logger.info("Unhandled Exception:" + traceback.format_exc())
+        if shutdownRequested:
+            # SIGTERM arrived and an exception handler lost it on the way.
+            logger.info("Exiting after background tasks complete...")
+            break
         # Sleep 5 seconds so the user might see the error.
         try:
             time.sleep(5)
