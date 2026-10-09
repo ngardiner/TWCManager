@@ -28,6 +28,7 @@ def make_api():
 def make_vehicle():
     v = SimpleNamespace(VIN=VIN1, lastAPIAccessTime=0)
     v.lastChargeRateSent = CarApiVehicle.lastChargeRateSent
+    v.lastChargeRateSentTime = CarApiVehicle.lastChargeRateSentTime
     return v
 
 
@@ -102,3 +103,31 @@ def test_post_has_timeout():
     with patch(POST, return_value=response()) as post:
         api.setChargeRate(16, v)
     assert post.call_args.kwargs["timeout"] == 30
+
+
+CLOCK = "TWCManager.Vehicle.TeslaAPI.time.time"
+
+
+def test_same_rate_skipped_inside_resend_window():
+    api, v = make_api(), make_vehicle()
+    with patch(POST, return_value=response()) as post, patch(CLOCK) as clock:
+        clock.return_value = 1000.0
+        api.setChargeRate(16, v)
+        clock.return_value = 1000.0 + TeslaAPI.CHARGE_RATE_RESEND_AFTER - 1
+        api.setChargeRate(16, v)
+    assert post.call_count == 1
+
+
+def test_same_rate_resent_after_resend_window():
+    api, v = make_api(), make_vehicle()
+    with patch(POST, return_value=response()) as post, patch(CLOCK) as clock:
+        clock.return_value = 1000.0
+        api.setChargeRate(16, v)
+        clock.return_value = 1000.0 + TeslaAPI.CHARGE_RATE_RESEND_AFTER
+        api.setChargeRate(16, v)
+        assert post.call_count == 2
+        assert v.lastChargeRateSentTime == clock.return_value
+        # The resend restarts the window.
+        clock.return_value += 1
+        api.setChargeRate(16, v)
+    assert post.call_count == 2

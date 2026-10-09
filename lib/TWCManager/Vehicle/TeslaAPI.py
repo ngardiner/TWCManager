@@ -16,6 +16,8 @@ logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
 class TeslaAPI:
     baseURL = ""
+    # A charge rate the car accepted is not resent for this long (seconds).
+    CHARGE_RATE_RESEND_AFTER = 600
     regionURL = {
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
@@ -1537,10 +1539,14 @@ class TeslaAPI:
             charge_rate = 1
 
         # set_charging_amps is a paid command: don't resend the rate this
-        # car last accepted. set_again (the low-rate repeat) always sends.
+        # car last accepted, unless CHARGE_RATE_RESEND_AFTER has passed (the
+        # rate may have been changed elsewhere). set_again (the low-rate
+        # repeat) always sends.
         if (
             not set_again
             and getattr(vehicle, "lastChargeRateSent", None) == charge_rate
+            and time.time() - getattr(vehicle, "lastChargeRateSentTime", 0)
+            < self.CHARGE_RATE_RESEND_AFTER
         ):
             return True
 
@@ -1573,6 +1579,7 @@ class TeslaAPI:
         try:
             if apiResponseDict["response"]["result"] == True:
                 vehicle.lastChargeRateSent = charge_rate
+                vehicle.lastChargeRateSentTime = time.time()
         except (KeyError, TypeError):
             pass
 
@@ -1754,8 +1761,10 @@ class CarApiVehicle:
     scheduledChargingPending = False
     timeToFullCharge = 0.0
     availableCurrent = 0
-    # The last rate set_charging_amps succeeded with, so it isn't resent.
+    # The last rate set_charging_amps succeeded with, and when, so it isn't
+    # resent within TeslaAPI.CHARGE_RATE_RESEND_AFTER.
     lastChargeRateSent = None
+    lastChargeRateSentTime = 0
     _actualCurrent = 0
     lastCurrentChangeTime = 0
     phases = 0
