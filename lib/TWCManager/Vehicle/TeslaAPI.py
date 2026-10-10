@@ -20,7 +20,17 @@ class TeslaAPI:
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
         "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
+        # Not a Fleet region: the read-only Owner API used by TeslaMate tokens.
+        # fleetRegions() leaves it out of every region list and lookup.
+        "OwnerAPI": "https://owner-api.teslamotors.com/api/1/vehicles",
     }
+    # teslaProxy base URL and certificate from config.json, kept apart from
+    # baseURL so it can be restored when a Fleet token replaces an Owner one.
+    proxyURL = ""
+    proxyCert = True
+    # True while the current token is an Owner API token, which cannot send
+    # vehicle commands.
+    readOnly = False
     refreshClientID = ""
     # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
     # whether a client secret is configured:
@@ -95,8 +105,11 @@ class TeslaAPI:
 
             proxyURL = self.config["config"].get("teslaProxy", "")
             if proxyURL:
-                self.baseURL = proxyURL + "/api/1/vehicles"
-                self.verifyCert = self.config["config"].get("teslaProxyCert", True)
+                self.proxyURL = proxyURL + "/api/1/vehicles"
+                self.proxyCert = self.config["config"].get("teslaProxyCert", True)
+                # Until a token is classified, assume it suits the proxy.
+                self.baseURL = self.proxyURL
+                self.verifyCert = self.proxyCert
             self.refreshClientID = self.config["config"].get("teslaApiClientID", "")
             self.clientSecret = self.config["config"].get("teslaApiClientSecret", "")
             self.redirectURI = self.config["config"].get("teslaApiRedirectUri", "")
@@ -254,6 +267,13 @@ class TeslaAPI:
                 logging.INFO8,
                 "Entering car_api_available - next step is to query Tesla API",
             )
+
+        if not self.getCarApiBaseURL():
+            # The token type is unknown; setCarApiBearerToken logged why.
+            logger.log(
+                logging.INFO8, "car_api_available returning False: no API base URL"
+            )
+            return False
 
         # Authenticate to Tesla API
         self.refreshTokenIfNeeded()
@@ -1142,11 +1162,16 @@ class TeslaAPI:
         # Public-client PKCE flow is used when no client secret is configured.
         return not bool(self.clientSecret)
 
+    def fleetRegions(self):
+        # The Fleet API regions, in regionURL order; never "OwnerAPI".
+        return [region for region in self.regionURL if region != "OwnerAPI"]
+
     def regionAudience(self, region):
         # Confidential-client only: the token audience is the regional FleetAPI
         # base URL without the /api/1/vehicles path suffix used elsewhere.
-        base = self.regionURL.get(region, self.regionURL["NA"])
-        return base.replace("/api/1/vehicles", "")
+        if region not in self.fleetRegions():
+            region = "NA"
+        return self.regionURL[region].replace("/api/1/vehicles", "")
 
     def loginConfigured(self):
         # Both flows need a client id and redirect URI; the secret is optional
@@ -1160,7 +1185,7 @@ class TeslaAPI:
             "client_id": self.refreshClientID,
             "redirect_uri": self.redirectURI,
             "pkce": self.usePKCE(),
-            "regions": list(self.regionURL.keys()),
+            "regions": self.fleetRegions(),
             "region": self.region,
         }
 
@@ -1169,7 +1194,7 @@ class TeslaAPI:
         # region) so the later token exchange matches.
         if not self.loginConfigured():
             return ""
-        if region not in self.regionURL:
+        if region not in self.fleetRegions():
             region = self.region
         self.__loginState = secrets.token_urlsafe(16)
         self.__loginRegion = region
@@ -1224,8 +1249,8 @@ class TeslaAPI:
             data["client_secret"] = self.clientSecret
             data["audience"] = self.regionAudience(self.__loginRegion or self.region)
             tokenURL = self.fleetRefreshURL
-        # baseURL is left to setCarApiBearerToken, which derives the region from
-        # the token's ou_code when no teslaProxy is configured.
+        # baseURL is left to setCarApiBearerToken, which classifies the token
+        # and picks the proxy or the region URL for a Fleet token.
 
         req = None
         try:
@@ -1278,6 +1303,7 @@ class TeslaAPI:
                 return False
             else:
                 self.carApiBearerToken = token
+                decoded = None
                 try:
                     decoded = jwt.decode(
                         token,
@@ -1287,30 +1313,67 @@ class TeslaAPI:
                             "verify_exp": False,
                         },
                     )
-                    if not self.baseURL:
-                        if decoded.get("ou_code", "") in self.regionURL:
-                            self.baseURL = self.regionURL[decoded["ou_code"]]
-                        else:
-                            logger.error(
-                                "Unable to determine Fleet API region from token. "
-                                "Set teslaProxy in config.json or provide a valid "
-                                "Fleet API token."
-                            )
+                except jwt.exceptions.InvalidTokenError:
+                    pass
+                self.applyTokenClassification(decoded)
 
-                    if "exp" in decoded:
-                        self.setCarApiTokenExpireTime(int(decoded["exp"]))
-                    else:
-                        self.setCarApiTokenExpireTime(time.time() + 8 * 60 * 60)
-
-                except jwt.exceptions.DecodeError:
-                    logger.error(
-                        "Unable to decode Tesla API token; cannot determine Fleet "
-                        "API region."
-                    )
+                if decoded and "exp" in decoded:
+                    self.setCarApiTokenExpireTime(int(decoded["exp"]))
+                else:
                     self.setCarApiTokenExpireTime(time.time() + 8 * 60 * 60)
                 return True
         else:
             return False
+
+    def classifyToken(self, decoded):
+        # Returns (tokenType, region) for a token's decoded JWT claims.
+        # tokenType is "owner", "fleet" or "unknown"; region is a Fleet region
+        # key for "fleet" and None otherwise. An Owner API token can also
+        # carry ou_code, so aud is checked for owner-api first.
+        if not isinstance(decoded, dict):
+            return ("unknown", None)
+        aud = decoded.get("aud", [])
+        if isinstance(aud, str):
+            aud = [aud]
+        aud = [str(entry) for entry in aud]
+        if any("owner-api" in entry for entry in aud):
+            return ("owner", None)
+        ouCode = decoded.get("ou_code", "")
+        if ouCode in self.fleetRegions():
+            return ("fleet", ouCode)
+        if any("fleet-api" in entry for entry in aud):
+            for region in self.fleetRegions():
+                host = urlsplit(self.regionURL[region]).netloc
+                if any(host in entry for entry in aud):
+                    return ("fleet", region)
+            return ("fleet", "NA")
+        return ("unknown", None)
+
+    def applyTokenClassification(self, decoded):
+        # Point baseURL, verifyCert and readOnly at the API the current
+        # token belongs to. Runs for every accepted token.
+        tokenType, region = self.classifyToken(decoded)
+        if tokenType == "owner":
+            # The Vehicle Command proxy only takes Fleet tokens.
+            baseURL, verifyCert, readOnly = self.regionURL["OwnerAPI"], True, True
+        elif tokenType == "fleet" and self.proxyURL:
+            baseURL, verifyCert, readOnly = self.proxyURL, self.proxyCert, False
+        elif tokenType == "fleet":
+            baseURL, verifyCert, readOnly = self.regionURL[region], True, False
+        else:
+            baseURL, verifyCert, readOnly = "", True, False
+            logger.error(
+                "Unable to determine the Tesla API token type (Owner API or "
+                "Fleet API). No Tesla API calls will be made until a "
+                "recognised token is supplied."
+            )
+        self.baseURL = baseURL
+        self.verifyCert = verifyCert
+        self.readOnly = readOnly
+        logger.info(
+            "Tesla API token type: %s, base URL host: %s, read-only: %s"
+            % (tokenType, urlsplit(baseURL).netloc or "none", readOnly)
+        )
 
     def setCarApiRefreshToken(self, token):
         self.carApiRefreshToken = token
@@ -1371,6 +1434,10 @@ class TeslaAPI:
                 logger.error("No Tesla vehicles available to set charge rate")
                 return False
             vehicle = vehicles[0]
+
+        if not self.getCarApiBaseURL():
+            # The token type is unknown; setCarApiBearerToken logged why.
+            return False
 
         # Do not set charge_rate to 0 as this will effectively stop the car from charging all together
         if charge_rate < 1:
@@ -1488,6 +1555,9 @@ class TeslaAPI:
                 return
 
     def wakeVehicle(self, vehicle):
+        if not self.getCarApiBaseURL():
+            # The token type is unknown; setCarApiBearerToken logged why.
+            return False
         apiResponseDict = None
         vehicle.lastAPIAccessTime = time.time()
 
@@ -1539,7 +1609,6 @@ class CarApiVehicle:
     carapi = None
     __config = None
     debuglevel = 0
-    verifyCert = None
     ID = None
     name = ""
     syncSource = "TeslaAPI"
@@ -1585,7 +1654,6 @@ class CarApiVehicle:
     def __init__(self, json, carapi, config):
         self.carapi = carapi
         self.__config = config
-        self.verifyCert = config["config"].get("teslaProxyCert", True)
         self.ID = json["id"]
         self.VIN = json["vin"]
         self.name = json["display_name"] or self.VIN or str(self.ID) or "unknown"
@@ -1594,6 +1662,12 @@ class CarApiVehicle:
         thread = Thread(target=self.checkSyncNotStale)
         thread.daemon = True
         thread.start()
+
+    @property
+    def verifyCert(self):
+        # Follows the current token: the proxy certificate only applies
+        # while requests go to teslaProxy.
+        return self.carapi.verifyCert
 
     def checkSyncNotStale(self):
         # Once an external system begins providing sync functionality to defer
@@ -1679,6 +1753,10 @@ class CarApiVehicle:
         return awakeState
 
     def get_car_api(self, url, checkReady=True, provesOnline=True):
+        if not self.carapi.getCarApiBaseURL():
+            # The token type is unknown; setCarApiBearerToken logged why.
+            return False, None
+
         if checkReady and not self.ready():
             return False, None
 
