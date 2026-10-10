@@ -1266,6 +1266,17 @@ class TeslaAPI:
             return False
 
     def setCarApiRefreshToken(self, token):
+        if self.master.tokenSyncEnabled():
+            # While token sync is on, only the sync source may set the token
+            # (applySyncedTokens stores it directly); refuse ones from the web
+            # UI, settings or a refresh, and store nothing.
+            if token:
+                logger.warning(
+                    "Tesla API refresh token refused: TeslaMate token sync is "
+                    "on, so TWCManager uses TeslaMate's tokens. Turn off "
+                    "syncTokens to enter tokens by hand."
+                )
+            return False
         self.carApiRefreshToken = token
         if (
             token

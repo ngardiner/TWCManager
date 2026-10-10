@@ -1528,6 +1528,7 @@ def CreateHTTPHandlerClass(master):
             # This function will write the settings submitted from the settings
             # page to the settings dict, before triggering a write of the settings
             # to file
+            location = "/"
             for key in self.fields:
                 # If the key relates to the car API tokens, we need to pass these
                 # to the appropriate module, rather than directly updating the
@@ -1535,6 +1536,10 @@ def CreateHTTPHandlerClass(master):
                 if (
                     key == "carApiBearerToken" or key == "carApiRefreshToken"
                 ) and self.getFieldValue(key) != "":
+                    if master.tokenSyncEnabled():
+                        # The setters refuse it and store nothing; say so
+                        # on the page we redirect to.
+                        location = "/teslaAccount/token_sync"
                     carapi = master.getModuleByName("TeslaAPI")
                     if key == "carApiBearerToken":
                         carapi.setCarApiBearerToken(self.getFieldValue(key))
@@ -1570,9 +1575,9 @@ def CreateHTTPHandlerClass(master):
             # Save Settings
             master.queue_background_task({"cmd": "saveSettings"})
 
-            # Redirect to the index page
+            # Redirect to the index page, or to the token sync notice
             self.send_response(302)
-            self.send_header("Location", "/")
+            self.send_header("Location", location)
             self.end_headers()
             self.wfile.write("".encode("utf-8"))
             return
