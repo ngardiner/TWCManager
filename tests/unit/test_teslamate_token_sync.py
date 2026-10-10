@@ -365,3 +365,41 @@ class TestTokensTableLocation:
         tm = make_teslamate(master, None, None)
         tm.doSyncTokens()
         assert not api.getCarApiRefreshToken()
+
+
+class TestDecryptTeslaMateVault:
+    """TeslaMate stores tokens as Cloak AES.GCM.V1 blobs in bytea columns;
+    psycopg2 returns those as memoryview, not Base64 text."""
+
+    KEY = "an-encryption-key"
+
+    def _blob(self, plaintext):
+        import os
+        from hashlib import sha256
+
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        tag = b"AES.GCM.V1"
+        iv = os.urandom(12)
+        sealed = AESGCM(sha256(self.KEY.encode()).digest()).encrypt(
+            iv, plaintext.encode(), tag
+        )
+        ciphertext, ciphertag = sealed[:-16], sealed[-16:]
+        return bytes([1, len(tag)]) + tag + iv + ciphertag + ciphertext
+
+    def _tm(self):
+        from TWCManager.Vehicle.TeslaMateVehicle import TeslaMateVehicle
+
+        tm = TeslaMateVehicle.__new__(TeslaMateVehicle)
+        tm.encryption_key = self.KEY
+        return tm
+
+    def test_bytea_memoryview(self):
+        blob = self._blob("secret-token")
+        assert self._tm().decrypt_data(memoryview(blob)) == "secret-token"
+
+    def test_base64_text_still_works(self):
+        import base64
+
+        blob = base64.b64encode(self._blob("secret-token")).decode()
+        assert self._tm().decrypt_data(blob) == "secret-token"

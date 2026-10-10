@@ -110,9 +110,16 @@ class TeslaMateVehicle(TelmetryBase):
             return None
 
         try:
-            # 1. Decode from Base64
+            # 1. Get the raw Cloak blob. psycopg2 returns TeslaMate's bytea
+            # columns as memoryview/bytes, already raw; only a text value
+            # needs Base64 decoding.
+            if isinstance(encrypted_data, (bytes, bytearray, memoryview)):
+                decoded_data = bytes(encrypted_data)
+            else:
+                decoded_data = None
             try:
-                decoded_data = base64.b64decode(encrypted_data)
+                if decoded_data is None:
+                    decoded_data = base64.b64decode(encrypted_data)
             except Exception as e:
                 logger.info(f"Base64 decode failed: {e}. Attempting to fix padding...")
                 try:
