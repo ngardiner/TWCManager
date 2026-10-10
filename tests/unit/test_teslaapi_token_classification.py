@@ -133,6 +133,31 @@ class TestUnknownToken:
         assert vehicle.lastErrorTime == 0
 
 
+class TestNoBaseURLLogLine:
+    """car_api_available stops when there is no base URL. Its log line must
+    tell "no token yet" apart from "token type unknown"."""
+
+    def messages(self, api, caplog, requests_mock):
+        any_call = requests_mock.register_uri(rm.ANY, rm.ANY, json={})
+        caplog.set_level(logging.INFO8)
+        assert api.car_api_available() is False
+        assert any_call.call_count == 0
+        return [r.getMessage() for r in caplog.records]
+
+    def test_no_token_yet(self, caplog, requests_mock):
+        api = new_api()
+        messages = self.messages(api, caplog, requests_mock)
+        assert any("no Tesla API token yet" in m for m in messages)
+        assert not any("token type unknown" in m for m in messages)
+
+    def test_unknown_token(self, caplog, requests_mock):
+        api = new_api()
+        api.setCarApiBearerToken("not-a-jwt-at-all")
+        messages = self.messages(api, caplog, requests_mock)
+        assert any("token type unknown" in m for m in messages)
+        assert not any("no Tesla API token yet" in m for m in messages)
+
+
 class TestOddAud:
     """aud is normally a string or a list; other shapes must not raise out of
     setCarApiBearerToken."""
