@@ -376,3 +376,48 @@ class TestSettingsPageWhileSyncOn:
 
         assert api.getCarApiRefreshToken() == "typed-refresh"
         request.send_header.assert_any_call("Location", "/")
+
+
+class TestTokensTableLocation:
+    """TeslaMate keeps its tokens in private.tokens on current releases and in
+    public tokens on older ones; the sync must find either."""
+
+    def _db(self, monkeypatch, present):
+        import psycopg2
+        import TWCManager.Vehicle.TeslaMateVehicle as tmmod
+
+        queries = []
+
+        def connect(**kwargs):
+            conn = Mock()
+            cur = conn.cursor.return_value
+
+            def execute(sql):
+                queries.append(sql)
+                if (" " + present + " ") not in sql:
+                    raise psycopg2.errors.UndefinedTable("missing")
+
+            cur.execute.side_effect = execute
+            cur.fetchone.return_value = (owner_token(), "refresh-1")
+            return conn
+
+        monkeypatch.setattr(tmmod.psycopg2, "connect", connect)
+        return queries
+
+    @pytest.mark.parametrize("present", ["private.tokens", "tokens"])
+    def test_sync_reads_either_location(self, monkeypatch, present):
+        queries = self._db(monkeypatch, present)
+        master = FakeMaster()
+        api = new_api(master)
+        tm = make_teslamate(master, None, None)
+        tm.doSyncTokens()
+        assert api.getCarApiRefreshToken() == "refresh-1"
+        assert "FROM private.tokens " in queries[0]
+
+    def test_no_tokens_table_logs_and_keeps_tokens(self, monkeypatch):
+        self._db(monkeypatch, "nowhere")
+        master = FakeMaster()
+        api = new_api(master)
+        tm = make_teslamate(master, None, None)
+        tm.doSyncTokens()
+        assert not api.getCarApiRefreshToken()
