@@ -156,7 +156,7 @@ class TestNoRefreshForSyncedTokens:
         # Even with an expiry in the past, nothing may refresh.
         api.setCarApiTokenExpireTime(time.time() - 60)
 
-        # The settings-load path (TWCMaster.loadSettings) and the direct
+        # The refresh-token setter (refused while sync is on) and the direct
         # refresh used by wakeVehicle on a 401.
         api.setCarApiRefreshToken(api.getCarApiRefreshToken())
         assert api.apiRefresh() is False
@@ -273,3 +273,50 @@ class TestSettingsLoadWhileSyncOn:
         assert api.getCarApiBearerToken() == fresh
         assert api.getCarApiRefreshToken() == "synced-refresh"
         assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
+
+
+class TestSettingsPageWhileSyncOn:
+    """Settings has manual token fields. While sync is on, a token typed there
+    is refused, nothing is stored, and the browser is sent to a page saying
+    so."""
+
+    def save(self, master, fields):
+        from TWCManager.Control.HTTPControl import CreateHTTPHandlerClass
+
+        handler = CreateHTTPHandlerClass(master)
+        request = Mock()
+        request.fields = fields
+        request.getFieldValue = fields.get
+        handler.process_save_settings(request)
+        return request
+
+    def test_refresh_token_refused(self, fake_db, refresh_endpoints, caplog):
+        master = FakeMaster()
+        api = new_api(master)
+        synced = owner_token()
+        fake_db["tm"] = make_teslamate(master, synced, "refresh-1")
+        fake_db["tm"].doSyncTokens()
+
+        request = self.save(
+            master, {"carApiRefreshToken": "typed-refresh", "chargeNowAmps": "6"}
+        )
+
+        assert api.getCarApiRefreshToken() == "refresh-1"
+        assert api.getCarApiBearerToken() == synced
+        assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
+        assert all(ep.call_count == 0 for ep in refresh_endpoints)
+        assert "carApiRefreshToken" not in master.settings
+        # Other settings are still saved.
+        assert master.settings["chargeNowAmps"] == "6"
+        request.send_header.assert_any_call("Location", "/teslaAccount/token_sync")
+        assert any("token sync is on" in r.getMessage() for r in caplog.records)
+
+    def test_refresh_token_accepted_while_sync_off(self, refresh_endpoints):
+        master = FakeMaster()
+        api = new_api(master)
+        api.setCarApiBearerToken(owner_token())
+
+        request = self.save(master, {"carApiRefreshToken": "typed-refresh"})
+
+        assert api.getCarApiRefreshToken() == "typed-refresh"
+        request.send_header.assert_any_call("Location", "/")
