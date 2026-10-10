@@ -381,8 +381,9 @@ class TestDecryptTeslaMateVault:
 
         tag = b"AES.GCM.V1"
         iv = os.urandom(12)
+        # Cloak's AES.GCM authenticates the fixed AAD "AES256GCM".
         sealed = AESGCM(sha256(self.KEY.encode()).digest()).encrypt(
-            iv, plaintext.encode(), tag
+            iv, plaintext.encode(), b"AES256GCM"
         )
         ciphertext, ciphertag = sealed[:-16], sealed[-16:]
         return bytes([1, len(tag)]) + tag + iv + ciphertag + ciphertext
