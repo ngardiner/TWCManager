@@ -201,6 +201,49 @@ class TestPastedRefreshToken:
         assert api.readOnly is True
         assert api.getCarApiBaseURL() == OWNER_API_URL
 
+    def test_owner_refresh_token_pasted_back(self, requests_mock):
+        # The /teslaAccount/saveToken form takes a bare token as well as a
+        # redirect URL.
+        new_access = owner_token()
+        owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(new_access))
+        fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
+        api = new_api()
+
+        assert api.saveApiToken(owner_refresh_token()) == "success"
+
+        assert fleet.call_count == 0
+        assert owner.call_count == 1
+        assert api.getCarApiBearerToken() == new_access
+        assert api.readOnly is True
+
+    def test_owner_access_token_pasted_back(self, requests_mock):
+        refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
+        api = new_api()
+        access = owner_token()
+
+        assert api.saveApiToken(access) == "success"
+
+        assert refresh.call_count == 0
+        assert api.getCarApiBearerToken() == access
+        assert api.readOnly is True
+        assert {"cmd": "saveSettings"} in api.master.tasks
+
+    @pytest.mark.parametrize(
+        "pasted",
+        ["https://example.com/teslaAccount/callback", "https://example.com/cb?x=1"],
+    )
+    def test_url_without_code_is_not_stored(self, requests_mock, pasted):
+        refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
+        fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
+        api = new_api()
+        api.carApiRefreshToken = "kept-refresh"
+
+        assert api.saveApiToken(pasted) != "success"
+
+        assert api.getCarApiRefreshToken() == "kept-refresh"
+        assert refresh.called is False
+        assert fleet.called is False
+
     def test_opaque_refresh_token_gets_fleet_refresh(self, requests_mock):
         fleet = requests_mock.post(
             FLEET_REFRESH_URL, json=token_response(fleet_token())
@@ -320,6 +363,8 @@ class TestSyncOn:
         assert api.apiRefresh() is False
         api.refreshTokenIfNeeded()
         assert api.setCarApiRefreshToken(owner_refresh_token()) is False
+        assert api.saveApiToken(owner_refresh_token()) == "token_sync"
+        assert api.saveApiToken(owner_token()) == "token_sync"
 
         assert owner.called is False
         assert fleet.called is False

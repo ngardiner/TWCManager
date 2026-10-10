@@ -1339,7 +1339,38 @@ class TeslaAPI:
         qs = parse_qs(urlsplit(url).query)
         code = qs.get("code", [None])[0]
         state = qs.get("state", [None])[0]
+        if code is None and "?" not in url and not urlsplit(url.strip()).scheme:
+            # Not a URL: a bare token, e.g. an Owner API token. (A URL without
+            # a query is still a failed login, and must not be stored.)
+            return self.savePastedToken(url.strip())
         return self.fleetTokenExchange(code, state)
+
+    def savePastedToken(self, token):
+        # Stores a token pasted on its own: an access token as the bearer
+        # token, anything else as the refresh token (which refreshes by its
+        # type). Returns a status string for the web UI, as saveApiToken does.
+        if self.master.tokenSyncEnabled():
+            logger.warning(
+                "Tesla API token refused: TeslaMate token sync is on, so "
+                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
+                "enter tokens by hand."
+            )
+            return "token_sync"
+        if not token:
+            return "error"
+        decoded = self.decodeToken(token)
+        tokenType = self.classifyToken(decoded)[0]
+        isOwnerRefresh = decoded is not None and (
+            decoded.get("iss") == self.ownerTokenIssuer and tokenType != "owner"
+        )
+        if tokenType != "unknown" and not isOwnerRefresh:
+            self.setCarApiBearerToken(token)
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            return "success"
+        if self.setCarApiRefreshToken(token):
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            return "success"
+        return "error"
 
     def decodeToken(self, token):
         # A token's JWT claims, read without verifying the signature (only
