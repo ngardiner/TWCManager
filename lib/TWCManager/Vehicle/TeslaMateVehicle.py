@@ -228,10 +228,10 @@ class TeslaMateVehicle(TelmetryBase):
                         # Set Bearer and Refresh Tokens
                         carapi = self.master.getModuleByName("TeslaAPI")
                         if carapi:
-                            # We don't want to refresh the token - let the source handle that.
-                            carapi.setCarApiTokenExpireTime(99999 * 99999 * 99999)
-                            carapi.setCarApiBearerToken(access_token)
-                            carapi.setCarApiRefreshToken(refresh_token)
+                            # applySyncedTokens marks the tokens as never
+                            # expiring, so TWCManager leaves refresh to
+                            # TeslaMate.
+                            carapi.applySyncedTokens(access_token, refresh_token)
                             self.lastSync = time.time()
                             logger.log(
                                 logging.INFO,
