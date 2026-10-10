@@ -566,6 +566,44 @@ class TestRejectedPasteKeepsTokens:
         assert "Tesla reported an error" not in page
 
 
+class TestLoginPages:
+    def render(self, name, **context):
+        import os
+
+        import jinja2
+
+        themes = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "lib",
+            "TWCManager",
+            "Control",
+            "themes",
+            "Default",
+        )
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(themes))
+        return env.get_template(name).render(**context)
+
+    def test_paste_back_form_mentions_bare_tokens(self):
+        login = Mock(configured=True, pkce=True, region="NA", regions=["NA"])
+        page = self.render(
+            "request_teslalogin.html.j2",
+            teslaLogin=lambda: login,
+            addButton=lambda *args: "",
+        )
+        assert "bare access or refresh" in page
+
+    def test_success_page_for_owner_token_points_at_ble(self):
+        page = render_login_page("success", carapi=Mock(readOnly=True))
+        assert "TeslaBLE" in page
+        assert "you also need the Tesla Vehicle Command proxy" not in page
+
+    def test_success_page_for_fleet_token_points_at_proxy(self):
+        page = render_login_page("success", carapi=Mock(readOnly=False))
+        assert "you also need the Tesla Vehicle Command proxy" in page
+
+
 class TestNoClientID:
     def test_owner_refresh_needs_no_client_id(self, requests_mock):
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
