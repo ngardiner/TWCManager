@@ -1298,10 +1298,12 @@ class TeslaAPI:
         # not tokenSyncEnabled() is already true, and never refreshes.
         if not self.setCarApiBearerToken(accessToken, fromSync=True):
             return False
+        # After the bearer token, so its decoded exp cannot replace the
+        # sentinel, and before the refresh token, so nothing can refresh with
+        # the new refresh token under the decoded exp.
+        self.setCarApiTokenExpireTime(self.SYNCED_TOKEN_EXPIRY)
         # Stored directly: setCarApiRefreshToken() may start a refresh.
         self.carApiRefreshToken = refreshToken
-        # Last, so the token's decoded exp cannot replace the sentinel.
-        self.setCarApiTokenExpireTime(self.SYNCED_TOKEN_EXPIRY)
         return True
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
