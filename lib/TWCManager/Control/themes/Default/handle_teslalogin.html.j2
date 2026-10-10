@@ -28,6 +28,16 @@
        tokens. The tokens you supplied were not stored. To use your own
        tokens, turn off syncTokens in the TeslaMate module's config.</b>
   </font>
+{% elif url.path == "/teslaAccount/token_rejected" %}
+  <font color='red'>
+    <b>Tesla rejected the token you supplied. Your previous Tesla API tokens
+       were kept.</b>
+  </font>
+{% elif url.path == "/teslaAccount/unreachable" %}
+  <font color='red'>
+    <b>TWCManager could not reach Tesla to check the token you supplied. The
+       token has been stored, and TWCManager will retry.</b>
+  </font>
 {% elif url.path == "/teslaAccount/error" %}
   <font color='red'>
     <b>An error occurred during Tesla login. Please check the logs and try

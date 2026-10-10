@@ -179,11 +179,18 @@ class TeslaAPI:
         return False
 
     def apiRefresh(self):
+        return self.refreshToken() == "success"
+
+    def refreshToken(self, saveOnFailure=True):
+        # Refreshes the tokens. Returns "success", "rejected" (Tesla answered
+        # but gave no tokens), "unreachable" (no response), "not_configured"
+        # (a Fleet refresh with no teslaApiClientID) or "token_sync".
+        # saveOnFailure=False leaves saving a failure's state to the caller.
         if self.master.tokenSyncEnabled():
             # The sync source (TeslaMate) owns and refreshes these tokens.
             # Refreshing here would rotate the token out from under it.
             logger.log(logging.INFO8, "Token sync is on; not refreshing token")
-            return False
+            return "token_sync"
         # Refresh tokens expire in 45
         # days when first issued, so we'll get a new token every 15 days.
         if self.refreshTokenIsOwner():
@@ -199,7 +206,7 @@ class TeslaAPI:
                     "Cannot refresh Tesla token: no teslaApiClientID configured. "
                     "Register a Fleet API app and set teslaApiClientID in config.json."
                 )
-                return False
+                return "not_configured"
             clientID = self.refreshClientID
             # Refresh at the same host the token was issued from: auth.tesla.com
             # for the PKCE/public-client flow, the regional fleet-auth for
@@ -235,8 +242,9 @@ class TeslaAPI:
             # on web interface. I feel this is safer than trying to log in every
             # ten minutes with a bad token because Tesla might decide to block
             # remote access to your car after too many authorization errors.
-            self.master.queue_background_task({"cmd": "saveSettings"})
-            return False
+            if saveOnFailure:
+                self.master.queue_background_task({"cmd": "saveSettings"})
+            return "unreachable" if req is None else "rejected"
         except json.decoder.JSONDecodeError:
             logger.log(
                 logging.INFO2, "JSON Decode Error parsing API Token Refresh Response"
@@ -252,13 +260,13 @@ class TeslaAPI:
             self.setCarApiRefreshToken(apiResponseDict["refresh_token"])
             self.setCarApiTokenExpireTime(now + apiResponseDict["expires_in"])
             self.master.queue_background_task({"cmd": "saveSettings"})
-            return True
+            return "success"
 
         except Exception as e:
             logger.warning(f"Error processing token refresh response: {e}")
             pass
 
-        return False
+        return "rejected"
 
     def refreshTokenIsOwner(self):
         # True when the refresh token is an Owner API one, so apiRefresh uses
@@ -1367,20 +1375,67 @@ class TeslaAPI:
             self.setCarApiBearerToken(token)
             self.master.queue_background_task({"cmd": "saveSettings"})
             return "success"
-        if self.pasteRefreshToken(token):
-            self.master.queue_background_task({"cmd": "saveSettings"})
-            return "success"
-        return "error"
+        return self.pasteRefreshToken(token)
 
     def pasteRefreshToken(self, token):
         # A refresh token entered on its own (Settings page or paste-back).
         # The stored bearer token may be of the other type, and apiRefresh
         # picks the refresh from the bearer token, so forget it first: the
-        # refresh then goes by the refresh token's own type. While token
-        # sync is on, setCarApiRefreshToken refuses and nothing is cleared.
-        if token and not self.master.tokenSyncEnabled():
-            self.clearCarApiBearerToken()
-        return self.setCarApiRefreshToken(token)
+        # refresh then goes by the refresh token's own type.
+        # Returns a status for the web UI, as saveApiToken does:
+        #   "success";
+        #   "token_rejected" or "not_configured": Tesla rejected the token,
+        #     or it needs a teslaApiClientID; the previous tokens are kept;
+        #   "unreachable": no response from Tesla; the pasted token is kept
+        #     and the usual refresh retries it;
+        #   "token_sync": refused, nothing changed.
+        if self.master.tokenSyncEnabled():
+            # Refuses and logs why.
+            self.setCarApiRefreshToken(token)
+            return "token_sync"
+        if not token:
+            return "error"
+        previous = (
+            self.carApiBearerToken,
+            self.carApiRefreshToken,
+            self.carApiTokenExpireTime,
+            self.baseURL,
+            self.verifyCert,
+            self.readOnly,
+            self.readOnlyRefusalLogged,
+            self.carApiLastErrorTime,
+            self.errorCount,
+        )
+        self.clearCarApiBearerToken()
+        self.carApiRefreshToken = token
+        # Nothing is saved on failure until the outcome is known, so a
+        # queued save never writes the cleared state.
+        result = self.refreshToken(saveOnFailure=False)
+        if result == "success":
+            return "success"
+        if result == "unreachable":
+            logger.warning(
+                "Could not reach Tesla to check the pasted refresh token; "
+                "keeping it and retrying later."
+            )
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            return "unreachable"
+        (
+            self.carApiBearerToken,
+            self.carApiRefreshToken,
+            self.carApiTokenExpireTime,
+            self.baseURL,
+            self.verifyCert,
+            self.readOnly,
+            self.readOnlyRefusalLogged,
+            self.carApiLastErrorTime,
+            self.errorCount,
+        ) = previous
+        self.master.queue_background_task({"cmd": "saveSettings"})
+        logger.warning(
+            "Pasted Tesla API refresh token not accepted; previous tokens kept."
+        )
+        return "token_rejected" if result == "rejected" else result
 
     def decodeToken(self, token):
         # A token's JWT claims, read without verifying the signature (only

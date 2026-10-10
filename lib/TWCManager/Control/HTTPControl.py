@@ -1578,7 +1578,9 @@ def CreateHTTPHandlerClass(master):
                         else:
                             # Pasted on its own: replaces the stored bearer
                             # token and refreshes by its own type.
-                            carapi.pasteRefreshToken(self.getFieldValue(key))
+                            result = carapi.pasteRefreshToken(self.getFieldValue(key))
+                            if result not in ("success", "token_sync"):
+                                location = "/teslaAccount/" + result
 
                 else:
                     # Write setting to dictionary
