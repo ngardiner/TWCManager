@@ -2,11 +2,21 @@
   <font color="blue">
     <b>Success, your Tesla API tokens have been stored.</b>
   </font>
+  {% set carapi = master.getModuleByName("TeslaAPI") %}
+  {% if carapi and carapi.readOnly %}
+  <p>This is a read-only Owner API token: TWCManager can read your vehicle
+     state, but Tesla does not accept vehicle commands with it, and the
+     Vehicle Command proxy only takes Fleet API tokens. To <b>drive
+     charging</b> (start/stop/rate-limit), use the TeslaBLE module, which
+     sends commands to the car over Bluetooth. See the
+     <a href="https://github.com/ngardiner/TWCManager/blob/main/docs/modules/Vehicle_TeslaBLE.md" target="_blank">TeslaBLE</a> docs.</p>
+  {% else %}
   <p>TWCManager can now read your vehicle state. To <b>drive charging</b>
      (start/stop/rate-limit), you also need the Tesla Vehicle Command proxy
      (set <code>teslaProxy</code>) or the TeslaBLE module - Tesla's REST charge
      commands now require the Vehicle Command Protocol. See the
      <a href="https://github.com/ngardiner/TWCManager/blob/main/docs/modules/Vehicle_TeslaAPI.md#driving-charging-proxy-or-ble" target="_blank">Driving charging</a> docs.</p>
+  {% endif %}
 {% elif url.path == "/teslaAccount/state_mismatch" %}
   <font color='red'>
     <b>Login security check failed (state mismatch). This usually happens if the
