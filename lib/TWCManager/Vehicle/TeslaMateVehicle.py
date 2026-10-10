@@ -178,6 +178,25 @@ class TeslaMateVehicle(TelmetryBase):
             )
             return None
 
+    # TeslaMate moved its tokens table into the "private" schema; older
+    # installs still have it in public. Try the current location first.
+    TOKEN_TABLES = ("private.tokens", "tokens")
+
+    def fetchLatestTokens(self, conn, cur):
+        for table in self.TOKEN_TABLES:
+            try:
+                cur.execute(
+                    "SELECT access, refresh FROM " + table + " ORDER BY id DESC LIMIT 1"
+                )
+            except psycopg2.errors.UndefinedTable:
+                # A failed statement aborts the transaction; clear it
+                # before trying the next location.
+                conn.rollback()
+                continue
+            return cur.fetchone()
+        logger.error("No tokens table found in the TeslaMate database.")
+        return None
+
     def doSyncTokens(self, firstrun=False):
         # Connect to TeslaMate database and synchronize API tokens
 
@@ -209,12 +228,7 @@ class TeslaMateVehicle(TelmetryBase):
 
                 try:
                     # Query DB for latest access and refresh token
-                    cur.execute(
-                        "SELECT access, refresh FROM tokens ORDER BY id DESC LIMIT 1"
-                    )
-
-                    # Fetch result
-                    result = cur.fetchone()
+                    result = self.fetchLatestTokens(conn, cur)
 
                     if result:
                         encrypted_access_token = result[0]
