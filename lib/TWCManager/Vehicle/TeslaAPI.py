@@ -188,10 +188,10 @@ class TeslaAPI:
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
-            if req.status_code == 401:
+            # req is None when the request never went out (e.g. no network).
+            if req is not None and req.status_code == 401:
                 logger.log(
                     logging.INFO2,
-                    "TeslaAPI",
                     "ERROR: Can't access Tesla car via API.  Please supply fresh tokens.",
                 )
                 self.setCarApiBearerToken("")
