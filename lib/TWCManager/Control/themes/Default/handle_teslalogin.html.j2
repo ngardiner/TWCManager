@@ -22,6 +22,12 @@
   <font color='red'>
     <b>The Tesla API did not return an access token. Please try again.</b>
   </font>
+{% elif url.path == "/teslaAccount/token_sync" %}
+  <font color='red'>
+    <b>TeslaMate token sync is on, so TWCManager uses TeslaMate's Tesla API
+       tokens. The tokens you supplied were not stored. To use your own
+       tokens, turn off syncTokens in the TeslaMate module's config.</b>
+  </font>
 {% elif url.path == "/teslaAccount/error" %}
   <font color='red'>
     <b>An error occurred during Tesla login. Please check the logs and try
