@@ -162,8 +162,9 @@ class TestReadsStillRun:
     def test_vehicle_list_read_uses_owner_api(self, no_threads, requests_mock):
         api = new_api()
         api.setCarApiBearerToken(owner_token())
+        # The Owner API lists vehicles under /products, not /vehicles.
         listing = requests_mock.get(
-            OWNER_URL,
+            OWNER_URL[: -len("vehicles")] + "products",
             json={
                 "count": 1,
                 "response": [{"id": 1, "vin": "VIN1", "display_name": "Car"}],

@@ -290,7 +290,7 @@ class TeslaAPI:
 
         if self.getCarApiBearerToken() != "":
             if self.getVehicleCount() < 1:
-                url = self.baseURL
+                url = self.vehicleListURL()
                 headers = {
                     "accept": "application/json",
                     "Authorization": "Bearer " + self.getCarApiBearerToken(),
@@ -1078,6 +1078,16 @@ class TeslaAPI:
 
     def getCarApiRefreshToken(self):
         return self.carApiRefreshToken
+
+    def vehicleListURL(self):
+        # The Owner API no longer lists vehicles under /vehicles (it answers
+        # 412 "only available on fleetapi"); /products still works and also
+        # returns energy sites, which addVehicle skips because they have no
+        # VIN. Per-vehicle endpoints (/vehicles/<VIN>/...) work as they are.
+        url = self.getCarApiBaseURL()
+        if self.readOnly and url.endswith("/vehicles"):
+            return url[: -len("vehicles")] + "products"
+        return url
 
     def getCarApiBaseURL(self):
         return self.baseURL
