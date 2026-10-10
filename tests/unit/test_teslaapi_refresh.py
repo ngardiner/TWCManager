@@ -4,6 +4,7 @@ release/1.3.3 refreshes it (client_id "ownerapi" at auth.tesla.com, over the
 TLS 1.3 session); every other token keeps the Fleet refresh.
 """
 
+import json
 import ssl
 import time
 from unittest.mock import patch
@@ -337,17 +338,56 @@ class TestRefreshNeverSent:
         [(owner_token, AUTH_TOKEN_URL), (fleet_token, FLEET_REFRESH_URL)],
         ids=["owner", "fleet"],
     )
-    def test_401_still_clears_tokens(self, requests_mock, make_access, url):
+    def test_401_clears_both_tokens_and_the_type(self, requests_mock, make_access, url):
         requests_mock.post(url, status_code=401, json={})
         api = new_api()
         api.setCarApiBearerToken(make_access(expires_in=60))
         api.carApiRefreshToken = "some-refresh"
+        before = time.time()
 
         assert api.apiRefresh() is False
 
-        # The guard keeps the 401 handling. (setCarApiBearerToken("") leaves
-        # the bearer token in place, as in release/1.3.3.)
+        assert api.getCarApiBearerToken() == ""
         assert api.getCarApiRefreshToken() == ""
+        assert api.readOnly is False
+        assert api.getCarApiBaseURL() == ""
+        assert before <= api.getCarApiTokenExpireTime() <= time.time()
+        assert {"cmd": "saveSettings"} in api.master.tasks
+
+    def test_401_keeps_the_proxy_for_the_next_fleet_token(self, requests_mock):
+        requests_mock.post(AUTH_TOKEN_URL, status_code=401, json={})
+        api = new_api(teslaProxy="https://proxy.local:4443")
+        api.setCarApiBearerToken(owner_token(expires_in=60))
+        api.carApiRefreshToken = "some-refresh"
+
+        api.apiRefresh()
+        assert api.getCarApiBaseURL() == ""
+
+        api.setCarApiBearerToken(fleet_token())
+        assert api.getCarApiBaseURL() == "https://proxy.local:4443/api/1/vehicles"
+
+    def test_cleared_tokens_save_and_reload_cleared(self, requests_mock, tmp_path):
+        # The 401 queues saveSettings; what it saves must load back as "no
+        # token", not as the old token or its type.
+        from tests.unit.test_teslamate_token_sync import master_with_settings
+
+        requests_mock.post(AUTH_TOKEN_URL, status_code=401, json={})
+        refresh = requests_mock.post(FLEET_REFRESH_URL, json={})
+        master, api, _ = master_with_settings(tmp_path, {})
+        api.setCarApiBearerToken(owner_token(expires_in=60))
+        api.carApiRefreshToken = "some-refresh"
+        api.apiRefresh()
+        master.saveSettings()
+        saved = json.loads((tmp_path / "settings.json").read_text())
+
+        master2, api2, _ = master_with_settings(tmp_path, saved)
+        master2.loadSettings()
+
+        assert api2.getCarApiBearerToken() == ""
+        assert api2.getCarApiRefreshToken() == ""
+        assert api2.readOnly is False
+        assert api2.getCarApiBaseURL() == ""
+        assert refresh.called is False
 
 
 class TestSyncOn:
