@@ -1098,7 +1098,9 @@ class TWCMaster:
         carapi = self.getModuleByName("TeslaAPI")
         carapi.setCarApiBearerToken(self.settings.get("carApiBearerToken", ""))
         carapi.setCarApiRefreshToken(self.settings.get("carApiRefreshToken", ""))
-        carapi.setCarApiTokenExpireTime(self.settings.get("carApiTokenExpireTime", ""))
+        carapi.restoreCarApiTokenExpireTime(
+            self.settings.get("carApiTokenExpireTime", "")
+        )
 
         # We start with vehicles, but this should be templated in future for all modules to both remove the above logic,
         # and to push settings logic out to the individual modules
