@@ -224,7 +224,7 @@ class TeslaAPI:
                     logging.INFO2,
                     "ERROR: Can't access Tesla car via API.  Please supply fresh tokens.",
                 )
-                self.setCarApiBearerToken("")
+                self.clearCarApiBearerToken()
                 self.setCarApiRefreshToken("")
             self.updateCarApiLastErrorTime()
             # Instead of just setting carApiLastErrorTime, erase tokens to
@@ -1439,6 +1439,21 @@ class TeslaAPI:
                 return True
         else:
             return False
+
+    def clearCarApiBearerToken(self):
+        # Forgets the bearer token, its type and its expiry, e.g. after the
+        # refresh token is rejected. (setCarApiBearerToken("") stores
+        # nothing.) baseURL is reset as for an unknown token; a configured
+        # teslaProxy stays in proxyURL for the next Fleet token. Callers
+        # check tokenSyncEnabled() first: a synced token must not be cleared.
+        self.carApiBearerToken = ""
+        if self.readOnly:
+            # Let the next refused command log again.
+            self.readOnlyRefusalLogged = False
+        self.baseURL = ""
+        self.verifyCert = True
+        self.readOnly = False
+        self.setCarApiTokenExpireTime(time.time())
 
     def classifyToken(self, decoded):
         # Returns (tokenType, region) for a token's decoded JWT claims.
