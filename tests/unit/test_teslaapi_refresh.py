@@ -7,7 +7,7 @@ TLS 1.3 session); every other token keeps the Fleet refresh.
 import json
 import ssl
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 import requests
@@ -258,6 +258,84 @@ class TestPastedRefreshToken:
         assert owner.call_count == 1
 
 
+class TestRefreshTokenPastedAlone:
+    """A refresh token pasted on its own replaces the stored bearer token,
+    which may be of the other type, and refreshes by its own type."""
+
+    def save_settings(self, api, fields):
+        from TWCManager.Control.HTTPControl import CreateHTTPHandlerClass
+
+        handler = CreateHTTPHandlerClass(api.master)
+        request = Mock()
+        request.fields = fields
+        request.getFieldValue = fields.get
+        handler.process_save_settings(request)
+        return request
+
+    def test_owner_refresh_over_stale_fleet_bearer(self, requests_mock):
+        new_access = owner_token()
+        owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(new_access))
+        fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
+        api = new_api()
+        api.setCarApiBearerToken(fleet_token(expires_in=-60))
+        pasted = owner_refresh_token()
+
+        self.save_settings(api, {"carApiRefreshToken": pasted})
+
+        assert fleet.call_count == 0
+        assert owner.call_count == 1
+        assert owner.last_request.json()["refresh_token"] == pasted
+        assert api.getCarApiBearerToken() == new_access
+        assert api.readOnly is True
+        assert api.getCarApiBaseURL() == OWNER_API_URL
+
+    def test_fleet_refresh_over_fresh_owner_bearer(self, requests_mock):
+        new_access = fleet_token()
+        fleet = requests_mock.post(FLEET_REFRESH_URL, json=token_response(new_access))
+        owner = requests_mock.post(AUTH_TOKEN_URL, json={})
+        api = new_api()
+        api.setCarApiBearerToken(owner_token())
+
+        self.save_settings(api, {"carApiRefreshToken": OPAQUE_REFRESH})
+
+        assert owner.call_count == 0
+        assert fleet.call_count == 1
+        assert fleet.last_request.json()["refresh_token"] == OPAQUE_REFRESH
+        assert api.getCarApiBearerToken() == new_access
+        assert api.readOnly is False
+
+    def test_paste_back_over_stale_fleet_bearer(self, requests_mock):
+        owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
+        fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
+        api = new_api()
+        api.setCarApiBearerToken(fleet_token(expires_in=-60))
+
+        assert api.saveApiToken(owner_refresh_token()) == "success"
+
+        assert fleet.call_count == 0
+        assert owner.call_count == 1
+        assert api.readOnly is True
+
+    def test_both_tokens_pasted_access_token_first(self, requests_mock):
+        # The Settings form posts the access token field first, so the
+        # refresh token belongs to it: no clear and no refresh.
+        owner = requests_mock.post(AUTH_TOKEN_URL, json={})
+        fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
+        api = new_api()
+        api.setCarApiBearerToken(fleet_token(expires_in=-60))
+        access, refresh = owner_token(), owner_refresh_token()
+
+        self.save_settings(
+            api, {"carApiBearerToken": access, "carApiRefreshToken": refresh}
+        )
+
+        assert owner.called is False
+        assert fleet.called is False
+        assert api.getCarApiBearerToken() == access
+        assert api.getCarApiRefreshToken() == refresh
+        assert api.readOnly is True
+
+
 class TestNoClientID:
     def test_owner_refresh_needs_no_client_id(self, requests_mock):
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
@@ -374,6 +452,7 @@ class TestSyncOn:
         assert api.setCarApiRefreshToken(owner_refresh_token()) is False
         assert api.saveApiToken(owner_refresh_token()) == "token_sync"
         assert api.saveApiToken(owner_token()) == "token_sync"
+        assert api.pasteRefreshToken(owner_refresh_token()) is False
 
         assert owner.called is False
         assert fleet.called is False

@@ -1400,10 +1400,20 @@ class TeslaAPI:
             self.setCarApiBearerToken(token)
             self.master.queue_background_task({"cmd": "saveSettings"})
             return "success"
-        if self.setCarApiRefreshToken(token):
+        if self.pasteRefreshToken(token):
             self.master.queue_background_task({"cmd": "saveSettings"})
             return "success"
         return "error"
+
+    def pasteRefreshToken(self, token):
+        # A refresh token entered on its own (Settings page or paste-back).
+        # The stored bearer token may be of the other type, and apiRefresh
+        # picks the refresh from the bearer token, so forget it first: the
+        # refresh then goes by the refresh token's own type. While token
+        # sync is on, setCarApiRefreshToken refuses and nothing is cleared.
+        if token and not self.master.tokenSyncEnabled():
+            self.clearCarApiBearerToken()
+        return self.setCarApiRefreshToken(token)
 
     def decodeToken(self, token):
         # A token's JWT claims, read without verifying the signature (only
