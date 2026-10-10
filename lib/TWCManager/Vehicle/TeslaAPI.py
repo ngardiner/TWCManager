@@ -1413,10 +1413,34 @@ class TeslaAPI:
             decoded.get("iss") == self.ownerTokenIssuer and tokenType != "owner"
         )
         if tokenType != "unknown" and not isOwnerRefresh:
-            self.setCarApiBearerToken(token)
+            self.pasteAccessToken(token)
             self.master.queue_background_task({"cmd": "saveSettings"})
             return "success"
         return self.pasteRefreshToken(token)
+
+    def pasteAccessToken(self, token):
+        # An access token entered on its own (Settings page or paste-back).
+        # A stored refresh token of the other type can't refresh it: the
+        # refresh would go to the wrong client and, on a 401, clear both
+        # tokens. Drop it, so the access token is used until it expires.
+        if not self.setCarApiBearerToken(token):
+            return False
+        tokenType = self.classifyToken(self.decodeToken(token))[0]
+        stored = self.getCarApiRefreshToken()
+        if (
+            stored
+            and tokenType in ("owner", "fleet")
+            and self.refreshTokenType(stored) != tokenType
+        ):
+            logger.warning(
+                "Dropping the stored Tesla API refresh token: it is a %s "
+                "token and the pasted access token is a %s token. Paste the "
+                "matching refresh token too, or the access token will not be "
+                "refreshed when it expires."
+                % (self.refreshTokenType(stored), tokenType)
+            )
+            self.carApiRefreshToken = ""
+        return True
 
     def pasteRefreshToken(self, token):
         # A refresh token entered on its own (Settings page or paste-back).

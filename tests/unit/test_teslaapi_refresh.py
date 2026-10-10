@@ -401,6 +401,53 @@ class TestRefreshTokenPastedAlone:
         assert api.readOnly is True
 
 
+class TestAccessTokenPastedAlone:
+    """An access token pasted on its own whose type differs from the stored
+    refresh token's makes that refresh token useless: refreshing it would
+    send it to the wrong client. It is dropped, with a WARNING."""
+
+    @pytest.mark.parametrize(
+        "make_access, stored, dropped",
+        [
+            (owner_token, OPAQUE_REFRESH, True),
+            (fleet_token, owner_refresh_token(), True),
+            (owner_token, owner_refresh_token(), False),
+            (fleet_token, OPAQUE_REFRESH, False),
+        ],
+        ids=["owner-over-fleet", "fleet-over-owner", "owner-match", "fleet-match"],
+    )
+    def test_paste_back(self, requests_mock, caplog, make_access, stored, dropped):
+        refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
+        fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
+        api = new_api()
+        api.carApiRefreshToken = stored
+        access = make_access()
+
+        assert api.saveApiToken(access) == "success"
+
+        assert api.getCarApiBearerToken() == access
+        assert api.getCarApiRefreshToken() == ("" if dropped else stored)
+        warned = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "refresh token" in r.getMessage()
+        ]
+        assert bool(warned) == dropped
+        assert stored not in caplog.text
+        assert refresh.called is False
+        assert fleet.called is False
+
+    def test_settings_access_field_only(self, requests_mock):
+        api = new_api()
+        api.carApiRefreshToken = OPAQUE_REFRESH
+        access = owner_token()
+
+        save_settings(api, {"carApiBearerToken": access})
+
+        assert api.getCarApiBearerToken() == access
+        assert api.getCarApiRefreshToken() == ""
+
+
 class TestRejectedPasteKeepsTokens:
     """A pasted refresh token that Tesla rejects must not cost the user the
     tokens that were working; one that can't be checked (no network) is kept
