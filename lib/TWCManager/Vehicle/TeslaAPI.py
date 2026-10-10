@@ -272,9 +272,16 @@ class TeslaAPI:
             )
 
         if not self.getCarApiBaseURL():
-            # The token type is unknown; setCarApiBearerToken logged why.
+            # No token yet (and no teslaProxy), or the token type is unknown,
+            # which setCarApiBearerToken logged as an ERROR. The main loop's
+            # refreshTokenIfNeeded() still covers a token-less start.
+            if self.getCarApiBearerToken():
+                reason = "token type unknown"
+            else:
+                reason = "no Tesla API token yet"
             logger.log(
-                logging.INFO8, "car_api_available returning False: no API base URL"
+                logging.INFO8,
+                "car_api_available returning False: no API base URL (%s)" % reason,
             )
             return False
 
@@ -1459,7 +1466,8 @@ class TeslaAPI:
             vehicle = vehicles[0]
 
         if not self.getCarApiBaseURL():
-            # The token type is unknown; setCarApiBearerToken logged why.
+            # No token yet, or its type is unknown (setCarApiBearerToken
+            # logged why).
             return False
 
         # Do not set charge_rate to 0 as this will effectively stop the car from charging all together
@@ -1555,7 +1563,8 @@ class TeslaAPI:
         if self.refuseCommandIfReadOnly("wake_up"):
             return False
         if not self.getCarApiBaseURL():
-            # The token type is unknown; setCarApiBearerToken logged why.
+            # No token yet, or its type is unknown (setCarApiBearerToken
+            # logged why).
             return False
         apiResponseDict = None
         vehicle.lastAPIAccessTime = time.time()
@@ -1753,7 +1762,8 @@ class CarApiVehicle:
 
     def get_car_api(self, url, checkReady=True, provesOnline=True):
         if not self.carapi.getCarApiBaseURL():
-            # The token type is unknown; setCarApiBearerToken logged why.
+            # No token yet, or its type is unknown (setCarApiBearerToken
+            # logged why).
             return False, None
 
         if checkReady and not self.ready():
