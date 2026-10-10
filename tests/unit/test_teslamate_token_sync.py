@@ -125,6 +125,29 @@ class TestNoRefreshForSyncedTokens:
         assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
         assert all(ep.call_count == 0 for ep in refresh_endpoints)
 
+    def test_sentinel_set_before_the_refresh_token(self, fake_db):
+        # Between the refresh token and the sentinel, a concurrent
+        # refreshTokenIfNeeded() at startup (sync not yet registered) could
+        # see the new refresh token with the decoded exp and refresh it.
+        master = FakeMaster()
+        api = new_api(master)
+        api.carApiRefreshToken = "before-sync"
+        tm = make_teslamate(master, owner_token(), "refresh-1", registered=False)
+        fake_db["tm"] = tm
+        seen = []
+        setExpiry = api.setCarApiTokenExpireTime
+
+        def record(value):
+            seen.append((value, api.getCarApiRefreshToken()))
+            return setExpiry(value)
+
+        api.setCarApiTokenExpireTime = record
+
+        tm.doSyncTokens(True)
+
+        assert (SYNCED_EXPIRY, "before-sync") in seen
+        assert api.getCarApiRefreshToken() == "refresh-1"
+
     def test_refresh_paths_do_nothing_while_sync_on(self, fake_db, refresh_endpoints):
         master = FakeMaster()
         api = new_api(master)
