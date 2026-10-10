@@ -1,5 +1,6 @@
 import base64
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 from hashlib import sha256
 import logging
 import psycopg2
@@ -170,12 +171,18 @@ class TeslaMateVehicle(TelmetryBase):
             # 3. Derive the key by hashing the user-provided key with SHA-256
             key = sha256(self.encryption_key.encode("utf-8")).digest()
 
-            # 4. Decrypt using AES-256-GCM with the tag as AAD
+            # 4. Decrypt using AES-256-GCM. Cloak's AES.GCM cipher always
+            # authenticates the fixed AAD "AES256GCM", not the key tag;
+            # the key tag is kept as a fallback for any data written the
+            # other way.
             aesgcm = AESGCM(key)
             ciphertext_with_tag = ciphertext + ciphertag
-            decrypted_data = aesgcm.decrypt(
-                iv, ciphertext_with_tag, key_tag.encode("utf-8")
-            )
+            try:
+                decrypted_data = aesgcm.decrypt(iv, ciphertext_with_tag, b"AES256GCM")
+            except InvalidTag:
+                decrypted_data = aesgcm.decrypt(
+                    iv, ciphertext_with_tag, key_tag.encode("utf-8")
+                )
 
             return decrypted_data.decode("utf-8")
         except Exception as e:
