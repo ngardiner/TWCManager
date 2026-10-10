@@ -25,6 +25,9 @@ class TelmetryBase:
     status = None
     vehicles = {}
     unknownVehicles = {}
+    vehicleNames = {}
+    unmappedRetrySecs = 300
+    retryScheduled = False
 
     # Empty default events
     events = {
@@ -34,6 +37,9 @@ class TelmetryBase:
 
     def __init__(self, master):
         self.master = master
+        self.vehicles = {}
+        self.unknownVehicles = {}
+        self.vehicleNames = {}
 
         self.config = master.config
         try:
@@ -133,13 +139,18 @@ class TelmetryBase:
 
         if event == self.vehicleNameTopic:
             # We can map the car ID in Telemetry data to the vehicle
-            # in the Tesla API module
-            self.updateVehicles(id, payload)
-            if id in self.unknownVehicles:
-                pastEvents = self.unknownVehicles[id]
-                del self.unknownVehicles[id]
-                for pastEvent in pastEvents:
-                    self.applyDataToVehicle(id, pastEvent[0], pastEvent[1])
+            # in the Tesla API module. Remember the name: brokers publish it
+            # retained and only on change, so if the API vehicle list isn't
+            # loaded yet we must retry the mapping later rather than wait for
+            # another message.
+            self.vehicleNames[id] = payload
+            # Only match against the already-loaded vehicle list here: this
+            # runs on the MQTT network thread, which must not block on a cloud
+            # call. If it doesn't match, a timer thread loads the list.
+            if self.updateVehicles(id, payload, loadList=False):
+                self.replayUnknownEvents(id)
+            else:
+                self.scheduleUnmappedRetry(delay=1)
 
         elif event in events:
             vehicle = self.vehicles.get(id, None)
@@ -165,7 +176,37 @@ class TelmetryBase:
     def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
 
-    def updateVehicles(self, vehicle_id, vehicle_name):
+    def replayUnknownEvents(self, vehicle_id):
+        if vehicle_id in self.vehicles and vehicle_id in self.unknownVehicles:
+            pastEvents = self.unknownVehicles.pop(vehicle_id)
+            for pastEvent in pastEvents:
+                self.applyDataToVehicle(vehicle_id, pastEvent[0], pastEvent[1])
+
+    def scheduleUnmappedRetry(self, delay=None):
+        if self.retryScheduled:
+            return
+        self.retryScheduled = True
+        timer = threading.Timer(
+            self.unmappedRetrySecs if delay is None else delay,
+            self.retryUnmappedVehicles,
+        )
+        timer.daemon = True
+        timer.start()
+
+    def retryUnmappedVehicles(self):
+        # Map any vehicle names we've seen but couldn't match yet (e.g. the API
+        # vehicle list wasn't available when the name arrived), rescheduling
+        # until every known name is mapped.
+        self.retryScheduled = False
+        for vehicle_id, vehicle_name in list(self.vehicleNames.items()):
+            if vehicle_id not in self.vehicles:
+                if self.updateVehicles(vehicle_id, vehicle_name):
+                    self.replayUnknownEvents(vehicle_id)
+
+        if any(i not in self.vehicles for i in self.vehicleNames):
+            self.scheduleUnmappedRetry()
+
+    def updateVehicles(self, vehicle_id, vehicle_name, loadList=True):
         # Called by mqttMessage each time we get the display_name topic
         # We check to see if this aligns with a vehicle we know of from the API
 
@@ -173,18 +214,34 @@ class TelmetryBase:
         if vehicle:
             # We already have this vehicle mapped
             vehicle.name = vehicle_name
-        else:
-            for apiVehicle in self.master.getModuleByName(
-                "TeslaAPI"
-            ).getCarApiVehicles():
-                if apiVehicle.name == vehicle_name:
-                    # Found a match
-                    self.vehicles[vehicle_id] = apiVehicle
-                    self.vehicles[vehicle_id].syncSource = self.__class__.__name__
+            return True
 
-                    logger.info(
-                        f"Vehicle {vehicle_name} telemetry being provided by {self.__class__.__name__}"
-                    )
+        carapi = self.master.getModuleByName("TeslaAPI")
+        if not carapi:
+            return False
+
+        # The API vehicle list is otherwise only loaded when a command needs
+        # the API, which may never happen when BLE handles everything. Callers
+        # on latency-sensitive threads pass loadList=False.
+        if loadList and not carapi.getCarApiRetryRemaining():
+            carapi.loadVehicleList()
+
+        for apiVehicle in carapi.getCarApiVehicles():
+            if apiVehicle.name == vehicle_name:
+                # Found a match
+                self.vehicles[vehicle_id] = apiVehicle
+                apiVehicle.syncSource = self.__class__.__name__
+
+                logger.info(
+                    f"Vehicle {vehicle_name} telemetry being provided by {self.__class__.__name__}"
+                )
+                return True
+
+        logger.warning(
+            f"{self.__class__.__name__}: no Tesla API vehicle named "
+            f"'{vehicle_name}' to attach telemetry to; will retry"
+        )
+        return False
 
     def updateSettings(self):
         return True
