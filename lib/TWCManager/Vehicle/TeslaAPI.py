@@ -4,14 +4,29 @@ import json
 import logging
 import re
 import requests
+from requests.adapters import HTTPAdapter
 import secrets
+import ssl
 from threading import Thread
 import time
 from urllib.parse import urlencode, urlsplit, parse_qs
+from urllib3.util.ssl_ import create_urllib3_context
 import jwt
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
+
+
+class TLS13Adapter(HTTPAdapter):
+    """HTTPAdapter that enforces TLS 1.3, as release/1.3.3 does for Tesla
+    Owner API support: auth.tesla.com requires TLS 1.3 for the Owner API
+    token refresh."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        context = create_urllib3_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        kwargs["ssl_context"] = context
+        return super().init_poolmanager(*args, **kwargs)
 
 
 class TeslaAPI:
@@ -42,6 +57,9 @@ class TeslaAPI:
     #     tokens exchanged at the regional fleet-auth endpoint.
     authorizeURL = "https://auth.tesla.com/oauth2/v3/authorize"
     authTokenURL = "https://auth.tesla.com/oauth2/v3/token"
+    # iss of an Owner API refresh token (a JWT). Fleet tokens use .../v3/nts,
+    # and Fleet refresh tokens are opaque.
+    ownerTokenIssuer = "https://auth.tesla.com/oauth2/v3"
     clientSecret = ""
     redirectURI = ""
     region = "NA"
@@ -124,6 +142,10 @@ class TeslaAPI:
         except KeyError:
             pass
 
+        # The Owner API refresh goes through this session, as in release/1.3.3.
+        self.session = requests.Session()
+        self.session.mount("https://auth.tesla.com", TLS13Adapter())
+
     def enabled(self) -> bool:
         return self._enabled
 
@@ -164,24 +186,34 @@ class TeslaAPI:
             return False
         # Refresh tokens expire in 45
         # days when first issued, so we'll get a new token every 15 days.
-        if not self.refreshClientID:
-            logger.error(
-                "Cannot refresh Tesla token: no teslaApiClientID configured. "
-                "Register a Fleet API app and set teslaApiClientID in config.json."
-            )
-            return False
+        if self.refreshTokenIsOwner():
+            # An Owner API token refreshes as in release/1.3.3: client_id
+            # "ownerapi" at auth.tesla.com, through the TLS 1.3 session.
+            # No teslaApiClientID is needed.
+            clientID = "ownerapi"
+            myRefreshURL = self.authTokenURL
+            post = self.session.post
+        else:
+            if not self.refreshClientID:
+                logger.error(
+                    "Cannot refresh Tesla token: no teslaApiClientID configured. "
+                    "Register a Fleet API app and set teslaApiClientID in config.json."
+                )
+                return False
+            clientID = self.refreshClientID
+            myRefreshURL = self.fleetRefreshURL
+            post = requests.post
         headers = {"accept": "application/json", "Content-Type": "application/json"}
         data = {
-            "client_id": self.refreshClientID,
+            "client_id": clientID,
             "grant_type": "refresh_token",
             "refresh_token": self.getCarApiRefreshToken(),
             "scope": "offline_access",
         }
-        myRefreshURL = self.fleetRefreshURL
         req = None
         now = time.time()
         try:
-            req = requests.post(myRefreshURL, headers=headers, json=data)
+            req = post(myRefreshURL, headers=headers, json=data)
             logger.log(logging.INFO2, "Car API request" + str(req))
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
@@ -224,6 +256,18 @@ class TeslaAPI:
             pass
 
         return False
+
+    def refreshTokenIsOwner(self):
+        # True when the refresh token is an Owner API one, so apiRefresh uses
+        # the ownerapi refresh. The current bearer token decides when there
+        # is one (readOnly is set only for an Owner API token). With no
+        # bearer, e.g. when only a refresh token was pasted, an Owner API
+        # refresh token is a JWT issued by auth.tesla.com/oauth2/v3; anything
+        # else, including an opaque token, is a Fleet refresh token.
+        if self.getCarApiBearerToken():
+            return self.readOnly
+        decoded = self.decodeToken(self.getCarApiRefreshToken())
+        return isinstance(decoded, dict) and decoded.get("iss") == self.ownerTokenIssuer
 
     def refreshTokenIfNeeded(self):
         # Proactively refresh the bearer token if it's missing or close to
@@ -1330,6 +1374,22 @@ class TeslaAPI:
         state = qs.get("state", [None])[0]
         return self.fleetTokenExchange(code, state)
 
+    def decodeToken(self, token):
+        # A token's JWT claims, read without verifying the signature (only
+        # the token type and expiry are needed), or None if it is not a JWT.
+        try:
+            decoded = jwt.decode(
+                token,
+                options={
+                    "verify_signature": False,
+                    "verify_aud": False,
+                    "verify_exp": False,
+                },
+            )
+        except (jwt.exceptions.InvalidTokenError, TypeError, ValueError):
+            return None
+        return decoded if isinstance(decoded, dict) else None
+
     def setCarApiBearerToken(self, token=None, fromSync=False):
         if token:
             if self.master.tokenSyncEnabled() and not fromSync:
@@ -1338,18 +1398,7 @@ class TeslaAPI:
                 return False
             else:
                 self.carApiBearerToken = token
-                decoded = None
-                try:
-                    decoded = jwt.decode(
-                        token,
-                        options={
-                            "verify_signature": False,
-                            "verify_aud": False,
-                            "verify_exp": False,
-                        },
-                    )
-                except jwt.exceptions.InvalidTokenError:
-                    pass
+                decoded = self.decodeToken(token)
                 self.applyTokenClassification(decoded)
 
                 if decoded and "exp" in decoded:
