@@ -152,3 +152,71 @@ class TestTokenExchange:
         pasted = f"{REDIRECT}?code=pasted-code&state={state}"
         assert pkce_api.saveApiToken(pasted) == "success"
         assert parse_qs(requests_mock.last_request.text)["code"] == ["pasted-code"]
+
+
+class TestLoginWhileTokenSyncOn:
+    """While TeslaMate token sync is on, TeslaMate owns the tokens. The login
+    routes can still be reached by URL; the exchange must store nothing."""
+
+    SENTINEL = 99999 * 99999 * 99999
+
+    def synced(self, api):
+        api.carApiBearerToken = "synced-access"
+        api.carApiRefreshToken = "synced-refresh"
+        api.carApiTokenExpireTime = self.SENTINEL
+        api.master.tokenSyncEnabled.return_value = True
+
+    def assert_unchanged(self, api):
+        assert api.getCarApiBearerToken() == "synced-access"
+        assert api.getCarApiRefreshToken() == "synced-refresh"
+        assert api.getCarApiTokenExpireTime() == self.SENTINEL
+
+    def test_callback_exchange_refused(self, pkce_api, requests_mock):
+        adapter = requests_mock.post(
+            PKCE_TOKEN_URL,
+            json={"access_token": "A", "refresh_token": "R", "expires_in": 28800},
+        )
+        state = parse_qs(urlsplit(pkce_api.getLoginURL("NA")).query)["state"][0]
+        self.synced(pkce_api)
+
+        assert pkce_api.fleetTokenExchange("auth-code", state) == "token_sync"
+        assert adapter.call_count == 0
+        self.assert_unchanged(pkce_api)
+
+    def test_paste_back_refused(self, conf_api, requests_mock):
+        adapter = requests_mock.post(
+            CONF_TOKEN_URL,
+            json={"access_token": "A", "refresh_token": "R", "expires_in": 28800},
+        )
+        state = parse_qs(urlsplit(conf_api.getLoginURL("NA")).query)["state"][0]
+        self.synced(conf_api)
+
+        pasted = f"{REDIRECT}?code=pasted-code&state={state}"
+        assert conf_api.saveApiToken(pasted) == "token_sync"
+        assert adapter.call_count == 0
+        self.assert_unchanged(conf_api)
+
+    def test_login_page_explains_the_refusal(self):
+        # The routes redirect to "/teslaAccount/" + the exchange's result.
+        import os
+
+        import jinja2
+
+        themes = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "lib",
+            "TWCManager",
+            "Control",
+            "themes",
+            "Default",
+        )
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(themes))
+        page = env.get_template("handle_teslalogin.html.j2").render(
+            url=urlsplit("/teslaAccount/token_sync"),
+            master=Mock(tokenSyncEnabled=Mock(return_value=True)),
+            apiAvailable=True,
+        )
+        assert "TeslaMate token sync is on" in page
+        assert "Tesla reported an error" not in page

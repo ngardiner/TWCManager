@@ -1197,6 +1197,15 @@ class TeslaAPI:
     def fleetTokenExchange(self, code, state):
         # Exchange an authorization code for tokens. Returns a status string used
         # by the web UI ("success", "error", or a Tesla error code).
+        if self.master.tokenSyncEnabled():
+            # The sync source (TeslaMate) owns the tokens. Refuse before the
+            # exchange, so nothing is stored and the code is not used up.
+            logger.warning(
+                "Tesla login refused: TeslaMate token sync is on, so "
+                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
+                "log in here."
+            )
+            return "token_sync"
         if not self.loginConfigured():
             logger.error("Tesla FleetAPI login is not configured.")
             return "not_configured"
