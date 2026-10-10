@@ -142,35 +142,40 @@ class TestNoRefreshForSyncedTokens:
         assert api.getCarApiRefreshToken() == "refresh-1"
 
 
+def master_with_settings(tmp_path, settings):
+    """A real TWCMaster with settings.json written, and a TeslaAPI registered.
+    Returns (master, api, modules); add to modules to register more."""
+    import json
+
+    from TWCManager.TWCMaster import TWCMaster
+    from TWCManager.Vehicle.TeslaAPI import TeslaAPI
+
+    (tmp_path / "settings.json").write_text(json.dumps(settings))
+    config = {
+        "config": {
+            "settingsPath": str(tmp_path),
+            "wiringMaxAmpsAllTWCs": 80,
+            "teslaApiClientID": "my-client-id",
+        },
+        "vehicle": {"teslaAPI": {"enabled": True}},
+    }
+    master = TWCMaster("AB", config)
+    # Not new_api(): TWCMaster.modules has its own structure.
+    api = TeslaAPI(master)
+    api.carApiBearerToken = ""
+    api.carApiRefreshToken = ""
+    api.carApiVehicles = []
+    modules = {"TeslaAPI": api}
+    master.getModuleByName = modules.get
+    return master, api, modules
+
+
 class TestSettingsLoadAfterSyncTurnedOff:
     """settings.json keeps the never-expires sentinel after a sync. If sync is
     later turned off, loading it must not leave a token that never refreshes."""
 
-    def load(self, tmp_path, settings, teslamate_registered=False):
-        import json
-
-        from TWCManager.TWCMaster import TWCMaster
-        from TWCManager.Vehicle.TeslaAPI import TeslaAPI
-
-        (tmp_path / "settings.json").write_text(json.dumps(settings))
-        config = {
-            "config": {
-                "settingsPath": str(tmp_path),
-                "wiringMaxAmpsAllTWCs": 80,
-                "teslaApiClientID": "my-client-id",
-            },
-            "vehicle": {"teslaAPI": {"enabled": True}},
-        }
-        master = TWCMaster("AB", config)
-        # Not new_api(): TWCMaster.modules has its own structure.
-        api = TeslaAPI(master)
-        api.carApiBearerToken = ""
-        api.carApiRefreshToken = ""
-        api.carApiVehicles = []
-        modules = {"TeslaAPI": api}
-        if teslamate_registered:
-            modules["TeslaMateVehicle"] = Mock(syncTokens=True)
-        master.getModuleByName = modules.get
+    def load(self, tmp_path, settings):
+        master, api, _ = master_with_settings(tmp_path, settings)
         master.loadSettings()
         return api
 
@@ -201,18 +206,6 @@ class TestSettingsLoadAfterSyncTurnedOff:
         )
         assert before <= api.getCarApiTokenExpireTime() <= time.time()
 
-    def test_sentinel_kept_while_sync_on(self, tmp_path):
-        api = self.load(
-            tmp_path,
-            {
-                "carApiBearerToken": owner_token(),
-                "carApiRefreshToken": "refresh-1",
-                "carApiTokenExpireTime": SYNCED_EXPIRY,
-            },
-            teslamate_registered=True,
-        )
-        assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
-
     def test_ordinary_saved_expiry_unchanged(self, tmp_path):
         saved = int(time.time()) + 5 * 60 * 60
         api = self.load(
@@ -224,3 +217,36 @@ class TestSettingsLoadAfterSyncTurnedOff:
             },
         )
         assert api.getCarApiTokenExpireTime() == saved
+
+
+class TestSettingsLoadWhileSyncOn:
+    """TWCManager.py loads settings after every module is registered, so
+    TeslaMateVehicle's startup sync has already set the tokens and
+    tokenSyncEnabled() is already True. loadSettings must not put the saved
+    (pre-sync) tokens or expiry back over them."""
+
+    def test_saved_tokens_do_not_replace_startup_sync(self, tmp_path, fake_db):
+        # Saved by an earlier run: an old token, its refresh token and an
+        # expiry that has since passed.
+        master, api, modules = master_with_settings(
+            tmp_path,
+            {
+                "carApiBearerToken": owner_token(jti="old", expires_in=-3600),
+                "carApiRefreshToken": "old-refresh",
+                "carApiTokenExpireTime": int(time.time()) - 3600,
+            },
+        )
+
+        # Module load: TeslaMateVehicle.__init__ syncs, then it is registered.
+        fresh = owner_token(jti="fresh")
+        tm = make_teslamate(master, fresh, "synced-refresh", registered=False)
+        fake_db["tm"] = tm
+        tm.doSyncTokens(True)
+        modules["TeslaMateVehicle"] = tm
+        assert master.tokenSyncEnabled() is True
+
+        master.loadSettings()
+
+        assert api.getCarApiBearerToken() == fresh
+        assert api.getCarApiRefreshToken() == "synced-refresh"
+        assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
