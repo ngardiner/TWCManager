@@ -133,6 +133,35 @@ class TestUnknownToken:
         assert vehicle.lastErrorTime == 0
 
 
+class TestOddAud:
+    """aud is normally a string or a list; other shapes must not raise out of
+    setCarApiBearerToken."""
+
+    def test_null_aud_falls_through_to_ou_code(self):
+        api = new_api()
+        assert api.setCarApiBearerToken(make_jwt(aud=None, ou_code="EU")) is True
+        assert api.getCarApiBaseURL() == EU_URL
+        assert api.readOnly is False
+
+    def test_null_aud_without_ou_code_is_unknown(self):
+        api = new_api()
+        assert api.setCarApiBearerToken(make_jwt(aud=None)) is True
+        assert api.getCarApiBaseURL() == ""
+
+    @pytest.mark.parametrize(
+        "aud",
+        [42, {"host": "https://owner-api.teslamotors.com/"}, True],
+        ids=["number", "object", "boolean"],
+    )
+    def test_other_aud_types_are_unknown(self, aud):
+        api = new_api()
+        token = make_jwt(aud=aud, ou_code="NA")
+        assert api.setCarApiBearerToken(token) is True
+        assert api.getCarApiBearerToken() == token  # still stored
+        assert api.getCarApiBaseURL() == ""
+        assert api.readOnly is False
+
+
 class _NoThread:
     daemon = False
 

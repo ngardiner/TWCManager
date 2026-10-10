@@ -1307,9 +1307,13 @@ class TeslaAPI:
         # carry ou_code, so aud is checked for owner-api first.
         if not isinstance(decoded, dict):
             return ("unknown", None)
-        aud = decoded.get("aud", [])
+        # aud may be absent or null (treated as no aud), a string or a list.
+        # Any other shape is unexpected, so the token type is unknown.
+        aud = decoded.get("aud") or []
         if isinstance(aud, str):
             aud = [aud]
+        if not isinstance(aud, list):
+            return ("unknown", None)
         aud = [str(entry) for entry in aud]
         if any("owner-api" in entry for entry in aud):
             return ("owner", None)
