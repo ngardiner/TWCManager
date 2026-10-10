@@ -6,7 +6,7 @@ import os
 import re
 import requests
 from requests.adapters import HTTPAdapter
-from threading import Thread
+from threading import RLock, Thread
 import time
 from urllib.parse import parse_qs
 import ssl
@@ -58,6 +58,7 @@ class TeslaAPI:
     lastChargeCheck = 0
     chargeUpdateInterval = 1800
     carApiVehicles = []
+    vehicleListLock = RLock()
     enabled = True
     config = None
     master = None
@@ -213,6 +214,60 @@ class TeslaAPI:
 
         return False
 
+    def loadVehicleList(self):
+        # Populate carApiVehicles from the Tesla API vehicle list. Returns True
+        # if vehicles are (now) known, False if the fetch failed. Safe to call
+        # from any thread; concurrent callers will not double-add vehicles.
+        with self.vehicleListLock:
+            if self.getVehicleCount() > 0:
+                return True
+            if self.getCarApiBearerToken() == "":
+                return False
+
+            req = None
+            apiResponseDict = {}
+            url = self.baseURL
+            if "owner-api" in url:
+                url = url.replace("vehicles", "products")
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + self.getCarApiBearerToken(),
+            }
+            try:
+                req = self.session.get(
+                    url, headers=headers, verify=self.verifyCert, timeout=30
+                )
+                logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
+                apiResponseDict = json.loads(req.text)
+            except requests.exceptions.RequestException:
+                logger.info("Failed to make API call " + url)
+                if req:
+                    logger.log(logging.INFO6, "Response: " + req.text)
+            except json.decoder.JSONDecodeError:
+                logger.info("Could not parse JSON result from " + url)
+                if req:
+                    logger.log(logging.INFO6, "Response: " + req.text)
+
+            try:
+                logger.debug("Car API vehicle list" + str(apiResponseDict) + "\n")
+
+                for i in range(0, apiResponseDict["count"]):
+                    self.addVehicle(apiResponseDict["response"][i])
+                self.resetCarApiLastErrorTime()
+            except (KeyError, TypeError):
+                # This catches cases like trying to access
+                # apiResponseDict['response'] when 'response' doesn't exist in
+                # apiResponseDict.
+                logger.log(
+                    logging.INFO2,
+                    "ERROR: Can't get list of vehicles via Tesla car API.  Will try again in "
+                    + str(self.getCarApiErrorRetryMins())
+                    + " minutes.",
+                )
+                self.updateCarApiLastErrorTime()
+                return False
+            return True
+
     def car_api_available(
         self, email=None, password=None, charge=None, applyLimit=None
     ):
@@ -278,47 +333,8 @@ class TeslaAPI:
                     return ret
 
         if self.getCarApiBearerToken() != "":
-            if self.getVehicleCount() < 1:
-                url = self.baseURL
-                if "owner-api" in url:
-                    url = url.replace("vehicles", "products")
-                headers = {
-                    "accept": "application/json",
-                    "Authorization": "Bearer " + self.getCarApiBearerToken(),
-                }
-                try:
-                    req = self.session.get(url, headers=headers, verify=self.verifyCert)
-                    logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
-                    apiResponseDict = json.loads(req.text)
-                except requests.exceptions.RequestException:
-                    logger.info("Failed to make API call " + url)
-                    if req:
-                        logger.log(logging.INFO6, "Response: " + req.text)
-                    pass
-                except json.decoder.JSONDecodeError:
-                    logger.info("Could not parse JSON result from " + url)
-                    if req:
-                        logger.log(logging.INFO6, "Response: " + req.text)
-                    pass
-
-                try:
-                    logger.debug("Car API vehicle list" + str(apiResponseDict) + "\n")
-
-                    for i in range(0, apiResponseDict["count"]):
-                        self.addVehicle(apiResponseDict["response"][i])
-                    self.resetCarApiLastErrorTime()
-                except (KeyError, TypeError):
-                    # This catches cases like trying to access
-                    # apiResponseDict['response'] when 'response' doesn't exist in
-                    # apiResponseDict.
-                    logger.log(
-                        logging.INFO2,
-                        "ERROR: Can't get list of vehicles via Tesla car API.  Will try again in "
-                        + str(self.getCarApiErrorRetryMins())
-                        + " minutes.",
-                    )
-                    self.updateCarApiLastErrorTime()
-                    return False
+            if self.getVehicleCount() < 1 and not self.loadVehicleList():
+                return False
 
             if self.getVehicleCount() > 0 and (charge or applyLimit):
                 # Wake cars if needed
