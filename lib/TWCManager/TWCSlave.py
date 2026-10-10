@@ -1049,7 +1049,16 @@ class TWCSlave:
         # See notes in send_slave_heartbeat() for details on how we transmit
         # desiredAmpsOffered and the meaning of the code in
         # self.masterHeartbeatData[0].
-        #
+        self.masterHeartbeatData = self._amps_heartbeat(desiredAmpsOffered)
+
+        if len(self.master.getMasterHeartbeatOverride()) >= 7:
+            self.masterHeartbeatData = self.master.getMasterHeartbeatOverride()
+
+        if logger.getEffectiveLevel() <= logging.INFO:
+            self.print_status(heartbeatData)
+
+    def _amps_heartbeat(self, desiredAmpsOffered):
+        """Return the 9-byte master heartbeat payload for this slave."""
         # Rather than only sending desiredAmpsOffered when slave is sending code
         # 04 or 08, it seems to work better to send desiredAmpsOffered whenever
         # it does not equal self.reportedAmpsMax reported by the slave TWC.
@@ -1070,9 +1079,20 @@ class TWCSlave:
         # desiredAmpsOffered == 0. In that case, slave's response should always
         # look like this:
         #   S 032e 0.25/0.00A: 03 0000 0019 0000 M: 05 0000 0000 0000
-        if self.reportedAmpsMax != desiredAmpsOffered or desiredAmpsOffered == 0:
+        #
+        # State 08 ("starting to charge") needs the offer resent even when the
+        # slave's reported max already matches. A slave seen idle in state 03
+        # with the offer already at 47A went to 08 reporting 06.16/47.00A and
+        # stayed there at 6A until a mismatch was forced. Only 08 is included:
+        # resending every heartbeat in a long-lived state (e.g. 04) risks the
+        # slave bouncing between states.
+        if (
+            self.reportedAmpsMax != desiredAmpsOffered
+            or desiredAmpsOffered == 0
+            or self.reportedState == 0x08
+        ):
             desiredHundredthsOfAmps = int(desiredAmpsOffered * 100)
-            self.masterHeartbeatData = bytearray(
+            return bytearray(
                 [
                     (0x09 if self.protocolVersion == 2 else 0x05),
                     (desiredHundredthsOfAmps >> 8) & 0xFF,
@@ -1086,15 +1106,7 @@ class TWCSlave:
                 ]
             )
         else:
-            self.masterHeartbeatData = bytearray(
-                [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-            )
-
-        if len(self.master.getMasterHeartbeatOverride()) >= 7:
-            self.masterHeartbeatData = self.master.getMasterHeartbeatOverride()
-
-        if logger.getEffectiveLevel() <= logging.INFO:
-            self.print_status(heartbeatData)
+            return bytearray([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
 
     def set_last_amps_offered(self, desiredAmpsOffered):
         # self.lastAmpsOffered should only be changed using this sub.
