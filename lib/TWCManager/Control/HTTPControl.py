@@ -1569,7 +1569,12 @@ def CreateHTTPHandlerClass(master):
                         location = "/teslaAccount/token_sync"
                     carapi = master.getModuleByName("TeslaAPI")
                     if key == "carApiBearerToken":
-                        carapi.setCarApiBearerToken(self.getFieldValue(key))
+                        if self.getFieldValue("carApiRefreshToken"):
+                            carapi.setCarApiBearerToken(self.getFieldValue(key))
+                        else:
+                            # Pasted on its own: drops a stored refresh
+                            # token of the other type.
+                            carapi.pasteAccessToken(self.getFieldValue(key))
                     elif key == "carApiRefreshToken":
                         if self.getFieldValue("carApiBearerToken"):
                             # Pasted with its access token, which the form
