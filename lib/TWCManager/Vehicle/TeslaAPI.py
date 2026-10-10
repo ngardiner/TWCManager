@@ -31,6 +31,7 @@ class TeslaAPI:
     # True while the current token is an Owner API token, which cannot send
     # vehicle commands.
     readOnly = False
+    readOnlyRefusalLogged = False
     refreshClientID = ""
     # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
     # whether a client secret is configured:
@@ -319,7 +320,11 @@ class TeslaAPI:
                     self.updateCarApiLastErrorTime()
                     return False
 
-            if self.getVehicleCount() > 0 and (charge or applyLimit):
+            if (
+                self.getVehicleCount() > 0
+                and (charge or applyLimit)
+                and not self.readOnly
+            ):
                 # Wake cars if needed
                 for vehicle in self.getCarApiVehicles():
                     if charge is True and vehicle.stopAskingToStartCharging:
@@ -592,6 +597,8 @@ class TeslaAPI:
     def car_api_charge(self, task):
         # Do not call this function directly.  Call by using background thread:
         # queue_background_task({'cmd':'charge', 'charge':<True/False>})
+        if self.refuseCommandIfReadOnly("charge_start/charge_stop"):
+            return "error"
 
         charge = None
         if task:
@@ -915,6 +922,8 @@ class TeslaAPI:
         return ""
 
     def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
+        if self.refuseCommandIfReadOnly("set_charge_limit"):
+            return "error"
         if limit != -1 and (limit < 50 or limit > 100):
             logger.log(logging.INFO8, "applyChargeLimit skipped")
             return "error"
@@ -1367,6 +1376,9 @@ class TeslaAPI:
                 "Fleet API). No Tesla API calls will be made until a "
                 "recognised token is supplied."
             )
+        if readOnly != self.readOnly:
+            # Let the next refused command log again.
+            self.readOnlyRefusalLogged = False
         self.baseURL = baseURL
         self.verifyCert = verifyCert
         self.readOnly = readOnly
@@ -1413,6 +1425,22 @@ class TeslaAPI:
                 pass
         return self.setCarApiTokenExpireTime(value)
 
+    def refuseCommandIfReadOnly(self, command):
+        # True when the current token cannot send vehicle commands. Logs at
+        # INFO once per read-only period, makes no HTTP call and records no
+        # API error (an error would start the backoff that also blocks reads).
+        if not self.readOnly:
+            return False
+        if not self.readOnlyRefusalLogged:
+            logger.info(
+                "Tesla API token is read-only (Owner API); not sending "
+                + command
+                + " or any other vehicle command. Commands need a Fleet API "
+                "token or the TeslaBLE module."
+            )
+            self.readOnlyRefusalLogged = True
+        return True
+
     def applySyncedTokens(self, accessToken, refreshToken):
         # Entry point for token sync sources (TeslaMate). Accepted whether or
         # not tokenSyncEnabled() is already true, and never refreshes.
@@ -1427,6 +1455,9 @@ class TeslaAPI:
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         # As a fallback to allow initial implementation of the charge rate functionality for single car installs,
         # If no vehicle is specified, we take the first returned to us.
+
+        if self.refuseCommandIfReadOnly("set_charging_amps"):
+            return False
 
         if not vehicle:
             vehicles = self.getCarApiVehicles()
@@ -1555,6 +1586,8 @@ class TeslaAPI:
                 return
 
     def wakeVehicle(self, vehicle):
+        if self.refuseCommandIfReadOnly("wake_up"):
+            return False
         if not self.getCarApiBaseURL():
             # The token type is unknown; setCarApiBearerToken logged why.
             return False
@@ -2055,6 +2088,9 @@ class CarApiVehicle:
             self.lastCurrentChangeTime = time.time()
 
     def apply_charge_limit(self, limit):
+        if self.carapi.refuseCommandIfReadOnly("set_charge_limit"):
+            return False
+
         if self.stopTryingToApplyLimit:
             return True
 

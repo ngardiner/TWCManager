@@ -75,6 +75,16 @@ class VehiclePriority:
             return True
         return False
 
+    def _skip_read_only_for_command(self, module_ref, method_name):
+        """Return True if module_ref holds a read-only token (TeslaAPI with an
+        Owner API token) and method_name is a state-changing command. The
+        next module is tried instead; the skip is not counted as a failure.
+        Compared with `is True` so a module without the attribute, or a
+        Mock in tests, is never skipped."""
+        if method_name not in self.COMMAND_METHODS:
+            return False
+        return getattr(module_ref, "readOnly", False) is True
+
     def _calculate_retries(self, priority):
         """Calculate number of retries based on priority level.
         For every 10 priority points, we get 1 retry.
@@ -110,6 +120,13 @@ class VehiclePriority:
                     logger.log(
                         logging.INFO2,
                         f"VehiclePriority: commandPolicy {self.commandPolicy} excludes {module_name} for {name}",
+                    )
+                    continue
+
+                if self._skip_read_only_for_command(module_ref, name):
+                    logger.log(
+                        logging.INFO2,
+                        f"VehiclePriority: {module_name} is read-only; skipping it for {name}",
                     )
                     continue
 
