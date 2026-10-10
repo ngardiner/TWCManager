@@ -1155,6 +1155,16 @@ class TeslaAPI:
         return True
 
     def saveApiToken(self, url):
+        if self.master.tokenSyncEnabled():
+            # The sync source (TeslaMate) owns the tokens. Refuse before the
+            # exchange, so nothing is stored and the code is not used up.
+            logger.warning(
+                "Tesla login refused: TeslaMate token sync is on, so "
+                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
+                "log in here."
+            )
+            return "token_sync"
+
         # Extract code from url
         if isinstance(url, bytes):
             url = url.decode("UTF-8")

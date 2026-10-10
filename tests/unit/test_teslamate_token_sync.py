@@ -273,3 +273,59 @@ class TestSettingsLoadWhileSyncOn:
         assert api.getCarApiBearerToken() == fresh
         assert api.getCarApiRefreshToken() == "synced-refresh"
         assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
+
+
+class TestLoginWhileTokenSyncOn:
+    """While sync is on, TeslaMate owns the tokens. The login form is hidden,
+    but /teslaAccount/saveToken can still be reached; the code exchange must
+    store nothing."""
+
+    def test_code_exchange_refused(self, fake_db, requests_mock):
+        import requests_mock as rm
+
+        any_call = requests_mock.register_uri(
+            rm.ANY,
+            rm.ANY,
+            json={"access_token": "A", "refresh_token": "R", "expires_in": 28800},
+        )
+        master = FakeMaster()
+        api = new_api(master)
+        api._TeslaAPI__apiVerifier = b"verifier"
+        synced = owner_token()
+        fake_db["tm"] = make_teslamate(master, synced, "refresh-1")
+        fake_db["tm"].doSyncTokens()
+
+        pasted = "https://auth.tesla.com/void/callback?code=pasted&state=s"
+        assert api.saveApiToken(pasted) == "token_sync"
+
+        assert any_call.call_count == 0
+        assert api.getCarApiBearerToken() == synced
+        assert api.getCarApiRefreshToken() == "refresh-1"
+        assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
+
+    def test_login_page_explains_the_refusal(self):
+        # The route redirects to "/teslaAccount/" + saveApiToken's result.
+        import os
+        from urllib.parse import urlsplit
+
+        import jinja2
+
+        themes = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "lib",
+            "TWCManager",
+            "Control",
+            "themes",
+            "Default",
+        )
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(themes))
+        page = env.get_template("handle_teslalogin.html.j2").render(
+            url=urlsplit("/teslaAccount/token_sync"),
+            master=Mock(
+                tokenSyncEnabled=Mock(return_value=True), teslaLoginAskLater=False
+            ),
+            apiAvailable=True,
+        )
+        assert "TeslaMate token sync is on" in page
