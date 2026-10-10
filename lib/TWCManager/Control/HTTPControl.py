@@ -1571,7 +1571,14 @@ def CreateHTTPHandlerClass(master):
                     if key == "carApiBearerToken":
                         carapi.setCarApiBearerToken(self.getFieldValue(key))
                     elif key == "carApiRefreshToken":
-                        carapi.setCarApiRefreshToken(self.getFieldValue(key))
+                        if self.getFieldValue("carApiBearerToken"):
+                            # Pasted with its access token, which the form
+                            # posts first and so is already set.
+                            carapi.setCarApiRefreshToken(self.getFieldValue(key))
+                        else:
+                            # Pasted on its own: replaces the stored bearer
+                            # token and refreshes by its own type.
+                            carapi.pasteRefreshToken(self.getFieldValue(key))
 
                 else:
                     # Write setting to dictionary
