@@ -267,15 +267,23 @@ class TeslaAPI:
 
     def refreshTokenIsOwner(self):
         # True when the refresh token is an Owner API one, so apiRefresh uses
-        # the ownerapi refresh. The current bearer token decides when there
-        # is one (readOnly is set only for an Owner API token). With no
-        # bearer, e.g. when only a refresh token was pasted, an Owner API
-        # refresh token is a JWT issued by auth.tesla.com/oauth2/v3; anything
-        # else, including an opaque token, is a Fleet refresh token.
-        if self.getCarApiBearerToken():
+        # the ownerapi refresh. A classified (Owner or Fleet) bearer token
+        # decides (readOnly is set only for an Owner API token). With no
+        # bearer token, e.g. when only a refresh token was pasted, or one of
+        # unknown type, the refresh token's own type decides.
+        bearer = self.getCarApiBearerToken()
+        if bearer and self.classifyToken(self.decodeToken(bearer))[0] != "unknown":
             return self.readOnly
-        decoded = self.decodeToken(self.getCarApiRefreshToken())
-        return isinstance(decoded, dict) and decoded.get("iss") == self.ownerTokenIssuer
+        return self.refreshTokenType(self.getCarApiRefreshToken()) == "owner"
+
+    def refreshTokenType(self, token):
+        # "owner" for an Owner API refresh token, a JWT issued by
+        # auth.tesla.com/oauth2/v3; "fleet" for anything else, including an
+        # opaque token (Fleet refresh tokens are opaque).
+        decoded = self.decodeToken(token)
+        if decoded is not None and decoded.get("iss") == self.ownerTokenIssuer:
+            return "owner"
+        return "fleet"
 
     def refreshTokenIfNeeded(self):
         # Proactively refresh the bearer token if it's missing or close to

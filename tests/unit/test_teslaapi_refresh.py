@@ -284,6 +284,27 @@ class TestPastedRefreshToken:
         assert owner.call_count == 0
         assert fleet.call_count == 1
 
+    @pytest.mark.parametrize(
+        "refresh_token, owner_calls",
+        [(owner_refresh_token(), 1), (OPAQUE_REFRESH, 0)],
+        ids=["owner-refresh", "opaque-refresh"],
+    )
+    def test_unknown_bearer_falls_back_to_refresh_token_type(
+        self, requests_mock, refresh_token, owner_calls
+    ):
+        owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
+        fleet = requests_mock.post(
+            FLEET_REFRESH_URL, json=token_response(fleet_token())
+        )
+        api = new_api()
+        api.setCarApiBearerToken("not-a-jwt")
+        api.carApiRefreshToken = refresh_token
+
+        assert api.apiRefresh() is True
+
+        assert owner.call_count == owner_calls
+        assert fleet.call_count == 1 - owner_calls
+
     def test_refresh_if_needed_uses_owner_refresh(self, requests_mock):
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
