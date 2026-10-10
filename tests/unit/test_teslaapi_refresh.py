@@ -289,6 +289,23 @@ class TestPastedRefreshToken:
         assert owner.call_count == 1
 
 
+class TestWakeNeverSent:
+    def test_connection_error_does_not_crash(self, requests_mock):
+        # The wake request never went out, so there is no response.
+        api = new_api()
+        api.setCarApiBearerToken(fleet_token())
+        requests_mock.post(
+            api.baseURL + "/VIN1/wake_up", exc=requests.exceptions.ConnectionError
+        )
+        refresh = requests_mock.post(FLEET_REFRESH_URL, json={})
+
+        class Vehicle:
+            VIN = "VIN1"
+
+        assert api.wakeVehicle(Vehicle()) is False
+        assert refresh.called is False
+
+
 class TestRefreshTokenPastedAlone:
     """A refresh token pasted on its own replaces the stored bearer token,
     which may be of the other type, and refreshes by its own type."""

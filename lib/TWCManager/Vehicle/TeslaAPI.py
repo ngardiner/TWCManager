@@ -1692,13 +1692,17 @@ class TeslaAPI:
             "accept": "application/json",
             "Authorization": "Bearer " + self.getCarApiBearerToken(),
         }
+        req = None
         try:
             req = requests.post(url, headers=headers, verify=self.verifyCert)
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
-            if req.status_code == 401 and "expired" in req.text:
+            if req is None:
+                # The request never went out (e.g. no network).
+                pass
+            elif req.status_code == 401 and "expired" in req.text:
                 # If the token is expired, refresh it and try again
                 if self.apiRefresh():
                     return self.wakeVehicle(vehicle)
