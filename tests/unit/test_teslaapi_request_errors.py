@@ -41,6 +41,8 @@ def api():
     api.setCarApiBearerToken(fleet_token(jti="old"))
     api.carApiRefreshToken = "old-refresh"
     api.carApiLastErrorTime = 0
+    # Requests are only made once a token has given us an API base URL
+    api.baseURL = "https://vehicle.example/api/1/vehicles"
     return api
 
 
