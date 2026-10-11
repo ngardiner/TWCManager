@@ -1978,13 +1978,14 @@ class CarApiVehicle:
 
         apiResponseDict = {}
 
-        headers = {
-            "accept": "application/json",
-            "Authorization": "Bearer " + self.carapi.getCarApiBearerToken(),
-        }
-
         # Retry up to 3 times on certain errors.
         for _ in range(0, 3):
+            # Built per attempt, so a retry after a refresh sends the new token.
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + self.carapi.getCarApiBearerToken(),
+            }
+            req = None
             try:
                 req = requests.get(url, headers=headers, verify=self.verifyCert)
                 req.raise_for_status()
@@ -1995,9 +1996,12 @@ class CarApiVehicle:
                 # This one is somewhat common:
                 #   {'response': None, 'error': 'vehicle unavailable: {:error=>"vehicle unavailable:"}', 'error_description': ''}
             except requests.exceptions.RequestException:
-                if req.status_code == 401 and "expired" in req.text:
+                if req is None:
+                    # The request never went out (e.g. no network).
+                    pass
+                elif req.status_code == 401 and "expired" in req.text:
                     # If the token is expired, refresh it and try again
-                    if self.apiRefresh():
+                    if self.carapi.apiRefresh():
                         continue
                 elif req.status_code == 429:
                     # We're explicitly being told to back off
