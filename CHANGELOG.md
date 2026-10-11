@@ -13,9 +13,9 @@ This document logs the changes per release of TWCManager.
     * Fix invalid escape sequence (`\Z`) in TWCProtocol regex byte string (Python 3.12 compatibility)
     * Fix HTTP status codes in API endpoints (correct 200/400/404 responses)
     * Fix `/api/chargeNow` and `/api/cancelChargeNow` to return proper HTTP responses
-    * Fix `'bool' object is not callable` in `VehiclePriority.enabled()` — instance attribute was shadowing the method in TeslaBLE, TeslaAPI, and HomeAssistant vehicle modules
+    * Fix `'bool' object is not callable` in `VehiclePriority.enabled()` - instance attribute was shadowing the method in TeslaBLE, TeslaAPI, and HomeAssistant vehicle modules
     * Add `fsync` before atomic rename in `saveSettings()` to prevent partial writes surviving a power loss
-    * Reduce module loading log noise (INFO → DEBUG level)
+    * Reduce module loading log noise (INFO -> DEBUG level)
     * Fix: Debounce charge session end to avoid false stops on startup (closes #156)
     * Fix: Avoid double-counting charger watts in `nominalOffer` when `treatGenerationAsGridDelivery` is set (closes #523)
     * Fix: Use `parse_qs` instead of regex for OAuth callback URL parsing (closes #566)
@@ -52,6 +52,9 @@ This release maintains support for Tesla Owner API (owner-api.teslamotors.com) w
     * Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
     * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
+    * (@MikeBishop) - Fix: Import serial at module level in RS485 so SerialException handling and reconnect work (#685)
+    * (@MikeBishop) - Fix: TeslaAPI error handlers no longer crash when a request never went out (#684)
+    * (@MikeBishop) - Fix: TeslaMate telemetry now attaches to the API vehicle when BLE handles all commands (#678)
     * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
     * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
     * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
