@@ -327,11 +327,16 @@ class TestSettingsPageWhileSyncOn:
         return request
 
     def test_refresh_token_refused(self, fake_db, refresh_endpoints, caplog):
+        # An opaque refresh token belongs to the Fleet slot, which holds a
+        # synced token here.
+        from tests.unit.teslatokens import fleet_token
+
         master = FakeMaster()
         api = new_api(master)
-        synced = owner_token()
+        synced = fleet_token()
         fake_db["tm"] = make_teslamate(master, synced)
         fake_db["tm"].doSyncTokens()
+        assert api.fleetSlot.source == "synced"
 
         request = self.save(
             master, {"carApiRefreshToken": "typed-refresh", "chargeNowAmps": "6"}
@@ -339,14 +344,32 @@ class TestSettingsPageWhileSyncOn:
 
         assert api.ownerSlot.refreshToken == ""
         assert api.fleetSlot.refreshToken == ""
-        assert api.ownerSlot.accessToken == synced
-        assert api.ownerSlot.expireTime == exp(synced)
+        assert api.fleetSlot.accessToken == synced
+        assert api.fleetSlot.expireTime == exp(synced)
         assert all(ep.call_count == 0 for ep in refresh_endpoints)
         assert "carApiRefreshToken" not in master.settings
         # Other settings are still saved.
         assert master.settings["chargeNowAmps"] == "6"
         request.send_header.assert_any_call("Location", "/teslaAccount/token_sync")
-        assert any("token sync is on" in r.getMessage() for r in caplog.records)
+        assert any("token sync manages" in r.getMessage() for r in caplog.records)
+
+    def test_refresh_token_for_the_other_slot_accepted(
+        self, fake_db, refresh_endpoints
+    ):
+        # Owner synced, so an opaque (Fleet) refresh token still goes through.
+        master = FakeMaster()
+        api = new_api(master)
+        synced = owner_token()
+        fake_db["tm"] = make_teslamate(master, synced)
+        fake_db["tm"].doSyncTokens()
+
+        self.save(master, {"carApiRefreshToken": "typed-refresh"})
+
+        assert api.ownerSlot.accessToken == synced
+        # For this public client 1.3.4 sends the Fleet refresh to
+        # auth.tesla.com.
+        assert refresh_endpoints[1].call_count == 1
+        assert refresh_endpoints[1].last_request.json()["client_id"] == "my-client-id"
 
     def test_refresh_token_accepted_while_sync_off(self, refresh_endpoints):
         master = FakeMaster()

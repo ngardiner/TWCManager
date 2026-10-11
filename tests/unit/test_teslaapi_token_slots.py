@@ -81,9 +81,11 @@ def test_store_token_results():
     assert api.storeToken("", "") == "error"
     assert api.ownerSlot.empty() and api.fleetSlot.empty()
     sync_on(api)
-    assert api.storeToken(owner_token()) == "token_sync"
-    assert api.ownerSlot.empty()
+    # A free slot takes a pasted token while sync is on; a slot with a live
+    # synced token does not.
     assert api.storeToken(owner_token(), "", "synced") == "success"
+    assert api.storeToken(owner_token(jti="p")) == "token_sync"
+    assert api.ownerSlot.source == "synced"
 
 
 def test_reads_use_owner_when_usable(no_threads, requests_mock):
