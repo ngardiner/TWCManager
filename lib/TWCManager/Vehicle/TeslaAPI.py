@@ -258,9 +258,10 @@ class TeslaAPI:
     def slotFor(self, purpose):
         # The slot a request of this purpose ("read", "command" or "energy")
         # uses, or None when no slot is usable for it. The only chooser.
-        if purpose in ("read", "energy") and self.ownerSlot.usable(purpose):
-            return self.ownerSlot
-        return self.fleetSlot if self.fleetSlot.usable(purpose) else None
+        for slot in (self.ownerSlot, self.fleetSlot):
+            if slot.usable(purpose):
+                return slot
+        return None
 
     @property
     def readOnly(self):

@@ -115,12 +115,20 @@ class TeslaTokenSlot:
         now = time.time() if now is None else now
         if self.empty(now) or self.tokenType != self.kind:
             return False
-        if self.missingScope(purpose) is not None:
+        if not self.grants(purpose):
             self.reportScopeRefused(purpose)
             return False
         if purpose in ("read", "energy") and now < self.pausedUntil:
             return False
         return True
+
+    def grants(self, purpose):
+        # Whether this kind of token can serve the purpose at all. Read-only
+        # is just a scope the Owner API never grants: it serves reads and
+        # energy, never commands.
+        if self.kind == "owner":
+            return purpose in ("read", "energy")
+        return self.missingScope(purpose) is None
 
     def missingScope(self, purpose):
         if self.tokenType != "fleet" or self.scopes is None:

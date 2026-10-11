@@ -291,3 +291,10 @@ def test_status_of_empty_and_filled_slot():
     assert st["expires"] == time.strftime(
         "%Y-%m-%d %H:%M", time.localtime(decode_exp(tok))
     )
+
+
+def test_owner_slot_never_grants_commands_and_logs_nothing(caplog):
+    s = owner_slot()
+    s.setTokens(owner_token())
+    assert s.grants("read") and s.grants("energy") and not s.grants("command")
+    assert s.usable("command") is False and "scope" not in caplog.text
