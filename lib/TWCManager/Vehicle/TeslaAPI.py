@@ -50,6 +50,9 @@ class TeslaAPI:
     carApiBearerToken = ""
     carApiRefreshToken = ""
     carApiTokenExpireTime = time.time()
+    # Expiry given to tokens supplied by a token sync source (TeslaMate). The
+    # source refreshes them; TWCManager must never try to.
+    SYNCED_TOKEN_EXPIRY = 99999 * 99999 * 99999
     carApiLastStartOrStopChargeTime = 0
     carApiLastChargeLimitApplyTime = 0
     clientID = "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384"
@@ -155,6 +158,11 @@ class TeslaAPI:
         return False
 
     def apiRefresh(self):
+        if self.master.tokenSyncEnabled():
+            # The sync source (TeslaMate) owns and refreshes these tokens.
+            # Refreshing here would rotate the token out from under it.
+            logger.log(logging.INFO8, "Token sync is on; not refreshing token")
+            return False
         # Refresh tokens expire in 45
         # days when first issued, so we'll get a new token every 15 days.
         headers = {"accept": "application/json", "Content-Type": "application/json"}
@@ -1163,6 +1171,16 @@ class TeslaAPI:
         return True
 
     def saveApiToken(self, url):
+        if self.master.tokenSyncEnabled():
+            # The sync source (TeslaMate) owns the tokens. Refuse before the
+            # exchange, so nothing is stored and the code is not used up.
+            logger.warning(
+                "Tesla login refused: TeslaMate token sync is on, so "
+                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
+                "log in here."
+            )
+            return "token_sync"
+
         # Extract code from url
         if isinstance(url, bytes):
             url = url.decode("UTF-8")
@@ -1227,10 +1245,11 @@ class TeslaAPI:
 
         return "unknown"
 
-    def setCarApiBearerToken(self, token=None):
+    def setCarApiBearerToken(self, token=None, fromSync=False):
         if token:
-            if self.master.tokenSyncEnabled():
-                # We won't accept tokens if Token Sync is already in place
+            if self.master.tokenSyncEnabled() and not fromSync:
+                # While token sync is on, only the sync source may set the
+                # token; refuse ones from the web UI, settings or a refresh.
                 return False
             else:
                 self.carApiBearerToken = token
@@ -1263,6 +1282,17 @@ class TeslaAPI:
             return False
 
     def setCarApiRefreshToken(self, token):
+        if self.master.tokenSyncEnabled():
+            # While token sync is on, only the sync source may set the token
+            # (applySyncedTokens stores it directly); refuse ones from the web
+            # UI, settings or a refresh, and store nothing.
+            if token:
+                logger.warning(
+                    "Tesla API refresh token refused: TeslaMate token sync is "
+                    "on, so TWCManager uses TeslaMate's tokens. Turn off "
+                    "syncTokens to enter tokens by hand."
+                )
+            return False
         self.carApiRefreshToken = token
         if (
             token
@@ -1277,6 +1307,40 @@ class TeslaAPI:
 
     def setCarApiTokenExpireTime(self, value):
         self.carApiTokenExpireTime = value
+        return True
+
+    def restoreCarApiTokenExpireTime(self, value):
+        # Settings-load path (TWCMaster.loadSettings). A saved
+        # SYNCED_TOKEN_EXPIRY only applies while token sync is on; once it is
+        # off, use the stored token's own exp, so TWCManager's normal refresh
+        # (or a re-login) follows instead of a token that never refreshes.
+        if value == self.SYNCED_TOKEN_EXPIRY and not self.master.tokenSyncEnabled():
+            value = time.time()
+            try:
+                decoded = jwt.decode(
+                    self.getCarApiBearerToken(),
+                    options={
+                        "verify_signature": False,
+                        "verify_aud": False,
+                        "verify_exp": False,
+                    },
+                )
+                value = int(decoded["exp"])
+            except (jwt.exceptions.InvalidTokenError, KeyError, TypeError, ValueError):
+                pass
+        return self.setCarApiTokenExpireTime(value)
+
+    def applySyncedTokens(self, accessToken, refreshToken):
+        # Entry point for token sync sources (TeslaMate). Accepted whether or
+        # not tokenSyncEnabled() is already true, and never refreshes.
+        if not self.setCarApiBearerToken(accessToken, fromSync=True):
+            return False
+        # After the bearer token, so its decoded exp cannot replace the
+        # sentinel, and before the refresh token, so nothing can refresh with
+        # the new refresh token under the decoded exp.
+        self.setCarApiTokenExpireTime(self.SYNCED_TOKEN_EXPIRY)
+        # Stored directly: setCarApiRefreshToken() may start a refresh.
+        self.carApiRefreshToken = refreshToken
         return True
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):

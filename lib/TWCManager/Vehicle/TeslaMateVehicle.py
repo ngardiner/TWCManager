@@ -1,5 +1,6 @@
 import base64
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 from hashlib import sha256
 import logging
 import psycopg2
@@ -110,9 +111,16 @@ class TeslaMateVehicle(TelmetryBase):
             return None
 
         try:
-            # 1. Decode from Base64
+            # 1. Get the raw Cloak blob. psycopg2 returns TeslaMate's bytea
+            # columns as memoryview/bytes, already raw; only a text value
+            # needs Base64 decoding.
+            if isinstance(encrypted_data, (bytes, bytearray, memoryview)):
+                decoded_data = bytes(encrypted_data)
+            else:
+                decoded_data = None
             try:
-                decoded_data = base64.b64decode(encrypted_data)
+                if decoded_data is None:
+                    decoded_data = base64.b64decode(encrypted_data)
             except Exception as e:
                 logger.info(f"Base64 decode failed: {e}. Attempting to fix padding...")
                 try:
@@ -163,12 +171,18 @@ class TeslaMateVehicle(TelmetryBase):
             # 3. Derive the key by hashing the user-provided key with SHA-256
             key = sha256(self.encryption_key.encode("utf-8")).digest()
 
-            # 4. Decrypt using AES-256-GCM with the tag as AAD
+            # 4. Decrypt using AES-256-GCM. Cloak's AES.GCM cipher always
+            # authenticates the fixed AAD "AES256GCM", not the key tag;
+            # the key tag is kept as a fallback for any data written the
+            # other way.
             aesgcm = AESGCM(key)
             ciphertext_with_tag = ciphertext + ciphertag
-            decrypted_data = aesgcm.decrypt(
-                iv, ciphertext_with_tag, key_tag.encode("utf-8")
-            )
+            try:
+                decrypted_data = aesgcm.decrypt(iv, ciphertext_with_tag, b"AES256GCM")
+            except InvalidTag:
+                decrypted_data = aesgcm.decrypt(
+                    iv, ciphertext_with_tag, key_tag.encode("utf-8")
+                )
 
             return decrypted_data.decode("utf-8")
         except Exception as e:
@@ -177,6 +191,25 @@ class TeslaMateVehicle(TelmetryBase):
                 "This usually indicates an incorrect encryption key or corrupted data in TeslaMate database"
             )
             return None
+
+    # TeslaMate moved its tokens table into the "private" schema; older
+    # installs still have it in public. Try the current location first.
+    TOKEN_TABLES = ("private.tokens", "tokens")
+
+    def fetchLatestTokens(self, conn, cur):
+        for table in self.TOKEN_TABLES:
+            try:
+                cur.execute(
+                    "SELECT access, refresh FROM " + table + " ORDER BY id DESC LIMIT 1"
+                )
+            except psycopg2.errors.UndefinedTable:
+                # A failed statement aborts the transaction; clear it
+                # before trying the next location.
+                conn.rollback()
+                continue
+            return cur.fetchone()
+        logger.error("No tokens table found in the TeslaMate database.")
+        return None
 
     def doSyncTokens(self, firstrun=False):
         # Connect to TeslaMate database and synchronize API tokens
@@ -209,12 +242,7 @@ class TeslaMateVehicle(TelmetryBase):
 
                 try:
                     # Query DB for latest access and refresh token
-                    cur.execute(
-                        "SELECT access, refresh FROM tokens ORDER BY id DESC LIMIT 1"
-                    )
-
-                    # Fetch result
-                    result = cur.fetchone()
+                    result = self.fetchLatestTokens(conn, cur)
 
                     if result:
                         encrypted_access_token = result[0]
@@ -228,10 +256,10 @@ class TeslaMateVehicle(TelmetryBase):
                         # Set Bearer and Refresh Tokens
                         carapi = self.master.getModuleByName("TeslaAPI")
                         if carapi:
-                            # We don't want to refresh the token - let the source handle that.
-                            carapi.setCarApiTokenExpireTime(99999 * 99999 * 99999)
-                            carapi.setCarApiBearerToken(access_token)
-                            carapi.setCarApiRefreshToken(refresh_token)
+                            # applySyncedTokens marks the tokens as never
+                            # expiring, so TWCManager leaves refresh to
+                            # TeslaMate.
+                            carapi.applySyncedTokens(access_token, refresh_token)
                             self.lastSync = time.time()
                             logger.log(
                                 logging.INFO,
