@@ -32,6 +32,7 @@ import logging
 import os.path
 import math
 import re
+import signal
 import sys
 import time
 import traceback
@@ -317,11 +318,7 @@ def background_tasks_thread(master):
                 vehicleModule = get_vehicle_module()
 
             if "cmd" in task:
-                if task["cmd"] == "applyChargeLimit":
-                    vehicleModule.applyChargeLimit(limit=task["limit"])
-                elif task["cmd"] == "charge":
-                    vehicleModule.car_api_charge(task)
-                elif task["cmd"] == "checkArrival":
+                if task["cmd"] == "checkArrival":
                     # Use the policy-tracked limit, not TeslaAPI's own
                     # lastChargeLimitApplied: that attribute is only updated
                     # when TeslaAPI itself applies a limit, so it stays 0
@@ -802,6 +799,11 @@ backgroundTasksThread = threading.Thread(target=background_tasks_thread, args=(m
 backgroundTasksThread.daemon = True
 backgroundTasksThread.start()
 
+# Vehicle commands (charge start/stop, charge limit, charge rate) run on
+# their own worker so slow BLE retries never block this thread or the
+# background thread.
+master.vehicleCommandQueue.start()
+
 master.queue_background_task({"cmd": "sunrise"}, 30)
 
 logger.info(
@@ -817,8 +819,6 @@ logger.info(
 logger.info("=" * 70)
 logger.info("✓ TWCManager initialization complete and ready")
 logger.info("=" * 70)
-logger.info("Starting main event loop...")
-logger.info("=" * 70)
 
 if "PYTEST_CURRENT_TEST" in os.environ:
     # Running under pytest - skip the blocking event loop so that
@@ -827,6 +827,28 @@ if "PYTEST_CURRENT_TEST" in os.environ:
 
     sys.exit(0)
 
+
+shutdownRequested = False
+
+
+def sigterm_to_keyboard_interrupt(signum, frame):
+    # systemd stop/restart sends SIGTERM. Take the same graceful shutdown
+    # path as Ctrl-C: save settings, drain stop-charging commands, then wait
+    # (bounded) for background tasks. A second SIGTERM kills immediately.
+    # The flag backs up the exception: an except clause that fails while
+    # handling it would otherwise turn the shutdown into an ordinary error.
+    global shutdownRequested
+    shutdownRequested = True
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    raise KeyboardInterrupt
+
+
+signal.signal(signal.SIGTERM, sigterm_to_keyboard_interrupt)
+
+logger.info("Starting main event loop...")
+logger.info("=" * 70)
+
+timeLastLoopTop = time.time()
 while True:
     try:
         # In this area, we always send a linkready message when we first start.
@@ -842,6 +864,13 @@ while True:
         time.sleep(0.025)
 
         now = time.time()
+
+        # Diagnostic: the serial link must be serviced several times a second.
+        # Anything holding this thread for over a second risks losing sync
+        # with the slave TWCs.
+        if now - timeLastLoopTop > 1.0:
+            logger.warning("Main loop stalled for %.1fs", now - timeLastLoopTop)
+        timeLastLoopTop = now
 
         if config["config"]["fakeMaster"] == 1:
             # A real master sends 5 copies of linkready1 and linkready2 whenever
@@ -1941,20 +1970,54 @@ while True:
         # 'Traceback' to find these in the log.
         traceback.print_exc()
         logger.info("Unhandled Exception:" + traceback.format_exc())
+        if shutdownRequested:
+            # SIGTERM arrived and an exception handler lost it on the way.
+            logger.info("Exiting after background tasks complete...")
+            break
         # Sleep 5 seconds so the user might see the error.
-        time.sleep(5)
+        try:
+            time.sleep(5)
+        except KeyboardInterrupt:
+            logger.info("Exiting after background tasks complete...")
+            break
+        # The 5 s sleep was deliberate; don't report it as a main loop stall.
+        timeLastLoopTop = time.time()
 
-# Make sure any volatile data is written to disk before exiting
+# Whole shutdown must finish inside systemd's 90 s stop timeout.
+shutdownDeadline = time.time() + 80
+
+# Make sure any volatile data is written to disk before exiting. Queue this
+# first so the background thread can work on it during the drain below.
 master.queue_background_task({"cmd": "saveSettings"})
 
-# Wait for background tasks thread to finish all tasks.
+# Let pending stop-charging commands reach the car; other pending vehicle
+# commands are dropped rather than holding up shutdown.
+master.vehicleCommandQueue.drain_high_priority(timeout=60)
+
+# Wait for the background tasks thread to finish its queued tasks, but only
+# until the shutdown deadline: a task blocked on the BLE lock must not hold
+# up exit until systemd SIGKILLs us.
 # Note that there is no such thing as backgroundTasksThread.stop(). Because we
 # set the thread type to daemon, it will be automatically killed when we exit
 # this program.
-master.backgroundTasksQueue.join()
+while master.backgroundTasksQueue.unfinished_tasks > 0:
+    if time.time() >= shutdownDeadline:
+        logger.warning(
+            "Background tasks still pending at exit (%d unfinished)",
+            master.backgroundTasksQueue.unfinished_tasks,
+        )
+        break
+    time.sleep(0.1)
 
 # Close the input module
 master.getInterfaceModule().close()
+
+# Backstop: any stray non-daemon thread (paho, future modules) would otherwise
+# keep the interpreter alive until systemd SIGKILLs us. Exit now that shutdown
+# work is done.
+logger.info("Shutdown complete")
+logging.shutdown()
+os._exit(0)
 
 #
 # End main program

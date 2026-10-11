@@ -70,8 +70,6 @@ class TWCSlave:
     currentVIN = ""
     lastVIN = ""
 
-    vehicleModule = None
-
     def __init__(self, TWCID, maxAmps, config, master):
         self.config = config
         self.configConfig = self.config.get("config", {})
@@ -80,6 +78,10 @@ class TWCSlave:
         self.maxAmps = maxAmps
         self.APIcontrol = False
         self.vehicleRateRaised = False
+        # Bumped whenever vehicleRateRaised is reset, so a raise request that
+        # completes on the vehicle worker after control moved elsewhere
+        # can't set the flag back.
+        self._vehicleRateRaiseGen = 0
         self.__vehicleRateRaiseAttemptTime = 0
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
@@ -87,29 +89,31 @@ class TWCSlave:
             "useFlexAmpsToStartCharge", False
         )
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
-        self.vehicleModule = self.get_vehicle_module()
 
-    def get_vehicle_module(self):
-        # Try to use VehiclePriority proxy for fallback logic
-        vehiclePriority = self.master.getModuleByName("VehiclePriority")
-        if vehiclePriority:
-            return vehiclePriority
+    def _queueChargeRate(self, amps, callback=None):
+        # Vehicle commands can take minutes over BLE; hand them to the
+        # vehicle worker so this (main, serial) thread keeps running.
+        self.master.queue_vehicle_command(
+            {
+                "cmd": "setChargeRate",
+                "amps": int(amps),
+                "vehicle": self.getLastVehicle(),
+            },
+            callback,
+        )
 
-        # Fallback to direct module selection if VehiclePriority not available
-        carHass = self.master.getModuleByName("HomeAssistant")
-        if carHass:
-            return carHass
+    def _requestVehicleRateRaise(self):
+        gen = self._vehicleRateRaiseGen
 
-        carble = self.master.getModuleByName("TeslaBLE")
-        if carble:
-            return carble
+        def done(result):
+            if result is not False and gen == self._vehicleRateRaiseGen:
+                self.vehicleRateRaised = True
 
-        carapi = self.master.getModuleByName("TeslaAPI")
-        if carapi:
-            return carapi
+        self._queueChargeRate(self.wiringMaxAmps, done)
 
-        logger.error("No vehicle module enabled")
-        return None
+    def _resetVehicleRateRaised(self):
+        self.vehicleRateRaised = False
+        self._vehicleRateRaiseGen += 1
 
     def print_status(self, heartbeatData):
         try:
@@ -863,7 +867,7 @@ class TWCSlave:
             # Control is given to the Tesla API to control Charge Rate
             # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
             self.APIcontrol = True
-            self.vehicleRateRaised = False
+            self._resetVehicleRateRaised()
             self.__vehicleRateRaiseAttemptTime = 0
 
             # Call the Tesla API to set the charge rate for vehicle connected to this TWC
@@ -884,12 +888,7 @@ class TWCSlave:
                 self.__lastAPIAmpsRepeat = 0
                 self.__lastAPIAmpsValue = int(desiredAmpsOffered)
 
-                # Determine vehicle to control
-                targetVehicle = (
-                    None if self.getLastVehicle() is None else self.getLastVehicle()
-                )
-
-                self.vehicleModule.setChargeRate(int(desiredAmpsOffered), targetVehicle)
+                self._queueChargeRate(desiredAmpsOffered)
 
             desiredAmpsOffered = self.wiringMaxAmps
 
@@ -902,12 +901,9 @@ class TWCSlave:
             if not self.vehicleRateRaised and (
                 now - self.__vehicleRateRaiseAttemptTime >= 60
             ):
+                # The 60s window also stops re-requesting while one is queued.
                 self.__vehicleRateRaiseAttemptTime = now
-                result = self.vehicleModule.setChargeRate(
-                    self.wiringMaxAmps, self.getLastVehicle()
-                )
-                if result is not False:
-                    self.vehicleRateRaised = True
+                self._requestVehicleRateRaise()
             self.APIcontrol = False
 
             # We can tell the TWC how much power to use in 0.01A increments, but

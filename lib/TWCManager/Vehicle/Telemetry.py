@@ -74,6 +74,7 @@ class TelmetryBase:
                 logging.INFO4, "Telemetry information will be fetched in 30 seconds."
             )
             timer = threading.Timer(30, self.doMQTT)
+            timer.daemon = True
             timer.start()
 
     def doMQTT(self):
@@ -105,7 +106,9 @@ class TelmetryBase:
             return False
 
         self.client.loop_start()
-        threading.Timer(24 * 60 * 60, self.resetMQTT).start()
+        timer = threading.Timer(24 * 60 * 60, self.resetMQTT)
+        timer.daemon = True
+        timer.start()
 
     def resetMQTT(self):
         self.client.disconnect()
