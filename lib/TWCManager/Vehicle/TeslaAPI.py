@@ -189,6 +189,12 @@ class TeslaAPI:
         # If we make it here, we did not execute a command
         return False
 
+    def refreshTokenTypeKnown(self, token):
+        # True when the refresh token's type can be told from the token
+        # itself: only an Owner API refresh token (a JWT) is recognisable.
+        decoded = self.decodeToken(token)
+        return decoded is not None and decoded.get("iss") == self.ownerTokenIssuer
+
     def refreshTokenType(self, token):
         # "owner" for an Owner API refresh token, a JWT issued by
         # auth.tesla.com/oauth2/v3; "fleet" for anything else, including an
@@ -1460,7 +1466,9 @@ class TeslaAPI:
         # or "login". Returns "success", "error" (no token), "unknown_type"
         # (nothing stored), "kept" (sync met a pasted or login token) or
         # "token_sync" (the slot holds a live synced token while
-        # sync is on). The caller queues saveSettings.
+        # sync is on) or "mismatched_types" (an access and refresh token
+        # of different known types; nothing stored). The caller queues
+        # saveSettings.
         if not accessToken and not refreshToken:
             return "error"
         if accessToken:
@@ -1478,6 +1486,26 @@ class TeslaAPI:
                 # Logs the unknown-type ERROR.
                 self.tokenRoute(accessToken)
             return "unknown_type"
+        if (
+            accessToken
+            and refreshToken
+            and self.refreshTokenTypeKnown(refreshToken)
+            and self.refreshTokenType(refreshToken) != tokenType
+        ):
+            # The wrong-type refresh token would later 401 and clear the
+            # valid access token it was stored with.
+            logger.error(
+                "The access token and refresh token are for different Tesla "
+                "APIs (Owner and Fleet); not storing either."
+            )
+            return "mismatched_types"
+        if (
+            source == "synced"
+            and slot.source == "synced"
+            and slot.accessToken == accessToken
+        ):
+            # An unchanged resync: keep the slot's pause and counters.
+            return "success"
         if (
             source == "synced"
             and not slot.empty()

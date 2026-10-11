@@ -307,3 +307,91 @@ def render_settings(api, master=None):
     env.globals["ampsList"] = [0, 6]
     template = env.get_template("settings.html.j2")
     return template.render(master=master, url=urlsplit("/settings"))
+
+
+def test_paste_mismatched_pair_refused_and_stores_nothing(caplog):
+    api = new_api()
+    access, refresh = fleet_token(), owner_refresh_token()
+    before = (api.ownerSlot.snapshot(), api.fleetSlot.snapshot())
+
+    assert api.storeToken(access, refresh, "pasted") == "mismatched_types"
+    assert (api.ownerSlot.snapshot(), api.fleetSlot.snapshot()) == before
+    assert access not in caplog.text and refresh not in caplog.text
+    assert api.storeToken(owner_token(), refresh) == "success"  # matching pair
+
+    # An opaque refresh token's type is unknown, so it is kept as before.
+    assert api.storeToken(owner_token(), OPAQUE_REFRESH) == "success"
+    assert api.ownerSlot.refreshToken == OPAQUE_REFRESH
+
+
+def test_paste_mismatched_pair_from_settings_form_redirects():
+    api = new_api()
+    request = save_settings(
+        api,
+        {
+            "carApiBearerToken": fleet_token(),
+            "carApiRefreshToken": owner_refresh_token(),
+        },
+    )
+
+    request.send_header.assert_any_call("Location", "/teslaAccount/mismatched_types")
+    assert api.ownerSlot.empty() and api.fleetSlot.empty()
+    page = login_template().render(
+        url=urlsplit("/teslaAccount/mismatched_types"),
+        master=api.master,
+        apiAvailable=True,
+    )
+    assert (
+        "The access token and refresh token are for different Tesla APIs "
+        "(one Owner API, one Fleet API), so neither was stored. Paste them "
+        "separately, or paste a matching pair." in " ".join(page.split())
+    )
+
+
+def test_identical_resync_keeps_pause_changes_and_logs(caplog):
+    api = new_api()
+    token = owner_token(jti="same")
+    assert api.storeToken(token, "", "synced") == "success"
+    api.ownerSlot.pause()
+    paused, changes = api.ownerSlot.pausedUntil, api.ownerSlot.changes
+    api.ownerSlot.scopeErrorsLogged.add("charge")
+    caplog.clear()
+
+    assert api.storeToken(token, "", "synced") == "success"
+
+    assert api.ownerSlot.pausedUntil == paused
+    assert api.ownerSlot.changes == changes
+    assert api.ownerSlot.scopeErrorsLogged == {"charge"}
+    assert caplog.text == ""
+    # A different synced token still replaces it and ends the pause.
+    assert api.storeToken(owner_token(jti="new"), "", "synced") == "success"
+    assert api.ownerSlot.pausedUntil == 0
+
+
+def test_login_form_shown_for_expired_synced_fleet_token():
+    from TWCManager.Control.HTTPControl import CreateHTTPHandlerClass
+
+    api = new_api()
+    master = Mock()
+    master.getModuleByName = lambda name: api if name == "TeslaAPI" else Mock()
+    handler = CreateHTTPHandlerClass(master)
+
+    def get_main():
+        request = Mock()
+        request.path = "/"
+        request.headers = {}
+        rendered = {}
+
+        def render(values):
+            rendered.update(values)
+            return ""
+
+        request.templateEnv.get_template.return_value.render = render
+        handler.do_GET(request)
+        return rendered["apiAvailable"]
+
+    api.storeToken(fleet_token(expires_in=-60), "", "synced")
+    assert api.fleetSlot.accessToken and api.fleetSlot.empty()
+    assert get_main() is False
+    api.storeToken(fleet_token(), "", "synced")
+    assert get_main() is True

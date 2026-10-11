@@ -44,6 +44,12 @@
     <b>TWCManager could not recognise this token as an Owner API or Fleet API
        token. Nothing was stored.</b>
   </font>
+{% elif url.path == "/teslaAccount/mismatched_types" %}
+  <font color='red'>
+    <b>The access token and refresh token are for different Tesla APIs (one
+       Owner API, one Fleet API), so neither was stored. Paste them
+       separately, or paste a matching pair.</b>
+  </font>
 {% elif url.path == "/teslaAccount/token_rejected" %}
   <font color='red'>
     <b>Tesla rejected the token you supplied. Your previous Tesla API tokens
