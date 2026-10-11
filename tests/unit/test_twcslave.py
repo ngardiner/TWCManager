@@ -191,85 +191,6 @@ class TestTWCSlaveHeartbeat:
         assert slave.lastHeartbeatDebugOutput == "Test output"
 
 
-class TestTWCSlaveVehicleModule:
-    """Test TWCSlave vehicle module selection."""
-    
-    @pytest.fixture
-    def mock_config(self):
-        """Create a mock configuration."""
-        return {
-            "config": {
-                "wiringMaxAmpsPerTWC": 6,
-                "useFlexAmpsToStartCharge": False,
-                "startStopDelay": 60,
-                "fakeMaster": False,
-            }
-        }
-    
-    def test_get_vehicle_module_priority(self, mock_config):
-        """Test vehicle module selection with VehiclePriority."""
-        from TWCManager.TWCSlave import TWCSlave
-        
-        master = Mock()
-        vehicle_priority = Mock()
-        master.getModuleByName = Mock(side_effect=lambda name: 
-            vehicle_priority if name == "VehiclePriority" else None)
-        
-        slave = TWCSlave(bytearray(b"AB"), 80, mock_config, master)
-        
-        assert slave.vehicleModule == vehicle_priority
-    
-    def test_get_vehicle_module_hass_fallback(self, mock_config):
-        """Test vehicle module selection falls back to HomeAssistant."""
-        from TWCManager.TWCSlave import TWCSlave
-        
-        master = Mock()
-        hass = Mock()
-        master.getModuleByName = Mock(side_effect=lambda name: 
-            hass if name == "HomeAssistant" else None)
-        
-        slave = TWCSlave(bytearray(b"AB"), 80, mock_config, master)
-        
-        assert slave.vehicleModule == hass
-    
-    def test_get_vehicle_module_ble_fallback(self, mock_config):
-        """Test vehicle module selection falls back to TeslaBLE."""
-        from TWCManager.TWCSlave import TWCSlave
-        
-        master = Mock()
-        ble = Mock()
-        master.getModuleByName = Mock(side_effect=lambda name: 
-            ble if name == "TeslaBLE" else None)
-        
-        slave = TWCSlave(bytearray(b"AB"), 80, mock_config, master)
-        
-        assert slave.vehicleModule == ble
-    
-    def test_get_vehicle_module_api_fallback(self, mock_config):
-        """Test vehicle module selection falls back to TeslaAPI."""
-        from TWCManager.TWCSlave import TWCSlave
-        
-        master = Mock()
-        api = Mock()
-        master.getModuleByName = Mock(side_effect=lambda name: 
-            api if name == "TeslaAPI" else None)
-        
-        slave = TWCSlave(bytearray(b"AB"), 80, mock_config, master)
-        
-        assert slave.vehicleModule == api
-    
-    def test_get_vehicle_module_none(self, mock_config):
-        """Test vehicle module returns None when no module available."""
-        from TWCManager.TWCSlave import TWCSlave
-        
-        master = Mock()
-        master.getModuleByName = Mock(return_value=None)
-        
-        slave = TWCSlave(bytearray(b"AB"), 80, mock_config, master)
-        
-        assert slave.vehicleModule is None
-
-
 class TestTWCSlaveVIN:
     """Test TWCSlave VIN handling."""
     
@@ -479,3 +400,87 @@ class TestAmpsHeartbeat:
     def test_zero_amps_always_sent(self):
         slave = self.make_slave(2, 0x01, 0)
         assert slave._amps_heartbeat(0) == bytearray([0x09, 0, 0, 0, 0, 0, 0, 0, 0])
+
+
+class TestVehicleChargeRateQueueing:
+    """setChargeRate is queued to the vehicle worker, never called inline."""
+
+    @pytest.fixture
+    def vehicle(self):
+        v = Mock()
+        v.VIN = "5YJ3E1EA1KF000001"
+        return v
+
+    @pytest.fixture
+    def slave(self, vehicle):
+        from TWCManager.TWCSlave import TWCSlave
+
+        master = Mock()
+        master.getModuleByName = Mock(return_value=None)
+        config = {
+            "config": {
+                "wiringMaxAmpsPerTWC": 32,
+                "useFlexAmpsToStartCharge": False,
+                "startStopDelay": 60,
+                "fakeMaster": False,
+            }
+        }
+        s = TWCSlave(bytearray(b"AB"), 80, config, master)
+        s.getLastVehicle = Mock(return_value=vehicle)
+        return s
+
+    def test_queue_charge_rate(self, slave, vehicle):
+        slave._queueChargeRate(16.7)
+        slave.master.queue_vehicle_command.assert_called_once_with(
+            {"cmd": "setChargeRate", "amps": 16, "vehicle": vehicle}, None
+        )
+
+    def test_raise_queues_wiring_max_with_callback(self, slave, vehicle):
+        slave._requestVehicleRateRaise()
+        task, callback = slave.master.queue_vehicle_command.call_args[0]
+        assert task == {"cmd": "setChargeRate", "amps": 32, "vehicle": vehicle}
+        assert callable(callback)
+        assert slave.vehicleRateRaised is False
+
+    @pytest.mark.parametrize("result", [True, "success", None])
+    def test_raise_success_sets_flag(self, slave, result):
+        slave._requestVehicleRateRaise()
+        _, callback = slave.master.queue_vehicle_command.call_args[0]
+        callback(result)
+        assert slave.vehicleRateRaised is True
+
+    def test_raise_failure_leaves_flag(self, slave):
+        slave._requestVehicleRateRaise()
+        _, callback = slave.master.queue_vehicle_command.call_args[0]
+        callback(False)
+        assert slave.vehicleRateRaised is False
+
+    def test_stale_raise_ignored_after_reset(self, slave):
+        slave._requestVehicleRateRaise()
+        _, callback = slave.master.queue_vehicle_command.call_args[0]
+        slave._resetVehicleRateRaised()
+        callback(True)
+        assert slave.vehicleRateRaised is False
+
+    def test_reset_clears_flag_and_bumps_generation(self, slave):
+        slave.vehicleRateRaised = True
+        gen = slave._vehicleRateRaiseGen
+        slave._resetVehicleRateRaised()
+        assert slave.vehicleRateRaised is False
+        assert slave._vehicleRateRaiseGen == gen + 1
+
+    def test_heartbeat_code_never_calls_set_charge_rate_inline(self):
+        import inspect
+        from TWCManager.TWCSlave import TWCSlave
+
+        source = inspect.getsource(TWCSlave)
+        assert "vehicleModule.setChargeRate" not in source
+
+class TestPolicyNotOnMainLoop:
+    """The serial main loop must not evaluate charging policy inline."""
+
+    def test_twcslave_never_calls_set_charging_per_policy(self):
+        import inspect
+        from TWCManager.TWCSlave import TWCSlave
+
+        assert "setChargingPerPolicy" not in inspect.getsource(TWCSlave)

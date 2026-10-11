@@ -4,6 +4,20 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming
 
+* Features
+    * (@MikeBishop) - Apply charge limit over BLE
+    * (@MikeBishop) - Fetch charge and location state over BLE, falling back to Fleet API when BLE is unavailable
+    * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, ported from v1.3.4 (closes #639)
+    * Add vehicle commandPolicy (prefer_ble/ble_only/api_only) to restrict state-changing commands to BLE or API, capping billed Fleet API command spend; configurable from the Settings page, with optional hard override in config.json (closes #651)
+    * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
+    * (@MikeBishop) - Keep an Owner API token and a Fleet API token at once: reads use the free Owner API when possible, commands use the Fleet API, and TeslaMate token sync can stay on beside a Fleet login. Settings migrate automatically on first start; downgrading afterwards loses the Owner API token (stored under new `ownerApi*` keys). When TeslaMate `syncTokens` is configured, a token found in the old settings at first upgrade is treated as TeslaMate's (its refresh token is dropped and the slot is locked while sync is on), so a Fleet token you saved yourself may need the Fleet login again.
+* Architecture
+    * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used read-only
+    * (@MikeBishop) - TWC abstraction layer with EVSEController/EVSEInstance interface (ported from #483)
+    * (@ngardiner) - Gen3 TWC support via Neurio Modbus emulation
+    * (@MikeBishop) - Run vehicle commands on a dedicated worker thread and serialize tesla-control calls, so BLE retries no longer stall the RS485 loop (#668)
+    * (@MikeBishop) - Shut down gracefully on SIGTERM, saving settings and sending pending stop-charging commands before exit (#668)
+    * (@MikeBishop) - Evaluate charging policy on its own thread instead of the RS485 loop, only when acting as master (#670)
 * Bugfixes
     * Fix: Add missing module-level time import in HASS, EmonCMS, Growatt, IotaWatt, SmartMe and TCP modules, which crashed EMS polling and caused charge current oscillation (closes #644)
     * Fix: Restore minInterval parameter on update_location, fixing TypeError that broke API start/stop charging and home location correction
@@ -24,20 +38,9 @@ This document logs the changes per release of TWCManager.
     * Fix: Correct RecieverID key in TWCProtocol heartbeat parsing and build Dummy slave heartbeats via the protocol module
     * Fix: BLE no longer re-sends charge start commands every poll cycle once the car reports it is already in the desired state (closes #652)
     * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
-* Features
-    * (@MikeBishop) - Apply charge limit over BLE
-    * (@MikeBishop) - Fetch charge and location state over BLE, falling back to Fleet API when BLE is unavailable
-    * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, ported from v1.3.4 (closes #639)
-    * Add vehicle commandPolicy (prefer_ble/ble_only/api_only) to restrict state-changing commands to BLE or API, capping billed Fleet API command spend; configurable from the Settings page, with optional hard override in config.json (closes #651)
-    * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
-    * (@MikeBishop) - Keep an Owner API token and a Fleet API token at once: reads use the free Owner API when possible, commands use the Fleet API, and TeslaMate token sync can stay on beside a Fleet login. Settings migrate automatically on first start; downgrading afterwards loses the Owner API token (stored under new `ownerApi*` keys). When TeslaMate `syncTokens` is configured, a token found in the old settings at first upgrade is treated as TeslaMate's (its refresh token is dropped and the slot is locked while sync is on), so a Fleet token you saved yourself may need the Fleet login again.
-* Architecture
-    * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
-* Bugfixes
     * Fix: Remove dead Tesla email/password login path that called a non-existent apiLogin method
     * Fix: Remove hardcoded /home/twcmanager fallback path for tesla-control binary; use PATH lookup only (closes #600)
     * Fix: limitOverride no longer applies charge limit cap when charging has resumed, preventing 60% limit being set instead of stopping charge (closes #586)
-    * Fix: Skip start-charge commands (API and BLE) when the car is waiting on its own Scheduled Charging/Departure timer; disable via respectVehicleSchedule (closes #493)
     * Fix: Transient API errors (vehicle unavailable, operation_timedout) no longer trigger full exponential backoff, preventing hour-long delays in stop-charge commands (closes #377)
     * Fix: Negate negative generation values from EMS modules that report generation as negative watts (closes #442)
     * Fix: Add "context deadline exceeded" to transient API errors so wake-up timeouts don't trigger full backoff (closes #593)
@@ -53,11 +56,11 @@ This document logs the changes per release of TWCManager.
     * Fix: Set stopAskingToStartCharging=True when a vehicle departs home, preventing unnecessary wake attempts on absent vehicles (closes #590)
     * Fix: Trust TeslaMate asleep/offline state in is_awake() to avoid Fleet API status polls when vehicle is confirmed sleeping
     * Fix: Fleet API wake minimization - 3-minute pre-wake delay (configurable wakeDelayMins), 30-minute retry backoff, no API polls during hold windows
-
-* Architecture
-    * (@MikeBishop) TWC abstraction layer - EVSEController/EVSEInstance interface ported from #483 (@MikeBishop). Gen2 TWC slaves, Tesla API vehicles, and future EVSE types are now managed through a unified interface:
-    * (@ngardiner) Gen3 TWC support - new `Gen3TWCs` EVSEController and `Gen3TWC` EVSEInstance enable power control of Generation 3 Tesla Wall Connectors:
-        * Protocol implementation informed by @Klangen82/tesla-wall-connector-control and @LucaTNT's Neurio register map gist
+    * (@MikeBishop) - Fix: Import serial at module level in RS485 so SerialException handling and reconnect work (#673)
+    * (@MikeBishop) - Fix: TeslaAPI error handlers no longer crash when a request never went out (#682)
+    * (@MikeBishop) - Fix: TeslaMate telemetry now attaches to the API vehicle when BLE handles all commands (#671)
+    * (@MikeBishop) - Fix: TeslaMate token sync now accepts resyncs and reads tokens from current TeslaMate versions (#679)
+    * (@MikeBishop) - Fix: Classify Owner API tokens as read-only and refuse vehicle commands on them instead of sending them to the Fleet API (#679)
 
 ## v1.3.4 - 2026-04-24
 * Features

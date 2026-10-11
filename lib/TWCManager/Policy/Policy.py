@@ -1,6 +1,8 @@
 import copy
 import logging
 import time
+import threading
+import traceback
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("Policy", "Policy")
@@ -88,6 +90,12 @@ class Policy:
     policyCheckInterval = 30
 
     def __init__(self, master):
+        # Policy evaluation runs on its own thread (see start()) so module
+        # I/O done by policy conditions never stalls the serial main loop.
+        self._wake = threading.Event()
+        self._stopping = threading.Event()
+        self._evalLock = threading.Lock()
+        self._thread = None
         self.master = master
         self.config = self.master.config
 
@@ -129,11 +137,72 @@ class Policy:
             policy_engine = config_policy.get("engine")
             if policy_engine:
                 if policy_engine.get("policyCheckInterval"):
-                    self.policyCheckInterval = policy_engine.get("policyCheckInterval")
+                    self.policyCheckInterval = self._parseInterval(
+                        policy_engine.get("policyCheckInterval")
+                    )
+
+    @staticmethod
+    def _parseInterval(value):
+        # The interval feeds Event.wait(); a non-numeric value would kill the
+        # policy thread and a tiny/negative one would busy-loop it.
+        try:
+            interval = float(value)
+        except (TypeError, ValueError):
+            logger.error(
+                f"Invalid policyCheckInterval {value!r}; using 30 seconds",
+                extra={"colored": "red"},
+            )
+            return 30
+        if not interval >= 1.0:
+            logger.warning(
+                f"policyCheckInterval {value!r} is below 1 second; using 1 second"
+            )
+            return 1.0
+        if interval > threading.TIMEOUT_MAX:
+            logger.warning(
+                f"policyCheckInterval {value!r} is too large; "
+                f"using {threading.TIMEOUT_MAX} seconds"
+            )
+            return threading.TIMEOUT_MAX
+        return interval
+
+    def start(self):
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._run, name="PolicyEvaluation", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self):
+        # Shutdown: start no further evaluations. An evaluation already in
+        # progress finishes; the thread is not joined.
+        self._stopping.set()
+        self._wake.set()
 
     def applyPolicyImmediately(self):
-        self.lastPolicyCheck = 0
-        self.setChargingPerPolicy()
+        # Wake the policy thread; evaluation happens there, not on the caller.
+        if not self._stopping.is_set():
+            self._wake.set()
+
+    def _run(self):
+        try:
+            while not self._stopping.is_set():
+                try:
+                    self.setChargingPerPolicy()
+                except Exception as e:
+                    logger.error(
+                        f"PolicyError: {traceback.format_exc()}, occurred when evaluating policy: {e}",
+                        extra={"colored": "red"},
+                    )
+                self._wake.wait(timeout=self.policyCheckInterval)
+                self._wake.clear()
+        except BaseException:
+            logger.error(
+                f"Policy evaluation thread died: {traceback.format_exc()}",
+                extra={"colored": "red"},
+            )
+            raise
 
     def setChargingPerPolicy(self):
         # This function is called for the purpose of evaluating the charging
@@ -143,14 +212,17 @@ class Policy:
         # share based on the policy, we call setMaxAmpsToDivideAmongSlaves to
         # distribute the designated power amongst slaves.
 
-        # First, determine if it has been less than 30 seconds since the last
-        # policy check. If so, skip for now
-        if (self.lastPolicyCheck + self.policyCheckInterval) > time.time():
+        # Cadence is owned by the policy thread (see start()); this evaluates
+        # now. The lock keeps evaluations from overlapping.
+        if self._stopping.is_set():
             return
-        else:
-            # Update last policy check time
+        with self._evalLock:
+            if self._stopping.is_set():
+                return
             self.lastPolicyCheck = time.time()
+            self._evaluate()
 
+    def _evaluate(self):
         for policy in self.charge_policy:
             # Check if the policy is within its latching period
             latched = False

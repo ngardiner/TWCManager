@@ -3,6 +3,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
+import functools
 import json
 import logging
 import os
@@ -10,10 +11,28 @@ from pathlib import Path
 import signal
 import shutil
 import subprocess
+import threading
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("TeslaBLE", "Vehicle")
+
+
+def _serialized(method):
+    """Hold the instance's BLE lock for the whole call.
+
+    Every tesla-control invocation writes key material to the shared
+    pipeName path, runs, and unlinks it. Overlapping invocations delete each
+    other's key file and contend for the adapter, so each "write key -> run ->
+    unlink" unit must run alone, whatever thread it is called from.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._bleLock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class BLECircuitBreaker:
@@ -77,6 +96,7 @@ class TeslaBLE:
     pipeOpen = False  # Track pipe state
 
     def __init__(self, master):
+        self._bleLock = threading.Lock()
         self.master = master
         try:
             self.config = self.master.config
@@ -386,6 +406,7 @@ class TeslaBLE:
         )
         return False
 
+    @_serialized
     def peerWithVehicle(self, vin):
         """
         Pair with a vehicle using BLE key exchange.
@@ -464,6 +485,7 @@ class TeslaBLE:
             vin = vin.VIN
         return self._execute_with_retry(self._sendCommand_internal, vin, command, args)
 
+    @_serialized
     def _sendCommand_internal(self, vin, command, args=None):
         """
         Internal sendCommand implementation (called by retry wrapper).
@@ -910,6 +932,7 @@ class TeslaBLE:
             return float(val.get("seconds", 0)) or None
         return None
 
+    @_serialized
     def _fetch_state_json(self, vin, state_type):
         """Run `tesla-control state STATE_TYPE` and return parsed JSON dict, or None."""
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
