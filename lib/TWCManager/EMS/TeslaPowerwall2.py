@@ -305,9 +305,10 @@ class TeslaPowerwall2:
                             and e.response is not None
                             and e.response.status_code == 403
                         ):
-                            logger.warn(
-                                "Error fetching Powerwall cloud data; does your API token have energy_device_data scope?"
-                            )
+                            if slot.kind == "fleet":
+                                slot.reportScopeRefused("energy", refused=True)
+                            else:
+                                logger.warning(f"Error fetching Powerwall data: {e}")
                         else:
                             logger.warning(f"Error fetching Powerwall data: {e}")
             else:

@@ -221,6 +221,37 @@ class TeslaAPI:
                 self.master.queue_background_task({"cmd": "saveSettings"})
         return result
 
+    def slotRequestFailed(self, slot, response):
+        # Reacts to a failed vehicle read made with this slot's token.
+        # Returns True only when it refreshed the slot, so the caller should
+        # retry once. A dead token is cleared and a refused one paused for
+        # reads; neither records an API error, so the next poll can use the
+        # other slot at once. Storm Watch does not come here: a refused
+        # energy read must not pause vehicle reads.
+        if response is None:
+            return False
+        code = response.status_code
+        label = slot.kind.capitalize()
+        if code == 401:
+            if (
+                "expired" in response.text
+                and slot.source != "synced"
+                and slot.refreshToken
+            ):
+                return self.refreshSlot(slot) == "success"
+            logger.error(
+                "Tesla %s API token was rejected (HTTP 401); removing it." % label
+            )
+            slot.clear()
+            self.master.queue_background_task({"cmd": "saveSettings"})
+        elif code in (403, 410, 412):
+            logger.error(
+                "Tesla %s API refused a read (HTTP %d); not using that token "
+                "for reads for an hour." % (label, code)
+            )
+            slot.pause()
+        return False
+
     def tokenRoute(self, token):
         # (tokenType, baseURL, verifyCert) for an access token: where its
         # requests go. Both slots classify their tokens with this.
@@ -326,6 +357,9 @@ class TeslaAPI:
             try:
                 req = requests.get(url, headers=headers, verify=slot.verifyCert)
                 logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
+                if req.status_code in (401, 403, 410, 412):
+                    self.slotRequestFailed(slot, req)
+                    return False
                 apiResponseDict = json.loads(req.text)
             except requests.exceptions.RequestException:
                 logger.info("Failed to make API call " + url)
@@ -1885,12 +1919,11 @@ class CarApiVehicle:
                 if req is None:
                     # The request never went out (e.g. no network).
                     pass
-                elif req.status_code == 401 and "expired" in req.text:
-                    # If the token is expired, refresh it and try again, once
-                    if not refreshed:
+                elif req.status_code in (401, 403, 410, 412):
+                    # Clears or pauses the slot, or refreshes it for one retry.
+                    if not refreshed and self.carapi.slotRequestFailed(slot, req):
                         refreshed = True
-                        if self.carapi.refreshSlot(slot) == "success":
-                            continue
+                        continue
                 elif req.status_code == 429:
                     # We're explicitly being told to back off
                     self.errorCount = max(30, self.errorCount)
