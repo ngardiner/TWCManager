@@ -7,14 +7,32 @@ status code from it.
 """
 
 import re
+import time
 from unittest.mock import Mock
 
+import jwt
 import pytest
 import requests
 
 VIN = "5YJ3E1EA0KF000001"
 # Any Tesla token endpoint; which host refreshes a token varies by release.
 TOKEN_URL = re.compile(r"/oauth2/v3/token$")
+
+
+def fleet_token(jti):
+    # A Fleet-shaped JWT, so TeslaAPI recognises the token and has a base URL.
+    claims = {
+        "aud": ["https://fleet-api.prd.na.vn.cloud.tesla.com"],
+        "ou_code": "NA",
+        "exp": int(time.time()) + 8 * 60 * 60,
+        "jti": jti,
+    }
+    return jwt.encode(
+        claims, "unit-test-signing-key-0123456789abcdef", algorithm="HS256"
+    )
+
+
+NEW_ACCESS = fleet_token("new")
 
 
 def make_master():
@@ -34,7 +52,7 @@ def api():
 
     api = TeslaAPI(make_master())
     # Start each test without inherited class-level token state
-    api.carApiBearerToken = "old-access"
+    api.setCarApiBearerToken(fleet_token("old"))
     api.carApiRefreshToken = "old-refresh"
     api.carApiLastErrorTime = 0
     return api
@@ -99,7 +117,7 @@ class TestGetCarApi:
         requests_mock.post(
             TOKEN_URL,
             json={
-                "access_token": "new-access",
+                "access_token": NEW_ACCESS,
                 "refresh_token": "new-refresh",
                 "expires_in": 28800,
             },
@@ -110,4 +128,6 @@ class TestGetCarApi:
         assert ok is True
         assert response == {"ok": True}
         assert data.call_count == 2
-        assert data.request_history[1].headers["Authorization"] == "Bearer new-access"
+        assert (
+            data.request_history[1].headers["Authorization"] == "Bearer " + NEW_ACCESS
+        )
