@@ -40,6 +40,17 @@ def fix_base64_padding(data):
 logger = LoggerFactory.get_logger("TeslaMate", "Vehicle")
 
 
+def parse_bool(payload):
+    """True or False for a "true"/"false" payload, else None (unknown): an
+    empty or odd payload must not read as unplugged."""
+    value = str(payload).strip().lower()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    return None
+
+
 class TeslaMateVehicle(TelmetryBase):
     __db_host = None
     __db_name = None
@@ -61,6 +72,7 @@ class TeslaMateVehicle(TelmetryBase):
         "charger_phases": ["phases", lambda a: int(a) if a else 0],
         "charger_voltage": ["voltage", lambda a: int(a)],
         "charging_state": ["chargingState", lambda a: str(a)],
+        "plugged_in": ["pluggedIn", parse_bool],
     }
 
     def __init__(self, master):
