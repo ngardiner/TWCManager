@@ -32,8 +32,10 @@ def owner_refresh_token():
     return make_jwt(iss="https://auth.tesla.com/oauth2/v3", aud="ownerapi")
 
 
-def load(tmp_path, settings):
-    master, api, modules = master_with_settings(tmp_path, settings)
+def load(tmp_path, settings, syncTokensConfigured=False):
+    master, api, modules = master_with_settings(
+        tmp_path, settings, syncTokensConfigured
+    )
     master.loadSettings()
     return master, api
 
@@ -41,7 +43,9 @@ def load(tmp_path, settings):
 def start_with_sync(tmp_path, settings, fake_db, synced):
     """Startup order of TWCManager.py: TeslaMateVehicle's first sync runs
     from its __init__ before it is registered, then loadSettings."""
-    master, api, modules = master_with_settings(tmp_path, settings)
+    master, api, modules = master_with_settings(
+        tmp_path, settings, syncTokensConfigured=True
+    )
     tm = make_teslamate(master, synced, registered=False)
     fake_db["tm"] = tm
     tm.doSyncTokens(True)
@@ -378,3 +382,94 @@ def test_synced_refresh_only_owner_keeps_saved_owner_token():
     assert s["ownerApiTokenSource"] == "pasted"
     assert s["carApiRefreshToken"] == ""
     assert s["carApiTokenSource"] == ""
+
+
+def test_owner_token_synced_when_sync_configured_but_off_at_load(
+    tmp_path, refresh_endpoints
+):
+    # syncTokens is set in config.json, but the startup sync couldn't reach
+    # TeslaMate's database and turned sync off. The saved token (an
+    # earlier release's, with an ordinary expiry) is still TeslaMate's.
+    token = owner_token(expires_in=600)
+    master, api, modules = master_with_settings(
+        tmp_path,
+        {
+            "carApiBearerToken": token,
+            "carApiRefreshToken": "teslamate-refresh",
+            "carApiTokenExpireTime": int(time.time()) + 600,
+        },
+        syncTokensConfigured=True,
+    )
+    # Registered, but its startup sync turned syncTokens off.
+    tm = make_teslamate(master, owner_token(jti="unused"), registered=False)
+    tm.syncTokens = False
+    modules["TeslaMateVehicle"] = tm
+    assert master.tokenSyncEnabled() is False
+    master.loadSettings()
+
+    assert api.ownerSlot.accessToken == token
+    assert api.ownerSlot.source == "synced"
+    assert api.ownerSlot.refreshToken == ""
+    assert api.ownerSlot.expireTime == exp(token)
+    assert api.fleetSlot.empty()
+    assert "teslamate-refresh" not in json.dumps(master.settings)
+
+    api.refreshTokenIfNeeded()
+    assert all(ep.call_count == 0 for ep in refresh_endpoints)
+
+
+def test_fleet_token_synced_when_sync_configured(tmp_path, refresh_endpoints):
+    token = fleet_token(expires_in=600)
+    master, api = load(
+        tmp_path,
+        {
+            "carApiBearerToken": token,
+            "carApiRefreshToken": "teslamate-refresh",
+            "carApiTokenExpireTime": int(time.time()) + 600,
+        },
+        syncTokensConfigured=True,
+    )
+    assert api.fleetSlot.accessToken == token
+    assert api.fleetSlot.source == "synced"
+    assert api.fleetSlot.refreshToken == ""
+    assert master.settings["carApiTokenSource"] == "synced"
+    assert "teslamate-refresh" not in json.dumps(master.settings)
+
+    api.refreshTokenIfNeeded()
+    assert all(ep.call_count == 0 for ep in refresh_endpoints)
+
+
+def test_saved_fleet_token_does_not_replace_startup_sync(tmp_path, fake_db):
+    # A TeslaMate Fleet token saved in carApi* with an ordinary expiry,
+    # sync on: the startup sync's fresher Fleet token is kept.
+    fresh = fleet_token(jti="fresh")
+    master, api = start_with_sync(
+        tmp_path,
+        {
+            "carApiBearerToken": fleet_token(jti="saved"),
+            "carApiRefreshToken": "teslamate-refresh",
+            "carApiTokenExpireTime": int(time.time()) + 3600,
+        },
+        fake_db,
+        fresh,
+    )
+    assert api.fleetSlot.accessToken == fresh
+    assert api.fleetSlot.source == "synced"
+    assert api.fleetSlot.refreshToken == ""
+
+
+def test_owner_token_stays_pasted_when_sync_not_configured(tmp_path):
+    token = owner_token()
+    saved = int(time.time()) + 3600
+    master, api = load(
+        tmp_path,
+        {
+            "carApiBearerToken": token,
+            "carApiRefreshToken": "r1",
+            "carApiTokenExpireTime": saved,
+        },
+    )
+    assert api.ownerSlot.accessToken == token
+    assert api.ownerSlot.source == "pasted"
+    assert api.ownerSlot.refreshToken == "r1"
+    assert api.ownerSlot.expireTime == saved
