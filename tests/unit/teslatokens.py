@@ -30,31 +30,47 @@ def make_jwt(**claims):
     return jwt.encode(claims, SIGNING_KEY, algorithm="HS256")
 
 
-def owner_token(expires_in=8 * 60 * 60, **extra):
+FLEET_SCOPES = [
+    "openid",
+    "user_data",
+    "vehicle_device_data",
+    "vehicle_cmds",
+    "vehicle_charging_cmds",
+    "energy_device_data",
+    "energy_cmds",
+    "offline_access",
+]
+
+
+def owner_token(
+    expires_in=8 * 60 * 60, scp=("email", "offline_access", "openid"), **extra
+):
     """A live-shaped TeslaMate access token: Owner API aud, azp ownerapi,
     and (as observed live on 2026-10-10) an ou_code of NA."""
     claims = {
         "iss": "https://auth.tesla.com/oauth2/v3",
         "aud": OWNER_AUD,
         "azp": "ownerapi",
-        "scp": ["email", "offline_access", "openid"],
         "ou_code": "NA",
         "exp": int(time.time() + expires_in),
     }
+    if scp is not None:
+        claims["scp"] = list(scp)
     claims.update(extra)
     return make_jwt(**claims)
 
 
-def fleet_token(expires_in=8 * 60 * 60, **extra):
+def fleet_token(expires_in=8 * 60 * 60, scp=FLEET_SCOPES, **extra):
     """A Fleet API access token as issued to a registered third-party app."""
     claims = {
         "iss": "https://auth.tesla.com/oauth2/v3/nts",
         "aud": FLEET_AUD,
         "azp": "my-client-id",
-        "scp": ["openid", "offline_access", "vehicle_device_data", "vehicle_cmds"],
         "ou_code": "NA",
         "exp": int(time.time() + expires_in),
     }
+    if scp is not None:
+        claims["scp"] = list(scp)
     claims.update(extra)
     return make_jwt(**claims)
 
