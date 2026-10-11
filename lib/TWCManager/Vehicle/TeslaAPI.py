@@ -13,6 +13,7 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 import jwt
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.TeslaTokenSlot import decodeToken
 
 logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
@@ -1470,20 +1471,7 @@ class TeslaAPI:
         return "token_rejected" if result == "rejected" else result
 
     def decodeToken(self, token):
-        # A token's JWT claims, read without verifying the signature (only
-        # the token type and expiry are needed), or None if it is not a JWT.
-        try:
-            decoded = jwt.decode(
-                token,
-                options={
-                    "verify_signature": False,
-                    "verify_aud": False,
-                    "verify_exp": False,
-                },
-            )
-        except (jwt.exceptions.InvalidTokenError, TypeError, ValueError):
-            return None
-        return decoded if isinstance(decoded, dict) else None
+        return decodeToken(token)
 
     def setCarApiBearerToken(self, token=None, fromSync=False):
         if token:
