@@ -162,7 +162,8 @@ class TestLoginWhileTokenSyncOn:
     routes can still be reached by URL; the exchange must store nothing."""
 
     def synced(self, api):
-        api.storeToken(owner_token(), "", "synced")
+        # TeslaMate's token is in the Fleet slot, the one a login fills.
+        api.storeToken(fleet_token(jti="synced"), "", "synced")
         api.master.tokenSyncEnabled.return_value = True
         self.before = (api.ownerSlot.snapshot(), api.fleetSlot.snapshot())
 
@@ -210,5 +211,5 @@ class TestLoginWhileTokenSyncOn:
             master=Mock(tokenSyncEnabled=Mock(return_value=True)),
             apiAvailable=True,
         )
-        assert "TeslaMate token sync is on" in page
+        assert "TeslaMate token sync manages the token slot" in page
         assert "Tesla reported an error" not in page

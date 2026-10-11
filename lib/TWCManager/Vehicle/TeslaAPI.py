@@ -1293,13 +1293,13 @@ class TeslaAPI:
     def fleetTokenExchange(self, code, state):
         # Exchange an authorization code for tokens. Returns a status string used
         # by the web UI ("success", "error", or a Tesla error code).
-        if self.master.tokenSyncEnabled():
-            # The sync source (TeslaMate) owns the tokens. Refuse before the
-            # exchange, so nothing is stored and the code is not used up.
+        if self.syncedSlotLocked(self.fleetSlot):
+            # TeslaMate owns the Fleet slot. Refuse before the exchange, so
+            # nothing is stored and the code is not used up.
             logger.warning(
-                "Tesla login refused: TeslaMate token sync is on, so "
-                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
-                "log in here."
+                "Tesla login refused: TeslaMate token sync manages the Fleet "
+                "API token. Remove that token on the Settings page, or turn "
+                "off syncTokens, to log in here."
             )
             return "token_sync"
         if not self.loginConfigured():
@@ -1393,6 +1393,15 @@ class TeslaAPI:
         isOwnerRefresh = decoded is not None and (
             decoded.get("iss") == self.ownerTokenIssuer and tokenType != "owner"
         )
+        if (
+            tokenType == "unknown"
+            and decoded is not None
+            and decoded.get("iss") != self.ownerTokenIssuer
+        ):
+            # A JWT that is neither token type: nothing to store, and it
+            # is not a refresh token either (Fleet's are opaque).
+            self.tokenRoute(token)
+            return "unknown_type"
         if tokenType != "unknown" and not isOwnerRefresh:
             # refreshToken=None keeps the slot's refresh token; the other
             # slot is untouched.
@@ -1413,16 +1422,12 @@ class TeslaAPI:
         #   "unreachable": no response from Tesla; the pasted token is kept
         #     and the usual refresh retries it;
         #   "token_sync": refused, nothing changed.
-        if self.master.tokenSyncEnabled():
-            logger.warning(
-                "Tesla API refresh token refused: TeslaMate token sync is "
-                "on, so TWCManager uses TeslaMate's tokens. Turn off "
-                "syncTokens to enter tokens by hand."
-            )
-            return "token_sync"
         if not token:
             return "error"
         slot = self.slotOfType(self.refreshTokenType(token))
+        if self.syncedSlotLocked(slot):
+            self.logSyncedSlotLocked(slot)
+            return "token_sync"
         previous = slot.snapshot()
         previousErrors = (self.carApiLastErrorTime, self.errorCount)
         slot.clear()
@@ -1451,6 +1456,34 @@ class TeslaAPI:
     def decodeToken(self, token):
         return decodeToken(token)
 
+    def syncedSlotLocked(self, slot):
+        # True when TeslaMate sync manages this slot's token: sync is on and
+        # the slot holds a live synced token. The one place the refusal rule
+        # lives; the user replaces such a token by removing it first.
+        return bool(
+            slot is not None
+            and self.master.tokenSyncEnabled()
+            and slot.source == "synced"
+            and not slot.empty()
+        )
+
+    def logSyncedSlotLocked(self, slot):
+        logger.warning(
+            "Tesla API token not stored: TeslaMate token sync manages the %s "
+            "API token. Remove that token on the Settings page, or turn off "
+            "syncTokens, to replace it." % slot.kind.capitalize()
+        )
+
+    def removeToken(self, kind):
+        # Settings page "Remove token": clears the Owner or Fleet slot, a
+        # synced one included. False for any other kind.
+        slot = self.slotOfType(kind)
+        if slot is None:
+            return False
+        slot.clear()
+        self.master.queue_background_task({"cmd": "saveSettings"})
+        return True
+
     def storeToken(
         self, accessToken, refreshToken=None, source="pasted", expireTime=None
     ):
@@ -1459,8 +1492,8 @@ class TeslaAPI:
         # None keeps the slot's refresh token. source is "synced", "pasted"
         # or "login". Returns "success", "error" (no token), "unknown_type"
         # (nothing stored), "kept" (sync met a pasted or login token) or
-        # "token_sync" (refused while sync is on). The
-        # caller queues saveSettings.
+        # "token_sync" (the slot holds a live synced token while
+        # sync is on). The caller queues saveSettings.
         if not accessToken and not refreshToken:
             return "error"
         if accessToken:
@@ -1495,13 +1528,8 @@ class TeslaAPI:
                 )
                 self.syncSkipLoggedAt[tokenType] = slot.changes
             return "kept"
-        if self.master.tokenSyncEnabled() and source != "synced":
-            # While token sync is on, only the sync source may set tokens.
-            logger.warning(
-                "Tesla API token refused: TeslaMate token sync is on, so "
-                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
-                "enter tokens by hand."
-            )
+        if source != "synced" and self.syncedSlotLocked(slot):
+            self.logSyncedSlotLocked(slot)
             return "token_sync"
         slot.setTokens(accessToken, refreshToken, expireTime, source)
         return "success"

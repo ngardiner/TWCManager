@@ -1173,6 +1173,7 @@ def CreateHTTPHandlerClass(master):
                 {"route": "/settings", "tmpl": "settings.html.j2"},
                 {"route": "/settings/homeLocation", "error": "insecure"},
                 {"route": "/settings/save", "error": "insecure"},
+                {"route": "/teslaAccount/removeToken", "error": "insecure"},
                 {"route": "/teslaAccount/saveToken", "error": "insecure"},
                 {"rstart": "/teslaAccount", "tmpl": "main.html.j2"},
                 {"route": "/upgradePrompt", "tmpl": "upgradePrompt.html.j2"},
@@ -1433,6 +1434,17 @@ def CreateHTTPHandlerClass(master):
 
                 self.send_response(302)
                 self.send_header("Location", "/teslaAccount/" + res)
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            if self.url.path == "/teslaAccount/removeToken":
+                teslaapi = master.getModuleByName("TeslaAPI")
+                if teslaapi:
+                    teslaapi.removeToken(self.getFieldValue("slot"))
+
+                self.send_response(302)
+                self.send_header("Location", "/settings")
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
                 return
