@@ -20,8 +20,10 @@ This is performed through direct queries of the TeslaMate database, and is not u
 
 Please note that turning on the Token Sync functionality of this module will have the following affect on TWCManager's Tesla API token handling functionality:
 
-   * You will no longer be prompted for your Tesla API login. Even if the TeslaMate tokens are invalid, you will not be prompted.
-   * TWCManager will not refresh API tokens, however on refresh of the TeslaMate token, the token will be used by TWCManager.
+   * Sync copies TeslaMate's access token only, into the Owner API or Fleet API slot according to the token's type. TeslaMate's refresh token is never read.
+   * Sync never replaces a token you pasted or logged in with; it fills a slot only while that slot is empty or holds a synced token.
+   * TWCManager does not refresh synced tokens. A synced token is used until it expires, and the next sync after TeslaMate refreshes it replaces it.
+   * You can still log in with the Fleet API while sync is on; that token is kept beside the synced one.
 
 Please note that since TeslaMate v1.27.0, TeslaMate performs encryption of Tesla API tokens. You will need to specify your encryption key in the configuration to continue to fetch API keys.
 

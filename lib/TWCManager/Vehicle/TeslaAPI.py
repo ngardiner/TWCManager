@@ -112,6 +112,8 @@ class TeslaAPI:
 
     def __init__(self, master):
         self.master = master
+        # slot.changes when a skipped sync was last logged, per slot.
+        self.syncSkipLoggedAt = {"owner": None, "fleet": None}
 
         try:
             self.config = master.config
@@ -1456,7 +1458,8 @@ class TeslaAPI:
         # the refresh token's when there is no access token. refreshToken
         # None keeps the slot's refresh token. source is "synced", "pasted"
         # or "login". Returns "success", "error" (no token), "unknown_type"
-        # (nothing stored) or "token_sync" (refused while sync is on). The
+        # (nothing stored), "kept" (sync met a pasted or login token) or
+        # "token_sync" (refused while sync is on). The
         # caller queues saveSettings.
         if not accessToken and not refreshToken:
             return "error"
@@ -1466,9 +1469,32 @@ class TeslaAPI:
             tokenType = self.refreshTokenType(refreshToken)
         slot = self.slotOfType(tokenType)
         if slot is None:
-            # Logs the unknown-type ERROR.
-            self.tokenRoute(accessToken)
+            if source == "synced":
+                logger.error(
+                    "TeslaMate token sync: the token's type (Owner API or "
+                    "Fleet API) was not recognised; not using it."
+                )
+            else:
+                # Logs the unknown-type ERROR.
+                self.tokenRoute(accessToken)
             return "unknown_type"
+        if (
+            source == "synced"
+            and not slot.empty()
+            and slot.source in ("pasted", "login")
+        ):
+            # Sync never replaces a token the user supplied.
+            if slot.changes != self.syncSkipLoggedAt[tokenType]:
+                logger.info(
+                    "TeslaMate token sync: keeping the %s API token you %s; "
+                    "not replacing it."
+                    % (
+                        "Owner" if tokenType == "owner" else "Fleet",
+                        "pasted" if slot.source == "pasted" else "logged in with",
+                    )
+                )
+                self.syncSkipLoggedAt[tokenType] = slot.changes
+            return "kept"
         if self.master.tokenSyncEnabled() and source != "synced":
             # While token sync is on, only the sync source may set tokens.
             logger.warning(
@@ -1545,11 +1571,11 @@ class TeslaAPI:
             self.refusalLoggedAt = self.fleetSlot.changes
         return True
 
-    def applySyncedTokens(self, accessToken, refreshToken):
-        # Entry point for token sync sources (TeslaMate). Accepted whether or
-        # not tokenSyncEnabled() is already true. The synced slot holds no
-        # refresh token (refreshToken is ignored), so it never refreshes.
-        return self.storeToken(accessToken, "", "synced") == "success"
+    def applySyncedToken(self, accessToken):
+        # Entry point for token sync sources (TeslaMate): the access token
+        # only, so a synced slot never refreshes. Accepted whether or not
+        # tokenSyncEnabled() is already true. Returns storeToken's result.
+        return self.storeToken(accessToken, "", "synced")
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         # As a fallback to allow initial implementation of the charge rate functionality for single car installs,

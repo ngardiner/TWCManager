@@ -28,7 +28,7 @@ def exp(token):
     return jwt.decode(token, options={"verify_signature": False})["exp"]
 
 
-def make_teslamate(master, access, refresh, registered=True):
+def make_teslamate(master, access, registered=True):
     """A TeslaMateVehicle wired to a fake TeslaMate database.
 
     Built with __new__ so __init__ does not start MQTT or the hourly
@@ -45,7 +45,7 @@ def make_teslamate(master, access, refresh, registered=True):
     tm._TeslaMateVehicle__db_user = "teslamate"
     tm._TeslaMateVehicle__db_pass = "secret"
     tm.encryption_key = "key"
-    tm.rows = {"access": access, "refresh": refresh}
+    tm.rows = {"access": access}
     # The fake database stores plaintext; decryption is the identity.
     tm.decrypt_data = lambda data: data
     if registered:
@@ -63,10 +63,7 @@ def fake_db(monkeypatch):
     def connect(**kwargs):
         conn = Mock()
         rows = state["tm"].rows
-        conn.cursor.return_value.fetchone.return_value = (
-            rows["access"],
-            rows["refresh"],
-        )
+        conn.cursor.return_value.fetchone.return_value = (rows["access"],)
         return conn
 
     monkeypatch.setattr(tmmod.psycopg2, "connect", connect)
@@ -88,7 +85,7 @@ class TestHourlyResync:
         master = FakeMaster()
         api = new_api(master)
         first, second = owner_token(), owner_token(jti="rotated")
-        tm = make_teslamate(master, first, "refresh-1", registered=False)
+        tm = make_teslamate(master, first, registered=False)
         fake_db["tm"] = tm
 
         # Startup sync runs from TeslaMateVehicle.__init__, before the
@@ -99,7 +96,7 @@ class TestHourlyResync:
         # The module is now registered; this is what resyncTokens() sees.
         master.modules["TeslaMateVehicle"] = tm
         assert master.tokenSyncEnabled() is True
-        tm.rows = {"access": second, "refresh": "refresh-2"}
+        tm.rows = {"access": second}
         tm.doSyncTokens()
 
         assert api.ownerSlot.accessToken == second
@@ -110,7 +107,7 @@ class TestHourlyResync:
         master = FakeMaster()
         api = new_api(master)
         synced = owner_token()
-        fake_db["tm"] = make_teslamate(master, synced, "refresh-1")
+        fake_db["tm"] = make_teslamate(master, synced)
         fake_db["tm"].doSyncTokens()
 
         assert api.storeToken(owner_token(jti="typed")) == "token_sync"
@@ -125,7 +122,7 @@ class TestNoRefreshForSyncedTokens:
         api = new_api(master)
         # TeslaMate has not refreshed for a while: 10 minutes left.
         token = owner_token(expires_in=600)
-        tm = make_teslamate(master, token, "refresh-1", registered=False)
+        tm = make_teslamate(master, token, registered=False)
         fake_db["tm"] = tm
 
         tm.doSyncTokens(True)
@@ -141,7 +138,7 @@ class TestNoRefreshForSyncedTokens:
         master = FakeMaster()
         api = new_api(master)
         api.ownerSlot.refreshToken = "before-sync"
-        tm = make_teslamate(master, owner_token(), "refresh-1", registered=False)
+        tm = make_teslamate(master, owner_token(), registered=False)
         fake_db["tm"] = tm
 
         tm.doSyncTokens(True)
@@ -152,7 +149,7 @@ class TestNoRefreshForSyncedTokens:
     def test_refresh_paths_do_nothing_while_sync_on(self, fake_db, refresh_endpoints):
         master = FakeMaster()
         api = new_api(master)
-        fake_db["tm"] = make_teslamate(master, owner_token(), "refresh-1")
+        fake_db["tm"] = make_teslamate(master, owner_token())
         fake_db["tm"].doSyncTokens()
         # Even with an expiry in the past, nothing may refresh.
         api.ownerSlot.expireTime = time.time() - 60
@@ -257,7 +254,7 @@ class TestSettingsLoadWhileSyncOn:
 
         # Module load: TeslaMateVehicle.__init__ syncs, then it is registered.
         fresh = owner_token(jti="fresh")
-        tm = make_teslamate(master, fresh, "synced-refresh", registered=False)
+        tm = make_teslamate(master, fresh, registered=False)
         fake_db["tm"] = tm
         tm.doSyncTokens(True)
         modules["TeslaMateVehicle"] = tm
@@ -290,7 +287,7 @@ class TestSettingsPageWhileSyncOn:
         master = FakeMaster()
         api = new_api(master)
         synced = owner_token()
-        fake_db["tm"] = make_teslamate(master, synced, "refresh-1")
+        fake_db["tm"] = make_teslamate(master, synced)
         fake_db["tm"].doSyncTokens()
 
         request = self.save(
@@ -343,7 +340,7 @@ class TestTokensTableLocation:
                     raise psycopg2.errors.UndefinedTable("missing")
 
             cur.execute.side_effect = execute
-            cur.fetchone.return_value = (owner_token(), "refresh-1")
+            cur.fetchone.return_value = (owner_token(),)
             return conn
 
         monkeypatch.setattr(tmmod.psycopg2, "connect", connect)
@@ -354,7 +351,7 @@ class TestTokensTableLocation:
         queries = self._db(monkeypatch, present)
         master = FakeMaster()
         api = new_api(master)
-        tm = make_teslamate(master, None, None)
+        tm = make_teslamate(master, None)
         tm.doSyncTokens()
         assert api.ownerSlot.tokenType == "owner"
         assert api.ownerSlot.source == "synced"
@@ -364,7 +361,7 @@ class TestTokensTableLocation:
         self._db(monkeypatch, "nowhere")
         master = FakeMaster()
         api = new_api(master)
-        tm = make_teslamate(master, None, None)
+        tm = make_teslamate(master, None)
         tm.doSyncTokens()
         assert not api.ownerSlot.accessToken and not api.fleetSlot.accessToken
 
@@ -406,3 +403,126 @@ class TestDecryptTeslaMateVault:
 
         blob = base64.b64encode(self._blob("secret-token")).decode()
         assert self._tm().decrypt_data(blob) == "secret-token"
+
+
+class TestSyncBySlot:
+    """TeslaMate sync copies the access token only, into the slot of its
+    type, and never replaces a token the user pasted or logged in with."""
+
+    def test_refresh_column_neither_selected_nor_decrypted(self, monkeypatch):
+        import TWCManager.Vehicle.TeslaMateVehicle as tmmod
+
+        sql = []
+        conn = Mock()
+        cur = conn.cursor.return_value
+        cur.execute.side_effect = sql.append
+        cur.fetchone.return_value = (owner_token(),)
+        monkeypatch.setattr(tmmod.psycopg2, "connect", lambda **kw: conn)
+        master = FakeMaster()
+        new_api(master)
+        tm = make_teslamate(master, None)
+        decrypted = []
+        tm.decrypt_data = lambda data: decrypted.append(data) or data
+
+        tm.doSyncTokens()
+
+        assert sql and all("refresh" not in s for s in sql)
+        assert len(decrypted) == 1
+
+    def test_sync_fills_empty_owner_slot(self, fake_db):
+        master = FakeMaster()
+        api = new_api(master)
+        fake_db["tm"] = make_teslamate(master, owner_token())
+        fake_db["tm"].doSyncTokens()
+        assert api.ownerSlot.source == "synced"
+        assert api.ownerSlot.refreshToken == ""
+
+    def test_fleet_token_from_teslamate_fills_empty_fleet_slot(self, fake_db):
+        master = FakeMaster()
+        api = new_api(master)
+        token = fleet_token()
+        fake_db["tm"] = make_teslamate(master, token)
+        fake_db["tm"].doSyncTokens()
+        assert api.fleetSlot.accessToken == token
+        assert api.fleetSlot.source == "synced"
+        assert api.fleetSlot.refreshToken == ""
+        assert not api.ownerSlot.accessToken
+
+    def test_sync_replaces_its_own_token(self, fake_db):
+        master = FakeMaster()
+        api = new_api(master)
+        tm = make_teslamate(master, owner_token(jti="1"))
+        fake_db["tm"] = tm
+        tm.doSyncTokens()
+        second = owner_token(jti="2")
+        tm.rows = {"access": second}
+        tm.doSyncTokens()
+        assert api.ownerSlot.accessToken == second
+
+    @pytest.mark.parametrize("source", ["pasted", "login"])
+    def test_sync_never_replaces_pasted_or_login(self, fake_db, caplog, source):
+        import logging
+
+        caplog.set_level(logging.INFO)
+        master = FakeMaster()
+        api = new_api(master)
+        mine = owner_token(jti="mine")
+        api.ownerSlot.setTokens(mine, "my-refresh", None, source)
+        synced = owner_token(jti="synced")
+        tm = make_teslamate(master, synced)
+        fake_db["tm"] = tm
+        for _ in range(3):
+            tm.doSyncTokens()
+        assert api.ownerSlot.accessToken == mine
+        assert api.ownerSlot.source == source
+        verb = "pasted" if source == "pasted" else "logged in with"
+        expected = (
+            "TeslaMate token sync: keeping the Owner API token you %s; "
+            "not replacing it." % verb
+        )
+        assert [r.getMessage() for r in caplog.records].count(expected) == 1
+        assert mine not in caplog.text and synced not in caplog.text
+        assert "my-refresh" not in caplog.text
+
+    def test_unknown_synced_token_skipped_with_error(self, fake_db, caplog):
+        master = FakeMaster()
+        api = new_api(master)
+        bad = make_jwt_unknown()
+        tm = make_teslamate(master, bad)
+        fake_db["tm"] = tm
+        tm.doSyncTokens()
+        assert not api.ownerSlot.accessToken and not api.fleetSlot.accessToken
+        assert (
+            "TeslaMate token sync: the token's type (Owner API or Fleet API) "
+            "was not recognised; not using it." in caplog.text
+        )
+        assert bad not in caplog.text
+
+    def test_healing_cleared_slot_refilled_by_next_sync(self, fake_db):
+        master = FakeMaster()
+        api = new_api(master)
+        api.ownerSlot.setTokens(owner_token(jti="mine"), "r", None, "pasted")
+        tm = make_teslamate(master, owner_token(jti="synced"))
+        fake_db["tm"] = tm
+        api.ownerSlot.clear()  # as a 401 would
+        tm.doSyncTokens()
+        assert api.ownerSlot.source == "synced"
+
+    def test_sync_beside_fleet_login(self, fake_db):
+        master = FakeMaster()
+        api = new_api(master)
+        login = fleet_token(jti="login")
+        api.fleetSlot.setTokens(login, "fleet-refresh", None, "login")
+        tm = make_teslamate(master, owner_token())
+        fake_db["tm"] = tm
+        tm.doSyncTokens()
+        assert api.ownerSlot.source == "synced"
+        assert api.fleetSlot.accessToken == login
+        assert api.fleetSlot.source == "login"
+        assert api.readOnly is False
+
+
+def make_jwt_unknown():
+    from tests.unit.teslatokens import make_jwt
+
+    return make_jwt(aud="https://example.com/", exp=int(time.time() + 3600))
