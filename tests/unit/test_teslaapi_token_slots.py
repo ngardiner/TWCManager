@@ -332,3 +332,17 @@ def test_readonly_property_follows_fleet_slot():
     assert api.readOnly is True
     with pytest.raises(AttributeError):
         api.readOnly = False
+
+
+def test_slot_for_is_uniform_walk():
+    api = new_api()
+    store_both(api)
+    assert api.slotFor("read") is api.ownerSlot
+    assert api.slotFor("energy") is api.ownerSlot
+    assert api.slotFor("command") is api.fleetSlot
+    assert api.readOnly is False
+
+    owner_only = new_api()
+    owner_only.ownerSlot.setTokens(owner_token())
+    assert owner_only.slotFor("command") is None
+    assert owner_only.readOnly is True
