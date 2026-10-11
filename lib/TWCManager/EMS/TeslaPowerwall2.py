@@ -238,9 +238,7 @@ class TeslaPowerwall2:
     def getStormWatch(self):
         carapi = self.master.getModuleByName("TeslaAPI")
         carapi.refreshTokenIfNeeded()
-        token = carapi.getCarApiBearerToken()
-        expiry = carapi.getCarApiTokenExpireTime()
-        baseURL = carapi.getCarApiBaseURL()
+        slot = carapi.slotFor("energy")
         now = time.time()
         key = "CLOUD/live_status"
 
@@ -249,9 +247,10 @@ class TeslaPowerwall2:
         )
 
         if (int(time.time()) - lastTime) > self.cloudCacheTime:
-            if token and now < expiry:
+            if slot is not None and now < slot.expireTime:
+                baseURL = slot.baseURL
                 headers = {
-                    "Authorization": "Bearer " + token,
+                    "Authorization": "Bearer " + slot.accessToken,
                     "Content-Type": "application/json",
                 }
                 if not self.cloudID:
@@ -261,7 +260,7 @@ class TeslaPowerwall2:
 
                     try:
                         r = self.httpSession.get(
-                            url, headers=headers, verify=carapi.verifyCert
+                            url, headers=headers, verify=slot.verifyCert
                         )
                         r.raise_for_status()
                         bodyjson = r.json()
@@ -293,13 +292,17 @@ class TeslaPowerwall2:
 
                     try:
                         r = self.httpSession.get(
-                            url, headers=headers, verify=carapi.verifyCert
+                            url, headers=headers, verify=slot.verifyCert
                         )
                         r.raise_for_status()
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
                     except Exception as e:
-                        if hasattr(e, "response") and e.response is not None and e.response.status_code == 403:
+                        if (
+                            hasattr(e, "response")
+                            and e.response is not None
+                            and e.response.status_code == 403
+                        ):
                             logger.warn(
                                 "Error fetching Powerwall cloud data; does your API token have energy_device_data scope?"
                             )

@@ -1030,11 +1030,10 @@ def CreateHTTPHandlerClass(master):
                 self.template = self.templateEnv.get_template("main.html.j2")
 
                 # Set some values that we use within the template
-                # The Tesla login form is hidden once we hold an API token.
+                # The Tesla login form is hidden once we hold a Fleet API
+                # token, so an Owner-only user can still log in.
                 teslaapi = master.getModuleByName("TeslaAPI")
-                self.apiAvailable = bool(
-                    teslaapi and teslaapi.getCarApiBearerToken() != ""
-                )
+                self.apiAvailable = bool(teslaapi and teslaapi.fleetSlot.accessToken)
                 self.scheduledAmpsMax = master.getScheduledAmpsMax()
 
                 self.activeAction = master.getModuleByName(
@@ -1563,29 +1562,25 @@ def CreateHTTPHandlerClass(master):
                 if (
                     key == "carApiBearerToken" or key == "carApiRefreshToken"
                 ) and self.getFieldValue(key) != "":
-                    if master.tokenSyncEnabled():
-                        # The setters refuse it and store nothing; say so
-                        # on the page we redirect to.
-                        location = "/teslaAccount/token_sync"
                     carapi = master.getModuleByName("TeslaAPI")
+                    result = "success"
                     if key == "carApiBearerToken":
-                        if self.getFieldValue("carApiRefreshToken"):
-                            carapi.setCarApiBearerToken(self.getFieldValue(key))
-                        else:
-                            # Pasted on its own: drops a stored refresh
-                            # token of the other type.
-                            carapi.pasteAccessToken(self.getFieldValue(key))
-                    elif key == "carApiRefreshToken":
-                        if self.getFieldValue("carApiBearerToken"):
-                            # Pasted with its access token, which the form
-                            # posts first and so is already set.
-                            carapi.setCarApiRefreshToken(self.getFieldValue(key))
-                        else:
-                            # Pasted on its own: replaces the stored bearer
-                            # token and refreshes by its own type.
-                            result = carapi.pasteRefreshToken(self.getFieldValue(key))
-                            if result not in ("success", "token_sync"):
-                                location = "/teslaAccount/" + result
+                        # Stored in the slot of its type, with the refresh
+                        # token if one was pasted too; otherwise the slot
+                        # keeps its refresh token.
+                        result = carapi.storeToken(
+                            self.getFieldValue(key),
+                            self.getFieldValue("carApiRefreshToken") or None,
+                            "pasted",
+                        )
+                    elif not self.getFieldValue("carApiBearerToken"):
+                        # Pasted on its own: replaces the tokens in the slot
+                        # of its type and refreshes at once. (With an access
+                        # token, it was stored with it above.)
+                        result = carapi.pasteRefreshToken(self.getFieldValue(key))
+                    if result != "success":
+                        # Say why on the page we redirect to.
+                        location = "/teslaAccount/" + result
 
                 else:
                     # Write setting to dictionary
