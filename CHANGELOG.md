@@ -11,7 +11,7 @@ This document logs the changes per release of TWCManager.
     * Add vehicle commandPolicy (prefer_ble/ble_only/api_only) to restrict state-changing commands to BLE or API, capping billed Fleet API command spend; configurable from the Settings page, with optional hard override in config.json (closes #651)
     * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
 * Architecture
-    * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
+    * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used read-only
     * (@MikeBishop) - TWC abstraction layer with EVSEController/EVSEInstance interface (ported from #483)
     * (@ngardiner) - Gen3 TWC support via Neurio Modbus emulation
     * (@MikeBishop) - Run vehicle commands on a dedicated worker thread and serialize tesla-control calls, so BLE retries no longer stall the RS485 loop (#668)
@@ -58,6 +58,8 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: Import serial at module level in RS485 so SerialException handling and reconnect work (#673)
     * (@MikeBishop) - Fix: TeslaAPI error handlers no longer crash when a request never went out (#682)
     * (@MikeBishop) - Fix: TeslaMate telemetry now attaches to the API vehicle when BLE handles all commands (#671)
+    * (@MikeBishop) - Fix: TeslaMate token sync now accepts resyncs and reads tokens from current TeslaMate versions (#679)
+    * (@MikeBishop) - Fix: Classify Owner API tokens as read-only and refuse vehicle commands on them instead of sending them to the Fleet API (#679)
 
 ## v1.3.4 - 2026-04-24
 * Features
