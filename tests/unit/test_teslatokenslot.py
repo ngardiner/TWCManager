@@ -308,3 +308,27 @@ def test_nested_scp_claim_is_treated_as_no_claim():
     assert slot.scopes is None
     slot.setTokens(make_jwt(scp=["a", "b"], exp=4102444800), None, None, "pasted")
     assert slot.scopes == frozenset({"a", "b"})
+
+
+def test_refresh_post_has_timeout(requests_mock):
+    hit = requests_mock.post(
+        AUTH_TOKEN_URL,
+        json={
+            "access_token": owner_token(jti="n"),
+            "refresh_token": "r2",
+            "expires_in": 1,
+        },
+    )
+    s = owner_slot()
+    s.setTokens(owner_token(), "r1", source="login")
+    assert s.refresh() == "success"
+    assert hit.last_request.timeout == slotmod.REFRESH_TIMEOUT == 30
+
+
+def test_refresh_timeout_is_unreachable_and_keeps_tokens(requests_mock):
+    requests_mock.post(FLEET_REFRESH_URL, exc=requests.exceptions.ConnectTimeout)
+    s = fleet_slot()
+    access = fleet_token()
+    s.setTokens(access, "r1", source="login")
+    assert s.refresh() == "unreachable"
+    assert s.accessToken == access and s.refreshToken == "r1"

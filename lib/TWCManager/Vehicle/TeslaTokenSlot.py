@@ -24,6 +24,7 @@ SOURCES = ("synced", "pasted", "login")
 PAUSE_SECONDS = 3600
 DEFAULT_LIFETIME = 8 * 60 * 60
 REFRESH_MARGIN = 60 * 60
+REFRESH_TIMEOUT = 30  # seconds, same as the vehicle list request
 
 
 def decodeToken(token):
@@ -193,7 +194,10 @@ class TeslaTokenSlot:
         }
         req = None
         try:
-            req = self.post(self.refreshURL, headers=headers, json=data)
+            # Bounded: loadVehicleList holds its lock across a refresh.
+            req = self.post(
+                self.refreshURL, headers=headers, json=data, timeout=REFRESH_TIMEOUT
+            )
             logger.log(logging.INFO2, "Car API request" + str(req))
             req.raise_for_status()
             response = json.loads(req.text)
