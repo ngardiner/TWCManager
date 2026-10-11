@@ -6,6 +6,7 @@ slot otherwise; commands use only the Fleet slot.
 
 import json
 import re
+import time
 
 import jwt
 import pytest
@@ -349,3 +350,110 @@ def test_slot_for_is_uniform_walk():
     owner_only.ownerSlot.setTokens(owner_token())
     assert owner_only.slotFor("command") is None
     assert owner_only.readOnly is True
+
+
+def test_owner_401_clears_owner_and_next_read_uses_fleet(
+    no_threads, requests_mock, caplog
+):
+    api = new_api()
+    owner, fleet = store_both(api)
+    vehicle = add_home_vehicle(api)
+    ownerData = requests_mock.get(
+        OWNER_API_URL + "/VIN1/vehicle_data",
+        status_code=401,
+        json={"error": "invalid bearer"},
+    )
+    fleetData = requests_mock.get(
+        FLEET_NA_URL + "/VIN1/vehicle_data", json=VEHICLE_DATA
+    )
+
+    assert vehicle.update_vehicle_data() is False
+    assert api.ownerSlot.accessToken == ""
+    assert "Tesla Owner API token was rejected (HTTP 401); removing it." in caplog.text
+    assert {"cmd": "saveSettings"} in api.master.tasks
+    assert ownerData.call_count == 1
+
+    assert vehicle.update_vehicle_data() is True
+    assert fleetData.call_count == 1
+    assert owner not in caplog.text and fleet not in caplog.text
+
+
+def test_owner_412_pauses_for_an_hour_then_returns(
+    no_threads, requests_mock, monkeypatch
+):
+    api = new_api()
+    owner, _ = store_both(api)
+    products = requests_mock.get(OWNER_API_URL[:-8] + "products", status_code=412)
+    fleetList = requests_mock.get(FLEET_NA_URL, json=LISTING)
+    now = time.time()
+
+    assert api.car_api_available() is False
+    assert api.ownerSlot.accessToken == owner
+    assert abs(api.ownerSlot.pausedUntil - (now + 3600)) < 5
+    assert products.call_count == 1
+
+    assert api.car_api_available() is True
+    assert fleetList.call_count == 1
+
+    monkeypatch.setattr(time, "time", lambda: now + 3601)
+    assert api.slotFor("read") is api.ownerSlot
+
+
+def test_new_sync_ends_synced_pause():
+    api = new_api()
+    api.storeToken(owner_token(jti="o"), "", "synced")
+    api.ownerSlot.pause()
+    assert api.slotFor("read") is None
+    api.storeToken(owner_token(jti="n"), "", "synced")
+    assert api.slotFor("read") is api.ownerSlot
+
+
+def test_synced_401_expired_clears_without_refresh(no_threads, requests_mock):
+    api = new_api()
+    api.storeToken(owner_token(), "", "synced")
+    vehicle = add_home_vehicle(api)
+    requests_mock.get(
+        OWNER_API_URL + "/VIN1/vehicle_data", status_code=401, text="token expired"
+    )
+    refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
+
+    assert vehicle.get_car_api("VIN1/vehicle_data", checkReady=False) == (False, None)
+
+    assert refresh.call_count == 0
+    assert api.ownerSlot.accessToken == ""
+
+
+@pytest.mark.parametrize("code", [503, 429])
+def test_5xx_and_429_do_not_pause_or_clear(no_threads, requests_mock, code):
+    api = new_api()
+    owner, _ = store_both(api)
+    vehicle = add_home_vehicle(api)
+    requests_mock.get(OWNER_API_URL + "/VIN1/vehicle_data", status_code=code)
+
+    assert vehicle.get_car_api("VIN1/vehicle_data", checkReady=False) == (False, None)
+
+    assert api.ownerSlot.accessToken == owner
+    assert api.ownerSlot.pausedUntil == 0
+    assert api.slotFor("read") is api.ownerSlot
+
+
+def test_both_paused_no_requests(no_threads, requests_mock):
+    api = new_api()
+    store_both(api)
+    api.ownerSlot.pause()
+    api.fleetSlot.pause()
+    anything = requests_mock.register_uri(rm.ANY, re.compile(".*"), json={})
+
+    assert api.car_api_available() is False
+
+    assert anything.call_count == 0
+
+
+def test_slot_failure_records_no_api_error(no_threads, requests_mock):
+    api = new_api()
+    store_both(api)
+    requests_mock.get(OWNER_API_URL[:-8] + "products", status_code=412)
+
+    assert api.car_api_available() is False
+
+    assert api.getCarApiLastErrorTime() == 0

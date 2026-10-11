@@ -138,8 +138,16 @@ class TeslaTokenSlot:
             return None
         return required[0]
 
-    def reportScopeRefused(self, purpose):
+    def reportScopeRefused(self, purpose, refused=False):
+        # Logs once per token and purpose that a Fleet token lacks the scope
+        # the purpose needs. refused=True means Tesla itself refused the
+        # request (HTTP 403), which counts as the scope missing even when
+        # the token's own scp claim lists it or has none.
+        if self.kind != "fleet":
+            return
         scope = self.missingScope(purpose)
+        if scope is None and refused:
+            scope = SCOPES[purpose][0]
         if scope is None or purpose in self.scopeErrorsLogged:
             return
         self.scopeErrorsLogged.add(purpose)
