@@ -23,6 +23,7 @@ This document logs the changes per release of TWCManager.
     * Fix: MQTTControl no longer returns a value from __init__ when the broker connection fails
     * Fix: Correct RecieverID key in TWCProtocol heartbeat parsing and build Dummy slave heartbeats via the protocol module
     * Fix: BLE no longer re-sends charge start commands every poll cycle once the car reports it is already in the desired state (closes #652)
+    * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
 * Features
     * (@MikeBishop) - Apply charge limit over BLE
     * (@MikeBishop) - Fetch charge and location state over BLE, falling back to Fleet API when BLE is unavailable
