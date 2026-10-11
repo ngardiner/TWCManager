@@ -938,23 +938,29 @@ class TWCMaster:
                 self.settings[key] = value
 
         # Step 2 - Send settings to other modules
+        # Migration and restore run whether or not token sync is on. The
+        # sync source's startup sync has already run (every module is
+        # registered by now); restoreSlot keeps its token over a saved
+        # synced one, while a saved pasted or login token replaces it.
         carapi = self.getModuleByName("TeslaAPI")
-        if not self.tokenSyncEnabled():
-            carapi.restoreSlot(
-                carapi.fleetSlot,
-                self.settings.get("carApiBearerToken", ""),
-                self.settings.get("carApiRefreshToken", ""),
-                self.settings.get("carApiTokenExpireTime", ""),
-            )
-            carapi.restoreSlot(
-                carapi.ownerSlot,
-                self.settings.get("ownerApiBearerToken", ""),
-                self.settings.get("ownerApiRefreshToken", ""),
-                self.settings.get("ownerApiTokenExpireTime", ""),
-            )
-        # else: every module is registered by now, so the sync source's
-        # startup sync has already set the tokens and their expiry; the
-        # saved ones are from an earlier run and must not replace them.
+        if carapi.migrateSavedTokens(self.settings, self.tokenSyncEnabled()):
+            # Writes the migrated keys, so a dropped TeslaMate refresh token
+            # leaves settings.json too.
+            self.queue_background_task({"cmd": "saveSettings"})
+        carapi.restoreSlot(
+            carapi.fleetSlot,
+            self.settings.get("carApiBearerToken", ""),
+            self.settings.get("carApiRefreshToken", ""),
+            self.settings.get("carApiTokenExpireTime", ""),
+            self.settings.get("carApiTokenSource") or "pasted",
+        )
+        carapi.restoreSlot(
+            carapi.ownerSlot,
+            self.settings.get("ownerApiBearerToken", ""),
+            self.settings.get("ownerApiRefreshToken", ""),
+            self.settings.get("ownerApiTokenExpireTime", ""),
+            self.settings.get("ownerApiTokenSource") or "pasted",
+        )
 
         # We start with vehicles, but this should be templated in future for all modules to both remove the above logic,
         # and to push settings logic out to the individual modules
@@ -1338,6 +1344,8 @@ class TWCMaster:
         self.settings["ownerApiBearerToken"] = carapi.ownerSlot.accessToken
         self.settings["ownerApiRefreshToken"] = carapi.ownerSlot.refreshToken
         self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
+        self.settings["carApiTokenSource"] = carapi.fleetSlot.source
+        self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
 
         # Step 2 - Write the settings dict to a JSON file atomically
         # Use temp file + rename to ensure atomic write and prevent corruption

@@ -9,6 +9,7 @@ This document logs the changes per release of TWCManager.
     * Implement missing API endpoints: `setPolicy`, `setLatLon`, `setConsumptionOffset`
     * Add centralized API input validation (`APIValidator`) across all endpoints
     * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, replacing the retired Owner API login
+    * (@MikeBishop) - Keep an Owner API token and a Fleet API token at once: reads use the free Owner API when possible, commands use the Fleet API, and TeslaMate token sync can stay on beside a Fleet login. Settings migrate automatically on first start; downgrading afterwards loses the Owner API token (stored under new `ownerApi*` keys).
 * Architecture
     * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
 * Bugfixes

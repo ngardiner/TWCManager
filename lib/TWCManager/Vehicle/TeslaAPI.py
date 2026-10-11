@@ -1473,12 +1473,80 @@ class TeslaAPI:
         slot.setTokens(accessToken, refreshToken, expireTime, source)
         return "success"
 
+    def migrateSavedTokens(self, settings, syncOn):
+        # One-time move of a saved Owner API token from the carApi* keys,
+        # where earlier releases kept their only token, to the ownerApi*
+        # keys. Mutates settings; returns True if it changed anything.
+        # carApiTokenSource marks settings already migrated, unless an
+        # Owner token or the never-expires sentinel is back in carApi*
+        # (written by a downgraded release): those always migrate, so the
+        # Fleet slot never holds TeslaMate's refresh token.
+        access = settings.get("carApiBearerToken", "") or ""
+        refresh = settings.get("carApiRefreshToken", "") or ""
+        expireTime = settings.get("carApiTokenExpireTime", 0)
+        if not access and not refresh:
+            return False
+        if access:
+            tokenType = self.classifyToken(self.decodeToken(access))[0]
+        else:
+            tokenType = self.refreshTokenType(refresh)
+        legacySynced = expireTime == self.LEGACY_SYNCED_EXPIRY
+        if (
+            "carApiTokenSource" in settings
+            and tokenType != "owner"
+            and not legacySynced
+        ):
+            return False
+        before = dict(settings)
+        synced = legacySynced or (syncOn and tokenType == "owner")
+        if synced:
+            # The refresh token is TeslaMate's: never keep it. The token
+            # expires at its own exp, not at the sentinel.
+            refresh = ""
+            decoded = self.decodeToken(access) if access else None
+            exp = decoded.get("exp") if decoded else None
+            if isinstance(exp, (int, float)) and not isinstance(exp, bool):
+                expireTime = exp
+            elif legacySynced:
+                expireTime = 0
+        source = "synced" if synced else "pasted"
+        if tokenType == "owner":
+            if access or refresh:
+                # Nothing is left of a synced refresh-only token, so it
+                # doesn't wipe a saved Owner token.
+                settings["ownerApiBearerToken"] = access
+                settings["ownerApiRefreshToken"] = refresh
+                settings["ownerApiTokenExpireTime"] = expireTime
+                settings["ownerApiTokenSource"] = source
+            settings["carApiBearerToken"] = ""
+            settings["carApiRefreshToken"] = ""
+            settings["carApiTokenExpireTime"] = 0
+            settings["carApiTokenSource"] = ""
+        else:
+            # Fleet stays (nothing records a Fleet login, so it is never
+            # marked "login"). Unknown stays too; restoring the slot logs
+            # the unknown-type ERROR.
+            settings["carApiRefreshToken"] = refresh
+            settings["carApiTokenExpireTime"] = expireTime
+            settings["carApiTokenSource"] = source if (access or refresh) else ""
+        changed = settings != before
+        if changed:
+            logger.info(
+                "Migrated the saved Tesla API token (%s, %s) to the new settings."
+                % (tokenType, source)
+            )
+        return changed
+
     def restoreSlot(self, slot, accessToken, refreshToken, expireTime, source="pasted"):
         # Settings-load path (TWCMaster.loadSettings): puts saved tokens back
         # as they were, without policy checks or a refresh. A saved
         # LEGACY_SYNCED_EXPIRY (or no usable expiry) gives way to the
-        # token's own exp, or to now when that can't be read.
+        # token's own exp, or to now when that can't be read. A saved synced
+        # token gives way to a slot that is already filled: the startup
+        # sync, which runs before loadSettings, put a fresher one there.
         if not accessToken and not refreshToken:
+            return
+        if source == "synced" and not slot.empty():
             return
         if (
             expireTime == self.LEGACY_SYNCED_EXPIRY
