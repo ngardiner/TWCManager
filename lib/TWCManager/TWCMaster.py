@@ -1100,7 +1100,12 @@ class TWCMaster:
         # registered by now); restoreSlot keeps its token over a saved
         # synced one, while a saved pasted or login token replaces it.
         carapi = self.getModuleByName("TeslaAPI")
-        if carapi.migrateSavedTokens(self.settings, self.tokenSyncEnabled()):
+        # Configured, not tokenSyncEnabled(): sync turns itself off when
+        # the TeslaMate database is unreachable at startup, and a token it
+        # saved must still count as synced.
+        teslamateConfig = self.config.get("vehicle", {}).get("TeslaMate", {}) or {}
+        syncConfigured = bool(teslamateConfig.get("syncTokens", False))
+        if carapi.migrateSavedTokens(self.settings, syncConfigured):
             # Writes the migrated keys, so a dropped TeslaMate refresh token
             # leaves settings.json too.
             self.queue_background_task({"cmd": "saveSettings"})

@@ -162,9 +162,10 @@ class TestNoRefreshForSyncedTokens:
         assert api.ownerSlot.refreshToken == ""
 
 
-def master_with_settings(tmp_path, settings):
+def master_with_settings(tmp_path, settings, syncTokensConfigured=False):
     """A real TWCMaster with settings.json written, and a TeslaAPI registered.
-    Returns (master, api, modules); add to modules to register more."""
+    Returns (master, api, modules); add to modules to register more.
+    syncTokensConfigured puts TeslaMate's syncTokens in the config."""
     import json
 
     from TWCManager.TWCMaster import TWCMaster
@@ -179,6 +180,8 @@ def master_with_settings(tmp_path, settings):
         },
         "vehicle": {"teslaAPI": {"enabled": True}},
     }
+    if syncTokensConfigured:
+        config["vehicle"]["TeslaMate"] = {"enabled": True, "syncTokens": True}
     master = TWCMaster("AB", config)
     # Not new_api(): TWCMaster.modules has its own structure.
     api = TeslaAPI(master)
@@ -251,7 +254,9 @@ class TestSettingsLoadWhileSyncOn:
     the startup sync's fresher one; a saved pasted one does."""
 
     def start(self, tmp_path, fake_db, settings, fresh):
-        master, api, modules = master_with_settings(tmp_path, settings)
+        master, api, modules = master_with_settings(
+            tmp_path, settings, syncTokensConfigured=True
+        )
         # Module load: TeslaMateVehicle.__init__ syncs, then it is registered.
         tm = make_teslamate(master, fresh, registered=False)
         fake_db["tm"] = tm

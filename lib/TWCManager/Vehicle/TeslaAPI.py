@@ -1506,10 +1506,14 @@ class TeslaAPI:
         slot.setTokens(accessToken, refreshToken, expireTime, source)
         return "success"
 
-    def migrateSavedTokens(self, settings, syncOn):
+    def migrateSavedTokens(self, settings, syncConfigured):
         # One-time move of a saved Owner API token from the carApi* keys,
         # where earlier releases kept their only token, to the ownerApi*
         # keys. Mutates settings; returns True if it changed anything.
+        # syncConfigured: TeslaMate's syncTokens is set in config.json,
+        # whether or not sync is running (it turns itself off when the
+        # database is unreachable at startup). Then a saved Owner or Fleet
+        # token counts as synced, as does one saved with the sentinel.
         # carApiTokenSource marks settings already migrated, unless an
         # Owner token or the never-expires sentinel is back in carApi*
         # (written by a downgraded release): those always migrate, so the
@@ -1531,7 +1535,7 @@ class TeslaAPI:
         ):
             return False
         before = dict(settings)
-        synced = legacySynced or (syncOn and tokenType == "owner")
+        synced = legacySynced or (syncConfigured and tokenType in ("owner", "fleet"))
         if synced:
             # The refresh token is TeslaMate's: never keep it. The token
             # expires at its own exp, not at the sentinel.
