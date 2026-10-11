@@ -436,3 +436,56 @@ class TestTWCSlaveConfiguration:
         slave = TWCSlave(bytearray(b"AB"), 80, config, mock_master)
         
         assert slave.APIcontrol is False
+
+
+class TestAmpsHeartbeat:
+    """Test the set-amps master heartbeat payload."""
+
+    def make_slave(self, protocol, state, ampsMax):
+        from TWCManager.TWCSlave import TWCSlave
+
+        master = Mock()
+        master.getModuleByName = Mock(return_value=None)
+        config = {
+            "config": {
+                "wiringMaxAmpsPerTWC": 6,
+                "useFlexAmpsToStartCharge": False,
+                "startStopDelay": 60,
+                "fakeMaster": False,
+            }
+        }
+        slave = TWCSlave(bytearray(b"AB"), 80, config, master)
+        slave.protocolVersion = protocol
+        slave.reportedState = state
+        slave.reportedAmpsMax = ampsMax
+        return slave
+
+    def test_state_08_resends_even_when_max_matches(self):
+        slave = self.make_slave(2, 0x08, 47)
+        assert slave._amps_heartbeat(47) == bytearray([0x09, 0x12, 0x5C, 0, 0, 0, 0, 0, 0])
+
+    def test_charging_state_matching_max_sends_nothing(self):
+        slave = self.make_slave(2, 0x01, 47)
+        assert slave._amps_heartbeat(47) == bytearray(9)
+
+    def test_mismatch_sends_offer(self):
+        slave = self.make_slave(2, 0x03, 47)
+        assert slave._amps_heartbeat(32) == bytearray([0x09, 0x0C, 0x80, 0, 0, 0, 0, 0, 0])
+
+    def test_protocol_1_state_08_uses_0x05(self):
+        slave = self.make_slave(1, 0x08, 32)
+        assert slave._amps_heartbeat(32) == bytearray([0x05, 0x0C, 0x80, 0, 0, 0, 0, 0, 0])
+
+    def test_zero_amps_always_sent(self):
+        slave = self.make_slave(2, 0x01, 0)
+        assert slave._amps_heartbeat(0) == bytearray([0x09, 0, 0, 0, 0, 0, 0, 0, 0])
+
+
+class TestPolicyNotOnMainLoop:
+    """The serial main loop must not evaluate charging policy inline."""
+
+    def test_twcslave_never_calls_set_charging_per_policy(self):
+        import inspect
+        from TWCManager.TWCSlave import TWCSlave
+
+        assert "setChargingPerPolicy" not in inspect.getsource(TWCSlave)

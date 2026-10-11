@@ -5,7 +5,7 @@ import logging
 import re
 import requests
 import secrets
-from threading import Thread
+from threading import RLock, Thread
 import time
 from urllib.parse import urlencode, urlsplit, parse_qs
 import jwt
@@ -67,6 +67,7 @@ class TeslaAPI:
     lastChargeCheck = 0
     chargeUpdateInterval = 1800
     carApiVehicles = []
+    vehicleListLock = RLock()
     enabled = True
     config = None
     master = None
@@ -188,10 +189,10 @@ class TeslaAPI:
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
-            if req.status_code == 401:
+            # req is None when the request never went out (e.g. no network).
+            if req is not None and req.status_code == 401:
                 logger.log(
                     logging.INFO2,
-                    "TeslaAPI",
                     "ERROR: Can't access Tesla car via API.  Please supply fresh tokens.",
                 )
                 self.setCarApiBearerToken("")
@@ -241,6 +242,58 @@ class TeslaAPI:
                 logger.log(logging.INFO8, "Attempting token refresh")
                 self.apiRefresh()
 
+    def loadVehicleList(self):
+        # Populate carApiVehicles from the Fleet API vehicle list. Returns True
+        # if vehicles are (now) known, False if the fetch failed. Safe to call
+        # from any thread; concurrent callers will not double-add vehicles.
+        with self.vehicleListLock:
+            if self.getVehicleCount() > 0:
+                return True
+            if self.getCarApiBearerToken() == "":
+                return False
+
+            req = None
+            apiResponseDict = {}
+            url = self.vehicleListURL()
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + self.getCarApiBearerToken(),
+            }
+            try:
+                req = requests.get(
+                    url, headers=headers, verify=self.verifyCert, timeout=30
+                )
+                logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
+                apiResponseDict = json.loads(req.text)
+            except requests.exceptions.RequestException:
+                logger.info("Failed to make API call " + url)
+                if req:
+                    logger.log(logging.INFO6, "Response: " + req.text)
+            except json.decoder.JSONDecodeError:
+                logger.info("Could not parse JSON result from " + url)
+                if req:
+                    logger.log(logging.INFO6, "Response: " + req.text)
+
+            try:
+                logger.debug("Car API vehicle list" + str(apiResponseDict) + "\n")
+
+                for i in range(0, apiResponseDict["count"]):
+                    self.addVehicle(apiResponseDict["response"][i])
+                self.resetCarApiLastErrorTime()
+            except (KeyError, TypeError):
+                # This catches cases like trying to access
+                # apiResponseDict['response'] when 'response' doesn't exist in
+                # apiResponseDict.
+                logger.log(
+                    logging.INFO2,
+                    "ERROR: Can't get list of vehicles via Tesla car API.  Will try again in "
+                    + str(self.getCarApiErrorRetryMins())
+                    + " minutes.",
+                )
+                self.updateCarApiLastErrorTime()
+                return False
+            return True
+
     def car_api_available(self, charge=None, applyLimit=None):
         now = time.time()
         needSleep = False
@@ -289,45 +342,8 @@ class TeslaAPI:
         self.refreshTokenIfNeeded()
 
         if self.getCarApiBearerToken() != "":
-            if self.getVehicleCount() < 1:
-                url = self.vehicleListURL()
-                headers = {
-                    "accept": "application/json",
-                    "Authorization": "Bearer " + self.getCarApiBearerToken(),
-                }
-                try:
-                    req = requests.get(url, headers=headers, verify=self.verifyCert)
-                    logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
-                    apiResponseDict = json.loads(req.text)
-                except requests.exceptions.RequestException:
-                    logger.info("Failed to make API call " + url)
-                    if req:
-                        logger.log(logging.INFO6, "Response: " + req.text)
-                    pass
-                except json.decoder.JSONDecodeError:
-                    logger.info("Could not parse JSON result from " + url)
-                    if req:
-                        logger.log(logging.INFO6, "Response: " + req.text)
-                    pass
-
-                try:
-                    logger.debug("Car API vehicle list" + str(apiResponseDict) + "\n")
-
-                    for i in range(0, apiResponseDict["count"]):
-                        self.addVehicle(apiResponseDict["response"][i])
-                    self.resetCarApiLastErrorTime()
-                except (KeyError, TypeError):
-                    # This catches cases like trying to access
-                    # apiResponseDict['response'] when 'response' doesn't exist in
-                    # apiResponseDict.
-                    logger.log(
-                        logging.INFO2,
-                        "ERROR: Can't get list of vehicles via Tesla car API.  Will try again in "
-                        + str(self.getCarApiErrorRetryMins())
-                        + " minutes.",
-                    )
-                    self.updateCarApiLastErrorTime()
-                    return False
+            if self.getVehicleCount() < 1 and not self.loadVehicleList():
+                return False
 
             if (
                 self.getVehicleCount() > 0
@@ -1586,13 +1602,17 @@ class TeslaAPI:
             "accept": "application/json",
             "Authorization": "Bearer " + self.getCarApiBearerToken(),
         }
+        req = None
         try:
             req = requests.post(url, headers=headers, verify=self.verifyCert)
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
-            if req.status_code == 401 and "expired" in req.text:
+            if req is None:
+                # The request never went out (e.g. no network).
+                pass
+            elif req.status_code == 401 and "expired" in req.text:
                 # If the token is expired, refresh it and try again
                 if self.apiRefresh():
                     return self.wakeVehicle(vehicle)
@@ -1781,13 +1801,14 @@ class CarApiVehicle:
 
         apiResponseDict = {}
 
-        headers = {
-            "accept": "application/json",
-            "Authorization": "Bearer " + self.carapi.getCarApiBearerToken(),
-        }
-
         # Retry up to 3 times on certain errors.
         for _ in range(0, 3):
+            # Built per attempt, so a retry after a refresh sends the new token.
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + self.carapi.getCarApiBearerToken(),
+            }
+            req = None
             try:
                 req = requests.get(url, headers=headers, verify=self.verifyCert)
                 req.raise_for_status()
@@ -1798,9 +1819,12 @@ class CarApiVehicle:
                 # This one is somewhat common:
                 #   {'response': None, 'error': 'vehicle unavailable: {:error=>"vehicle unavailable:"}', 'error_description': ''}
             except requests.exceptions.RequestException:
-                if req.status_code == 401 and "expired" in req.text:
+                if req is None:
+                    # The request never went out (e.g. no network).
+                    pass
+                elif req.status_code == 401 and "expired" in req.text:
                     # If the token is expired, refresh it and try again
-                    if self.apiRefresh():
+                    if self.carapi.apiRefresh():
                         continue
                 elif req.status_code == 429:
                     # We're explicitly being told to back off
