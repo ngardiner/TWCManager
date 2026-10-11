@@ -479,3 +479,13 @@ class TestAmpsHeartbeat:
     def test_zero_amps_always_sent(self):
         slave = self.make_slave(2, 0x01, 0)
         assert slave._amps_heartbeat(0) == bytearray([0x09, 0, 0, 0, 0, 0, 0, 0, 0])
+
+
+class TestPolicyNotOnMainLoop:
+    """The serial main loop must not evaluate charging policy inline."""
+
+    def test_twcslave_never_calls_set_charging_per_policy(self):
+        import inspect
+        from TWCManager.TWCSlave import TWCSlave
+
+        assert "setChargingPerPolicy" not in inspect.getsource(TWCSlave)

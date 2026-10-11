@@ -738,6 +738,17 @@ backgroundTasksThread = threading.Thread(target=background_tasks_thread, args=(m
 backgroundTasksThread.daemon = True
 backgroundTasksThread.start()
 
+# Charging policy is evaluated on its own thread so module I/O done by
+# policy conditions never stalls serial servicing. The first evaluation
+# runs now, usually before the first slave heartbeat.
+#
+# Only when acting as master (fakeMaster == 1): in the other modes the
+# heartbeat code that consumes policy results never runs, and evaluating
+# anyway would still send charge-limit commands to cars, fire webhooks and
+# poll EMS. Without the thread, applyPolicyImmediately() is a no-op there.
+if config["config"]["fakeMaster"] == 1:
+    master.getModuleByName("Policy").start()
+
 master.queue_background_task({"cmd": "sunrise"}, 30)
 
 logger.info(
@@ -1861,6 +1872,9 @@ while True:
         logger.info("Unhandled Exception:" + traceback.format_exc())
         # Sleep 5 seconds so the user might see the error.
         time.sleep(5)
+
+# Stop policy evaluation first so it doesn't queue new work while we drain.
+master.getModuleByName("Policy").stop()
 
 # Make sure any volatile data is written to disk before exiting
 master.queue_background_task({"cmd": "saveSettings"})

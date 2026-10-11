@@ -392,58 +392,6 @@ class TestPolicyInitialization:
         assert policy.policyCheckInterval == 60
 
 
-class TestPolicyThrottling:
-    """Test policy check throttling."""
-    
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.config = {"config": {}, "policy": {}}
-        master.settings = {}
-        master.getModuleByName = Mock(return_value=Mock())
-        master.getModulesByType = Mock(return_value=[])
-        master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.setAllowedFlex = Mock()
-        master.queue_background_task = Mock()
-        return master
-    
-    @pytest.fixture
-    def policy(self, mock_master):
-        """Create a Policy instance with mock master."""
-        from TWCManager.Policy.Policy import Policy
-        return Policy(mock_master)
-    
-    def test_apply_policy_immediately(self, policy):
-        """Test applyPolicyImmediately resets throttle."""
-        policy.lastPolicyCheck = time.time()
-        policy.applyPolicyImmediately()
-        assert policy.lastPolicyCheck == 0
-    
-    def test_policy_check_throttled(self, policy):
-        """Test policy check is throttled within interval."""
-        policy.policyCheckInterval = 30
-        policy.lastPolicyCheck = time.time()
-        policy.active_policy = "Charge Now"
-        
-        # Should return early without checking
-        policy.setChargingPerPolicy()
-        
-        # setMaxAmpsToDivideAmongSlaves should not be called
-        policy.master.setMaxAmpsToDivideAmongSlaves.assert_not_called()
-    
-    def test_policy_check_not_throttled(self, policy):
-        """Test policy check runs after throttle interval."""
-        policy.policyCheckInterval = 0
-        policy.lastPolicyCheck = 0
-        policy.active_policy = None
-        
-        policy.setChargingPerPolicy()
-        
-        # Should have called setMaxAmpsToDivideAmongSlaves
-        assert policy.master.setMaxAmpsToDivideAmongSlaves.called
-
-
 class TestPolicyEdgeCases:
     """Test suite for policy edge cases."""
     
@@ -620,7 +568,7 @@ class TestPolicyIntegration:
         assert call_counts[2] > call_counts[1]
 
 
-class TestPolicyThrottling:
+class TestDirectPolicyEvaluation:
     """Test suite for policy throttling mechanism."""
     
     @pytest.fixture
@@ -654,35 +602,7 @@ class TestPolicyThrottling:
         from TWCManager.Policy.Policy import Policy
         return Policy(mock_master)
     
-    def test_policy_throttle_interval_respected(self, policy):
-        """Test that policy throttle interval is respected."""
-        import time
-        policy.policyCheckInterval = 30
-        policy.lastPolicyCheck = time.time()
-        
-        initial_call_count = policy.master.setMaxAmpsToDivideAmongSlaves.call_count
-        
-        policy.setChargingPerPolicy()
-        
-        # Should not have called setMaxAmpsToDivideAmongSlaves due to throttle
-        assert policy.master.setMaxAmpsToDivideAmongSlaves.call_count == initial_call_count
-    
-    def test_policy_throttle_reset_on_immediate_apply(self, policy):
-        """Test that applyPolicyImmediately resets throttle and applies policy."""
-        import time
-        policy.policyCheckInterval = 30
-        policy.lastPolicyCheck = time.time() - 10  # 10 seconds ago
-        
-        initial_call_count = policy.master.setMaxAmpsToDivideAmongSlaves.call_count
-        
-        policy.applyPolicyImmediately()
-        
-        # Policy should have been applied immediately despite throttle
-        assert policy.master.setMaxAmpsToDivideAmongSlaves.call_count > initial_call_count
-        # lastPolicyCheck should be updated to current time after applying
-        assert policy.lastPolicyCheck > 0
-    
-    def test_policy_zero_throttle_interval(self, policy):
+    def test_direct_call_evaluates_with_zero_interval(self, policy):
         """Test policy with zero throttle interval."""
         policy.policyCheckInterval = 0
         policy.lastPolicyCheck = 0
@@ -694,3 +614,227 @@ class TestPolicyThrottling:
         # Should have called immediately
         assert policy.master.setMaxAmpsToDivideAmongSlaves.call_count > initial_call_count
 
+
+
+class TestPolicyThread:
+    """Policy evaluation runs on its own thread, never the serial main loop."""
+
+    WAIT = 2.0
+
+    @pytest.fixture
+    def mock_master(self):
+        master = Mock()
+        master.config = {"config": {}, "policy": {}}
+        master.settings = {}
+        master.getModuleByName = Mock(return_value=Mock())
+        master.getModulesByType = Mock(return_value=[])
+        return master
+
+    @pytest.fixture
+    def policy(self, mock_master):
+        from TWCManager.Policy.Policy import Policy
+
+        p = Policy(mock_master)
+        p.policyCheckInterval = 3600
+        yield p
+        p.stop()
+
+    @staticmethod
+    def wait_until(predicate, timeout=2.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.005)
+        return predicate()
+
+    def recorder(self, policy, gate=None):
+        """Replace the evaluation with a recorder; optionally block on `gate`."""
+        import threading
+
+        calls = []
+        entered = threading.Event()
+
+        def fake():
+            calls.append(time.monotonic())
+            entered.set()
+            if gate is not None:
+                gate.wait(self.WAIT)
+
+        policy.setChargingPerPolicy = fake
+        return calls, entered
+
+    def test_start_evaluates_immediately(self, policy):
+        calls, _ = self.recorder(policy)
+        policy.start()
+        assert self.wait_until(lambda: len(calls) >= 1)
+
+    def test_apply_immediately_wakes_thread(self, policy):
+        calls, _ = self.recorder(policy)
+        policy.start()
+        assert self.wait_until(lambda: len(calls) >= 1)
+        policy.applyPolicyImmediately()
+        assert self.wait_until(lambda: len(calls) >= 2, timeout=1.0)
+
+    def test_apply_immediately_does_not_block_on_running_evaluation(self, policy):
+        import threading
+
+        gate = threading.Event()
+        calls, entered = self.recorder(policy, gate)
+        policy.start()
+        assert entered.wait(self.WAIT)
+        start = time.monotonic()
+        policy.applyPolicyImmediately()
+        assert time.monotonic() - start < 0.5
+        gate.set()
+        assert self.wait_until(lambda: len(calls) >= 2)
+
+    def test_periodic_evaluation_without_wake(self, policy):
+        policy.policyCheckInterval = 0.05
+        calls, _ = self.recorder(policy)
+        policy.start()
+        assert self.wait_until(lambda: len(calls) >= 3)
+
+    def test_exception_is_logged_and_thread_survives(self, policy):
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("powerwall unreachable")
+
+        policy.setChargingPerPolicy = flaky
+        with patch("TWCManager.Policy.Policy.logger") as log:
+            policy.start()
+            assert self.wait_until(lambda: len(calls) >= 1)
+            policy.applyPolicyImmediately()
+            assert self.wait_until(lambda: len(calls) >= 2)
+            assert log.error.called
+
+    def test_start_is_idempotent(self, policy):
+        self.recorder(policy)
+        policy.start()
+        first = policy._thread
+        policy.start()
+        assert policy._thread is first
+
+    def test_stop_ends_thread_and_blocks_further_wakes(self, policy):
+        calls, _ = self.recorder(policy)
+        policy.start()
+        assert self.wait_until(lambda: len(calls) >= 1)
+        policy.stop()
+        policy._thread.join(1.0)
+        assert not policy._thread.is_alive()
+        count = len(calls)
+        policy.applyPolicyImmediately()
+        time.sleep(0.2)
+        assert len(calls) == count
+
+    def test_stop_lets_running_evaluation_finish(self, policy):
+        import threading
+
+        gate = threading.Event()
+        finished = []
+        calls, entered = self.recorder(policy, gate)
+        inner = policy.setChargingPerPolicy
+
+        def wrapped():
+            inner()
+            finished.append(True)
+
+        policy.setChargingPerPolicy = wrapped
+        policy.start()
+        assert entered.wait(self.WAIT)
+        policy.stop()
+        gate.set()
+        policy._thread.join(self.WAIT)
+        assert finished == [True]
+        assert len(calls) == 1
+
+    def test_direct_evaluation_has_no_rate_limit_and_respects_stop(self, policy):
+        policy.checkConditions = Mock(return_value=False)
+        policy.enforcePolicy = Mock()
+        policy.setChargingPerPolicy()
+        policy.setChargingPerPolicy()
+        assert policy.enforcePolicy.call_count == 2
+        policy.stop()
+        policy.setChargingPerPolicy()
+        assert policy.enforcePolicy.call_count == 2
+
+    def test_eval_lock_serializes_direct_calls(self, policy):
+        import threading
+
+        gate = threading.Event()
+        first_in = threading.Event()
+        counter_lock = threading.Lock()
+        state = {"inside": 0, "max": 0, "done": 0}
+
+        def fake():
+            with counter_lock:
+                state["inside"] += 1
+                state["max"] = max(state["max"], state["inside"])
+            first_in.set()
+            gate.wait(timeout=5)
+            with counter_lock:
+                state["inside"] -= 1
+                state["done"] += 1
+
+        policy._evaluate = fake
+        threads = [
+            threading.Thread(target=policy.setChargingPerPolicy, daemon=True)
+            for _ in range(2)
+        ]
+        for t in threads:
+            t.start()
+        assert first_in.wait(timeout=self.WAIT)
+        # Give the second caller time to (wrongly) enter alongside the first.
+        time.sleep(0.2)
+        with counter_lock:
+            assert state["inside"] == 1
+        gate.set()
+        for t in threads:
+            t.join(timeout=self.WAIT)
+            assert not t.is_alive()
+        assert state["max"] == 1
+        assert state["done"] == 2
+
+
+class TestPolicyIntervalConfig:
+    """policyCheckInterval from config is sanitised before the thread uses it."""
+
+    def make(self, value):
+        from TWCManager.Policy.Policy import Policy
+
+        master = Mock()
+        master.config = {
+            "config": {},
+            "policy": {"engine": {"policyCheckInterval": value}},
+        }
+        master.settings = {}
+        master.getModuleByName = Mock(return_value=Mock())
+        master.getModulesByType = Mock(return_value=[])
+        return Policy(master)
+
+    def test_numeric_string_is_coerced(self):
+        assert self.make("45").policyCheckInterval == 45.0
+
+    def test_non_numeric_logs_error_and_uses_default(self):
+        with patch("TWCManager.Policy.Policy.logger") as log:
+            p = self.make("bogus")
+        assert p.policyCheckInterval == 30
+        assert log.error.called
+
+    def test_negative_is_clamped(self):
+        with patch("TWCManager.Policy.Policy.logger") as log:
+            p = self.make(-5)
+        assert p.policyCheckInterval == 1.0
+        assert log.warning.called
+
+    @pytest.mark.parametrize("value", ["inf", 1e10])
+    def test_huge_is_capped_to_timeout_max(self, value):
+        import threading
+
+        with patch("TWCManager.Policy.Policy.logger") as log:
+            p = self.make(value)
+        assert p.policyCheckInterval == threading.TIMEOUT_MAX
+        assert log.warning.called
