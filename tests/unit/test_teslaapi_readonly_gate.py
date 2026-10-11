@@ -1,48 +1,34 @@
 """
 Read-only command gate.
 
-While TeslaAPI holds an Owner API token (readOnly), no vehicle command may
-reach Tesla: VehiclePriority skips TeslaAPI for command methods, and
+While TeslaAPI holds no usable Fleet API token (readOnly), e.g. only an
+Owner API token, no vehicle command may reach Tesla: VehiclePriority skips TeslaAPI for command methods, and
 TeslaAPI's own command entry points refuse without an HTTP call and without
 recording an API error (which would back off reads too). Reads still run.
 """
 
 import logging
 import re
-import time
 from unittest.mock import Mock
 
 import pytest
 import requests_mock as rm
 
-from tests.unit.teslatokens import fleet_token, new_api, owner_token
-
-OWNER_URL = "https://owner-api.teslamotors.com/api/1/vehicles"
-
-
-class _NoThread:
-    daemon = False
-
-    def start(self):
-        pass
-
-
-@pytest.fixture
-def no_threads(monkeypatch):
-    import TWCManager.Vehicle.TeslaAPI as teslaapi
-
-    monkeypatch.setattr(teslaapi, "Thread", lambda *a, **k: _NoThread())
+from tests.unit.teslatokens import (
+    OWNER_API_URL as OWNER_URL,
+    add_home_vehicle,
+    fleet_token,
+    new_api,
+    no_threads,
+    owner_token,
+)
 
 
 @pytest.fixture
 def owner_api(no_threads):
     api = new_api()
-    api.setCarApiBearerToken(owner_token())
-    api.addVehicle({"id": 1, "vin": "VIN1", "display_name": "Car"})
-    vehicle = api.getCarApiVehicles()[0]
-    vehicle.atHome = True
-    # Recently contacted, so ready() is True without an HTTP call.
-    vehicle.lastAPIAccessTime = time.time()
+    api.storeToken(owner_token())
+    add_home_vehicle(api)
     return api
 
 
@@ -94,7 +80,7 @@ class TestTeslaAPIRefusesCommands:
         assert no_error_recorded(owner_api)
 
     def test_fleet_token_is_not_refused(self, owner_api, requests_mock):
-        owner_api.setCarApiBearerToken(fleet_token())
+        owner_api.storeToken(fleet_token())
         cmd = requests_mock.post(
             re.compile(r".*/VIN1/command/set_charging_amps"),
             json={"response": {"result": True, "reason": ""}},
@@ -124,9 +110,9 @@ class TestRefusalLogging:
         owner_api.car_api_charge({"charge": True})
         assert len(self.refusals(caplog)) == 1
 
-        # Fleet token: commands allowed. Back to Owner: logs again, once.
-        owner_api.setCarApiBearerToken(fleet_token())
-        owner_api.setCarApiBearerToken(owner_token())
+        # Fleet token: commands allowed. Fleet slot cleared: logs again, once.
+        owner_api.storeToken(fleet_token())
+        owner_api.fleetSlot.clear()
         owner_api.setChargeRate(10, vehicle)
         owner_api.setChargeRate(10, vehicle)
         assert len(self.refusals(caplog)) == 2
@@ -137,7 +123,7 @@ class TestRefusalLogging:
         caplog.set_level(logging.INFO)
         vehicle = owner_api.getCarApiVehicles()[0]
         owner_api.setChargeRate(10, vehicle)
-        owner_api.setCarApiBearerToken(owner_token(jti="rotated"))
+        owner_api.storeToken(owner_token(jti="rotated"))
         owner_api.setChargeRate(10, vehicle)
         assert len(self.refusals(caplog)) == 1
 
@@ -161,7 +147,7 @@ class TestReadsStillRun:
 
     def test_vehicle_list_read_uses_owner_api(self, no_threads, requests_mock):
         api = new_api()
-        api.setCarApiBearerToken(owner_token())
+        api.storeToken(owner_token())
         # The Owner API lists vehicles under /products, not /vehicles.
         listing = requests_mock.get(
             OWNER_URL[: -len("vehicles")] + "products",
@@ -235,7 +221,7 @@ class TestTeslaAPIEVSE:
     def test_read_only_follows_tesla_api(self, owner_api):
         evse = self.make_evse(owner_api)
         assert evse.isReadOnly is True
-        owner_api.setCarApiBearerToken(fleet_token())
+        owner_api.storeToken(fleet_token())
         assert evse.isReadOnly is False
 
     def test_not_read_only_without_tesla_api(self):

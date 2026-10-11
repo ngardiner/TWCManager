@@ -1097,10 +1097,17 @@ class TWCMaster:
         # Step 2 - Send settings to other modules
         carapi = self.getModuleByName("TeslaAPI")
         if not self.tokenSyncEnabled():
-            carapi.setCarApiBearerToken(self.settings.get("carApiBearerToken", ""))
-            carapi.setCarApiRefreshToken(self.settings.get("carApiRefreshToken", ""))
-            carapi.restoreCarApiTokenExpireTime(
-                self.settings.get("carApiTokenExpireTime", "")
+            carapi.restoreSlot(
+                carapi.fleetSlot,
+                self.settings.get("carApiBearerToken", ""),
+                self.settings.get("carApiRefreshToken", ""),
+                self.settings.get("carApiTokenExpireTime", ""),
+            )
+            carapi.restoreSlot(
+                carapi.ownerSlot,
+                self.settings.get("ownerApiBearerToken", ""),
+                self.settings.get("ownerApiRefreshToken", ""),
+                self.settings.get("ownerApiTokenExpireTime", ""),
             )
         # else: every module is registered by now, so the sync source's
         # startup sync has already set the tokens and their expiry; the
@@ -1482,9 +1489,12 @@ class TWCMaster:
 
         # Step 1 - Merge any config from other modules
         carapi = self.getModuleByName("TeslaAPI")
-        self.settings["carApiBearerToken"] = carapi.getCarApiBearerToken()
-        self.settings["carApiRefreshToken"] = carapi.getCarApiRefreshToken()
-        self.settings["carApiTokenExpireTime"] = carapi.getCarApiTokenExpireTime()
+        self.settings["carApiBearerToken"] = carapi.fleetSlot.accessToken
+        self.settings["carApiRefreshToken"] = carapi.fleetSlot.refreshToken
+        self.settings["carApiTokenExpireTime"] = carapi.fleetSlot.expireTime
+        self.settings["ownerApiBearerToken"] = carapi.ownerSlot.accessToken
+        self.settings["ownerApiRefreshToken"] = carapi.ownerSlot.refreshToken
+        self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
 
         # Step 2 - Write the settings dict to a JSON file atomically
         # Use temp file + rename to ensure atomic write and prevent corruption

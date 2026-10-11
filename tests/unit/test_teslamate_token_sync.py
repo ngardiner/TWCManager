@@ -1,25 +1,31 @@
 """
 TeslaMate token sync: tokens pushed by TeslaMateVehicle.doSyncTokens must be
 accepted on every sync, not only the first one, and TWCManager must never
-refresh a synced token itself (TeslaMate owns the refresh).
+refresh a synced token itself (TeslaMate owns the refresh): a synced slot
+holds no refresh token and expires at the token's own exp.
 """
 
 import time
 from unittest.mock import Mock
 
+import jwt
 import pytest
 
 from tests.unit.teslatokens import (
     AUTH_TOKEN_URL,
     FLEET_REFRESH_URL,
     FakeMaster,
+    fleet_token,
     new_api,
     owner_token,
 )
 
-# The "never expires" sentinel TeslaMateVehicle.doSyncTokens has always set,
-# so that TWCManager never refreshes a token TeslaMate owns.
+# The "never expires" sentinel earlier releases saved with a synced token.
 SYNCED_EXPIRY = 99999 * 99999 * 99999
+
+
+def exp(token):
+    return jwt.decode(token, options={"verify_signature": False})["exp"]
 
 
 def make_teslamate(master, access, refresh, registered=True):
@@ -88,7 +94,7 @@ class TestHourlyResync:
         # Startup sync runs from TeslaMateVehicle.__init__, before the
         # module is registered, so tokenSyncEnabled() is still False.
         tm.doSyncTokens(True)
-        assert api.getCarApiBearerToken() == first
+        assert api.ownerSlot.accessToken == first
 
         # The module is now registered; this is what resyncTokens() sees.
         master.modules["TeslaMateVehicle"] = tm
@@ -96,8 +102,9 @@ class TestHourlyResync:
         tm.rows = {"access": second, "refresh": "refresh-2"}
         tm.doSyncTokens()
 
-        assert api.getCarApiBearerToken() == second
-        assert api.getCarApiRefreshToken() == "refresh-2"
+        assert api.ownerSlot.accessToken == second
+        assert api.ownerSlot.refreshToken == ""
+        assert api.ownerSlot.expireTime == exp(second)
 
     def test_hand_entered_token_still_refused_while_sync_on(self, fake_db):
         master = FakeMaster()
@@ -106,47 +113,41 @@ class TestHourlyResync:
         fake_db["tm"] = make_teslamate(master, synced, "refresh-1")
         fake_db["tm"].doSyncTokens()
 
-        assert api.setCarApiBearerToken(owner_token(jti="typed")) is False
-        assert api.getCarApiBearerToken() == synced
+        assert api.storeToken(owner_token(jti="typed")) == "token_sync"
+        assert api.ownerSlot.accessToken == synced
 
 
 class TestNoRefreshForSyncedTokens:
-    def test_sync_sets_never_expires_after_the_token(self, fake_db, refresh_endpoints):
+    def test_synced_token_expires_at_its_exp_and_is_not_refreshed(
+        self, fake_db, refresh_endpoints
+    ):
         master = FakeMaster()
         api = new_api(master)
         # TeslaMate has not refreshed for a while: 10 minutes left.
-        tm = make_teslamate(
-            master, owner_token(expires_in=600), "refresh-1", registered=False
-        )
+        token = owner_token(expires_in=600)
+        tm = make_teslamate(master, token, "refresh-1", registered=False)
         fake_db["tm"] = tm
 
         tm.doSyncTokens(True)
+        api.refreshTokenIfNeeded()
 
-        assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
+        assert api.ownerSlot.expireTime == exp(token)
+        assert api.ownerSlot.refreshToken == ""
         assert all(ep.call_count == 0 for ep in refresh_endpoints)
 
-    def test_sentinel_set_before_the_refresh_token(self, fake_db):
-        # Between the refresh token and the sentinel, a concurrent
-        # refreshTokenIfNeeded() at startup (sync not yet registered) could
-        # see the new refresh token with the decoded exp and refresh it.
+    def test_sync_drops_a_held_refresh_token(self, fake_db):
+        # TWCManager never holds a refresh token beside a synced token, so
+        # nothing can refresh it, even before sync is registered.
         master = FakeMaster()
         api = new_api(master)
-        api.carApiRefreshToken = "before-sync"
+        api.ownerSlot.refreshToken = "before-sync"
         tm = make_teslamate(master, owner_token(), "refresh-1", registered=False)
         fake_db["tm"] = tm
-        seen = []
-        setExpiry = api.setCarApiTokenExpireTime
-
-        def record(value):
-            seen.append((value, api.getCarApiRefreshToken()))
-            return setExpiry(value)
-
-        api.setCarApiTokenExpireTime = record
 
         tm.doSyncTokens(True)
 
-        assert (SYNCED_EXPIRY, "before-sync") in seen
-        assert api.getCarApiRefreshToken() == "refresh-1"
+        assert api.ownerSlot.refreshToken == ""
+        assert api.ownerSlot.source == "synced"
 
     def test_refresh_paths_do_nothing_while_sync_on(self, fake_db, refresh_endpoints):
         master = FakeMaster()
@@ -154,15 +155,14 @@ class TestNoRefreshForSyncedTokens:
         fake_db["tm"] = make_teslamate(master, owner_token(), "refresh-1")
         fake_db["tm"].doSyncTokens()
         # Even with an expiry in the past, nothing may refresh.
-        api.setCarApiTokenExpireTime(time.time() - 60)
+        api.ownerSlot.expireTime = time.time() - 60
 
-        # The refresh-token setter (refused while sync is on) and the direct
-        # refresh used by wakeVehicle on a 401.
-        api.setCarApiRefreshToken(api.getCarApiRefreshToken())
-        assert api.apiRefresh() is False
+        # The proactive refresh and the direct refresh used on a 401.
+        api.refreshTokenIfNeeded()
+        assert api.refreshSlot(api.ownerSlot) == "not_configured"
 
         assert all(ep.call_count == 0 for ep in refresh_endpoints)
-        assert api.getCarApiRefreshToken() == "refresh-1"
+        assert api.ownerSlot.refreshToken == ""
 
 
 def master_with_settings(tmp_path, settings):
@@ -185,8 +185,6 @@ def master_with_settings(tmp_path, settings):
     master = TWCMaster("AB", config)
     # Not new_api(): TWCMaster.modules has its own structure.
     api = TeslaAPI(master)
-    api.carApiBearerToken = ""
-    api.carApiRefreshToken = ""
     api.carApiVehicles = []
     modules = {"TeslaAPI": api}
     master.getModuleByName = modules.get
@@ -194,8 +192,8 @@ def master_with_settings(tmp_path, settings):
 
 
 class TestSettingsLoadAfterSyncTurnedOff:
-    """settings.json keeps the never-expires sentinel after a sync. If sync is
-    later turned off, loading it must not leave a token that never refreshes."""
+    """Earlier releases saved a never-expires sentinel after a sync. With sync
+    off, loading it must not leave a token that never expires."""
 
     def load(self, tmp_path, settings):
         master, api, _ = master_with_settings(tmp_path, settings)
@@ -203,10 +201,7 @@ class TestSettingsLoadAfterSyncTurnedOff:
         return api
 
     def test_sentinel_replaced_by_token_exp_when_sync_off(self, tmp_path):
-        import jwt
-
-        token = owner_token()
-        exp = jwt.decode(token, options={"verify_signature": False})["exp"]
+        token = fleet_token()
         api = self.load(
             tmp_path,
             {
@@ -215,7 +210,7 @@ class TestSettingsLoadAfterSyncTurnedOff:
                 "carApiTokenExpireTime": SYNCED_EXPIRY,
             },
         )
-        assert api.getCarApiTokenExpireTime() == exp
+        assert api.fleetSlot.expireTime == exp(token)
 
     def test_sentinel_with_undecodable_token_expires_now(self, tmp_path):
         before = time.time()
@@ -227,19 +222,19 @@ class TestSettingsLoadAfterSyncTurnedOff:
                 "carApiTokenExpireTime": SYNCED_EXPIRY,
             },
         )
-        assert before <= api.getCarApiTokenExpireTime() <= time.time()
+        assert before <= api.fleetSlot.expireTime <= time.time()
 
     def test_ordinary_saved_expiry_unchanged(self, tmp_path):
         saved = int(time.time()) + 5 * 60 * 60
         api = self.load(
             tmp_path,
             {
-                "carApiBearerToken": owner_token(),
+                "carApiBearerToken": fleet_token(),
                 "carApiRefreshToken": "refresh-1",
                 "carApiTokenExpireTime": saved,
             },
         )
-        assert api.getCarApiTokenExpireTime() == saved
+        assert api.fleetSlot.expireTime == saved
 
 
 class TestSettingsLoadWhileSyncOn:
@@ -270,9 +265,10 @@ class TestSettingsLoadWhileSyncOn:
 
         master.loadSettings()
 
-        assert api.getCarApiBearerToken() == fresh
-        assert api.getCarApiRefreshToken() == "synced-refresh"
-        assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
+        assert api.ownerSlot.accessToken == fresh
+        assert api.ownerSlot.refreshToken == ""
+        assert api.ownerSlot.expireTime == exp(fresh)
+        assert api.fleetSlot.accessToken == ""
 
 
 class TestSettingsPageWhileSyncOn:
@@ -301,9 +297,10 @@ class TestSettingsPageWhileSyncOn:
             master, {"carApiRefreshToken": "typed-refresh", "chargeNowAmps": "6"}
         )
 
-        assert api.getCarApiRefreshToken() == "refresh-1"
-        assert api.getCarApiBearerToken() == synced
-        assert api.getCarApiTokenExpireTime() == SYNCED_EXPIRY
+        assert api.ownerSlot.refreshToken == ""
+        assert api.fleetSlot.refreshToken == ""
+        assert api.ownerSlot.accessToken == synced
+        assert api.ownerSlot.expireTime == exp(synced)
         assert all(ep.call_count == 0 for ep in refresh_endpoints)
         assert "carApiRefreshToken" not in master.settings
         # Other settings are still saved.
@@ -314,12 +311,12 @@ class TestSettingsPageWhileSyncOn:
     def test_refresh_token_accepted_while_sync_off(self, refresh_endpoints):
         master = FakeMaster()
         api = new_api(master)
-        api.setCarApiBearerToken(owner_token())
+        api.storeToken(owner_token())
 
         request = self.save(master, {"carApiRefreshToken": "typed-refresh"})
 
-        # Pasted on its own, the refresh token replaces the bearer token and
-        # is refreshed by its own type (opaque, so Fleet).
+        # Pasted on its own, the refresh token goes to the slot of its type
+        # (opaque, so Fleet) and is refreshed there.
         fleet = refresh_endpoints[0]
         assert fleet.call_count == 1
         assert fleet.last_request.json()["refresh_token"] == "typed-refresh"
@@ -359,7 +356,8 @@ class TestTokensTableLocation:
         api = new_api(master)
         tm = make_teslamate(master, None, None)
         tm.doSyncTokens()
-        assert api.getCarApiRefreshToken() == "refresh-1"
+        assert api.ownerSlot.tokenType == "owner"
+        assert api.ownerSlot.source == "synced"
         assert "FROM private.tokens " in queries[0]
 
     def test_no_tokens_table_logs_and_keeps_tokens(self, monkeypatch):
@@ -368,7 +366,7 @@ class TestTokensTableLocation:
         api = new_api(master)
         tm = make_teslamate(master, None, None)
         tm.doSyncTokens()
-        assert not api.getCarApiRefreshToken()
+        assert not api.ownerSlot.accessToken and not api.fleetSlot.accessToken
 
 
 class TestDecryptTeslaMateVault:
