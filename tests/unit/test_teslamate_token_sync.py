@@ -189,8 +189,9 @@ def master_with_settings(tmp_path, settings):
 
 
 class TestSettingsLoadAfterSyncTurnedOff:
-    """Earlier releases saved a never-expires sentinel after a sync. With sync
-    off, loading it must not leave a token that never expires."""
+    """Earlier releases saved a never-expires sentinel with a synced token.
+    With sync off at load, that token is still marked synced: it keeps no
+    refresh token and expires at its own exp."""
 
     def load(self, tmp_path, settings):
         master, api, _ = master_with_settings(tmp_path, settings)
@@ -207,10 +208,12 @@ class TestSettingsLoadAfterSyncTurnedOff:
                 "carApiTokenExpireTime": SYNCED_EXPIRY,
             },
         )
+        assert api.fleetSlot.accessToken == token
         assert api.fleetSlot.expireTime == exp(token)
+        assert api.fleetSlot.refreshToken == ""
+        assert api.fleetSlot.source == "synced"
 
-    def test_sentinel_with_undecodable_token_expires_now(self, tmp_path):
-        before = time.time()
+    def test_sentinel_with_undecodable_token_is_unusable(self, tmp_path):
         api = self.load(
             tmp_path,
             {
@@ -219,7 +222,12 @@ class TestSettingsLoadAfterSyncTurnedOff:
                 "carApiTokenExpireTime": SYNCED_EXPIRY,
             },
         )
-        assert before <= api.fleetSlot.expireTime <= time.time()
+        assert api.fleetSlot.tokenType == "unknown"
+        assert api.fleetSlot.source == "synced"
+        assert api.fleetSlot.refreshToken == ""
+        assert api.fleetSlot.expireTime != SYNCED_EXPIRY
+        assert not api.fleetSlot.usable("read")
+        assert api.slotFor("read") is None
 
     def test_ordinary_saved_expiry_unchanged(self, tmp_path):
         saved = int(time.time()) + 5 * 60 * 60
@@ -232,40 +240,66 @@ class TestSettingsLoadAfterSyncTurnedOff:
             },
         )
         assert api.fleetSlot.expireTime == saved
+        assert api.fleetSlot.refreshToken == "refresh-1"
+        assert api.fleetSlot.source == "pasted"
 
 
 class TestSettingsLoadWhileSyncOn:
     """TWCManager.py loads settings after every module is registered, so
-    TeslaMateVehicle's startup sync has already set the tokens and
-    tokenSyncEnabled() is already True. loadSettings must not put the saved
-    (pre-sync) tokens or expiry back over them."""
+    TeslaMateVehicle's startup sync has already filled a slot and
+    tokenSyncEnabled() is already True. A saved synced token doesn't replace
+    the startup sync's fresher one; a saved pasted one does."""
 
-    def test_saved_tokens_do_not_replace_startup_sync(self, tmp_path, fake_db):
-        # Saved by an earlier run: an old token, its refresh token and an
-        # expiry that has since passed.
-        master, api, modules = master_with_settings(
-            tmp_path,
-            {
-                "carApiBearerToken": owner_token(jti="old", expires_in=-3600),
-                "carApiRefreshToken": "old-refresh",
-                "carApiTokenExpireTime": int(time.time()) - 3600,
-            },
-        )
-
+    def start(self, tmp_path, fake_db, settings, fresh):
+        master, api, modules = master_with_settings(tmp_path, settings)
         # Module load: TeslaMateVehicle.__init__ syncs, then it is registered.
-        fresh = owner_token(jti="fresh")
         tm = make_teslamate(master, fresh, registered=False)
         fake_db["tm"] = tm
         tm.doSyncTokens(True)
         modules["TeslaMateVehicle"] = tm
         assert master.tokenSyncEnabled() is True
-
         master.loadSettings()
+        return api
 
+    def test_saved_synced_token_does_not_replace_startup_sync(self, tmp_path, fake_db):
+        fresh = owner_token(jti="fresh")
+        api = self.start(
+            tmp_path,
+            fake_db,
+            {
+                "ownerApiBearerToken": owner_token(jti="old", expires_in=3600),
+                "ownerApiRefreshToken": "",
+                "ownerApiTokenExpireTime": int(time.time()) + 3600,
+                "ownerApiTokenSource": "synced",
+                "carApiTokenSource": "",
+            },
+            fresh,
+        )
         assert api.ownerSlot.accessToken == fresh
         assert api.ownerSlot.refreshToken == ""
         assert api.ownerSlot.expireTime == exp(fresh)
+        assert api.ownerSlot.source == "synced"
         assert api.fleetSlot.accessToken == ""
+
+    def test_saved_pasted_token_replaces_startup_sync(self, tmp_path, fake_db):
+        pasted = owner_token(jti="pasted")
+        saved = int(time.time()) + 3600
+        api = self.start(
+            tmp_path,
+            fake_db,
+            {
+                "ownerApiBearerToken": pasted,
+                "ownerApiRefreshToken": "my-refresh",
+                "ownerApiTokenExpireTime": saved,
+                "ownerApiTokenSource": "pasted",
+                "carApiTokenSource": "",
+            },
+            owner_token(jti="fresh"),
+        )
+        assert api.ownerSlot.accessToken == pasted
+        assert api.ownerSlot.refreshToken == "my-refresh"
+        assert api.ownerSlot.expireTime == saved
+        assert api.ownerSlot.source == "pasted"
 
 
 class TestSettingsPageWhileSyncOn:
