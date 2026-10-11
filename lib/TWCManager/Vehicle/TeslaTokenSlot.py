@@ -72,7 +72,10 @@ class TeslaTokenSlot:
         if not isinstance(exp, (int, float)) or isinstance(exp, bool):
             exp = None
         scp = decoded.get("scp") if decoded else None
-        self.scopes = frozenset(scp) if isinstance(scp, list) else None
+        if isinstance(scp, list) and all(isinstance(x, str) for x in scp):
+            self.scopes = frozenset(scp)
+        else:
+            self.scopes = None
         self.scopeErrorsLogged = set()
         self.accessToken = accessToken
         if accessToken:

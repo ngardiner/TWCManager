@@ -298,3 +298,13 @@ def test_owner_slot_never_grants_commands_and_logs_nothing(caplog):
     s.setTokens(owner_token())
     assert s.grants("read") and s.grants("energy") and not s.grants("command")
     assert s.usable("command") is False and "scope" not in caplog.text
+
+
+def test_nested_scp_claim_is_treated_as_no_claim():
+    from tests.unit.teslatokens import make_jwt
+
+    slot = owner_slot()
+    slot.setTokens(make_jwt(scp=[["a"], "b"], exp=4102444800), None, None, "pasted")
+    assert slot.scopes is None
+    slot.setTokens(make_jwt(scp=["a", "b"], exp=4102444800), None, None, "pasted")
+    assert slot.scopes == frozenset({"a", "b"})

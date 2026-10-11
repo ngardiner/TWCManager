@@ -1193,7 +1193,7 @@ def CreateHTTPHandlerClass(master):
                 # The Tesla login form is hidden once we hold a Fleet API
                 # token, so an Owner-only user can still log in.
                 teslaapi = master.getModuleByName("TeslaAPI")
-                self.apiAvailable = bool(teslaapi and teslaapi.fleetSlot.accessToken)
+                self.apiAvailable = bool(teslaapi and not teslaapi.fleetSlot.empty())
                 self.scheduledAmpsMax = master.getScheduledAmpsMax()
 
                 self.activeAction = master.getModuleByName(

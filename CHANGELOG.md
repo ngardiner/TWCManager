@@ -30,7 +30,7 @@ This document logs the changes per release of TWCManager.
     * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, ported from v1.3.4 (closes #639)
     * Add vehicle commandPolicy (prefer_ble/ble_only/api_only) to restrict state-changing commands to BLE or API, capping billed Fleet API command spend; configurable from the Settings page, with optional hard override in config.json (closes #651)
     * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
-    * (@MikeBishop) - Keep an Owner API token and a Fleet API token at once: reads use the free Owner API when possible, commands use the Fleet API, and TeslaMate token sync can stay on beside a Fleet login. Settings migrate automatically on first start; downgrading afterwards loses the Owner API token (stored under new `ownerApi*` keys).
+    * (@MikeBishop) - Keep an Owner API token and a Fleet API token at once: reads use the free Owner API when possible, commands use the Fleet API, and TeslaMate token sync can stay on beside a Fleet login. Settings migrate automatically on first start; downgrading afterwards loses the Owner API token (stored under new `ownerApi*` keys). When TeslaMate `syncTokens` is configured, a token found in the old settings at first upgrade is treated as TeslaMate's (its refresh token is dropped and the slot is locked while sync is on), so a Fleet token you saved yourself may need the Fleet login again.
 * Architecture
     * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
 * Bugfixes
