@@ -184,6 +184,25 @@
             </table>
           </td>
         </tr>
+        {% set carapi = master.getModuleByName("TeslaAPI") %}
+        {% if carapi %}
+        {% for slotName, label in [("owner", "Owner API token"), ("fleet", "Fleet API token")] %}
+        {% set status = (carapi.ownerSlot if slotName == "owner" else carapi.fleetSlot).status() %}
+        <tr>
+          <th>{{ label }}:</th>
+          <td>
+            {% if status.holdsToken %}
+              expires {{ status.expires }}
+              ({{ {"synced": "synced from TeslaMate", "pasted": "pasted", "login": "Fleet API login"}.get(status.source, status.source) }})
+              {% if status.paused %}<em>paused for reads</em>{% endif %}
+              <button class='btn btn-outline-danger btn-sm' type='submit' form='removeToken-{{ slotName }}'>Remove token</button>
+            {% else %}
+              none
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% endif %}
         <tr>
           <th>Manual Tesla API key override (<a href="http://registration.teslatasks.com/generateTokens" target="_blank">link</a>):</th>
           <td>
@@ -205,6 +224,13 @@
         </tr>
       </table>
     </form>
+    {% if carapi %}
+    {% for slotName in ["owner", "fleet"] %}
+    <form id='removeToken-{{ slotName }}' method='post' action='/teslaAccount/removeToken'>
+      <input type='hidden' name='slot' value='{{ slotName }}' />
+    </form>
+    {% endfor %}
+    {% endif %}
     <p>Click <a href='https://github.com/ngardiner/TWCManager/tree/main/docs/Settings.md' target='_blank'>here</a> for detailed information on settings on this page</p>
   </div>
 

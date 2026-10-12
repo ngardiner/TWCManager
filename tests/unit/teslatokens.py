@@ -9,6 +9,7 @@ TWCMaster.tokenSyncEnabled() does.
 import time
 
 import jwt
+import pytest
 
 SIGNING_KEY = "unit-test-signing-key-0123456789abcdef"
 
@@ -23,6 +24,8 @@ FLEET_AUD = [
 
 FLEET_REFRESH_URL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
 AUTH_TOKEN_URL = "https://auth.tesla.com/oauth2/v3/token"
+OWNER_API_URL = "https://owner-api.teslamotors.com/api/1/vehicles"
+FLEET_NA_URL = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles"
 
 
 def make_jwt(**claims):
@@ -30,31 +33,47 @@ def make_jwt(**claims):
     return jwt.encode(claims, SIGNING_KEY, algorithm="HS256")
 
 
-def owner_token(expires_in=8 * 60 * 60, **extra):
+FLEET_SCOPES = [
+    "openid",
+    "user_data",
+    "vehicle_device_data",
+    "vehicle_cmds",
+    "vehicle_charging_cmds",
+    "energy_device_data",
+    "energy_cmds",
+    "offline_access",
+]
+
+
+def owner_token(
+    expires_in=8 * 60 * 60, scp=("email", "offline_access", "openid"), **extra
+):
     """A live-shaped TeslaMate access token: Owner API aud, azp ownerapi,
     and (as observed live on 2026-10-10) an ou_code of NA."""
     claims = {
         "iss": "https://auth.tesla.com/oauth2/v3",
         "aud": OWNER_AUD,
         "azp": "ownerapi",
-        "scp": ["email", "offline_access", "openid"],
         "ou_code": "NA",
         "exp": int(time.time() + expires_in),
     }
+    if scp is not None:
+        claims["scp"] = list(scp)
     claims.update(extra)
     return make_jwt(**claims)
 
 
-def fleet_token(expires_in=8 * 60 * 60, **extra):
+def fleet_token(expires_in=8 * 60 * 60, scp=FLEET_SCOPES, **extra):
     """A Fleet API access token as issued to a registered third-party app."""
     claims = {
         "iss": "https://auth.tesla.com/oauth2/v3/nts",
         "aud": FLEET_AUD,
         "azp": "my-client-id",
-        "scp": ["openid", "offline_access", "vehicle_device_data", "vehicle_cmds"],
         "ou_code": "NA",
         "exp": int(time.time() + expires_in),
     }
+    if scp is not None:
+        claims["scp"] = list(scp)
     claims.update(extra)
     return make_jwt(**claims)
 
@@ -92,8 +111,31 @@ def new_api(master=None, **config_overrides):
 
     master = master or FakeMaster(**config_overrides)
     api = TeslaAPI(master)
-    api.carApiBearerToken = ""
-    api.carApiRefreshToken = ""
     api.carApiVehicles = []
     master.modules["TeslaAPI"] = api
     return api
+
+
+class _NoThread:
+    daemon = False
+
+    def start(self):
+        pass
+
+
+@pytest.fixture
+def no_threads(monkeypatch):
+    """Stop CarApiVehicle from starting its sync-monitoring thread."""
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+
+    monkeypatch.setattr(teslaapi, "Thread", lambda *a, **k: _NoThread())
+
+
+def add_home_vehicle(api):
+    """Add vehicle VIN1, at home and recently contacted, so ready() is True
+    without an HTTP call. Use with the no_threads fixture."""
+    api.addVehicle({"id": 1, "vin": "VIN1", "display_name": "Car"})
+    vehicle = api.getCarApiVehicles()[-1]
+    vehicle.atHome = True
+    vehicle.lastAPIAccessTime = time.time()
+    return vehicle

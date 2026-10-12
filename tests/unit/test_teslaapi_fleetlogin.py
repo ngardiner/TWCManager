@@ -13,9 +13,13 @@ from urllib.parse import urlsplit, parse_qs
 import pytest
 from unittest.mock import Mock
 
+from tests.unit.teslatokens import fleet_token, owner_token
+
 PKCE_TOKEN_URL = "https://auth.tesla.com/oauth2/v3/token"
 CONF_TOKEN_URL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
 REDIRECT = "https://twc.example.com/teslaAccount/callback"
+ACCESS = fleet_token()
+TOKENS = {"access_token": ACCESS, "refresh_token": "R", "expires_in": 28800}
 
 
 def make_master(**config_overrides):
@@ -32,7 +36,7 @@ def make_master(**config_overrides):
 
     master = Mock()
     master.config = {"config": cfg, "vehicle": {"teslaAPI": {"enabled": True}}}
-    # tokenSyncEnabled() must be falsey or setCarApiBearerToken refuses the token
+    # tokenSyncEnabled() must be falsey or storeToken refuses the token
     master.tokenSyncEnabled.return_value = False
     return master
 
@@ -40,11 +44,7 @@ def make_master(**config_overrides):
 def new_api(**config_overrides):
     from TWCManager.Vehicle.TeslaAPI import TeslaAPI
 
-    api = TeslaAPI(make_master(**config_overrides))
-    # Start each test without inherited class-level token state
-    api.carApiBearerToken = ""
-    api.carApiRefreshToken = ""
-    return api
+    return TeslaAPI(make_master(**config_overrides))
 
 
 @pytest.fixture
@@ -100,17 +100,19 @@ class TestTokenExchange:
         pkce_api.getLoginURL("NA")
         assert pkce_api.fleetTokenExchange("auth-code", "wrong") == "state_mismatch"
         assert adapter.call_count == 0
-        assert pkce_api.getCarApiBearerToken() == ""
+        assert pkce_api.fleetSlot.accessToken == ""
 
     def test_pkce_exchange_uses_verifier_no_secret(self, pkce_api, requests_mock):
-        requests_mock.post(
-            PKCE_TOKEN_URL,
-            json={"access_token": "A", "refresh_token": "R", "expires_in": 28800},
-        )
+        requests_mock.post(PKCE_TOKEN_URL, json=TOKENS)
         state = parse_qs(urlsplit(pkce_api.getLoginURL("NA")).query)["state"][0]
         assert pkce_api.fleetTokenExchange("auth-code", state) == "success"
-        assert pkce_api.getCarApiBearerToken() == "A"
-        assert pkce_api.getCarApiRefreshToken() == "R"
+        assert pkce_api.fleetSlot.accessToken == ACCESS
+        assert pkce_api.fleetSlot.refreshToken == "R"
+        assert pkce_api.fleetSlot.source == "login"
+        assert pkce_api.ownerSlot.accessToken == ""
+        assert {"cmd": "saveSettings"} in [
+            c.args[0] for c in pkce_api.master.queue_background_task.call_args_list
+        ]
 
         body = parse_qs(requests_mock.last_request.text)
         assert body["grant_type"] == ["authorization_code"]
@@ -125,10 +127,7 @@ class TestTokenExchange:
         assert pkce_api._TeslaAPI__loginVerifier is None
 
     def test_confidential_exchange_uses_secret_audience(self, conf_api, requests_mock):
-        requests_mock.post(
-            CONF_TOKEN_URL,
-            json={"access_token": "A", "refresh_token": "R", "expires_in": 28800},
-        )
+        requests_mock.post(CONF_TOKEN_URL, json=TOKENS)
         state = parse_qs(urlsplit(conf_api.getLoginURL("NA")).query)["state"][0]
         assert conf_api.fleetTokenExchange("auth-code", state) == "success"
 
@@ -141,13 +140,17 @@ class TestTokenExchange:
         requests_mock.post(PKCE_TOKEN_URL, json={"error": "invalid_grant"})
         state = parse_qs(urlsplit(pkce_api.getLoginURL("NA")).query)["state"][0]
         assert pkce_api.fleetTokenExchange("auth-code", state) == "invalid_grant"
-        assert pkce_api.getCarApiBearerToken() == ""
+        assert pkce_api.fleetSlot.accessToken == ""
+
+    def test_unknown_token_type_not_stored(self, pkce_api, requests_mock):
+        requests_mock.post(PKCE_TOKEN_URL, json=dict(TOKENS, access_token="A"))
+        state = parse_qs(urlsplit(pkce_api.getLoginURL("NA")).query)["state"][0]
+        assert pkce_api.fleetTokenExchange("auth-code", state) == "unknown_type"
+        assert pkce_api.fleetSlot.accessToken == ""
+        assert pkce_api.ownerSlot.accessToken == ""
 
     def test_paste_back_path(self, pkce_api, requests_mock):
-        requests_mock.post(
-            PKCE_TOKEN_URL,
-            json={"access_token": "A", "refresh_token": "R", "expires_in": 28800},
-        )
+        requests_mock.post(PKCE_TOKEN_URL, json=TOKENS)
         state = parse_qs(urlsplit(pkce_api.getLoginURL("NA")).query)["state"][0]
         pasted = f"{REDIRECT}?code=pasted-code&state={state}"
         assert pkce_api.saveApiToken(pasted) == "success"
@@ -158,24 +161,17 @@ class TestLoginWhileTokenSyncOn:
     """While TeslaMate token sync is on, TeslaMate owns the tokens. The login
     routes can still be reached by URL; the exchange must store nothing."""
 
-    SENTINEL = 99999 * 99999 * 99999
-
     def synced(self, api):
-        api.carApiBearerToken = "synced-access"
-        api.carApiRefreshToken = "synced-refresh"
-        api.carApiTokenExpireTime = self.SENTINEL
+        # TeslaMate's token is in the Fleet slot, the one a login fills.
+        api.storeToken(fleet_token(jti="synced"), "", "synced")
         api.master.tokenSyncEnabled.return_value = True
+        self.before = (api.ownerSlot.snapshot(), api.fleetSlot.snapshot())
 
     def assert_unchanged(self, api):
-        assert api.getCarApiBearerToken() == "synced-access"
-        assert api.getCarApiRefreshToken() == "synced-refresh"
-        assert api.getCarApiTokenExpireTime() == self.SENTINEL
+        assert (api.ownerSlot.snapshot(), api.fleetSlot.snapshot()) == self.before
 
     def test_callback_exchange_refused(self, pkce_api, requests_mock):
-        adapter = requests_mock.post(
-            PKCE_TOKEN_URL,
-            json={"access_token": "A", "refresh_token": "R", "expires_in": 28800},
-        )
+        adapter = requests_mock.post(PKCE_TOKEN_URL, json=TOKENS)
         state = parse_qs(urlsplit(pkce_api.getLoginURL("NA")).query)["state"][0]
         self.synced(pkce_api)
 
@@ -184,10 +180,7 @@ class TestLoginWhileTokenSyncOn:
         self.assert_unchanged(pkce_api)
 
     def test_paste_back_refused(self, conf_api, requests_mock):
-        adapter = requests_mock.post(
-            CONF_TOKEN_URL,
-            json={"access_token": "A", "refresh_token": "R", "expires_in": 28800},
-        )
+        adapter = requests_mock.post(CONF_TOKEN_URL, json=TOKENS)
         state = parse_qs(urlsplit(conf_api.getLoginURL("NA")).query)["state"][0]
         self.synced(conf_api)
 
@@ -218,5 +211,5 @@ class TestLoginWhileTokenSyncOn:
             master=Mock(tokenSyncEnabled=Mock(return_value=True)),
             apiAvailable=True,
         )
-        assert "TeslaMate token sync is on" in page
+        assert "TeslaMate token sync manages the token slot" in page
         assert "Tesla reported an error" not in page

@@ -211,9 +211,7 @@ class TeslaMateVehicle(TelmetryBase):
     def fetchLatestTokens(self, conn, cur):
         for table in self.TOKEN_TABLES:
             try:
-                cur.execute(
-                    "SELECT access, refresh FROM " + table + " ORDER BY id DESC LIMIT 1"
-                )
+                cur.execute("SELECT access FROM " + table + " ORDER BY id DESC LIMIT 1")
             except psycopg2.errors.UndefinedTable:
                 # A failed statement aborts the transaction; clear it
                 # before trying the next location.
@@ -229,7 +227,6 @@ class TeslaMateVehicle(TelmetryBase):
         if self.__db_host and self.__db_name and self.__db_user and self.__db_pass:
             conn = None
             access_token = None
-            refresh_token = None
 
             try:
                 conn = psycopg2.connect(
@@ -256,27 +253,20 @@ class TeslaMateVehicle(TelmetryBase):
                     # Query DB for latest access and refresh token
                     result = self.fetchLatestTokens(conn, cur)
 
-                    if result:
-                        encrypted_access_token = result[0]
-                        encrypted_refresh_token = result[1]
+                    if result and result[0]:
+                        access_token = self.decrypt_data(result[0])
 
-                        if encrypted_access_token and encrypted_refresh_token:
-                            access_token = self.decrypt_data(encrypted_access_token)
-                            refresh_token = self.decrypt_data(encrypted_refresh_token)
-
-                    if access_token and refresh_token:
-                        # Set Bearer and Refresh Tokens
+                    if access_token:
                         carapi = self.master.getModuleByName("TeslaAPI")
                         if carapi:
-                            # applySyncedTokens marks the tokens as never
-                            # expiring, so TWCManager leaves refresh to
-                            # TeslaMate.
-                            carapi.applySyncedTokens(access_token, refresh_token)
-                            self.lastSync = time.time()
-                            logger.log(
-                                logging.INFO,
-                                "Successfully synced tokens from TeslaMate database",
-                            )
+                            # Access token only: a synced token expires at
+                            # its own exp, and TeslaMate does the refreshing.
+                            if carapi.applySyncedToken(access_token) == "success":
+                                self.lastSync = time.time()
+                                logger.log(
+                                    logging.INFO,
+                                    "Successfully synced tokens from TeslaMate database",
+                                )
                         else:
                             logger.error("TeslaAPI module not found")
                     else:

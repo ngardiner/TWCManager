@@ -11,8 +11,8 @@ from threading import RLock, Thread
 import time
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
-import jwt
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 
 logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
@@ -30,7 +30,6 @@ class TLS13Adapter(HTTPAdapter):
 
 
 class TeslaAPI:
-    baseURL = ""
     # A charge rate the car accepted is not resent for this long (seconds).
     CHARGE_RATE_RESEND_AFTER = 600
     regionURL = {
@@ -41,14 +40,15 @@ class TeslaAPI:
         # fleetRegions() leaves it out of every region list and lookup.
         "OwnerAPI": "https://owner-api.teslamotors.com/api/1/vehicles",
     }
-    # teslaProxy base URL and certificate from config.json, kept apart from
-    # baseURL so it can be restored when a Fleet token replaces an Owner one.
+    # teslaProxy base URL and certificate from config.json, used for Fleet
+    # API tokens (the Vehicle Command proxy only takes Fleet tokens).
     proxyURL = ""
     proxyCert = True
-    # True while the current token is an Owner API token, which cannot send
-    # vehicle commands.
-    readOnly = False
-    readOnlyRefusalLogged = False
+    # One slot per token type; built in __init__.
+    ownerSlot = None
+    fleetSlot = None
+    # fleetSlot.changes when a refused command was last logged.
+    refusalLoggedAt = None
     refreshClientID = ""
     # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
     # whether a client secret is configured:
@@ -72,15 +72,11 @@ class TeslaAPI:
     __loginState = None
     __loginRegion = None
     __loginVerifier = None
-    verifyCert = True
     carApiLastErrorTime = 0
     wakeDelayMins = 3
-    carApiBearerToken = ""
-    carApiRefreshToken = ""
-    carApiTokenExpireTime = time.time()
-    # Expiry given to tokens supplied by a token sync source (TeslaMate). The
-    # source refreshes them; TWCManager must never try to.
-    SYNCED_TOKEN_EXPIRY = 99999 * 99999 * 99999
+    # The never-expires expiry earlier releases saved with a synced token.
+    # Only compared against, when restoring saved settings.
+    LEGACY_SYNCED_EXPIRY = 99999 * 99999 * 99999
     carApiLastStartOrStopChargeTime = 0
     carApiLastChargeLimitApplyTime = 0
     lastChargeLimitApplied = 0
@@ -119,6 +115,8 @@ class TeslaAPI:
 
     def __init__(self, master):
         self.master = master
+        # slot.changes when a skipped sync was last logged, per slot.
+        self.syncSkipLoggedAt = {"owner": None, "fleet": None}
 
         try:
             self.config = master.config
@@ -129,9 +127,6 @@ class TeslaAPI:
             if proxyURL:
                 self.proxyURL = proxyURL + "/api/1/vehicles"
                 self.proxyCert = self.config["config"].get("teslaProxyCert", True)
-                # Until a token is classified, assume it suits the proxy.
-                self.baseURL = self.proxyURL
-                self.verifyCert = self.proxyCert
             self.refreshClientID = self.config["config"].get("teslaApiClientID", "")
             self.clientSecret = self.config["config"].get("teslaApiClientSecret", "")
             self.redirectURI = self.config["config"].get("teslaApiRedirectUri", "")
@@ -148,6 +143,19 @@ class TeslaAPI:
         # The Owner API refresh goes through this session, as in release/1.3.3.
         self.session = requests.Session()
         self.session.mount("https://auth.tesla.com", TLS13Adapter())
+
+        # Owner tokens refresh as in release/1.3.3 (client_id "ownerapi",
+        # through the TLS 1.3 session); Fleet tokens with teslaApiClientID.
+        self.ownerSlot = TeslaTokenSlot(
+            "owner", self.tokenRoute, self.authTokenURL, "ownerapi", self.session.post
+        )
+        self.fleetSlot = TeslaTokenSlot(
+            "fleet",
+            self.tokenRoute,
+            self.fleetRefreshURL,
+            self.refreshClientID,
+            requests.post,
+        )
 
     def enabled(self) -> bool:
         return self._enabled
@@ -181,103 +189,11 @@ class TeslaAPI:
         # If we make it here, we did not execute a command
         return False
 
-    def apiRefresh(self):
-        return self.refreshToken() == "success"
-
-    def refreshToken(self, saveOnFailure=True):
-        # Refreshes the tokens. Returns "success", "rejected" (Tesla answered
-        # but gave no tokens), "unreachable" (no response), "not_configured"
-        # (a Fleet refresh with no teslaApiClientID) or "token_sync".
-        # saveOnFailure=False leaves saving a failure's state to the caller.
-        if self.master.tokenSyncEnabled():
-            # The sync source (TeslaMate) owns and refreshes these tokens.
-            # Refreshing here would rotate the token out from under it.
-            logger.log(logging.INFO8, "Token sync is on; not refreshing token")
-            return "token_sync"
-        # Refresh tokens expire in 45
-        # days when first issued, so we'll get a new token every 15 days.
-        if self.refreshTokenIsOwner():
-            # An Owner API token refreshes as in release/1.3.3: client_id
-            # "ownerapi" at auth.tesla.com, through the TLS 1.3 session.
-            # No teslaApiClientID is needed.
-            clientID = "ownerapi"
-            myRefreshURL = self.authTokenURL
-            post = self.session.post
-        else:
-            if not self.refreshClientID:
-                logger.error(
-                    "Cannot refresh Tesla token: no teslaApiClientID configured. "
-                    "Register a Fleet API app and set teslaApiClientID in config.json."
-                )
-                return "not_configured"
-            clientID = self.refreshClientID
-            myRefreshURL = self.fleetRefreshURL
-            post = requests.post
-        headers = {"accept": "application/json", "Content-Type": "application/json"}
-        data = {
-            "client_id": clientID,
-            "grant_type": "refresh_token",
-            "refresh_token": self.getCarApiRefreshToken(),
-            "scope": "offline_access",
-        }
-        req = None
-        now = time.time()
-        try:
-            req = post(myRefreshURL, headers=headers, json=data)
-            logger.log(logging.INFO2, "Car API request" + str(req))
-            req.raise_for_status()
-            apiResponseDict = json.loads(req.text)
-        except requests.exceptions.RequestException:
-            # req is None when the request never went out (e.g. no network).
-            if req is not None and req.status_code == 401:
-                logger.log(
-                    logging.INFO2,
-                    "ERROR: Can't access Tesla car via API.  Please supply fresh tokens.",
-                )
-                self.clearCarApiBearerToken()
-                self.setCarApiRefreshToken("")
-            self.updateCarApiLastErrorTime()
-            # Instead of just setting carApiLastErrorTime, erase tokens to
-            # prevent further authorization attempts until user enters password
-            # on web interface. I feel this is safer than trying to log in every
-            # ten minutes with a bad token because Tesla might decide to block
-            # remote access to your car after too many authorization errors.
-            if saveOnFailure:
-                self.master.queue_background_task({"cmd": "saveSettings"})
-            return "unreachable" if req is None else "rejected"
-        except json.decoder.JSONDecodeError:
-            logger.log(
-                logging.INFO2, "JSON Decode Error parsing API Token Refresh Response"
-            )
-        except ValueError:
-            logger.log(logging.INFO2, "ValueError parsing API Token Refresh Response")
-        except Exception as e:
-            logger.warning(f"Unexpected error during token refresh: {e}")
-
-        try:
-            logger.log(logging.INFO4, "Car API auth response" + str(apiResponseDict))
-            self.setCarApiBearerToken(apiResponseDict["access_token"])
-            self.setCarApiRefreshToken(apiResponseDict["refresh_token"])
-            self.setCarApiTokenExpireTime(now + apiResponseDict["expires_in"])
-            self.master.queue_background_task({"cmd": "saveSettings"})
-            return "success"
-
-        except Exception as e:
-            logger.warning(f"Error processing token refresh response: {e}")
-            pass
-
-        return "rejected"
-
-    def refreshTokenIsOwner(self):
-        # True when the refresh token is an Owner API one, so apiRefresh uses
-        # the ownerapi refresh. A classified (Owner or Fleet) bearer token
-        # decides (readOnly is set only for an Owner API token). With no
-        # bearer token, e.g. when only a refresh token was pasted, or one of
-        # unknown type, the refresh token's own type decides.
-        bearer = self.getCarApiBearerToken()
-        if bearer and self.classifyToken(self.decodeToken(bearer))[0] != "unknown":
-            return self.readOnly
-        return self.refreshTokenType(self.getCarApiRefreshToken()) == "owner"
+    def refreshTokenTypeKnown(self, token):
+        # True when the refresh token's type can be told from the token
+        # itself: only an Owner API refresh token (a JWT) is recognisable.
+        decoded = self.decodeToken(token)
+        return decoded is not None and decoded.get("iss") == self.ownerTokenIssuer
 
     def refreshTokenType(self, token):
         # "owner" for an Owner API refresh token, a JWT issued by
@@ -289,41 +205,139 @@ class TeslaAPI:
         return "fleet"
 
     def refreshTokenIfNeeded(self):
-        # Proactively refresh the bearer token if it's missing or close to
+        # Proactively refresh each slot's token if it's missing or close to
         # expiry. Called both from car_api_available() (ahead of vehicle
         # commands) and from read-only callers such as Storm Watch, which
-        # otherwise have no other path that keeps the token alive.
-        now = time.time()
-        if not self.master.tokenSyncEnabled() and (
-            self.getCarApiBearerToken() == ""
-            or self.getCarApiTokenExpireTime() - now < 60 * 60
-        ):
-            if self.getCarApiRefreshToken() != "":
+        # otherwise have no other path that keeps the token alive. A synced
+        # slot holds no refresh token, so it never refreshes.
+        for slot in (self.ownerSlot, self.fleetSlot):
+            if slot.needsRefresh():
                 logger.log(logging.INFO8, "Attempting token refresh")
-                self.apiRefresh()
+                self.refreshSlot(slot)
+
+    def refreshSlot(self, slot, saveOnFailure=True):
+        # Refreshes one slot's tokens. Returns slot.refresh()'s result:
+        # "success", "rejected", "unreachable" or "not_configured".
+        # saveOnFailure=False leaves saving a failure's state to the caller.
+        result = slot.refresh()
+        if result == "success":
+            self.master.queue_background_task({"cmd": "saveSettings"})
+        elif result != "not_configured":
+            # A rejected refresh token (401) has cleared the slot, so no
+            # further attempts are made with it until the user supplies
+            # fresh tokens: retrying a bad token might make Tesla block
+            # remote access to the car.
+            self.updateCarApiLastErrorTime()
+            if saveOnFailure:
+                self.master.queue_background_task({"cmd": "saveSettings"})
+        return result
+
+    def slotRequestFailed(self, slot, response):
+        # Reacts to a failed vehicle read made with this slot's token.
+        # Returns True only when it refreshed the slot, so the caller should
+        # retry once. A dead token is cleared and a refused one paused for
+        # reads; neither records an API error, so the next poll can use the
+        # other slot at once. Storm Watch does not come here: a refused
+        # energy read must not pause vehicle reads.
+        if response is None:
+            return False
+        code = response.status_code
+        label = slot.kind.capitalize()
+        if code == 401:
+            if (
+                "expired" in response.text
+                and slot.source != "synced"
+                and slot.refreshToken
+            ):
+                return self.refreshSlot(slot) == "success"
+            logger.error(
+                "Tesla %s API token was rejected (HTTP 401); removing it." % label
+            )
+            slot.clear()
+            self.master.queue_background_task({"cmd": "saveSettings"})
+        elif code in (403, 410, 412):
+            logger.error(
+                "Tesla %s API refused a read (HTTP %d); not using that token "
+                "for reads for an hour." % (label, code)
+            )
+            slot.pause()
+        return False
+
+    def tokenRoute(self, token):
+        # (tokenType, baseURL, verifyCert) for an access token: where its
+        # requests go. Both slots classify their tokens with this.
+        tokenType, region = self.classifyToken(self.decodeToken(token))
+        if tokenType == "owner":
+            # The Vehicle Command proxy only takes Fleet tokens.
+            baseURL, verifyCert = self.regionURL["OwnerAPI"], True
+        elif tokenType == "fleet" and self.proxyURL:
+            baseURL, verifyCert = self.proxyURL, self.proxyCert
+        elif tokenType == "fleet":
+            baseURL, verifyCert = self.regionURL[region], True
+        else:
+            baseURL, verifyCert = "", True
+            logger.error(
+                "Unable to determine the Tesla API token type (Owner API or "
+                "Fleet API). No Tesla API calls will be made until a "
+                "recognised token is supplied."
+            )
+        logger.info(
+            "Tesla API token type: %s, base URL host: %s"
+            % (tokenType, urlsplit(baseURL).netloc or "none")
+        )
+        return tokenType, baseURL, verifyCert
+
+    def slotOfType(self, tokenType):
+        if tokenType == "owner":
+            return self.ownerSlot
+        if tokenType == "fleet":
+            return self.fleetSlot
+        return None
+
+    def slotFor(self, purpose):
+        # The slot a request of this purpose ("read", "command" or "energy")
+        # uses, or None when no slot is usable for it. The only chooser.
+        for slot in (self.ownerSlot, self.fleetSlot):
+            if slot.usable(purpose):
+                return slot
+        return None
+
+    @property
+    def readOnly(self):
+        # True when no slot can send vehicle commands.
+        return self.slotFor("command") is None
 
     def loadVehicleList(self):
-        # Populate carApiVehicles from the Fleet API vehicle list. Returns True
-        # if vehicles are (now) known, False if the fetch failed. Safe to call
-        # from any thread; concurrent callers will not double-add vehicles.
+        # Populate carApiVehicles from the vehicle list of the read slot
+        # (Owner API /products, else the Fleet API vehicle list). Returns True
+        # if vehicles are (now) known, False if the fetch failed or no slot is
+        # usable for reads. Safe to call from any thread; concurrent callers
+        # will not double-add vehicles.
         with self.vehicleListLock:
             if self.getVehicleCount() > 0:
                 return True
-            if self.getCarApiBearerToken() == "":
+            slot = self.slotFor("read")
+            if slot is None:
                 return False
 
             req = None
             apiResponseDict = {}
-            url = self.vehicleListURL()
+            url = self.vehicleListURL(slot)
             headers = {
                 "accept": "application/json",
-                "Authorization": "Bearer " + self.getCarApiBearerToken(),
+                "Authorization": "Bearer " + slot.accessToken,
             }
             try:
                 req = requests.get(
-                    url, headers=headers, verify=self.verifyCert, timeout=30
+                    url, headers=headers, verify=slot.verifyCert, timeout=30
                 )
                 logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
+                if req.status_code in (401, 403, 410, 412):
+                    # Clears or pauses this slot only; no retry here, and no
+                    # API error backoff, so the next poll can use the other
+                    # slot at once.
+                    self.slotRequestFailed(slot, req)
+                    return False
                 apiResponseDict = json.loads(req.text)
             except requests.exceptions.RequestException:
                 logger.info("Failed to make API call " + url)
@@ -384,224 +398,215 @@ class TeslaAPI:
                 "Entering car_api_available - next step is to query Tesla API",
             )
 
-        if not self.getCarApiBaseURL():
-            # No token yet (and no teslaProxy), or the token type is unknown,
-            # which setCarApiBearerToken logged as an ERROR. The main loop's
-            # refreshTokenIfNeeded() still covers a token-less start.
-            if self.getCarApiBearerToken():
+        # Authenticate to Tesla API
+        self.refreshTokenIfNeeded()
+
+        slot = self.slotFor("read")
+        if slot is None:
+            # No token yet, a token of unknown type (logged as an ERROR when
+            # it was stored), or a paused slot.
+            slots = (self.ownerSlot, self.fleetSlot)
+            if any(s.accessToken and s.tokenType != s.kind for s in slots):
                 reason = "token type unknown"
+            elif any(now < s.pausedUntil for s in slots):
+                reason = "paused"
             else:
                 reason = "no Tesla API token yet"
             logger.log(
                 logging.INFO8,
-                "car_api_available returning False: no API base URL (%s)" % reason,
+                "car_api_available returning False: no usable Tesla API token (%s)"
+                % reason,
             )
             return False
 
-        # Authenticate to Tesla API
-        self.refreshTokenIfNeeded()
+        if self.getVehicleCount() < 1 and not self.loadVehicleList():
+            return False
 
-        if self.getCarApiBearerToken() != "":
-            if self.getVehicleCount() < 1 and not self.loadVehicleList():
-                return False
+        if self.getVehicleCount() > 0 and (charge or applyLimit) and not self.readOnly:
+            # Wake cars if needed
+            for vehicle in self.getCarApiVehicles():
+                if vin and vehicle.VIN != vin:
+                    # Targeted command: leave other cars asleep.
+                    continue
 
-            if (
-                self.getVehicleCount() > 0
-                and (charge or applyLimit)
-                and not self.readOnly
-            ):
-                # Wake cars if needed
-                for vehicle in self.getCarApiVehicles():
-                    if vin and vehicle.VIN != vin:
-                        # Targeted command: leave other cars asleep.
-                        continue
+                if charge is True and vehicle.stopAskingToStartCharging:
+                    # Vehicle is in a state (complete or charging) already
+                    # which doesn't make sense for us to keep requesting it
+                    # to start charging, so we will stop.
+                    logger.log(
+                        logging.DEBUG2,
+                        "Don't repeatedly request API to charge "
+                        + vehicle.name
+                        + ", because vehicle.stopAskingToStartCharging "
+                        + " == True - it has already been requested.",
+                    )
+                    continue
 
-                    if charge is True and vehicle.stopAskingToStartCharging:
-                        # Vehicle is in a state (complete or charging) already
-                        # which doesn't make sense for us to keep requesting it
-                        # to start charging, so we will stop.
-                        logger.log(
-                            logging.DEBUG2,
-                            "Don't repeatedly request API to charge "
-                            + vehicle.name
-                            + ", because vehicle.stopAskingToStartCharging "
-                            + " == True - it has already been requested.",
-                        )
-                        continue
+                if applyLimit is True and vehicle.stopTryingToApplyLimit:
+                    logger.log(
+                        logging.DEBUG2,
+                        "Don't wake "
+                        + vehicle.name
+                        + " to set the charge limit - it has already been set",
+                    )
+                    continue
 
-                    if applyLimit is True and vehicle.stopTryingToApplyLimit:
-                        logger.log(
-                            logging.DEBUG2,
-                            "Don't wake "
-                            + vehicle.name
-                            + " to set the charge limit - it has already been set",
-                        )
-                        continue
+                if self.getCarApiRetryRemaining(vehicle):
+                    # It's been under carApiErrorRetryMins minutes since the car
+                    # API generated an error on this vehicle. Don't send it more
+                    # commands yet.
+                    logger.log(
+                        logging.DEBUG2,
+                        "Don't send commands to "
+                        + vehicle.name
+                        + " because it returned an error in the last "
+                        + str(self.getCarApiErrorRetryMins())
+                        + " minutes.",
+                    )
+                    continue
 
-                    if self.getCarApiRetryRemaining(vehicle):
-                        # It's been under carApiErrorRetryMins minutes since the car
-                        # API generated an error on this vehicle. Don't send it more
-                        # commands yet.
-                        logger.log(
-                            logging.DEBUG2,
-                            "Don't send commands to "
-                            + vehicle.name
-                            + " because it returned an error in the last "
-                            + str(self.getCarApiErrorRetryMins())
-                            + " minutes.",
-                        )
-                        continue
+                # Don't wake a vehicle we already know is not at home;
+                # waking it would drain its battery unnecessarily (closes #466).
+                if not vehicle.atHome and vehicle.lat != 10000:
+                    logger.log(
+                        logging.DEBUG2,
+                        "Don't wake " + vehicle.name + " because it is not at home.",
+                    )
+                    continue
 
-                    # Don't wake a vehicle we already know is not at home;
-                    # waking it would drain its battery unnecessarily (closes #466).
-                    if not vehicle.atHome and vehicle.lat != 10000:
-                        logger.log(
-                            logging.DEBUG2,
-                            "Don't wake "
-                            + vehicle.name
-                            + " because it is not at home.",
-                        )
-                        continue
-
-                    # Pre-wake delay: on first detection check awake state once,
-                    # then hold wakeDelayMins before sending wake_up.  During the
-                    # hold window no Fleet API calls are made, giving the car a
-                    # chance to self-start via the TWC offer.
-                    if vehicle.firstChargeNeededTime == 0:
-                        if vehicle.ready():
-                            continue
-                        vehicle.firstChargeNeededTime = now
-                        logger.info(
-                            vehicle.name
-                            + ": deferring wake for "
-                            + str(self.wakeDelayMins)
-                            + " minutes"
-                        )
-                        return False
-
-                    wakeDelaySecs = self.wakeDelayMins * 60
-                    if now - vehicle.firstChargeNeededTime < wakeDelaySecs:
-                        # Still in pre-wake hold window - no API calls.
-                        return False
-
-                    # Pre-wake delay elapsed.  Honour post-wake retry delay
-                    # before issuing another wake command.
-                    if now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt:
-                        logger.debug(
-                            "car_api_available returning False - still in "
-                            + str(vehicle.delayNextWakeAttempt)
-                            + "s post-wake delay."
-                        )
-                        return False
-
-                    # Check whether the car woke itself since the last attempt.
+                # Pre-wake delay: on first detection check awake state once,
+                # then hold wakeDelayMins before sending wake_up.  During the
+                # hold window no Fleet API calls are made, giving the car a
+                # chance to self-start via the TWC offer.
+                if vehicle.firstChargeNeededTime == 0:
                     if vehicle.ready():
-                        vehicle.firstChargeNeededTime = 0
                         continue
+                    vehicle.firstChargeNeededTime = now
+                    logger.info(
+                        vehicle.name
+                        + ": deferring wake for "
+                        + str(self.wakeDelayMins)
+                        + " minutes"
+                    )
+                    return False
 
-                    # Car is still not awake.  Send a wake command.
-                    apiResponseDict = self.wakeVehicle(vehicle)
+                wakeDelaySecs = self.wakeDelayMins * 60
+                if now - vehicle.firstChargeNeededTime < wakeDelaySecs:
+                    # Still in pre-wake hold window - no API calls.
+                    return False
 
+                # Pre-wake delay elapsed.  Honour post-wake retry delay
+                # before issuing another wake command.
+                if now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt:
+                    logger.debug(
+                        "car_api_available returning False - still in "
+                        + str(vehicle.delayNextWakeAttempt)
+                        + "s post-wake delay."
+                    )
+                    return False
+
+                # Check whether the car woke itself since the last attempt.
+                if vehicle.ready():
+                    vehicle.firstChargeNeededTime = 0
+                    continue
+
+                # Car is still not awake.  Send a wake command.
+                apiResponseDict = self.wakeVehicle(vehicle)
+
+                state = "error"
+                logger.debug("Car API wake car response" + str(apiResponseDict))
+                try:
+                    state = apiResponseDict["response"]["state"]
+                    self.resetCarApiLastErrorTime()
+
+                except (KeyError, TypeError):
+                    # This catches unexpected cases like trying to access
+                    # apiResponseDict['response'] when 'response' doesn't exist
+                    # in apiResponseDict.
                     state = "error"
-                    logger.debug("Car API wake car response" + str(apiResponseDict))
-                    try:
-                        state = apiResponseDict["response"]["state"]
+
+                if state == "online":
+                    # With max power saving settings, car will almost always
+                    # report 'asleep' or 'offline' the first time it's sent
+                    # wake_up.  Rarely, it returns 'online' on the first wake_up
+                    # even when the car has not been contacted in a long while.
+                    # I suspect that happens when we happen to query the car
+                    # when it periodically awakens for some reason.
+                    vehicle.firstWakeAttemptTime = 0
+                    vehicle.firstChargeNeededTime = 0
+                    vehicle.delayNextWakeAttempt = 0
+                    # Don't alter vehicle.lastAPIAccessTime because
+                    # vehicle.ready() uses it to return True if the last wake
+                    # was under 2 mins ago.
+                    needSleep = True
+                else:
+                    if vehicle.firstWakeAttemptTime == 0:
+                        vehicle.firstWakeAttemptTime = now
+
+                    # Fleet API wake credits are finite and expensive.
+                    # Regardless of state (asleep/offline/error), wait 30
+                    # minutes before retrying.  Rapid retries don't help:
+                    # asleep cars can take 2+ minutes to come online after
+                    # the first wake_up, and offline cars may not be
+                    # reachable at all until they self-wake.
+                    if state in ("asleep", "waking"):
                         self.resetCarApiLastErrorTime()
-
-                    except (KeyError, TypeError):
-                        # This catches unexpected cases like trying to access
-                        # apiResponseDict['response'] when 'response' doesn't exist
-                        # in apiResponseDict.
-                        state = "error"
-
-                    if state == "online":
-                        # With max power saving settings, car will almost always
-                        # report 'asleep' or 'offline' the first time it's sent
-                        # wake_up.  Rarely, it returns 'online' on the first wake_up
-                        # even when the car has not been contacted in a long while.
-                        # I suspect that happens when we happen to query the car
-                        # when it periodically awakens for some reason.
-                        vehicle.firstWakeAttemptTime = 0
-                        vehicle.firstChargeNeededTime = 0
-                        vehicle.delayNextWakeAttempt = 0
-                        # Don't alter vehicle.lastAPIAccessTime because
-                        # vehicle.ready() uses it to return True if the last wake
-                        # was under 2 mins ago.
-                        needSleep = True
+                    elif state == "offline":
+                        self.resetCarApiLastErrorTime()
+                        # Brief pause to avoid hammering the API on a
+                        # transient connectivity hiccup.
+                        time.sleep(5)
                     else:
-                        if vehicle.firstWakeAttemptTime == 0:
-                            vehicle.firstWakeAttemptTime = now
+                        # Handle 'error' state.
+                        self.updateCarApiLastErrorTime()
 
-                        # Fleet API wake credits are finite and expensive.
-                        # Regardless of state (asleep/offline/error), wait 30
-                        # minutes before retrying.  Rapid retries don't help:
-                        # asleep cars can take 2+ minutes to come online after
-                        # the first wake_up, and offline cars may not be
-                        # reachable at all until they self-wake.
-                        if state in ("asleep", "waking"):
-                            self.resetCarApiLastErrorTime()
-                        elif state == "offline":
-                            self.resetCarApiLastErrorTime()
-                            # Brief pause to avoid hammering the API on a
-                            # transient connectivity hiccup.
-                            time.sleep(5)
-                        else:
-                            # Handle 'error' state.
-                            self.updateCarApiLastErrorTime()
+                    vehicle.delayNextWakeAttempt = 30 * 60
 
-                        vehicle.delayNextWakeAttempt = 30 * 60
-
-                        if state == "error":
-                            logger.info(
-                                "Car API wake "
-                                + vehicle.name
-                                + " failed with unknown response.  "
-                                + "Will try again in "
-                                + str(vehicle.delayNextWakeAttempt)
-                                + " seconds."
-                            )
-                        else:
-                            logger.info(
-                                "Car API wake "
-                                + vehicle.name
-                                + " failed.  State remains: '"
-                                + state
-                                + "'.  Will try again in "
-                                + str(vehicle.delayNextWakeAttempt)
-                                + " seconds."
-                            )
-
-                    if (
-                        vehicle.firstWakeAttemptTime > 0
-                        and now - vehicle.firstWakeAttemptTime > 60 * 60
-                    ):
-                        # It should never take over an hour to wake a car.  If it
-                        # does, ask user to report an error.
+                    if state == "error":
                         logger.info(
-                            "ERROR: We have failed to wake "
+                            "Car API wake "
                             + vehicle.name
-                            + " from '"
+                            + " failed with unknown response.  "
+                            + "Will try again in "
+                            + str(vehicle.delayNextWakeAttempt)
+                            + " seconds."
+                        )
+                    else:
+                        logger.info(
+                            "Car API wake "
+                            + vehicle.name
+                            + " failed.  State remains: '"
                             + state
-                            + "' state for %.1f hours.\n"
-                            "Please file an issue at https://github.com/ngardiner/TWCManager/. "
-                            "Also include this: %s"
-                            % (
-                                ((now - vehicle.firstWakeAttemptTime) / 60 / 60),
-                                str(apiResponseDict),
-                            )
+                            + "'.  Will try again in "
+                            + str(vehicle.delayNextWakeAttempt)
+                            + " seconds."
                         )
 
-        if (
-            now - self.getCarApiLastErrorTime() < (self.getCarApiErrorRetryMins() * 60)
-            or self.getCarApiBearerToken() == ""
-        ):
+                if (
+                    vehicle.firstWakeAttemptTime > 0
+                    and now - vehicle.firstWakeAttemptTime > 60 * 60
+                ):
+                    # It should never take over an hour to wake a car.  If it
+                    # does, ask user to report an error.
+                    logger.info(
+                        "ERROR: We have failed to wake "
+                        + vehicle.name
+                        + " from '"
+                        + state
+                        + "' state for %.1f hours.\n"
+                        "Please file an issue at https://github.com/ngardiner/TWCManager/. "
+                        "Also include this: %s"
+                        % (
+                            ((now - vehicle.firstWakeAttemptTime) / 60 / 60),
+                            str(apiResponseDict),
+                        )
+                    )
+
+        if now - self.getCarApiLastErrorTime() < (self.getCarApiErrorRetryMins() * 60):
             logger.log(
                 logging.INFO8,
                 "car_api_available returning False because of recent carApiLasterrorTime "
-                + str(now - self.getCarApiLastErrorTime())
-                + " or empty carApiBearerToken '"
-                + self.getCarApiBearerToken()
-                + "'",
+                + str(now - self.getCarApiLastErrorTime()),
             )
             return False
 
@@ -847,17 +852,21 @@ class TeslaAPI:
             if charge:
                 self.applyChargeLimit(self.lastChargeLimitApplied, checkArrival=True)
 
-            url = self.baseURL + "/"
+            slot = self.slotFor("command")
+            if slot is None:
+                result = "error"
+                continue
+            url = slot.baseURL + "/"
             url = url + str(vehicle.VIN) + "/command/charge_" + startOrStop
             headers = {
                 "accept": "application/json",
-                "Authorization": "Bearer " + self.getCarApiBearerToken(),
+                "Authorization": "Bearer " + slot.accessToken,
             }
 
             # Retry up to 3 times on certain errors.
             for _ in range(0, 3):
                 try:
-                    req = requests.post(url, headers=headers, verify=self.verifyCert)
+                    req = requests.post(url, headers=headers, verify=slot.verifyCert)
                     logger.log(
                         logging.INFO8,
                         "Car API cmd charge_" + startOrStop + " " + str(req),
@@ -1187,9 +1196,6 @@ class TeslaAPI:
         if checkArrival:
             self.updateChargeAtHome()
 
-    def getCarApiBearerToken(self):
-        return self.carApiBearerToken
-
     def getCarApiErrorRetryMins(self, vehicle=None):
         errorCount = self.errorCount
         if vehicle:
@@ -1200,21 +1206,14 @@ class TeslaAPI:
     def getCarApiLastErrorTime(self):
         return self.carApiLastErrorTime
 
-    def getCarApiRefreshToken(self):
-        return self.carApiRefreshToken
-
-    def vehicleListURL(self):
+    def vehicleListURL(self, slot):
         # The Owner API no longer lists vehicles under /vehicles (it answers
         # 412 "only available on fleetapi"); /products still works and also
         # returns energy sites, which addVehicle skips because they have no
         # VIN. Per-vehicle endpoints (/vehicles/<VIN>/...) work as they are.
-        url = self.getCarApiBaseURL()
-        if self.readOnly and url.endswith("/vehicles"):
-            return url[: -len("vehicles")] + "products"
-        return url
-
-    def getCarApiBaseURL(self):
-        return self.baseURL
+        if slot.tokenType == "owner":
+            return slot.baseURL[: -len("vehicles")] + "products"
+        return slot.baseURL
 
     def getCarApiRetryRemaining(self, vehicle=None):
         # Calculate the amount of time remaining until the API can be queried
@@ -1245,9 +1244,6 @@ class TeslaAPI:
                     + str(lastError),
                 )
                 return int(backoff - lasterrortime)
-
-    def getCarApiTokenExpireTime(self):
-        return self.carApiTokenExpireTime
 
     def getLastStartOrStopChargeTime(self):
         return int(self.carApiLastStartOrStopChargeTime)
@@ -1338,13 +1334,13 @@ class TeslaAPI:
     def fleetTokenExchange(self, code, state):
         # Exchange an authorization code for tokens. Returns a status string used
         # by the web UI ("success", "error", or a Tesla error code).
-        if self.master.tokenSyncEnabled():
-            # The sync source (TeslaMate) owns the tokens. Refuse before the
-            # exchange, so nothing is stored and the code is not used up.
+        if self.syncedSlotLocked(self.fleetSlot):
+            # TeslaMate owns the Fleet slot. Refuse before the exchange, so
+            # nothing is stored and the code is not used up.
             logger.warning(
-                "Tesla login refused: TeslaMate token sync is on, so "
-                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
-                "log in here."
+                "Tesla login refused: TeslaMate token sync manages the Fleet "
+                "API token. Remove that token on the Settings page, or turn "
+                "off syncTokens, to log in here."
             )
             return "token_sync"
         if not self.loginConfigured():
@@ -1374,8 +1370,8 @@ class TeslaAPI:
             data["client_secret"] = self.clientSecret
             data["audience"] = self.regionAudience(self.__loginRegion or self.region)
             tokenURL = self.fleetRefreshURL
-        # baseURL is left to setCarApiBearerToken, which classifies the token
-        # and picks the proxy or the region URL for a Fleet token.
+        # storeToken classifies the token and picks its slot, and the slot
+        # the proxy or the region URL for a Fleet token.
 
         req = None
         try:
@@ -1396,11 +1392,14 @@ class TeslaAPI:
             return params["error"]
 
         if "access_token" in params and "refresh_token" in params:
-            self.setCarApiBearerToken(params["access_token"])
-            self.setCarApiRefreshToken(params["refresh_token"])
-            self.setCarApiTokenExpireTime(
-                time.time() + params.get("expires_in", 8 * 60 * 60)
+            result = self.storeToken(
+                params["access_token"],
+                params["refresh_token"],
+                "login",
+                time.time() + params.get("expires_in", 8 * 60 * 60),
             )
+            if result != "success":
+                return result
             self.__loginState = None
             self.__loginVerifier = None
             self.master.queue_background_task({"cmd": "saveSettings"})
@@ -1425,16 +1424,9 @@ class TeslaAPI:
         return self.fleetTokenExchange(code, state)
 
     def savePastedToken(self, token):
-        # Stores a token pasted on its own: an access token as the bearer
-        # token, anything else as the refresh token (which refreshes by its
+        # Stores a token pasted on its own: an access token in the slot of
+        # its type, anything else as a refresh token (which refreshes by its
         # type). Returns a status string for the web UI, as saveApiToken does.
-        if self.master.tokenSyncEnabled():
-            logger.warning(
-                "Tesla API token refused: TeslaMate token sync is on, so "
-                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
-                "enter tokens by hand."
-            )
-            return "token_sync"
         if not token:
             return "error"
         decoded = self.decodeToken(token)
@@ -1442,41 +1434,28 @@ class TeslaAPI:
         isOwnerRefresh = decoded is not None and (
             decoded.get("iss") == self.ownerTokenIssuer and tokenType != "owner"
         )
-        if tokenType != "unknown" and not isOwnerRefresh:
-            self.pasteAccessToken(token)
-            self.master.queue_background_task({"cmd": "saveSettings"})
-            return "success"
-        return self.pasteRefreshToken(token)
-
-    def pasteAccessToken(self, token):
-        # An access token entered on its own (Settings page or paste-back).
-        # A stored refresh token of the other type can't refresh it: the
-        # refresh would go to the wrong client and, on a 401, clear both
-        # tokens. Drop it, so the access token is used until it expires.
-        if not self.setCarApiBearerToken(token):
-            return False
-        tokenType = self.classifyToken(self.decodeToken(token))[0]
-        stored = self.getCarApiRefreshToken()
         if (
-            stored
-            and tokenType in ("owner", "fleet")
-            and self.refreshTokenType(stored) != tokenType
+            tokenType == "unknown"
+            and decoded is not None
+            and decoded.get("iss") != self.ownerTokenIssuer
         ):
-            logger.warning(
-                "Dropping the stored Tesla API refresh token: it is a %s "
-                "token and the pasted access token is a %s token. Paste the "
-                "matching refresh token too, or the access token will not be "
-                "refreshed when it expires."
-                % (self.refreshTokenType(stored), tokenType)
-            )
-            self.carApiRefreshToken = ""
-        return True
+            # A JWT that is neither token type: nothing to store, and it
+            # is not a refresh token either (Fleet's are opaque).
+            self.tokenRoute(token)
+            return "unknown_type"
+        if tokenType != "unknown" and not isOwnerRefresh:
+            # refreshToken=None keeps the slot's refresh token; the other
+            # slot is untouched.
+            result = self.storeToken(token)
+            if result == "success":
+                self.master.queue_background_task({"cmd": "saveSettings"})
+            return result
+        return self.pasteRefreshToken(token)
 
     def pasteRefreshToken(self, token):
         # A refresh token entered on its own (Settings page or paste-back).
-        # The stored bearer token may be of the other type, and apiRefresh
-        # picks the refresh from the bearer token, so forget it first: the
-        # refresh then goes by the refresh token's own type.
+        # It goes to the slot of its type, replacing that slot's tokens, and
+        # is refreshed at once. The other slot is untouched.
         # Returns a status for the web UI, as saveApiToken does:
         #   "success";
         #   "token_rejected" or "not_configured": Tesla rejected the token,
@@ -1484,28 +1463,20 @@ class TeslaAPI:
         #   "unreachable": no response from Tesla; the pasted token is kept
         #     and the usual refresh retries it;
         #   "token_sync": refused, nothing changed.
-        if self.master.tokenSyncEnabled():
-            # Refuses and logs why.
-            self.setCarApiRefreshToken(token)
-            return "token_sync"
         if not token:
             return "error"
-        previous = (
-            self.carApiBearerToken,
-            self.carApiRefreshToken,
-            self.carApiTokenExpireTime,
-            self.baseURL,
-            self.verifyCert,
-            self.readOnly,
-            self.readOnlyRefusalLogged,
-            self.carApiLastErrorTime,
-            self.errorCount,
-        )
-        self.clearCarApiBearerToken()
-        self.carApiRefreshToken = token
+        slot = self.slotOfType(self.refreshTokenType(token))
+        if self.syncedSlotLocked(slot):
+            self.logSyncedSlotLocked(slot)
+            return "token_sync"
+        previous = slot.snapshot()
+        previousErrors = (self.carApiLastErrorTime, self.errorCount)
+        slot.clear()
+        slot.refreshToken = token
+        slot.source = "pasted"
         # Nothing is saved on failure until the outcome is known, so a
         # queued save never writes the cleared state.
-        result = self.refreshToken(saveOnFailure=False)
+        result = self.refreshSlot(slot, saveOnFailure=False)
         if result == "success":
             return "success"
         if result == "unreachable":
@@ -1515,17 +1486,8 @@ class TeslaAPI:
             )
             self.master.queue_background_task({"cmd": "saveSettings"})
             return "unreachable"
-        (
-            self.carApiBearerToken,
-            self.carApiRefreshToken,
-            self.carApiTokenExpireTime,
-            self.baseURL,
-            self.verifyCert,
-            self.readOnly,
-            self.readOnlyRefusalLogged,
-            self.carApiLastErrorTime,
-            self.errorCount,
-        ) = previous
+        slot.restore(previous)
+        self.carApiLastErrorTime, self.errorCount = previousErrors
         self.master.queue_background_task({"cmd": "saveSettings"})
         logger.warning(
             "Pasted Tesla API refresh token not accepted; previous tokens kept."
@@ -1533,54 +1495,199 @@ class TeslaAPI:
         return "token_rejected" if result == "rejected" else result
 
     def decodeToken(self, token):
-        # A token's JWT claims, read without verifying the signature (only
-        # the token type and expiry are needed), or None if it is not a JWT.
-        try:
-            decoded = jwt.decode(
-                token,
-                options={
-                    "verify_signature": False,
-                    "verify_aud": False,
-                    "verify_exp": False,
-                },
-            )
-        except (jwt.exceptions.InvalidTokenError, TypeError, ValueError):
-            return None
-        return decoded if isinstance(decoded, dict) else None
+        return decodeToken(token)
 
-    def setCarApiBearerToken(self, token=None, fromSync=False):
-        if token:
-            if self.master.tokenSyncEnabled() and not fromSync:
-                # While token sync is on, only the sync source may set the
-                # token; refuse ones from the web UI, settings or a refresh.
-                return False
-            else:
-                self.carApiBearerToken = token
-                decoded = self.decodeToken(token)
-                self.applyTokenClassification(decoded)
+    def syncedSlotLocked(self, slot):
+        # True when TeslaMate sync manages this slot's token: sync is on and
+        # the slot holds a live synced token. The one place the refusal rule
+        # lives; the user replaces such a token by removing it first.
+        return bool(
+            slot is not None
+            and self.master.tokenSyncEnabled()
+            and slot.source == "synced"
+            and not slot.empty()
+        )
 
-                if decoded and "exp" in decoded:
-                    self.setCarApiTokenExpireTime(int(decoded["exp"]))
-                else:
-                    self.setCarApiTokenExpireTime(time.time() + 8 * 60 * 60)
-                return True
-        else:
+    def logSyncedSlotLocked(self, slot):
+        logger.warning(
+            "Tesla API token not stored: TeslaMate token sync manages the %s "
+            "API token. Remove that token on the Settings page, or turn off "
+            "syncTokens, to replace it." % slot.kind.capitalize()
+        )
+
+    def removeToken(self, kind):
+        # Settings page "Remove token": clears the Owner or Fleet slot, a
+        # synced one included. False for any other kind.
+        slot = self.slotOfType(kind)
+        if slot is None:
             return False
+        slot.clear()
+        self.master.queue_background_task({"cmd": "saveSettings"})
+        return True
 
-    def clearCarApiBearerToken(self):
-        # Forgets the bearer token, its type and its expiry, e.g. after the
-        # refresh token is rejected. (setCarApiBearerToken("") stores
-        # nothing.) baseURL is reset as for an unknown token; a configured
-        # teslaProxy stays in proxyURL for the next Fleet token. Callers
-        # check tokenSyncEnabled() first: a synced token must not be cleared.
-        self.carApiBearerToken = ""
-        if self.readOnly:
-            # Let the next refused command log again.
-            self.readOnlyRefusalLogged = False
-        self.baseURL = ""
-        self.verifyCert = True
-        self.readOnly = False
-        self.setCarApiTokenExpireTime(time.time())
+    def storeToken(
+        self, accessToken, refreshToken=None, source="pasted", expireTime=None
+    ):
+        # Stores tokens in the slot of their type: the access token's, or
+        # the refresh token's when there is no access token. refreshToken
+        # None keeps the slot's refresh token. source is "synced", "pasted"
+        # or "login". Returns "success", "error" (no token), "unknown_type"
+        # (nothing stored), "kept" (sync met a pasted or login token) or
+        # "token_sync" (the slot holds a live synced token while
+        # sync is on) or "mismatched_types" (an access and refresh token
+        # of different known types; nothing stored). The caller queues
+        # saveSettings.
+        if not accessToken and not refreshToken:
+            return "error"
+        if accessToken:
+            tokenType = self.classifyToken(self.decodeToken(accessToken))[0]
+        else:
+            tokenType = self.refreshTokenType(refreshToken)
+        slot = self.slotOfType(tokenType)
+        if slot is None:
+            if source == "synced":
+                logger.error(
+                    "TeslaMate token sync: the token's type (Owner API or "
+                    "Fleet API) was not recognised; not using it."
+                )
+            else:
+                # Logs the unknown-type ERROR.
+                self.tokenRoute(accessToken)
+            return "unknown_type"
+        if (
+            accessToken
+            and refreshToken
+            and self.refreshTokenTypeKnown(refreshToken)
+            and self.refreshTokenType(refreshToken) != tokenType
+        ):
+            # The wrong-type refresh token would later 401 and clear the
+            # valid access token it was stored with.
+            logger.error(
+                "The access token and refresh token are for different Tesla "
+                "APIs (Owner and Fleet); not storing either."
+            )
+            return "mismatched_types"
+        if (
+            source == "synced"
+            and slot.source == "synced"
+            and slot.accessToken == accessToken
+        ):
+            # An unchanged resync: keep the slot's pause and counters.
+            return "success"
+        if (
+            source == "synced"
+            and not slot.empty()
+            and slot.source in ("pasted", "login")
+        ):
+            # Sync never replaces a token the user supplied.
+            if slot.changes != self.syncSkipLoggedAt[tokenType]:
+                logger.info(
+                    "TeslaMate token sync: keeping the %s API token you %s; "
+                    "not replacing it."
+                    % (
+                        "Owner" if tokenType == "owner" else "Fleet",
+                        "pasted" if slot.source == "pasted" else "logged in with",
+                    )
+                )
+                self.syncSkipLoggedAt[tokenType] = slot.changes
+            return "kept"
+        if source != "synced" and self.syncedSlotLocked(slot):
+            self.logSyncedSlotLocked(slot)
+            return "token_sync"
+        slot.setTokens(accessToken, refreshToken, expireTime, source)
+        return "success"
+
+    def migrateSavedTokens(self, settings, syncConfigured):
+        # One-time move of a saved Owner API token from the carApi* keys,
+        # where earlier releases kept their only token, to the ownerApi*
+        # keys. Mutates settings; returns True if it changed anything.
+        # syncConfigured: TeslaMate's syncTokens is set in config.json,
+        # whether or not sync is running (it turns itself off when the
+        # database is unreachable at startup). Then a saved Owner or Fleet
+        # token counts as synced, as does one saved with the sentinel.
+        # carApiTokenSource marks settings already migrated, unless an
+        # Owner token or the never-expires sentinel is back in carApi*
+        # (written by a downgraded release): those always migrate, so the
+        # Fleet slot never holds TeslaMate's refresh token.
+        access = settings.get("carApiBearerToken", "") or ""
+        refresh = settings.get("carApiRefreshToken", "") or ""
+        expireTime = settings.get("carApiTokenExpireTime", 0)
+        if not access and not refresh:
+            return False
+        if access:
+            tokenType = self.classifyToken(self.decodeToken(access))[0]
+        else:
+            tokenType = self.refreshTokenType(refresh)
+        legacySynced = expireTime == self.LEGACY_SYNCED_EXPIRY
+        if (
+            "carApiTokenSource" in settings
+            and tokenType != "owner"
+            and not legacySynced
+        ):
+            return False
+        before = dict(settings)
+        synced = legacySynced or (syncConfigured and tokenType in ("owner", "fleet"))
+        if synced:
+            # The refresh token is TeslaMate's: never keep it. The token
+            # expires at its own exp, not at the sentinel.
+            refresh = ""
+            decoded = self.decodeToken(access) if access else None
+            exp = decoded.get("exp") if decoded else None
+            if isinstance(exp, (int, float)) and not isinstance(exp, bool):
+                expireTime = exp
+            elif legacySynced:
+                expireTime = 0
+        source = "synced" if synced else "pasted"
+        if tokenType == "owner":
+            if access or refresh:
+                # Nothing is left of a synced refresh-only token, so it
+                # doesn't wipe a saved Owner token.
+                settings["ownerApiBearerToken"] = access
+                settings["ownerApiRefreshToken"] = refresh
+                settings["ownerApiTokenExpireTime"] = expireTime
+                settings["ownerApiTokenSource"] = source
+            settings["carApiBearerToken"] = ""
+            settings["carApiRefreshToken"] = ""
+            settings["carApiTokenExpireTime"] = 0
+            settings["carApiTokenSource"] = ""
+        else:
+            # Fleet stays (nothing records a Fleet login, so it is never
+            # marked "login"). Unknown stays too; restoring the slot logs
+            # the unknown-type ERROR.
+            settings["carApiRefreshToken"] = refresh
+            settings["carApiTokenExpireTime"] = expireTime
+            settings["carApiTokenSource"] = source if (access or refresh) else ""
+        changed = settings != before
+        if changed:
+            logger.info(
+                "Migrated the saved Tesla API token (%s, %s) to the new settings."
+                % (tokenType, source)
+            )
+        return changed
+
+    def restoreSlot(self, slot, accessToken, refreshToken, expireTime, source="pasted"):
+        # Settings-load path (TWCMaster.loadSettings): puts saved tokens back
+        # as they were, without policy checks or a refresh. A saved
+        # LEGACY_SYNCED_EXPIRY (or no usable expiry) gives way to the
+        # token's own exp, or to now when that can't be read. A saved synced
+        # token gives way to a slot that is already filled: the startup
+        # sync, which runs before loadSettings, put a fresher one there.
+        if not accessToken and not refreshToken:
+            return
+        if source == "synced" and not slot.empty():
+            return
+        if (
+            expireTime == self.LEGACY_SYNCED_EXPIRY
+            or not isinstance(expireTime, (int, float))
+            or isinstance(expireTime, bool)
+        ):
+            decoded = self.decodeToken(accessToken) if accessToken else None
+            exp = decoded.get("exp") if decoded else None
+            if isinstance(exp, (int, float)) and not isinstance(exp, bool):
+                expireTime = exp
+            else:
+                expireTime = time.time()
+        slot.setTokens(accessToken, refreshToken, expireTime, source)
 
     def classifyToken(self, decoded):
         # Returns (tokenType, region) for a token's decoded JWT claims.
@@ -1610,112 +1717,28 @@ class TeslaAPI:
             return ("fleet", "NA")
         return ("unknown", None)
 
-    def applyTokenClassification(self, decoded):
-        # Point baseURL, verifyCert and readOnly at the API the current
-        # token belongs to. Runs for every accepted token.
-        tokenType, region = self.classifyToken(decoded)
-        if tokenType == "owner":
-            # The Vehicle Command proxy only takes Fleet tokens.
-            baseURL, verifyCert, readOnly = self.regionURL["OwnerAPI"], True, True
-        elif tokenType == "fleet" and self.proxyURL:
-            baseURL, verifyCert, readOnly = self.proxyURL, self.proxyCert, False
-        elif tokenType == "fleet":
-            baseURL, verifyCert, readOnly = self.regionURL[region], True, False
-        else:
-            baseURL, verifyCert, readOnly = "", True, False
-            logger.error(
-                "Unable to determine the Tesla API token type (Owner API or "
-                "Fleet API). No Tesla API calls will be made until a "
-                "recognised token is supplied."
-            )
-        if readOnly != self.readOnly:
-            # Let the next refused command log again.
-            self.readOnlyRefusalLogged = False
-        self.baseURL = baseURL
-        self.verifyCert = verifyCert
-        self.readOnly = readOnly
-        logger.info(
-            "Tesla API token type: %s, base URL host: %s, read-only: %s"
-            % (tokenType, urlsplit(baseURL).netloc or "none", readOnly)
-        )
-
-    def setCarApiRefreshToken(self, token):
-        if self.master.tokenSyncEnabled():
-            # While token sync is on, only the sync source may set the token
-            # (applySyncedTokens stores it directly); refuse ones from the web
-            # UI, settings or a refresh, and store nothing.
-            if token:
-                logger.warning(
-                    "Tesla API refresh token refused: TeslaMate token sync is "
-                    "on, so TWCManager uses TeslaMate's tokens. Turn off "
-                    "syncTokens to enter tokens by hand."
-                )
-            return False
-        self.carApiRefreshToken = token
-        if (
-            token
-            and not self.master.tokenSyncEnabled()
-            and (
-                self.getCarApiBearerToken() == ""
-                or self.getCarApiTokenExpireTime() - time.time() < 60 * 60
-            )
-        ):
-            return self.apiRefresh()
-        return True
-
-    def setCarApiTokenExpireTime(self, value):
-        self.carApiTokenExpireTime = value
-        return True
-
-    def restoreCarApiTokenExpireTime(self, value):
-        # Settings-load path (TWCMaster.loadSettings). A saved
-        # SYNCED_TOKEN_EXPIRY only applies while token sync is on; once it is
-        # off, use the stored token's own exp, so TWCManager's normal refresh
-        # (or a re-login) follows instead of a token that never refreshes.
-        if value == self.SYNCED_TOKEN_EXPIRY and not self.master.tokenSyncEnabled():
-            value = time.time()
-            try:
-                decoded = jwt.decode(
-                    self.getCarApiBearerToken(),
-                    options={
-                        "verify_signature": False,
-                        "verify_aud": False,
-                        "verify_exp": False,
-                    },
-                )
-                value = int(decoded["exp"])
-            except (jwt.exceptions.InvalidTokenError, KeyError, TypeError, ValueError):
-                pass
-        return self.setCarApiTokenExpireTime(value)
-
     def refuseCommandIfReadOnly(self, command):
-        # True when the current token cannot send vehicle commands. Logs at
-        # INFO once per read-only period, makes no HTTP call and records no
-        # API error (an error would start the backoff that also blocks reads).
+        # True when no usable Fleet API token can send vehicle commands.
+        # Logs at INFO once per Fleet slot change, makes no HTTP call and
+        # records no API error (an error would start the backoff that also
+        # blocks reads).
         if not self.readOnly:
             return False
-        if not self.readOnlyRefusalLogged:
+        if self.fleetSlot.changes != self.refusalLoggedAt:
             logger.info(
-                "Tesla API token is read-only (Owner API); not sending "
+                "Tesla API is read-only (no usable Fleet API token); not sending "
                 + command
                 + " or any other vehicle command. Commands need a Fleet API "
                 "token or the TeslaBLE module."
             )
-            self.readOnlyRefusalLogged = True
+            self.refusalLoggedAt = self.fleetSlot.changes
         return True
 
-    def applySyncedTokens(self, accessToken, refreshToken):
-        # Entry point for token sync sources (TeslaMate). Accepted whether or
-        # not tokenSyncEnabled() is already true, and never refreshes.
-        if not self.setCarApiBearerToken(accessToken, fromSync=True):
-            return False
-        # After the bearer token, so its decoded exp cannot replace the
-        # sentinel, and before the refresh token, so nothing can refresh with
-        # the new refresh token under the decoded exp.
-        self.setCarApiTokenExpireTime(self.SYNCED_TOKEN_EXPIRY)
-        # Stored directly: setCarApiRefreshToken() may start a refresh.
-        self.carApiRefreshToken = refreshToken
-        return True
+    def applySyncedToken(self, accessToken):
+        # Entry point for token sync sources (TeslaMate): the access token
+        # only, so a synced slot never refreshes. Accepted whether or not
+        # tokenSyncEnabled() is already true. Returns storeToken's result.
+        return self.storeToken(accessToken, "", "synced")
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         # As a fallback to allow initial implementation of the charge rate functionality for single car installs,
@@ -1731,9 +1754,8 @@ class TeslaAPI:
                 return False
             vehicle = vehicles[0]
 
-        if not self.getCarApiBaseURL():
-            # No token yet, or its type is unknown (setCarApiBearerToken
-            # logged why).
+        slot = self.slotFor("command")
+        if slot is None:
             return False
 
         # The Fleet API takes whole amps. The web debug path passes the
@@ -1761,19 +1783,19 @@ class TeslaAPI:
 
         vehicle.lastAPIAccessTime = time.time()
 
-        url = self.baseURL + "/"
+        url = slot.baseURL + "/"
         url = url + str(vehicle.VIN) + "/command/set_charging_amps"
 
         headers = {
             "accept": "application/json",
-            "Authorization": "Bearer " + self.getCarApiBearerToken(),
+            "Authorization": "Bearer " + slot.accessToken,
         }
 
         body = {"charging_amps": charge_rate}
 
         try:
             req = requests.post(
-                url, headers=headers, json=body, verify=self.verifyCert, timeout=10
+                url, headers=headers, json=body, verify=slot.verifyCert, timeout=10
             )
             logger.log(
                 logging.INFO8,
@@ -1896,23 +1918,22 @@ class TeslaAPI:
     def wakeVehicle(self, vehicle):
         if self.refuseCommandIfReadOnly("wake_up"):
             return False
-        if not self.getCarApiBaseURL():
-            # No token yet, or its type is unknown (setCarApiBearerToken
-            # logged why).
+        slot = self.slotFor("command")
+        if slot is None:
             return False
         apiResponseDict = None
         vehicle.lastAPIAccessTime = time.time()
 
-        url = self.baseURL + "/"
+        url = slot.baseURL + "/"
         url = url + str(vehicle.VIN) + "/wake_up"
 
         headers = {
             "accept": "application/json",
-            "Authorization": "Bearer " + self.getCarApiBearerToken(),
+            "Authorization": "Bearer " + slot.accessToken,
         }
         req = None
         try:
-            req = requests.post(url, headers=headers, verify=self.verifyCert)
+            req = requests.post(url, headers=headers, verify=slot.verifyCert)
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
@@ -1922,7 +1943,7 @@ class TeslaAPI:
                 pass
             elif req.status_code == 401 and "expired" in req.text:
                 # If the token is expired, refresh it and try again
-                if self.apiRefresh():
+                if self.refreshSlot(slot) == "success":
                     return self.wakeVehicle(vehicle)
             elif req.status_code == 429:
                 # We're explicitly being told to back off
@@ -2013,12 +2034,6 @@ class CarApiVehicle:
         thread.daemon = True
         thread.start()
 
-    @property
-    def verifyCert(self):
-        # Follows the current token: the proxy certificate only applies
-        # while requests go to teslaProxy.
-        return self.carapi.verifyCert
-
     def checkSyncNotStale(self):
         # Once an external system begins providing sync functionality to defer
         # Tesla API queries and provide already fetched information, there is a
@@ -2095,34 +2110,39 @@ class CarApiVehicle:
         # Don't check more often than every 2 minutes
         if now - self.lastVehicleAwakeTime < 120:
             return self.lastVehicleAwakeState
-        url = self.carapi.getCarApiBaseURL() + "/" + str(self.VIN)
-        result, response = self.get_car_api(url, checkReady=False, provesOnline=False)
+        result, response = self.get_car_api(
+            str(self.VIN), checkReady=False, provesOnline=False
+        )
         awakeState = result and response.get("state", "") == "online"
         self.lastVehicleAwakeState = awakeState
         self.lastVehicleAwakeTime = now
         return awakeState
 
-    def get_car_api(self, url, checkReady=True, provesOnline=True):
-        if not self.carapi.getCarApiBaseURL():
-            # No token yet, or its type is unknown (setCarApiBearerToken
-            # logged why).
+    def get_car_api(self, path, checkReady=True, provesOnline=True):
+        # path is relative to the read slot's base URL, e.g. "<VIN>" or
+        # "<VIN>/vehicle_data?endpoints=...".
+        slot = self.carapi.slotFor("read")
+        if slot is None:
+            # No usable token (car_api_available logs why).
             return False, None
 
         if checkReady and not self.ready():
             return False, None
 
         apiResponseDict = {}
+        refreshed = False
 
         # Retry up to 3 times on certain errors.
         for _ in range(0, 3):
             # Built per attempt, so a retry after a refresh sends the new token.
+            url = slot.baseURL + "/" + path
             headers = {
                 "accept": "application/json",
-                "Authorization": "Bearer " + self.carapi.getCarApiBearerToken(),
+                "Authorization": "Bearer " + slot.accessToken,
             }
             req = None
             try:
-                req = requests.get(url, headers=headers, verify=self.verifyCert)
+                req = requests.get(url, headers=headers, verify=slot.verifyCert)
                 req.raise_for_status()
                 logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
                 apiResponseDict = json.loads(req.text)
@@ -2134,9 +2154,10 @@ class CarApiVehicle:
                 if req is None:
                     # The request never went out (e.g. no network).
                     pass
-                elif req.status_code == 401 and "expired" in req.text:
-                    # If the token is expired, refresh it and try again
-                    if self.carapi.apiRefresh():
+                elif req.status_code in (401, 403, 410, 412):
+                    # Clears or pauses the slot, or refreshes it for one retry.
+                    if not refreshed and self.carapi.slotRequestFailed(slot, req):
+                        refreshed = True
                         continue
                 elif req.status_code == 429:
                     # We're explicitly being told to back off
@@ -2252,9 +2273,9 @@ class CarApiVehicle:
             return True
 
     def update_vehicle_data(self):
-        url = (
-            "/".join([self.carapi.getCarApiBaseURL(), str(self.VIN), "vehicle_data"])
-            + "?endpoints="
+        path = (
+            str(self.VIN)
+            + "/vehicle_data?endpoints="
             + "%3B".join(
                 ["location_data", "charge_state", "drive_state", "vehicle_state"]
             )
@@ -2266,7 +2287,7 @@ class CarApiVehicle:
             return True
 
         try:
-            result, response = self.get_car_api(url)
+            result, response = self.get_car_api(path)
         except TypeError:
             logger.error("Got None response from get_car_api()")
             return False
@@ -2429,19 +2450,22 @@ class CarApiVehicle:
 
         self.lastLimitAttemptTime = now
 
-        url = self.carapi.getCarApiBaseURL() + "/"
+        slot = self.carapi.slotFor("command")
+        if slot is None:
+            return False
+        url = slot.baseURL + "/"
         url = url + str(self.VIN) + "/command/set_charge_limit"
 
         headers = {
             "accept": "application/json",
-            "Authorization": "Bearer " + self.carapi.getCarApiBearerToken(),
+            "Authorization": "Bearer " + slot.accessToken,
         }
         body = {"percent": limit}
 
         for _ in range(0, 3):
             try:
                 req = requests.post(
-                    url, headers=headers, json=body, verify=self.verifyCert
+                    url, headers=headers, json=body, verify=slot.verifyCert
                 )
                 logger.log(logging.INFO8, "Car API cmd set_charge_limit " + str(req))
 
