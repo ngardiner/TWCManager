@@ -16,6 +16,8 @@ logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
 class TeslaAPI:
     baseURL = ""
+    # A charge rate the car accepted is not resent for this long (seconds).
+    CHARGE_RATE_RESEND_AFTER = 600
     regionURL = {
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
@@ -1542,9 +1544,28 @@ class TeslaAPI:
             # logged why).
             return False
 
+        # The Fleet API takes whole amps. The web debug path passes the
+        # rate through from JSON, so it may be a numeric string.
+        try:
+            charge_rate = int(float(charge_rate))
+        except (TypeError, ValueError, OverflowError):
+            logger.error("setChargeRate: invalid charge rate %r", charge_rate)
+            return False
         # Do not set charge_rate to 0 as this will effectively stop the car from charging all together
         if charge_rate < 1:
             charge_rate = 1
+
+        # set_charging_amps is a paid command: don't resend the rate this
+        # car last accepted, unless CHARGE_RATE_RESEND_AFTER has passed (the
+        # rate may have been changed elsewhere). set_again (the low-rate
+        # repeat) always sends.
+        if (
+            not set_again
+            and getattr(vehicle, "lastChargeRateSent", None) == charge_rate
+            and time.monotonic() - getattr(vehicle, "lastChargeRateSentTime", 0)
+            < self.CHARGE_RATE_RESEND_AFTER
+        ):
+            return True
 
         vehicle.lastAPIAccessTime = time.time()
 
@@ -1559,7 +1580,9 @@ class TeslaAPI:
         body = {"charging_amps": charge_rate}
 
         try:
-            req = requests.post(url, headers=headers, json=body, verify=self.verifyCert)
+            req = requests.post(
+                url, headers=headers, json=body, verify=self.verifyCert, timeout=10
+            )
             logger.log(
                 logging.INFO8,
                 f"Car API cmd set_charging_amps {charge_rate}A {str(req)}",
@@ -1570,12 +1593,33 @@ class TeslaAPI:
         except json.decoder.JSONDecodeError:
             return False
 
+        accepted = self._chargeRateAccepted(apiResponseDict)
+
         # Set charge rates < 5 twice, see https://github.com/tdorssers/TeslaPy/pull/42
-        if charge_rate < 5 and not set_again:
+        if charge_rate < 5:
+            if set_again:
+                # The caller (the first send) records the rate.
+                return apiResponseDict
             time.sleep(5)
-            return self.setChargeRate(charge_rate, vehicle, set_again=True)
-        else:
-            return apiResponseDict
+            again = self.setChargeRate(charge_rate, vehicle, set_again=True)
+            if accepted and self._chargeRateAccepted(again):
+                self._recordChargeRate(vehicle, charge_rate)
+            return again
+        if accepted:
+            self._recordChargeRate(vehicle, charge_rate)
+        return apiResponseDict
+
+    @staticmethod
+    def _chargeRateAccepted(apiResponseDict):
+        try:
+            return apiResponseDict["response"]["result"] == True
+        except (KeyError, TypeError):
+            return False
+
+    @staticmethod
+    def _recordChargeRate(vehicle, charge_rate):
+        vehicle.lastChargeRateSent = charge_rate
+        vehicle.lastChargeRateSentTime = time.monotonic()
 
     def updateCarApiLastErrorTime(self, vehicle=None):
         timestamp = time.time()
@@ -1748,6 +1792,10 @@ class CarApiVehicle:
     scheduledChargingPending = False
     timeToFullCharge = 0.0
     availableCurrent = 0
+    # The last rate set_charging_amps succeeded with, and when (monotonic
+    # clock), so it isn't resent within TeslaAPI.CHARGE_RATE_RESEND_AFTER.
+    lastChargeRateSent = None
+    lastChargeRateSentTime = 0
     _actualCurrent = 0
     lastCurrentChangeTime = 0
     phases = 0
