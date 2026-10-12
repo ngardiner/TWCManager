@@ -17,6 +17,8 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: TeslaAPI error handlers no longer crash when a request never went out (#683)
     * (@MikeBishop) - Fix: TeslaMate telemetry now attaches to the API vehicle when BLE handles all commands (#677)
     * (@MikeBishop) - Evaluate charging policy on its own thread instead of the RS485 loop, only when acting as master (#676)
+    * (@MikeBishop) - Fix: TeslaMate token sync now accepts resyncs and reads tokens from current TeslaMate versions (#680)
+    * (@MikeBishop) - Fix: Classify Owner API tokens as read-only and refuse vehicle commands on them instead of sending them to the Fleet API (#680)
     * Fix: Correct invalid logging level in update_vehicle_data error handler which crashed when logging a failed API response
     * Fix: Remove stopAskingToStartCharging heartbeat reset that caused charge_start API commands to fire every 60 seconds while already charging (re-opens #575, closes #651)
     * Fix: Remove redundant car_api_available() call at applyChargeLimit entry - rate limit check now runs first, halving Fleet API calls on every policy tick
