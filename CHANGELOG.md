@@ -60,6 +60,8 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: TeslaMate telemetry now attaches to the API vehicle when BLE handles all commands (#671)
     * (@MikeBishop) - Fix: TeslaMate token sync now accepts resyncs and reads tokens from current TeslaMate versions (#679)
     * (@MikeBishop) - Fix: Classify Owner API tokens as read-only and refuse vehicle commands on them instead of sending them to the Fleet API (#679)
+    * (@MikeBishop) - Fix: Power distributor skipped every other EVSE, leaving it on a stale target (#696)
+    * (@MikeBishop) - Fix: Tesla API charge start/stop for one vehicle no longer wakes or commands every vehicle (#697)
 
 ## v1.3.4 - 2026-04-24
 * Features
