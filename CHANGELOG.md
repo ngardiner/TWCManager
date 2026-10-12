@@ -10,9 +10,11 @@ This document logs the changes per release of TWCManager.
     * Add centralized API input validation (`APIValidator`) across all endpoints
     * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, replacing the retired Owner API login
     * (@MikeBishop) - Accept a bare access or refresh token on the Tesla login paste-back (#688)
-    * (@MikeBishop) - Keep an Owner API token and a Fleet API token at once: reads use the free Owner API when possible, commands use the Fleet API, and TeslaMate token sync can stay on beside a Fleet login. Settings migrate automatically on first start; downgrading afterwards loses the Owner API token (stored under new `ownerApi*` keys). When TeslaMate `syncTokens` is configured, a token found in the old settings at first upgrade is treated as TeslaMate's (its refresh token is dropped and the slot is locked while sync is on), so a Fleet token you saved yourself may need the Fleet login again.
+    * (@MikeBishop) - Hold an Owner API token and a Fleet API token side by side: reads use the free Owner API, commands use Fleet, and TeslaMate sync can stay on beside a Fleet login (#693)
+    * (@MikeBishop) - Show each Tesla token slot's status on the Settings page, with a Remove token button (#693)
 * Architecture
     * Remove retired Tesla Owner API support (owner-api endpoints, ownerapi web login flow); FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths
+    * (@MikeBishop) - Saved Tesla tokens migrate to separate Owner and Fleet settings on first start; downgrading afterwards loses the Owner API token (#693)
 * Bugfixes
     * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
     * (@MikeBishop) - Fix: Import serial at module level in RS485 so SerialException handling and reconnect work (#674)
