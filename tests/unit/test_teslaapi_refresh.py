@@ -17,13 +17,13 @@ from tests.unit import teslatokens
 from tests.unit.teslatokens import (
     AUTH_TOKEN_URL,
     FLEET_REFRESH_URL,
+    OWNER_API_URL,
     fleet_token,
     make_jwt,
     owner_token,
 )
 
 OWNER_ISSUER = "https://auth.tesla.com/oauth2/v3"
-OWNER_API_URL = "https://owner-api.teslamotors.com/api/1/vehicles"
 OPAQUE_REFRESH = "NA_0123456789abcdef0123456789abcdef"
 
 
@@ -105,7 +105,7 @@ def render_login_page(result, carapi=None):
 
 class TestOwnerRefreshRequest:
     def test_owner_refresh_matches_release_1_3_3(self, requests_mock):
-        # The request below is transcribed from release/1.3.3's apiRefresh
+        # The request below is transcribed from release/1.3.3's token refresh
         # (lib/TWCManager/Vehicle/TeslaAPI.py:156-174 @ 1.3.3): refreshURL
         # auth.tesla.com/oauth2/v3/token, refreshClientID "ownerapi", sent
         # as JSON through self.session.
@@ -115,11 +115,12 @@ class TestOwnerRefreshRequest:
         )
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api()
-        api.setCarApiBearerToken(owner_token(expires_in=60))
-        api.carApiRefreshToken = "owner-refresh"
+        api.storeToken(owner_token(expires_in=60), "owner-refresh")
 
-        with patch.object(api.session, "post", wraps=api.session.post) as post:
-            assert api.apiRefresh() is True
+        # The Owner slot posts through the TLS 1.3 session.
+        assert api.ownerSlot.post == api.session.post
+        with patch.object(api.ownerSlot, "post", wraps=api.ownerSlot.post) as post:
+            assert api.refreshSlot(api.ownerSlot) == "success"
         assert post.call_count == 1
 
         assert owner.call_count == 1
@@ -154,12 +155,11 @@ class TestFleetRefreshUnchanged:
         )
         owner = requests_mock.post(AUTH_TOKEN_URL, json={})
         api = new_api()
-        api.setCarApiBearerToken(fleet_token(expires_in=60))
-        api.carApiRefreshToken = OPAQUE_REFRESH
+        api.storeToken(fleet_token(expires_in=60), OPAQUE_REFRESH)
 
-        with patch.object(api.session, "post") as post:
-            assert api.apiRefresh() is True
-        assert post.call_count == 0
+        # The Fleet slot does not use the Owner API's session.
+        assert api.fleetSlot.post is requests.post
+        assert api.refreshSlot(api.fleetSlot) == "success"
 
         assert owner.call_count == 0
         assert fleet.call_count == 1
@@ -180,11 +180,12 @@ class TestFleetRefreshUnchanged:
         refresh = requests_mock.post(AUTH_TOKEN_URL, json=token_response(fleet_token()))
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api(teslaApiClientSecret="")
-        api.setCarApiBearerToken(fleet_token(expires_in=60))
-        api.carApiRefreshToken = OPAQUE_REFRESH
+        api.storeToken(fleet_token(expires_in=60), OPAQUE_REFRESH)
 
+        assert api.fleetSlot.refreshURL == AUTH_TOKEN_URL
+        assert api.fleetSlot.post is requests.post
         with patch.object(api.session, "post") as post:
-            assert api.apiRefresh() is True
+            assert api.refreshSlot(api.fleetSlot) == "success"
         assert post.call_count == 0
 
         assert fleet.call_count == 0
@@ -204,9 +205,8 @@ class TestFleetRefreshUnchanged:
         )
         owner = requests_mock.post(AUTH_TOKEN_URL, json={})
         api = new_api()
-        api.setCarApiBearerToken(fleet_token())
-        api.carApiRefreshToken = OPAQUE_REFRESH
-        wake = api.baseURL + "/VIN1/wake_up"
+        api.storeToken(fleet_token(), OPAQUE_REFRESH)
+        wake = api.fleetSlot.baseURL + "/VIN1/wake_up"
         requests_mock.post(
             wake,
             [
@@ -231,15 +231,15 @@ class TestPastedRefreshToken:
         api = new_api()
         pasted = owner_refresh_token()
 
-        assert api.setCarApiRefreshToken(pasted) is True
+        assert api.pasteRefreshToken(pasted) == "success"
 
         assert fleet.call_count == 0
         assert owner.call_count == 1
         assert owner.last_request.json()["client_id"] == "ownerapi"
         assert owner.last_request.json()["refresh_token"] == pasted
-        assert api.getCarApiBearerToken() == new_access
+        assert api.ownerSlot.accessToken == new_access
         assert api.readOnly is True
-        assert api.getCarApiBaseURL() == OWNER_API_URL
+        assert api.ownerSlot.baseURL == OWNER_API_URL
 
     def test_owner_refresh_token_pasted_back(self, requests_mock):
         # The /teslaAccount/saveToken form takes a bare token as well as a
@@ -253,7 +253,7 @@ class TestPastedRefreshToken:
 
         assert fleet.call_count == 0
         assert owner.call_count == 1
-        assert api.getCarApiBearerToken() == new_access
+        assert api.ownerSlot.accessToken == new_access
         assert api.readOnly is True
 
     def test_owner_access_token_pasted_back(self, requests_mock):
@@ -264,7 +264,7 @@ class TestPastedRefreshToken:
         assert api.saveApiToken(access) == "success"
 
         assert refresh.call_count == 0
-        assert api.getCarApiBearerToken() == access
+        assert api.ownerSlot.accessToken == access
         assert api.readOnly is True
         assert {"cmd": "saveSettings"} in api.master.tasks
 
@@ -276,11 +276,11 @@ class TestPastedRefreshToken:
         refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api()
-        api.carApiRefreshToken = "kept-refresh"
+        api.fleetSlot.refreshToken = "kept-refresh"
 
         assert api.saveApiToken(pasted) != "success"
 
-        assert api.getCarApiRefreshToken() == "kept-refresh"
+        assert api.fleetSlot.refreshToken == "kept-refresh"
         assert refresh.called is False
         assert fleet.called is False
 
@@ -290,11 +290,10 @@ class TestPastedRefreshToken:
         )
         owner = requests_mock.post(AUTH_TOKEN_URL, json={})
         api = new_api()
-        # As left behind by an earlier Owner token that a 401 wiped:
-        # setCarApiBearerToken("") does not reclassify.
-        api.readOnly = True
+        # An Owner token in the other slot does not change the refresh.
+        api.storeToken(owner_token())
 
-        assert api.setCarApiRefreshToken(OPAQUE_REFRESH) is True
+        assert api.pasteRefreshToken(OPAQUE_REFRESH) == "success"
 
         assert owner.call_count == 0
         assert fleet.call_count == 1
@@ -310,7 +309,7 @@ class TestPastedRefreshToken:
         owner = requests_mock.post(AUTH_TOKEN_URL, json={})
         api = new_api()
 
-        api.setCarApiRefreshToken(owner_refresh_token(iss=OWNER_ISSUER + "/nts"))
+        api.pasteRefreshToken(owner_refresh_token(iss=OWNER_ISSUER + "/nts"))
 
         assert owner.call_count == 0
         assert fleet.call_count == 1
@@ -320,7 +319,7 @@ class TestPastedRefreshToken:
         [(owner_refresh_token(), 1), (OPAQUE_REFRESH, 0)],
         ids=["owner-refresh", "opaque-refresh"],
     )
-    def test_unknown_bearer_falls_back_to_refresh_token_type(
+    def test_refresh_token_without_access_token_refreshes_by_its_type(
         self, requests_mock, refresh_token, owner_calls
     ):
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
@@ -328,10 +327,9 @@ class TestPastedRefreshToken:
             FLEET_REFRESH_URL, json=token_response(fleet_token())
         )
         api = new_api()
-        api.setCarApiBearerToken("not-a-jwt")
-        api.carApiRefreshToken = refresh_token
+        assert api.storeToken("", refresh_token) == "success"
 
-        assert api.apiRefresh() is True
+        api.refreshTokenIfNeeded()
 
         assert owner.call_count == owner_calls
         assert fleet.call_count == 1 - owner_calls
@@ -340,8 +338,7 @@ class TestPastedRefreshToken:
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api()
-        api.setCarApiBearerToken(owner_token(expires_in=60))
-        api.carApiRefreshToken = owner_refresh_token()
+        api.storeToken(owner_token(expires_in=60), owner_refresh_token())
 
         api.refreshTokenIfNeeded()
 
@@ -353,9 +350,10 @@ class TestWakeNeverSent:
     def test_connection_error_does_not_crash(self, requests_mock):
         # The wake request never went out, so there is no response.
         api = new_api()
-        api.setCarApiBearerToken(fleet_token())
+        api.storeToken(fleet_token())
         requests_mock.post(
-            api.baseURL + "/VIN1/wake_up", exc=requests.exceptions.ConnectionError
+            api.fleetSlot.baseURL + "/VIN1/wake_up",
+            exc=requests.exceptions.ConnectionError,
         )
         refresh = requests_mock.post(FLEET_REFRESH_URL, json={})
 
@@ -367,15 +365,17 @@ class TestWakeNeverSent:
 
 
 class TestRefreshTokenPastedAlone:
-    """A refresh token pasted on its own replaces the stored bearer token,
-    which may be of the other type, and refreshes by its own type."""
+    """A refresh token pasted on its own replaces the tokens in the slot of
+    its type and refreshes by its own type. The other slot, which may hold a
+    token of the other type, is untouched."""
 
-    def test_owner_refresh_over_stale_fleet_bearer(self, requests_mock):
+    def test_owner_refresh_beside_stale_fleet_token(self, requests_mock):
         new_access = owner_token()
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(new_access))
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api()
-        api.setCarApiBearerToken(fleet_token(expires_in=-60))
+        stale = fleet_token(expires_in=-60)
+        api.storeToken(stale)
         pasted = owner_refresh_token()
 
         save_settings(api, {"carApiRefreshToken": pasted})
@@ -383,36 +383,40 @@ class TestRefreshTokenPastedAlone:
         assert fleet.call_count == 0
         assert owner.call_count == 1
         assert owner.last_request.json()["refresh_token"] == pasted
-        assert api.getCarApiBearerToken() == new_access
-        assert api.readOnly is True
-        assert api.getCarApiBaseURL() == OWNER_API_URL
+        assert api.ownerSlot.accessToken == new_access
+        assert api.ownerSlot.baseURL == OWNER_API_URL
+        assert api.fleetSlot.accessToken == stale
 
-    def test_fleet_refresh_over_fresh_owner_bearer(self, requests_mock):
+    def test_fleet_refresh_beside_fresh_owner_token(self, requests_mock):
         new_access = fleet_token()
         fleet = requests_mock.post(FLEET_REFRESH_URL, json=token_response(new_access))
         owner = requests_mock.post(AUTH_TOKEN_URL, json={})
         api = new_api()
-        api.setCarApiBearerToken(owner_token())
+        ownerAccess = owner_token()
+        api.storeToken(ownerAccess)
 
         save_settings(api, {"carApiRefreshToken": OPAQUE_REFRESH})
 
         assert owner.call_count == 0
         assert fleet.call_count == 1
         assert fleet.last_request.json()["refresh_token"] == OPAQUE_REFRESH
-        assert api.getCarApiBearerToken() == new_access
+        assert api.fleetSlot.accessToken == new_access
         assert api.readOnly is False
+        assert api.ownerSlot.accessToken == ownerAccess
 
-    def test_paste_back_over_stale_fleet_bearer(self, requests_mock):
+    def test_paste_back_beside_stale_fleet_token(self, requests_mock):
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api()
-        api.setCarApiBearerToken(fleet_token(expires_in=-60))
+        stale = fleet_token(expires_in=-60)
+        api.storeToken(stale)
 
         assert api.saveApiToken(owner_refresh_token()) == "success"
 
         assert fleet.call_count == 0
         assert owner.call_count == 1
-        assert api.readOnly is True
+        assert api.ownerSlot.tokenType == "owner"
+        assert api.fleetSlot.accessToken == stale
 
     def test_both_tokens_pasted_access_token_first(self, requests_mock):
         # The Settings form posts the access token field first, so the
@@ -420,63 +424,65 @@ class TestRefreshTokenPastedAlone:
         owner = requests_mock.post(AUTH_TOKEN_URL, json={})
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api()
-        api.setCarApiBearerToken(fleet_token(expires_in=-60))
+        stale = fleet_token(expires_in=-60)
+        api.storeToken(stale)
         access, refresh = owner_token(), owner_refresh_token()
 
         save_settings(api, {"carApiBearerToken": access, "carApiRefreshToken": refresh})
 
         assert owner.called is False
         assert fleet.called is False
-        assert api.getCarApiBearerToken() == access
-        assert api.getCarApiRefreshToken() == refresh
-        assert api.readOnly is True
+        assert api.ownerSlot.accessToken == access
+        assert api.ownerSlot.refreshToken == refresh
+        assert api.fleetSlot.accessToken == stale
 
 
 class TestAccessTokenPastedAlone:
-    """An access token pasted on its own whose type differs from the stored
-    refresh token's makes that refresh token useless: refreshing it would
-    send it to the wrong client. It is dropped, with a WARNING."""
+    """An access token pasted on its own goes to the slot of its type and
+    keeps that slot's refresh token. A refresh token of the other type sits
+    in the other slot and stays there, without a WARNING."""
 
     @pytest.mark.parametrize(
-        "make_access, stored, dropped",
+        "make_access, slotName, stored",
         [
-            (owner_token, OPAQUE_REFRESH, True),
-            (fleet_token, owner_refresh_token(), True),
-            (owner_token, owner_refresh_token(), False),
-            (fleet_token, OPAQUE_REFRESH, False),
+            (owner_token, "ownerSlot", OPAQUE_REFRESH),
+            (fleet_token, "fleetSlot", owner_refresh_token()),
+            (owner_token, "ownerSlot", owner_refresh_token()),
+            (fleet_token, "fleetSlot", OPAQUE_REFRESH),
         ],
-        ids=["owner-over-fleet", "fleet-over-owner", "owner-match", "fleet-match"],
+        ids=["owner-beside-fleet", "fleet-beside-owner", "owner-match", "fleet-match"],
     )
-    def test_paste_back(self, requests_mock, caplog, make_access, stored, dropped):
+    def test_paste_back(self, requests_mock, caplog, make_access, slotName, stored):
         refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api()
-        api.carApiRefreshToken = stored
+        storedSlot = api.slotOfType(api.refreshTokenType(stored))
+        storedSlot.refreshToken = stored
         access = make_access()
 
         assert api.saveApiToken(access) == "success"
 
-        assert api.getCarApiBearerToken() == access
-        assert api.getCarApiRefreshToken() == ("" if dropped else stored)
+        assert getattr(api, slotName).accessToken == access
+        assert storedSlot.refreshToken == stored
         warned = [
             r
             for r in caplog.records
             if r.levelname == "WARNING" and "refresh token" in r.getMessage()
         ]
-        assert bool(warned) == dropped
+        assert not warned
         assert stored not in caplog.text
         assert refresh.called is False
         assert fleet.called is False
 
     def test_settings_access_field_only(self, requests_mock):
         api = new_api()
-        api.carApiRefreshToken = OPAQUE_REFRESH
+        api.fleetSlot.refreshToken = OPAQUE_REFRESH
         access = owner_token()
 
         save_settings(api, {"carApiBearerToken": access})
 
-        assert api.getCarApiBearerToken() == access
-        assert api.getCarApiRefreshToken() == ""
+        assert api.ownerSlot.accessToken == access
+        assert api.fleetSlot.refreshToken == OPAQUE_REFRESH
 
 
 class TestRejectedPasteKeepsTokens:
@@ -490,39 +496,36 @@ class TestRejectedPasteKeepsTokens:
     def working_api(self, tmp_path):
         from tests.unit.test_teslamate_token_sync import master_with_settings
 
-        master, api, _ = master_with_settings(tmp_path, {})
         # A confidential client, as new_api() gives: 1.3.4 refreshes a
         # public client's Fleet token at auth.tesla.com.
-        api.clientSecret = "my-client-secret"
-        api.setCarApiBearerToken(fleet_token())
-        api.carApiRefreshToken = self.GOOD_REFRESH
+        master, api, _ = master_with_settings(
+            tmp_path, {}, teslaApiClientSecret="my-client-secret"
+        )
+        api.storeToken(fleet_token(), self.GOOD_REFRESH)
         # Record the tokens at every queued save: a save runs later, on the
         # background thread, and must never find the cleared state.
         master.queued = []
         master.queue_background_task = lambda task: master.queued.append(
-            (task, api.getCarApiBearerToken(), api.getCarApiRefreshToken())
+            (task, api.fleetSlot.accessToken, api.fleetSlot.refreshToken)
         )
         return master, api
 
     def state(self, api):
         return (
-            api.getCarApiBearerToken(),
-            api.getCarApiRefreshToken(),
-            api.getCarApiTokenExpireTime(),
-            api.getCarApiBaseURL(),
-            api.verifyCert,
+            api.ownerSlot.snapshot(),
+            api.fleetSlot.snapshot(),
             api.readOnly,
             api.getCarApiLastErrorTime(),
         )
 
     def assert_kept_and_saved(self, master, api, before, tmp_path):
         assert self.state(api) == before
+        tokens = (api.fleetSlot.accessToken, api.fleetSlot.refreshToken)
         for _, bearer, refresh in master.queued:
-            assert (bearer, refresh) == (before[0], before[1])
+            assert (bearer, refresh) == tokens
         master.saveSettings()
         saved = json.loads((tmp_path / "settings.json").read_text())
-        assert saved["carApiBearerToken"] == before[0]
-        assert saved["carApiRefreshToken"] == before[1]
+        assert (saved["carApiBearerToken"], saved["carApiRefreshToken"]) == tokens
 
     @pytest.mark.parametrize(
         "response",
@@ -556,8 +559,7 @@ class TestRejectedPasteKeepsTokens:
     def test_fleet_paste_without_client_id_keeps_tokens(self, requests_mock):
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api(teslaApiClientID="")
-        api.setCarApiBearerToken(owner_token())
-        api.carApiRefreshToken = owner_refresh_token()
+        api.storeToken(owner_token(), owner_refresh_token())
         before = self.state(api)
 
         assert api.saveApiToken(self.PASTED) == "not_configured"
@@ -568,24 +570,23 @@ class TestRejectedPasteKeepsTokens:
     def test_network_failure_keeps_pasted_token_for_retry(self, requests_mock):
         requests_mock.post(FLEET_REFRESH_URL, exc=requests.exceptions.ConnectionError)
         api = new_api()
-        api.setCarApiBearerToken(fleet_token())
-        api.carApiRefreshToken = self.GOOD_REFRESH
+        api.storeToken(fleet_token(), self.GOOD_REFRESH)
 
         assert api.saveApiToken(self.PASTED) == "unreachable"
 
-        assert api.getCarApiRefreshToken() == self.PASTED
-        assert api.getCarApiBearerToken() == ""
+        assert api.fleetSlot.refreshToken == self.PASTED
+        assert api.fleetSlot.accessToken == ""
         assert api.master.tasks[-1] == {"cmd": "saveSettings"}
 
     def test_settings_network_failure(self, requests_mock):
         requests_mock.post(FLEET_REFRESH_URL, exc=requests.exceptions.ConnectionError)
         api = new_api()
-        api.setCarApiBearerToken(fleet_token())
+        api.storeToken(fleet_token())
 
         request = save_settings(api, {"carApiRefreshToken": self.PASTED})
 
         request.send_header.assert_any_call("Location", "/teslaAccount/unreachable")
-        assert api.getCarApiRefreshToken() == self.PASTED
+        assert api.fleetSlot.refreshToken == self.PASTED
 
     @pytest.mark.parametrize(
         "result, text",
@@ -643,7 +644,7 @@ class TestNoClientID:
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
         api = new_api(teslaApiClientID="")
 
-        assert api.setCarApiRefreshToken(owner_refresh_token()) is True
+        assert api.pasteRefreshToken(owner_refresh_token()) == "success"
 
         assert owner.call_count == 1
         assert owner.last_request.json()["client_id"] == "ownerapi"
@@ -654,7 +655,7 @@ class TestNoClientID:
         owner = requests_mock.post(AUTH_TOKEN_URL, json={})
         api = new_api(teslaApiClientID="")
 
-        assert api.setCarApiRefreshToken(OPAQUE_REFRESH) is False
+        assert api.pasteRefreshToken(OPAQUE_REFRESH) == "not_configured"
 
         assert fleet.call_count == 0
         assert owner.call_count == 0
@@ -662,58 +663,61 @@ class TestNoClientID:
 
 
 class TestRefreshNeverSent:
-    @pytest.mark.parametrize(
-        "make_access, url",
-        [(owner_token, AUTH_TOKEN_URL), (fleet_token, FLEET_REFRESH_URL)],
+    SLOTS = pytest.mark.parametrize(
+        "make_access, slotName, url",
+        [
+            (owner_token, "ownerSlot", AUTH_TOKEN_URL),
+            (fleet_token, "fleetSlot", FLEET_REFRESH_URL),
+        ],
         ids=["owner", "fleet"],
     )
-    def test_connection_error_does_not_crash(self, requests_mock, make_access, url):
+
+    @SLOTS
+    def test_connection_error_does_not_crash(
+        self, requests_mock, make_access, slotName, url
+    ):
         # The request never went out, so there is no response (req is None).
         requests_mock.post(url, exc=requests.exceptions.ConnectionError)
         api = new_api()
         access = make_access(expires_in=60)
-        api.setCarApiBearerToken(access)
-        api.carApiRefreshToken = "some-refresh"
+        api.storeToken(access, "some-refresh")
+        slot = getattr(api, slotName)
 
-        assert api.apiRefresh() is False
+        assert api.refreshSlot(slot) == "unreachable"
 
         # No 401 came back, so the tokens are kept for a later retry.
-        assert api.getCarApiBearerToken() == access
-        assert api.getCarApiRefreshToken() == "some-refresh"
+        assert slot.accessToken == access
+        assert slot.refreshToken == "some-refresh"
         assert api.getCarApiLastErrorTime() > 0
 
-    @pytest.mark.parametrize(
-        "make_access, url",
-        [(owner_token, AUTH_TOKEN_URL), (fleet_token, FLEET_REFRESH_URL)],
-        ids=["owner", "fleet"],
-    )
-    def test_401_clears_both_tokens_and_the_type(self, requests_mock, make_access, url):
+    @SLOTS
+    def test_401_clears_both_tokens_and_the_type(
+        self, requests_mock, make_access, slotName, url
+    ):
         requests_mock.post(url, status_code=401, json={})
         api = new_api()
-        api.setCarApiBearerToken(make_access(expires_in=60))
-        api.carApiRefreshToken = "some-refresh"
-        before = time.time()
+        api.storeToken(make_access(expires_in=60), "some-refresh")
+        slot = getattr(api, slotName)
 
-        assert api.apiRefresh() is False
+        assert api.refreshSlot(slot) == "rejected"
 
-        assert api.getCarApiBearerToken() == ""
-        assert api.getCarApiRefreshToken() == ""
-        assert api.readOnly is False
-        assert api.getCarApiBaseURL() == ""
-        assert before <= api.getCarApiTokenExpireTime() <= time.time()
+        assert slot.accessToken == ""
+        assert slot.refreshToken == ""
+        assert slot.tokenType == ""
+        assert slot.baseURL == ""
+        assert slot.expireTime == 0
         assert {"cmd": "saveSettings"} in api.master.tasks
 
     def test_401_keeps_the_proxy_for_the_next_fleet_token(self, requests_mock):
-        requests_mock.post(AUTH_TOKEN_URL, status_code=401, json={})
+        requests_mock.post(FLEET_REFRESH_URL, status_code=401, json={})
         api = new_api(teslaProxy="https://proxy.local:4443")
-        api.setCarApiBearerToken(owner_token(expires_in=60))
-        api.carApiRefreshToken = "some-refresh"
+        api.storeToken(fleet_token(expires_in=60), "some-refresh")
 
-        api.apiRefresh()
-        assert api.getCarApiBaseURL() == ""
+        api.refreshSlot(api.fleetSlot)
+        assert api.fleetSlot.baseURL == ""
 
-        api.setCarApiBearerToken(fleet_token())
-        assert api.getCarApiBaseURL() == "https://proxy.local:4443/api/1/vehicles"
+        api.storeToken(fleet_token())
+        assert api.fleetSlot.baseURL == "https://proxy.local:4443/api/1/vehicles"
 
     def test_cleared_tokens_save_and_reload_cleared(self, requests_mock, tmp_path):
         # The 401 queues saveSettings; what it saves must load back as "no
@@ -723,39 +727,49 @@ class TestRefreshNeverSent:
         requests_mock.post(AUTH_TOKEN_URL, status_code=401, json={})
         refresh = requests_mock.post(FLEET_REFRESH_URL, json={})
         master, api, _ = master_with_settings(tmp_path, {})
-        api.setCarApiBearerToken(owner_token(expires_in=60))
-        api.carApiRefreshToken = "some-refresh"
-        api.apiRefresh()
+        api.storeToken(owner_token(expires_in=60), "some-refresh")
+        api.refreshSlot(api.ownerSlot)
         master.saveSettings()
         saved = json.loads((tmp_path / "settings.json").read_text())
 
         master2, api2, _ = master_with_settings(tmp_path, saved)
         master2.loadSettings()
 
-        assert api2.getCarApiBearerToken() == ""
-        assert api2.getCarApiRefreshToken() == ""
-        assert api2.readOnly is False
-        assert api2.getCarApiBaseURL() == ""
+        for slot in (api2.ownerSlot, api2.fleetSlot):
+            assert slot.accessToken == ""
+            assert slot.refreshToken == ""
+            assert slot.tokenType == ""
+            assert slot.baseURL == ""
         assert refresh.called is False
 
 
 class TestSyncOn:
-    def test_no_refresh_while_sync_on(self, requests_mock):
+    def test_synced_slot_not_refreshed(self, requests_mock):
         owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
         api = new_api()
-        api.carApiBearerToken = owner_token(expires_in=60)
-        api.readOnly = True
-        api.carApiRefreshToken = owner_refresh_token()
+        synced = owner_token(expires_in=60)
+        api.storeToken(synced, owner_refresh_token(), "synced")
         sync_on(api)
 
-        assert api.apiRefresh() is False
+        assert api.ownerSlot.refreshToken == ""
+        assert api.refreshSlot(api.ownerSlot) == "not_configured"
         api.refreshTokenIfNeeded()
-        assert api.setCarApiRefreshToken(owner_refresh_token()) is False
         assert api.saveApiToken(owner_refresh_token()) == "token_sync"
         assert api.saveApiToken(owner_token()) == "token_sync"
         assert api.pasteRefreshToken(owner_refresh_token()) == "token_sync"
 
         assert owner.called is False
         assert fleet.called is False
-        assert api.getCarApiBearerToken() != ""
+        assert api.ownerSlot.accessToken == synced
+
+    def test_pasted_owner_token_refreshes_while_sync_on(self, requests_mock):
+        # Only a synced token is TeslaMate's to refresh.
+        owner = requests_mock.post(AUTH_TOKEN_URL, json=token_response(owner_token()))
+        api = new_api()
+        api.storeToken(owner_token(expires_in=60), owner_refresh_token())
+        sync_on(api)
+
+        api.refreshTokenIfNeeded()
+
+        assert owner.call_count == 1

@@ -34,9 +34,21 @@
   </font>
 {% elif url.path == "/teslaAccount/token_sync" %}
   <font color='red'>
-    <b>TeslaMate token sync is on, so TWCManager uses TeslaMate's Tesla API
-       tokens. The tokens you supplied were not stored. To use your own
-       tokens, turn off syncTokens in the TeslaMate module's config.</b>
+    <b>TeslaMate token sync manages the token slot this token belongs to, so
+       it was not stored. To replace TeslaMate's token, remove it on the
+       Settings page, or turn off syncTokens in the TeslaMate module's
+       config.</b>
+  </font>
+{% elif url.path == "/teslaAccount/unknown_type" %}
+  <font color='red'>
+    <b>TWCManager could not recognise this token as an Owner API or Fleet API
+       token. Nothing was stored.</b>
+  </font>
+{% elif url.path == "/teslaAccount/mismatched_types" %}
+  <font color='red'>
+    <b>The access token and refresh token are for different Tesla APIs (one
+       Owner API, one Fleet API), so neither was stored. Paste them
+       separately, or paste a matching pair.</b>
   </font>
 {% elif url.path == "/teslaAccount/token_rejected" %}
   <font color='red'>
@@ -63,7 +75,8 @@
   </font>
 {% endif %}
 
-{% if not master.tokenSyncEnabled()
+{% set carapi = master.getModuleByName("TeslaAPI") %}
+{% if carapi and not carapi.syncedSlotLocked(carapi.fleetSlot)
       and url.path != "/teslaAccount/success" %}
       <!-- Show the login form whenever we don't already hold an API token -->
       {% if not apiAvailable %}

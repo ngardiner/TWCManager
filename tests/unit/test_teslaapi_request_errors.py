@@ -12,7 +12,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from tests.unit.teslatokens import fleet_token
+from tests.unit.teslatokens import FLEET_NA_URL, fleet_token
 
 VIN = "5YJ3E1EA0KF000001"
 NEW_ACCESS = fleet_token(jti="new")
@@ -26,7 +26,7 @@ def make_master():
         "config": {"teslaApiClientID": "my-client-id"},
         "vehicle": {"teslaAPI": {"enabled": True}},
     }
-    # tokenSyncEnabled() must be falsey or setCarApiBearerToken refuses the token
+    # tokenSyncEnabled() must be falsey or storeToken refuses the token
     master.tokenSyncEnabled.return_value = False
     return master
 
@@ -36,13 +36,9 @@ def api():
     from TWCManager.Vehicle.TeslaAPI import TeslaAPI
 
     api = TeslaAPI(make_master())
-    # Start each test without inherited class-level token state
     # A classified token, so requests have a base URL to go to.
-    api.setCarApiBearerToken(fleet_token(jti="old"))
-    api.carApiRefreshToken = "old-refresh"
+    api.storeToken(fleet_token(jti="old"), "old-refresh")
     api.carApiLastErrorTime = 0
-    # Requests are only made once a token has given us an API base URL
-    api.baseURL = "https://vehicle.example/api/1/vehicles"
     return api
 
 
@@ -59,23 +55,23 @@ class TestRefresh:
     def test_request_never_sent(self, api, requests_mock):
         requests_mock.post(TOKEN_URL, exc=requests.exceptions.ConnectionError)
 
-        assert api.apiRefresh() is False
+        assert api.refreshSlot(api.fleetSlot) == "unreachable"
 
         # No 401 came back, so the tokens are kept for a later retry.
-        assert api.getCarApiRefreshToken() == "old-refresh"
+        assert api.fleetSlot.refreshToken == "old-refresh"
         assert api.getCarApiLastErrorTime() > 0
 
     def test_401_still_clears_tokens(self, api, requests_mock):
         requests_mock.post(TOKEN_URL, status_code=401, json={})
 
-        assert api.apiRefresh() is False
-        assert api.getCarApiRefreshToken() == ""
+        assert api.refreshSlot(api.fleetSlot) == "rejected"
+        assert api.fleetSlot.refreshToken == ""
 
 
 class TestWake:
     def test_request_never_sent(self, api, vehicle, requests_mock):
         requests_mock.post(
-            api.baseURL + "/" + VIN + "/wake_up",
+            api.fleetSlot.baseURL + "/" + VIN + "/wake_up",
             exc=requests.exceptions.ConnectionError,
         )
         refresh = requests_mock.post(TOKEN_URL, json={})
@@ -85,12 +81,13 @@ class TestWake:
 
 
 class TestGetCarApi:
-    URL = "https://vehicle.example/api/1/vehicles/" + VIN + "/vehicle_data"
+    PATH = VIN + "/vehicle_data"
+    URL = FLEET_NA_URL + "/" + PATH
 
     def test_request_never_sent(self, vehicle, requests_mock):
         requests_mock.get(self.URL, exc=requests.exceptions.ConnectionError)
 
-        assert vehicle.get_car_api(self.URL, checkReady=False) == (False, None)
+        assert vehicle.get_car_api(self.PATH, checkReady=False) == (False, None)
 
     def test_expired_token_refreshes_and_retries_with_new_token(
         self, api, vehicle, requests_mock
@@ -111,7 +108,7 @@ class TestGetCarApi:
             },
         )
 
-        ok, response = vehicle.get_car_api(self.URL, checkReady=False)
+        ok, response = vehicle.get_car_api(self.PATH, checkReady=False)
 
         assert ok is True
         assert response == {"ok": True}

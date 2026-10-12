@@ -131,10 +131,7 @@ class WebIPCControl:
                 slaveTWCRoundRobin = self.master.getSlaveTWCs()
                 if webMsg == b"getStatus":
                     needCarApiBearerToken = False
-                    if (
-                        self.master.getModuleByName("TeslaAPI").getCarApiBearerToken()
-                        == ""
-                    ):
+                    if self.master.getModuleByName("TeslaAPI").slotFor("read") is None:
                         for i in range(0, self.master.countSlaveTWC()):
                             if slaveTWCRoundRobin[i].protocolVersion == 2:
                                 needCarApiBearerToken = True
@@ -330,11 +327,18 @@ class WebIPCControl:
                                 time.localtime(carapi.getCarApiLastErrorTime()),
                             )
                         )
+                        + "\nownerApiTokenExpireTime="
+                        + str(
+                            time.strftime(
+                                "%m-%d-%y %H:%M:%S",
+                                time.localtime(carapi.ownerSlot.expireTime),
+                            )
+                        )
                         + "\ncarApiTokenExpireTime="
                         + str(
                             time.strftime(
                                 "%m-%d-%y %H:%M:%S",
-                                time.localtime(carapi.getCarApiTokenExpireTime()),
+                                time.localtime(carapi.fleetSlot.expireTime),
                             )
                         )
                         + "\n"
