@@ -544,9 +544,9 @@ class TWCMaster:
         remaining_watts = available_watts
         pending = sorted(wants_power, key=lambda e: e.maxPower)
 
-        for evse in pending:
-            if not pending:
-                break
+        # Iterate a copy: pending.remove() below would otherwise make the loop
+        # skip every other EVSE, leaving it with no setTargetPower() at all.
+        for evse in list(pending):
             fair_share = remaining_watts / len(pending)
 
             # Constrain by EVSE capacity
