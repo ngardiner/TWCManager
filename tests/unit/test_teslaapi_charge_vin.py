@@ -23,7 +23,7 @@ def api(monkeypatch, requests_mock):
     monkeypatch.setattr(teslaapi, "Thread", lambda *a, **k: _NoThread())
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     a = new_api()
-    a.setCarApiBearerToken(fleet_token())
+    a.storeToken(fleet_token())
     a.addVehicle({"id": 1, "vin": "V1", "display_name": "Car1"})
     a.addVehicle({"id": 2, "vin": "V2", "display_name": "Car2"})
     for v in a.getCarApiVehicles():

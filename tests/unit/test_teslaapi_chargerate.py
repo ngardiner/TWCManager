@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 import requests
 
 from TWCManager.Vehicle.TeslaAPI import CarApiVehicle, TeslaAPI
+from tests.unit.teslatokens import fleet_token
 
 VIN1 = "5YJ3E1EA1KF000001"
 
@@ -20,8 +21,7 @@ def make_api():
     master.tokenSyncEnabled.return_value = False
     api = TeslaAPI(master)
     api.carApiVehicles = []
-    api.carApiBearerToken = "token"
-    api.baseURL = "https://fleet.example/api/1/vehicles"
+    api.storeToken(fleet_token())
     return api
 
 
