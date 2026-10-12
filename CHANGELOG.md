@@ -10,6 +10,7 @@ This document logs the changes per release of TWCManager.
     * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, ported from v1.3.4 (closes #639)
     * Add vehicle commandPolicy (prefer_ble/ble_only/api_only) to restrict state-changing commands to BLE or API, capping billed Fleet API command spend; configurable from the Settings page, with optional hard override in config.json (closes #651)
     * Add MQTT control topics for nonScheduledAmpsMax and nonScheduledAction to allow policy control via MQTT (closes #475)
+    * (@MikeBishop) - Accept a bare access or refresh token on the Tesla login paste-back (#687)
 * Architecture
     * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used read-only
     * (@MikeBishop) - TWC abstraction layer with EVSEController/EVSEInstance interface (ported from #483)
@@ -64,6 +65,8 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: Tesla API charge start/stop for one vehicle no longer wakes or commands every vehicle (#697)
     * (@MikeBishop) - Fix: Don't send paid Fleet API charge-rate commands to a car a TWC is serving (closes #672)
     * (@MikeBishop) - Fix: Don't resend an unchanged Fleet API charge rate, and time out the request after 10s (#694)
+    * (@MikeBishop) - Fix: Refresh Owner API tokens with client_id ownerapi at auth.tesla.com, as 1.3.3 does (#687)
+    * (@MikeBishop) - Fix: A rejected pasted refresh token keeps the previous tokens, and a 401 on refresh clears the token type (#687)
 
 ## v1.3.4 - 2026-04-24
 * Features
