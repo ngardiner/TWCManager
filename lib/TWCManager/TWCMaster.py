@@ -939,9 +939,15 @@ class TWCMaster:
 
         # Step 2 - Send settings to other modules
         carapi = self.getModuleByName("TeslaAPI")
-        carapi.setCarApiBearerToken(self.settings.get("carApiBearerToken", ""))
-        carapi.setCarApiRefreshToken(self.settings.get("carApiRefreshToken", ""))
-        carapi.setCarApiTokenExpireTime(self.settings.get("carApiTokenExpireTime", ""))
+        if not self.tokenSyncEnabled():
+            carapi.setCarApiBearerToken(self.settings.get("carApiBearerToken", ""))
+            carapi.setCarApiRefreshToken(self.settings.get("carApiRefreshToken", ""))
+            carapi.restoreCarApiTokenExpireTime(
+                self.settings.get("carApiTokenExpireTime", "")
+            )
+        # else: every module is registered by now, so the sync source's
+        # startup sync has already set the tokens and their expiry; the
+        # saved ones are from an earlier run and must not replace them.
 
         # We start with vehicles, but this should be templated in future for all modules to both remove the above logic,
         # and to push settings logic out to the individual modules
