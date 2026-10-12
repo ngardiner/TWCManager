@@ -4,14 +4,29 @@ import json
 import logging
 import re
 import requests
+from requests.adapters import HTTPAdapter
 import secrets
+import ssl
 from threading import RLock, Thread
 import time
 from urllib.parse import urlencode, urlsplit, parse_qs
+from urllib3.util.ssl_ import create_urllib3_context
 import jwt
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
+
+
+class TLS13Adapter(HTTPAdapter):
+    """HTTPAdapter that enforces TLS 1.3, as release/1.3.3 does for Tesla
+    Owner API support: auth.tesla.com requires TLS 1.3 for the Owner API
+    token refresh."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        context = create_urllib3_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        kwargs["ssl_context"] = context
+        return super().init_poolmanager(*args, **kwargs)
 
 
 class TeslaAPI:
@@ -44,6 +59,9 @@ class TeslaAPI:
     #     tokens exchanged at the regional fleet-auth endpoint.
     authorizeURL = "https://auth.tesla.com/oauth2/v3/authorize"
     authTokenURL = "https://auth.tesla.com/oauth2/v3/token"
+    # iss of an Owner API refresh token (a JWT). Fleet tokens use .../v3/nts,
+    # and Fleet refresh tokens are opaque.
+    ownerTokenIssuer = "https://auth.tesla.com/oauth2/v3"
     clientSecret = ""
     redirectURI = ""
     region = "NA"
@@ -127,6 +145,10 @@ class TeslaAPI:
         except KeyError:
             pass
 
+        # The Owner API refresh goes through this session, as in release/1.3.3.
+        self.session = requests.Session()
+        self.session.mount("https://auth.tesla.com", TLS13Adapter())
+
     def enabled(self) -> bool:
         return self._enabled
 
@@ -160,31 +182,48 @@ class TeslaAPI:
         return False
 
     def apiRefresh(self):
+        return self.refreshToken() == "success"
+
+    def refreshToken(self, saveOnFailure=True):
+        # Refreshes the tokens. Returns "success", "rejected" (Tesla answered
+        # but gave no tokens), "unreachable" (no response), "not_configured"
+        # (a Fleet refresh with no teslaApiClientID) or "token_sync".
+        # saveOnFailure=False leaves saving a failure's state to the caller.
         if self.master.tokenSyncEnabled():
             # The sync source (TeslaMate) owns and refreshes these tokens.
             # Refreshing here would rotate the token out from under it.
             logger.log(logging.INFO8, "Token sync is on; not refreshing token")
-            return False
+            return "token_sync"
         # Refresh tokens expire in 45
         # days when first issued, so we'll get a new token every 15 days.
-        if not self.refreshClientID:
-            logger.error(
-                "Cannot refresh Tesla token: no teslaApiClientID configured. "
-                "Register a Fleet API app and set teslaApiClientID in config.json."
-            )
-            return False
+        if self.refreshTokenIsOwner():
+            # An Owner API token refreshes as in release/1.3.3: client_id
+            # "ownerapi" at auth.tesla.com, through the TLS 1.3 session.
+            # No teslaApiClientID is needed.
+            clientID = "ownerapi"
+            myRefreshURL = self.authTokenURL
+            post = self.session.post
+        else:
+            if not self.refreshClientID:
+                logger.error(
+                    "Cannot refresh Tesla token: no teslaApiClientID configured. "
+                    "Register a Fleet API app and set teslaApiClientID in config.json."
+                )
+                return "not_configured"
+            clientID = self.refreshClientID
+            myRefreshURL = self.fleetRefreshURL
+            post = requests.post
         headers = {"accept": "application/json", "Content-Type": "application/json"}
         data = {
-            "client_id": self.refreshClientID,
+            "client_id": clientID,
             "grant_type": "refresh_token",
             "refresh_token": self.getCarApiRefreshToken(),
             "scope": "offline_access",
         }
-        myRefreshURL = self.fleetRefreshURL
         req = None
         now = time.time()
         try:
-            req = requests.post(myRefreshURL, headers=headers, json=data)
+            req = post(myRefreshURL, headers=headers, json=data)
             logger.log(logging.INFO2, "Car API request" + str(req))
             req.raise_for_status()
             apiResponseDict = json.loads(req.text)
@@ -195,7 +234,7 @@ class TeslaAPI:
                     logging.INFO2,
                     "ERROR: Can't access Tesla car via API.  Please supply fresh tokens.",
                 )
-                self.setCarApiBearerToken("")
+                self.clearCarApiBearerToken()
                 self.setCarApiRefreshToken("")
             self.updateCarApiLastErrorTime()
             # Instead of just setting carApiLastErrorTime, erase tokens to
@@ -203,8 +242,9 @@ class TeslaAPI:
             # on web interface. I feel this is safer than trying to log in every
             # ten minutes with a bad token because Tesla might decide to block
             # remote access to your car after too many authorization errors.
-            self.master.queue_background_task({"cmd": "saveSettings"})
-            return False
+            if saveOnFailure:
+                self.master.queue_background_task({"cmd": "saveSettings"})
+            return "unreachable" if req is None else "rejected"
         except json.decoder.JSONDecodeError:
             logger.log(
                 logging.INFO2, "JSON Decode Error parsing API Token Refresh Response"
@@ -220,13 +260,33 @@ class TeslaAPI:
             self.setCarApiRefreshToken(apiResponseDict["refresh_token"])
             self.setCarApiTokenExpireTime(now + apiResponseDict["expires_in"])
             self.master.queue_background_task({"cmd": "saveSettings"})
-            return True
+            return "success"
 
         except Exception as e:
             logger.warning(f"Error processing token refresh response: {e}")
             pass
 
-        return False
+        return "rejected"
+
+    def refreshTokenIsOwner(self):
+        # True when the refresh token is an Owner API one, so apiRefresh uses
+        # the ownerapi refresh. A classified (Owner or Fleet) bearer token
+        # decides (readOnly is set only for an Owner API token). With no
+        # bearer token, e.g. when only a refresh token was pasted, or one of
+        # unknown type, the refresh token's own type decides.
+        bearer = self.getCarApiBearerToken()
+        if bearer and self.classifyToken(self.decodeToken(bearer))[0] != "unknown":
+            return self.readOnly
+        return self.refreshTokenType(self.getCarApiRefreshToken()) == "owner"
+
+    def refreshTokenType(self, token):
+        # "owner" for an Owner API refresh token, a JWT issued by
+        # auth.tesla.com/oauth2/v3; "fleet" for anything else, including an
+        # opaque token (Fleet refresh tokens are opaque).
+        decoded = self.decodeToken(token)
+        if decoded is not None and decoded.get("iss") == self.ownerTokenIssuer:
+            return "owner"
+        return "fleet"
 
     def refreshTokenIfNeeded(self):
         # Proactively refresh the bearer token if it's missing or close to
@@ -1358,7 +1418,135 @@ class TeslaAPI:
         qs = parse_qs(urlsplit(url).query)
         code = qs.get("code", [None])[0]
         state = qs.get("state", [None])[0]
+        if code is None and "?" not in url and not urlsplit(url.strip()).scheme:
+            # Not a URL: a bare token, e.g. an Owner API token. (A URL without
+            # a query is still a failed login, and must not be stored.)
+            return self.savePastedToken(url.strip())
         return self.fleetTokenExchange(code, state)
+
+    def savePastedToken(self, token):
+        # Stores a token pasted on its own: an access token as the bearer
+        # token, anything else as the refresh token (which refreshes by its
+        # type). Returns a status string for the web UI, as saveApiToken does.
+        if self.master.tokenSyncEnabled():
+            logger.warning(
+                "Tesla API token refused: TeslaMate token sync is on, so "
+                "TWCManager uses TeslaMate's tokens. Turn off syncTokens to "
+                "enter tokens by hand."
+            )
+            return "token_sync"
+        if not token:
+            return "error"
+        decoded = self.decodeToken(token)
+        tokenType = self.classifyToken(decoded)[0]
+        isOwnerRefresh = decoded is not None and (
+            decoded.get("iss") == self.ownerTokenIssuer and tokenType != "owner"
+        )
+        if tokenType != "unknown" and not isOwnerRefresh:
+            self.pasteAccessToken(token)
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            return "success"
+        return self.pasteRefreshToken(token)
+
+    def pasteAccessToken(self, token):
+        # An access token entered on its own (Settings page or paste-back).
+        # A stored refresh token of the other type can't refresh it: the
+        # refresh would go to the wrong client and, on a 401, clear both
+        # tokens. Drop it, so the access token is used until it expires.
+        if not self.setCarApiBearerToken(token):
+            return False
+        tokenType = self.classifyToken(self.decodeToken(token))[0]
+        stored = self.getCarApiRefreshToken()
+        if (
+            stored
+            and tokenType in ("owner", "fleet")
+            and self.refreshTokenType(stored) != tokenType
+        ):
+            logger.warning(
+                "Dropping the stored Tesla API refresh token: it is a %s "
+                "token and the pasted access token is a %s token. Paste the "
+                "matching refresh token too, or the access token will not be "
+                "refreshed when it expires."
+                % (self.refreshTokenType(stored), tokenType)
+            )
+            self.carApiRefreshToken = ""
+        return True
+
+    def pasteRefreshToken(self, token):
+        # A refresh token entered on its own (Settings page or paste-back).
+        # The stored bearer token may be of the other type, and apiRefresh
+        # picks the refresh from the bearer token, so forget it first: the
+        # refresh then goes by the refresh token's own type.
+        # Returns a status for the web UI, as saveApiToken does:
+        #   "success";
+        #   "token_rejected" or "not_configured": Tesla rejected the token,
+        #     or it needs a teslaApiClientID; the previous tokens are kept;
+        #   "unreachable": no response from Tesla; the pasted token is kept
+        #     and the usual refresh retries it;
+        #   "token_sync": refused, nothing changed.
+        if self.master.tokenSyncEnabled():
+            # Refuses and logs why.
+            self.setCarApiRefreshToken(token)
+            return "token_sync"
+        if not token:
+            return "error"
+        previous = (
+            self.carApiBearerToken,
+            self.carApiRefreshToken,
+            self.carApiTokenExpireTime,
+            self.baseURL,
+            self.verifyCert,
+            self.readOnly,
+            self.readOnlyRefusalLogged,
+            self.carApiLastErrorTime,
+            self.errorCount,
+        )
+        self.clearCarApiBearerToken()
+        self.carApiRefreshToken = token
+        # Nothing is saved on failure until the outcome is known, so a
+        # queued save never writes the cleared state.
+        result = self.refreshToken(saveOnFailure=False)
+        if result == "success":
+            return "success"
+        if result == "unreachable":
+            logger.warning(
+                "Could not reach Tesla to check the pasted refresh token; "
+                "keeping it and retrying later."
+            )
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            return "unreachable"
+        (
+            self.carApiBearerToken,
+            self.carApiRefreshToken,
+            self.carApiTokenExpireTime,
+            self.baseURL,
+            self.verifyCert,
+            self.readOnly,
+            self.readOnlyRefusalLogged,
+            self.carApiLastErrorTime,
+            self.errorCount,
+        ) = previous
+        self.master.queue_background_task({"cmd": "saveSettings"})
+        logger.warning(
+            "Pasted Tesla API refresh token not accepted; previous tokens kept."
+        )
+        return "token_rejected" if result == "rejected" else result
+
+    def decodeToken(self, token):
+        # A token's JWT claims, read without verifying the signature (only
+        # the token type and expiry are needed), or None if it is not a JWT.
+        try:
+            decoded = jwt.decode(
+                token,
+                options={
+                    "verify_signature": False,
+                    "verify_aud": False,
+                    "verify_exp": False,
+                },
+            )
+        except (jwt.exceptions.InvalidTokenError, TypeError, ValueError):
+            return None
+        return decoded if isinstance(decoded, dict) else None
 
     def setCarApiBearerToken(self, token=None, fromSync=False):
         if token:
@@ -1368,18 +1556,7 @@ class TeslaAPI:
                 return False
             else:
                 self.carApiBearerToken = token
-                decoded = None
-                try:
-                    decoded = jwt.decode(
-                        token,
-                        options={
-                            "verify_signature": False,
-                            "verify_aud": False,
-                            "verify_exp": False,
-                        },
-                    )
-                except jwt.exceptions.InvalidTokenError:
-                    pass
+                decoded = self.decodeToken(token)
                 self.applyTokenClassification(decoded)
 
                 if decoded and "exp" in decoded:
@@ -1389,6 +1566,21 @@ class TeslaAPI:
                 return True
         else:
             return False
+
+    def clearCarApiBearerToken(self):
+        # Forgets the bearer token, its type and its expiry, e.g. after the
+        # refresh token is rejected. (setCarApiBearerToken("") stores
+        # nothing.) baseURL is reset as for an unknown token; a configured
+        # teslaProxy stays in proxyURL for the next Fleet token. Callers
+        # check tokenSyncEnabled() first: a synced token must not be cleared.
+        self.carApiBearerToken = ""
+        if self.readOnly:
+            # Let the next refused command log again.
+            self.readOnlyRefusalLogged = False
+        self.baseURL = ""
+        self.verifyCert = True
+        self.readOnly = False
+        self.setCarApiTokenExpireTime(time.time())
 
     def classifyToken(self, decoded):
         # Returns (tokenType, region) for a token's decoded JWT claims.

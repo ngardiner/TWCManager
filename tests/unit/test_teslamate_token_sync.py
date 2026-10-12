@@ -318,7 +318,11 @@ class TestSettingsPageWhileSyncOn:
 
         request = self.save(master, {"carApiRefreshToken": "typed-refresh"})
 
-        assert api.getCarApiRefreshToken() == "typed-refresh"
+        # Pasted on its own, the refresh token replaces the bearer token and
+        # is refreshed by its own type (opaque, so Fleet).
+        fleet = refresh_endpoints[0]
+        assert fleet.call_count == 1
+        assert fleet.last_request.json()["refresh_token"] == "typed-refresh"
         request.send_header.assert_any_call("Location", "/")
 
 

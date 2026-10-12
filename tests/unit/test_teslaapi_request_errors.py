@@ -12,7 +12,10 @@ from unittest.mock import Mock
 import pytest
 import requests
 
+from tests.unit.teslatokens import fleet_token
+
 VIN = "5YJ3E1EA0KF000001"
+NEW_ACCESS = fleet_token(jti="new")
 # Any Tesla token endpoint; which host refreshes a token varies by release.
 TOKEN_URL = re.compile(r"/oauth2/v3/token$")
 
@@ -34,7 +37,8 @@ def api():
 
     api = TeslaAPI(make_master())
     # Start each test without inherited class-level token state
-    api.carApiBearerToken = "old-access"
+    # A classified token, so requests have a base URL to go to.
+    api.setCarApiBearerToken(fleet_token(jti="old"))
     api.carApiRefreshToken = "old-refresh"
     api.carApiLastErrorTime = 0
     # Requests are only made once a token has given us an API base URL
@@ -101,7 +105,7 @@ class TestGetCarApi:
         requests_mock.post(
             TOKEN_URL,
             json={
-                "access_token": "new-access",
+                "access_token": NEW_ACCESS,
                 "refresh_token": "new-refresh",
                 "expires_in": 28800,
             },
@@ -112,4 +116,6 @@ class TestGetCarApi:
         assert ok is True
         assert response == {"ok": True}
         assert data.call_count == 2
-        assert data.request_history[1].headers["Authorization"] == "Bearer new-access"
+        assert (
+            data.request_history[1].headers["Authorization"] == "Bearer " + NEW_ACCESS
+        )
