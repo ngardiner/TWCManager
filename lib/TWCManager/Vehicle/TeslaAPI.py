@@ -292,7 +292,7 @@ class TeslaAPI:
                 return False
             return True
 
-    def car_api_available(self, charge=None, applyLimit=None):
+    def car_api_available(self, charge=None, applyLimit=None, vin=None):
         now = time.time()
         needSleep = False
         apiResponseDict = {}
@@ -350,6 +350,10 @@ class TeslaAPI:
             ):
                 # Wake cars if needed
                 for vehicle in self.getCarApiVehicles():
+                    if vin and vehicle.VIN != vin:
+                        # Targeted command: leave other cars asleep.
+                        continue
+
                     if charge is True and vehicle.stopAskingToStartCharging:
                         # Vehicle is in a state (complete or charging) already
                         # which doesn't make sense for us to keep requesting it
@@ -624,8 +628,11 @@ class TeslaAPI:
             return "error"
 
         charge = None
+        vin = None
         if task:
             charge = task.get("charge", None)
+            # When set, act on that vehicle only (and wake only that vehicle).
+            vin = task.get("vin", None)
 
         now = time.time()
         apiResponseDict = {}
@@ -633,6 +640,8 @@ class TeslaAPI:
             # Whenever we are going to tell vehicles to stop charging, reset
             # per-vehicle wake state so the next start cycle is fresh.
             for vehicle in self.getCarApiVehicles():
+                if vin and vehicle.VIN != vin:
+                    continue
                 vehicle.stopAskingToStartCharging = False
                 vehicle.firstChargeNeededTime = 0
                 vehicle.firstWakeAttemptTime = 0
@@ -646,7 +655,7 @@ class TeslaAPI:
             )
             return "error"
 
-        if self.car_api_available(charge=charge) is False:
+        if self.car_api_available(charge=charge, vin=vin) is False:
             logger.log(
                 logging.INFO8,
                 "car_api_charge return because car_api_available() == False",
@@ -658,6 +667,9 @@ class TeslaAPI:
         logger.log(logging.INFO8, "startOrStop is set to " + str(startOrStop))
 
         for vehicle in self.getCarApiVehicles():
+            if vin and vehicle.VIN != vin:
+                continue
+
             if charge and vehicle.stopAskingToStartCharging:
                 logger.log(
                     logging.INFO8,
