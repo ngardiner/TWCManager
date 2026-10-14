@@ -1,28 +1,25 @@
 """
-Telemetry (TeslaMate etc.) -> TeslaAPI vehicle mapping.
+Telemetry (TeslaMate etc.) -> registry vehicle mapping by name.
 
-The retained display_name message arrives once at subscribe time; if the Tesla
-API vehicle list isn't loaded yet the mapping must be retried, not dropped.
+The retained display_name message arrives once at subscribe time; if no
+registry vehicle has that name yet (the Tesla API vehicle list isn't loaded)
+the mapping must be retried, not dropped.
 """
 
 from unittest.mock import Mock
 
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Telemetry import TelmetryBase
 
-
-class FakeVehicle:
-    def __init__(self, name):
-        self.name = name
-        self.syncSource = "TeslaAPI"
-        self.chargeLimit = 0
+VIN = "5YJ3E1EA1KF000001"
 
 
 class FakeCarApi:
-    """Vehicle list is empty until loadVehicleList() is called."""
+    """Names no registry vehicle until loadVehicleList() is called."""
 
-    def __init__(self, vehicles, load_ok=True):
-        self._pending = vehicles
-        self.carApiVehicles = []
+    def __init__(self, registry, cars, load_ok=True):
+        self.registry = registry
+        self._pending = cars  # [(vin, name)]
         self.load_ok = load_ok
         self.loads = 0
 
@@ -32,11 +29,11 @@ class FakeCarApi:
     def loadVehicleList(self):
         self.loads += 1
         if self.load_ok:
-            self.carApiVehicles = list(self._pending)
+            for vin, name in self._pending:
+                self.registry.getOrCreate(vin, "TeslaAPI").observe(
+                    "name", name, "TeslaAPI"
+                )
         return self.load_ok
-
-    def getCarApiVehicles(self):
-        return self.carApiVehicles
 
 
 class Probe(TelmetryBase):
@@ -48,41 +45,39 @@ class Probe(TelmetryBase):
         self.scheduled = True
 
 
-def make(carapi):
+def make(load_ok=True):
+    registry = VehicleRegistry({})
+    api = FakeCarApi(registry, [(VIN, "Callandor")], load_ok)
     master = Mock()
+    master.vehicleRegistry = registry
     master.config = {"config": {}, "vehicle": {"Probe": {"enabled": True}}}
-    master.getModuleByName.return_value = carapi
-    return Probe(master)
+    master.getModuleByName.return_value = api
+    return Probe(master), api, registry
 
 
 def test_display_name_does_not_load_list_on_mqtt_thread():
-    veh = FakeVehicle("Callandor")
-    api = FakeCarApi([veh])
-    t = make(api)
+    t, api, registry = make()
     t.applyDataToVehicle("1", "display_name", "Callandor")
     assert api.loads == 0  # no cloud call on the caller's thread
     assert "1" not in t.vehicles and t.scheduled
 
     t.retryUnmappedVehicles()  # timer thread does the load
     assert api.loads == 1
-    assert t.vehicles["1"] is veh
-    assert veh.syncSource == "Probe"
+    assert t.vehicles["1"] is registry.get(VIN)
 
 
 def test_events_before_name_are_replayed_after_mapping():
-    veh = FakeVehicle("Callandor")
-    t = make(FakeCarApi([veh]))
+    t, api, registry = make()
     t.applyDataToVehicle("1", "charge_limit_soc", "80")  # arrives first
-    assert veh.chargeLimit == 0
     t.applyDataToVehicle("1", "display_name", "Callandor")
+    assert registry.get(VIN) is None
     t.retryUnmappedVehicles()
-    assert veh.chargeLimit == 80
+    obs = registry.get(VIN).latest("chargeLimit")
+    assert (obs.value, obs.source) == (80, "Probe")
 
 
 def test_unmatched_name_is_remembered_and_retried():
-    veh = FakeVehicle("Callandor")
-    api = FakeCarApi([veh], load_ok=False)
-    t = make(api)
+    t, api, registry = make(load_ok=False)
     t.applyDataToVehicle("1", "charge_limit_soc", "75")
     t.applyDataToVehicle("1", "display_name", "Callandor")
     t.retryUnmappedVehicles()
@@ -90,13 +85,14 @@ def test_unmatched_name_is_remembered_and_retried():
 
     api.load_ok = True  # API comes back
     t.retryUnmappedVehicles()
-    assert t.vehicles["1"] is veh
-    assert veh.syncSource == "Probe"
-    assert veh.chargeLimit == 75  # parked event replayed
+    v = registry.get(VIN)
+    assert t.vehicles["1"] is v
+    assert v.latest("chargeLimit").value == 75  # parked event replayed
+    assert v.latest("chargeLimit").source == "Probe"
 
 
 def test_state_is_per_instance():
-    a = make(FakeCarApi([]))
-    b = make(FakeCarApi([]))
+    a, _, _ = make()
+    b, _, _ = make()
     a.vehicleNames["1"] = "x"
     assert b.vehicleNames == {}

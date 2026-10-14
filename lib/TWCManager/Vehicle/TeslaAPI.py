@@ -2057,11 +2057,10 @@ class CarApiVehicle:
     lastCurrentChangeTime = 0
 
     # Telemetry (an external module such as TeslaMate) is the sync source
-    # while its latest "state" observation is younger than this.
+    # while its latest "state" observation is younger than this. Age is
+    # liveness-aware: on a connected, healthy feed a car that has sent
+    # nothing for hours (asleep) stays telemetry-sourced.
     syncTimeout = 60 * 60
-    # The source the legacy telemetry code (Telemetry.py) writes the sync*
-    # names with; Task 11 removes those writers and this with them.
-    _legacySyncSource = None
     _vehicle = None
 
     def __init__(self, json, carapi, config):
@@ -2100,8 +2099,7 @@ class CarApiVehicle:
             vehicle = self.carapi.registry.getOrCreate(self.VIN, "TeslaAPI")
         return self._bind(vehicle)
 
-    # Sync state is the latest "state" observation's source and age. The
-    # setters keep the legacy names assignable for Telemetry.py until Task 11.
+    # Sync state is the latest "state" observation's source and age.
 
     def _telemetryState(self):
         vehicle = self._liveVehicle()
@@ -2119,48 +2117,11 @@ class CarApiVehicle:
             return obs.source
         return "TeslaAPI"
 
-    @syncSource.setter
-    def syncSource(self, value):
-        self._legacySyncSource = value
-
     @property
     def syncTimestamp(self):
         vehicle = self._liveVehicle()
         obs = vehicle.latest("state") if vehicle is not None else None
         return obs.at if obs is not None else 0
-
-    @syncTimestamp.setter
-    def syncTimestamp(self, value):
-        # Observation times come from observe().
-        pass
-
-    def _observeLegacy(self, field, value):
-        self.vehicle.observe(field, value, self._legacySyncSource or "TeslaAPI")
-
-    @property
-    def syncState(self):
-        vehicle = self._liveVehicle()
-        return vehicle.value("state", "asleep") if vehicle is not None else "asleep"
-
-    @syncState.setter
-    def syncState(self, value):
-        self._observeLegacy("state", value)
-
-    @property
-    def syncLat(self):
-        return self.lat
-
-    @syncLat.setter
-    def syncLat(self, value):
-        self._observeLegacy("lat", value)
-
-    @property
-    def syncLon(self):
-        return self.lon
-
-    @syncLon.setter
-    def syncLon(self, value):
-        self._observeLegacy("lon", value)
 
     def ready(self):
         if self.carapi.getCarApiRetryRemaining(self):
