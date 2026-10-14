@@ -1871,7 +1871,9 @@ class TeslaAPI:
         vehicle.lastChargeRateSent = charge_rate
         vehicle.lastChargeRateSentTime = time.monotonic()
         # Own-write stamp, so a later read can tell our write from the feed.
-        registryVehicle = getattr(vehicle, "vehicle", None)
+        # Non-creating lookup: a write never revives a forgotten vehicle.
+        live = getattr(vehicle, "_liveVehicle", None)
+        registryVehicle = live() if callable(live) else None
         if registryVehicle is not None:
             registryVehicle.noteWrite("availableCurrent", charge_rate, "TeslaAPI")
 
