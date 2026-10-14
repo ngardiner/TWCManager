@@ -118,19 +118,10 @@ def new_api(master=None, **config_overrides):
     return api
 
 
-class _NoThread:
-    daemon = False
-
-    def start(self):
-        pass
-
-
 @pytest.fixture
-def no_threads(monkeypatch):
-    """Stop CarApiVehicle from starting its sync-monitoring thread."""
-    import TWCManager.Vehicle.TeslaAPI as teslaapi
-
-    monkeypatch.setattr(teslaapi, "Thread", lambda *a, **k: _NoThread())
+def no_threads():
+    """CarApiVehicle no longer starts a sync-monitoring thread; kept so the
+    tests that request it need not change."""
 
 
 def add_home_vehicle(api):

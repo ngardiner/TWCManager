@@ -9,18 +9,10 @@ import pytest
 from tests.unit.teslatokens import fleet_token, new_api
 
 
-class _NoThread:
-    daemon = False
-
-    def start(self):
-        pass
-
-
 @pytest.fixture
 def api(monkeypatch, requests_mock):
     import TWCManager.Vehicle.TeslaAPI as teslaapi
 
-    monkeypatch.setattr(teslaapi, "Thread", lambda *a, **k: _NoThread())
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     a = new_api()
     a.storeToken(fleet_token())

@@ -72,7 +72,7 @@
         <td> to vehicle </td>
         <td><select id="TeslaAPIVehicle">
           {% for vehicle in vehicles() %}
-            <option value="{{ vehicle.ID }}">{{ vehicle.name }}</option>
+            <option value="{{ vehicle.VIN }}">{{ vehicle.name }}</option>
           {% endfor %}
         </select></td>
       </tr>

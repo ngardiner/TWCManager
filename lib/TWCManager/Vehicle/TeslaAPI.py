@@ -7,14 +7,38 @@ import requests
 from requests.adapters import HTTPAdapter
 import secrets
 import ssl
-from threading import RLock, Thread
+from threading import RLock
 import time
+from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Registry.Fields import TELEMETRY_SOURCES
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 
 logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
+
+
+class RegistryField:
+    """A CarApiVehicle attribute that is a view onto a registry field: reads
+    return the latest observation's value (or the legacy default), writes
+    record an observation."""
+
+    def __init__(self, field: str, default: Any, source: str = "TeslaAPI"):
+        self.field = field
+        self.default = default
+        self.source = source
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        vehicle = instance._liveVehicle()
+        obs = vehicle.latest(self.field) if vehicle is not None else None
+        return self.default if obs is None else obs.value
+
+    def __set__(self, instance, value):
+        instance.vehicle.observe(self.field, value, self.source)
 
 
 class TLS13Adapter(HTTPAdapter):
@@ -125,6 +149,7 @@ class TeslaAPI:
 
     def __init__(self, master):
         self.master = master
+        self.registry = VehicleRegistry.forMaster(master)
         # slot.changes when a skipped sync was last logged, per slot.
         self.syncSkipLoggedAt = {"owner": None, "fleet": None}
 
@@ -172,13 +197,20 @@ class TeslaAPI:
 
     def addVehicle(self, json):
         if "vin" in json:
-            self.carApiVehicles.append(CarApiVehicle(json, self, self.config))
+            try:
+                car = CarApiVehicle(json, self, self.config)
+            except ValueError:
+                # The registry refuses a missing or malformed VIN.
+                logger.debug("Skipping a listed vehicle without a usable VIN")
+                return
+            self.carApiVehicles.append(car)
 
-    def apiDebugInterface(self, command, vehicleID, parameters):
+    def apiDebugInterface(self, command, vin, parameters):
         # Provides an interface from the Web UI to allow commands to be run interactively
 
-        # Map vehicle ID back to vehicle object
-        vehicle = self.getVehicleByID(int(vehicleID))
+        vehicle = self.getVehicleByVIN(vin)
+        if not vehicle:
+            return False
 
         # Get parameters
         params = {}
@@ -1285,10 +1317,12 @@ class TeslaAPI:
     def getLastStartOrStopChargeTime(self):
         return int(self.carApiLastStartOrStopChargeTime)
 
-    def getVehicleByID(self, vehicleID):
-        # Returns the vehicle object identified by the given ID
+    def getVehicleByVIN(self, vin):
+        # Returns the vehicle object identified by the given VIN
+        if not isinstance(vin, str):
+            return False
         for vehicle in self.getCarApiVehicles():
-            if vehicle.ID == vehicleID:
+            if str(vehicle.VIN).upper() == vin.upper():
                 return vehicle
         return False
 
@@ -2016,8 +2050,6 @@ class CarApiVehicle:
     __config = None
     debuglevel = 0
     ID = None
-    name = ""
-    syncSource = "TeslaAPI"
     VIN = ""
 
     firstWakeAttemptTime = 0
@@ -2036,69 +2068,138 @@ class CarApiVehicle:
     stopTryingToApplyLimit = False
     statusDeferral = 0
 
-    batteryLevel = 10000
-    chargeLimit = -1
-    lat = 10000
-    lon = 10000
-    gpsAsOf = 0
+    # Per-vehicle fields are views onto the registry Vehicle: reads give the
+    # latest observation (or the legacy default), writes observe.
+    name = RegistryField("name", "")
+    batteryLevel = RegistryField("batteryLevel", 10000)
+    chargeLimit = RegistryField("chargeLimit", -1)
+    chargingState = RegistryField("chargingState", "Unknown")
+    availableCurrent = RegistryField("availableCurrent", 0)
+    voltage = RegistryField("voltage", 0)
+    phases = RegistryField("phases", 0)
+    timeToFullCharge = RegistryField("timeToFullCharge", 0.0)
+    scheduledChargingPending = RegistryField("scheduledChargingPending", False)
+    lat = RegistryField("lat", 10000)
+    lon = RegistryField("lon", 10000)
+    gpsAsOf = RegistryField("gpsAsOf", 0)
+    pluggedIn = RegistryField("pluggedIn", None)
+    _actualCurrent = RegistryField("actualCurrent", 0)
+
     atHome = False
-    scheduledChargingPending = False
-    timeToFullCharge = 0.0
-    availableCurrent = 0
     # The last rate set_charging_amps succeeded with, and when (monotonic
     # clock), so it isn't resent within TeslaAPI.CHARGE_RATE_RESEND_AFTER.
     lastChargeRateSent = None
     lastChargeRateSentTime = 0
-    _actualCurrent = 0
     lastCurrentChangeTime = 0
-    phases = 0
-    voltage = 0
-    chargingState = "Unknown"
 
-    # Sync values are updated by an external module such as TeslaMate
-    syncTimestamp = 0
+    # Telemetry (an external module such as TeslaMate) is the sync source
+    # while its latest "state" observation is younger than this.
     syncTimeout = 60 * 60
-    syncLat = 10000
-    syncLon = 10000
-    syncState = "asleep"
+    # The source the legacy telemetry code (Telemetry.py) writes the sync*
+    # names with; Task 11 removes those writers and this with them.
+    _legacySyncSource = None
+    _vehicle = None
 
     def __init__(self, json, carapi, config):
         self.carapi = carapi
         self.__config = config
         self.ID = json["id"]
         self.VIN = json["vin"]
+        self._bind(carapi.registry.getOrCreate(self.VIN, "TeslaAPI"), listed=True)
+        # A cloud account listing is a sighting.
         self.name = json["display_name"] or self.VIN or str(self.ID) or "unknown"
 
-        # Launch sync monitoring thread
-        thread = Thread(target=self.checkSyncNotStale)
-        thread.daemon = True
-        thread.start()
+    def _bind(self, vehicle, listed=False):
+        # Joins the registry vehicle: the claim follows command access. A
+        # listing attaches this object; a rebind (after a forget) only takes
+        # an empty attachment, so a stale object never displaces a newer one.
+        if vehicle is not self._vehicle:
+            if listed or vehicle.attachment("TeslaAPI") is None:
+                vehicle.attach("TeslaAPI", self)
+            carapi = self.carapi
+            vehicle.claim("TeslaAPI", lambda: not carapi.readOnly, "listed")
+            self._vehicle = vehicle
+        return vehicle
 
-    def checkSyncNotStale(self):
-        # Once an external system begins providing sync functionality to defer
-        # Tesla API queries and provide already fetched information, there is a
-        # potential condition which may occur in which the external system goes
-        # away and leaves us with stale data.
+    def _liveVehicle(self):
+        # The registry's current vehicle for this VIN, or None if it was
+        # forgotten. Never creates one: a read is not a sighting.
+        vehicle = self.carapi.registry.get(self.VIN)
+        if vehicle is not None and vehicle is not self._vehicle:
+            self._bind(vehicle)
+        return vehicle
 
-        # To guard against this, this threaded function will loop every x minutes
-        # and check the last sync timestamp. If it has not updated in that interval,
-        # we switch back to using the API
+    @property
+    def vehicle(self):
+        # Resolved on each use, so a forgotten (or re-created) registry
+        # vehicle is never written to. The account still lists this car, so
+        # a write after a forget rejoins it, as the next listing would.
+        vehicle = self._liveVehicle()
+        if vehicle is None:
+            vehicle = self._bind(self.carapi.registry.getOrCreate(self.VIN, "TeslaAPI"))
+        return vehicle
 
-        while True:
-            if (
-                self.syncSource != "TeslaAPI"
-                and self.is_awake()
-                and (self.syncTimestamp < (time.time() - self.syncTimeout))
-            ):
-                logger.error(
-                    "Data from "
-                    + self.syncSource
-                    + " for "
-                    + self.name
-                    + " is stale. Switching back to TeslaAPI"
-                )
-                self.syncSource = "TeslaAPI"
-            time.sleep(self.syncTimeout)
+    # Sync state is the latest "state" observation's source and age. The
+    # setters keep the legacy names assignable for Telemetry.py until Task 11.
+
+    def _telemetryState(self):
+        vehicle = self._liveVehicle()
+        if vehicle is None:
+            return None, None
+        obs = vehicle.latest("state")
+        if obs is None or obs.source not in TELEMETRY_SOURCES:
+            return obs, None
+        return obs, vehicle.age("state")
+
+    @property
+    def syncSource(self):
+        obs, age = self._telemetryState()
+        if age is not None and age <= self.syncTimeout:
+            return obs.source
+        return "TeslaAPI"
+
+    @syncSource.setter
+    def syncSource(self, value):
+        self._legacySyncSource = value
+
+    @property
+    def syncTimestamp(self):
+        vehicle = self._liveVehicle()
+        obs = vehicle.latest("state") if vehicle is not None else None
+        return obs.at if obs is not None else 0
+
+    @syncTimestamp.setter
+    def syncTimestamp(self, value):
+        # Observation times come from observe().
+        pass
+
+    def _observeLegacy(self, field, value):
+        self.vehicle.observe(field, value, self._legacySyncSource or "TeslaAPI")
+
+    @property
+    def syncState(self):
+        vehicle = self._liveVehicle()
+        return vehicle.value("state", "asleep") if vehicle is not None else "asleep"
+
+    @syncState.setter
+    def syncState(self, value):
+        self._observeLegacy("state", value)
+
+    @property
+    def syncLat(self):
+        return self.lat
+
+    @syncLat.setter
+    def syncLat(self, value):
+        self._observeLegacy("lat", value)
+
+    @property
+    def syncLon(self):
+        return self.lon
+
+    @syncLon.setter
+    def syncLon(self, value):
+        self._observeLegacy("lon", value)
 
     def ready(self, awakeCheckSecs=120, telemetryNotBefore=0):
         if self.carapi.getCarApiRetryRemaining(self):
@@ -2143,15 +2244,17 @@ class CarApiVehicle:
         # that GET's cached result or GET again.
         # telemetryNotBefore: also ignore telemetry stamped earlier (e.g.
         # before a wake_up we sent; it can't tell us whether the wake worked).
+        # Fresh is the registry's age, so a live feed keeps an old reading
+        # fresh; it still loses to a state GET made after it.
         now = time.time()
+        obs, age = self._telemetryState()
         if (
-            self.syncSource != "TeslaAPI"
-            and self.syncTimestamp > 0
-            and self.syncTimestamp >= now - self.syncTimeout / 4
-            and self.syncTimestamp > self.lastVehicleAwakeTime
-            and self.syncTimestamp >= telemetryNotBefore
+            age is not None
+            and age <= self.syncTimeout / 4
+            and obs.at >= self.lastVehicleAwakeTime
+            and obs.at >= telemetryNotBefore
         ):
-            return self.syncState in ("online", "charging", "updating", "driving")
+            return obs.value in ("online", "charging", "updating", "driving")
 
         # Don't check more often than every minInterval seconds (2 minutes
         # unless the caller is watching for a car it just woke).
@@ -2299,8 +2402,10 @@ class CarApiVehicle:
                             self.lat = loc_data["latitude"]
                         if loc_data.get("longitude") is not None:
                             self.lon = loc_data["longitude"]
-                        self.gpsAsOf = loc_data.get("gpsAsOf") or 0
-                        gpsAge = (now - self.gpsAsOf) if self.gpsAsOf else None
+                        gpsAsOf = loc_data.get("gpsAsOf") or 0
+                        if gpsAsOf:
+                            self.gpsAsOf = gpsAsOf
+                        gpsAge = (now - gpsAsOf) if gpsAsOf else None
                         self.atHome = self.carapi.is_location_home(
                             self.lat, self.lon, gpsAge
                         )
@@ -2313,8 +2418,7 @@ class CarApiVehicle:
             return self.update_vehicle_data()
 
         else:
-            self.lat = self.syncLat
-            self.lon = self.syncLon
+            # Telemetry observes lat/lon directly; just place the car.
             self.atHome = self.carapi.is_location_home(self.lat, self.lon)
 
             return True
@@ -2368,33 +2472,34 @@ class CarApiVehicle:
                 )
                 return False
 
-            self.gpsAsOf = drive.get("gps_as_of") or 0
-            gpsAge = (now - self.gpsAsOf) if self.gpsAsOf else None
+            # Only keys present in the response are observed: a default or a
+            # carried-over value is not a fresh TeslaAPI reading.
+            gpsAsOf = drive.get("gps_as_of") or 0
+            if "gps_as_of" in drive:
+                self.gpsAsOf = gpsAsOf
+            gpsAge = (now - gpsAsOf) if gpsAsOf else None
             self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
 
-            self.chargeLimit = charge.get("charge_limit_soc", self.chargeLimit)
-            self.batteryLevel = charge.get("battery_level", self.batteryLevel)
-            self.timeToFullCharge = charge.get(
-                "time_to_full_charge", self.timeToFullCharge
-            )
-
             try:
-                self.name = response["vehicle_state"]["vehicle_name"] or self.name
+                vehicleName = response["vehicle_state"]["vehicle_name"]
             except (KeyError, TypeError):
-                pass
+                vehicleName = None
+            if vehicleName:
+                self.name = vehicleName
 
-            self.availableCurrent = charge.get(
-                "charger_pilot_current", self.availableCurrent
-            )
-            self.actualCurrent = charge.get(
-                "charger_actual_current", self.actualCurrent
-            )
-            self.phases = charge.get("charger_phases", self.phases)
-            self.voltage = charge.get("charger_voltage", self.voltage)
-            self.chargingState = charge.get("charging_state", self.chargingState)
-            self.scheduledChargingPending = charge.get(
-                "scheduled_charging_pending", self.scheduledChargingPending
-            )
+            for key, attr in (
+                ("charge_limit_soc", "chargeLimit"),
+                ("battery_level", "batteryLevel"),
+                ("time_to_full_charge", "timeToFullCharge"),
+                ("charger_pilot_current", "availableCurrent"),
+                ("charger_actual_current", "actualCurrent"),
+                ("charger_phases", "phases"),
+                ("charger_voltage", "voltage"),
+                ("charging_state", "chargingState"),
+                ("scheduled_charging_pending", "scheduledChargingPending"),
+            ):
+                if key in charge:
+                    setattr(self, attr, charge[key])
 
             if not self.atHome:
                 if self.carapi.is_far_from_home(self.lat, self.lon):
@@ -2473,8 +2578,10 @@ class CarApiVehicle:
 
     @actualCurrent.setter
     def actualCurrent(self, value):
-        if value != self._actualCurrent:
-            self._actualCurrent = value
+        changed = value != self._actualCurrent
+        # Observed even when unchanged: a repeat reading is still fresh.
+        self._actualCurrent = value
+        if changed:
             self.lastCurrentChangeTime = time.time()
 
     def apply_charge_limit(self, limit):

@@ -12,8 +12,10 @@ import time
 
 import pytest
 
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.teslatokens import (  # noqa: F401 (no_threads is a fixture)
     FLEET_NA_URL,
+    FakeMaster,
     fleet_token,
     new_api,
     no_threads,
@@ -63,7 +65,10 @@ def car_state(requests_mock):
 
 @pytest.fixture
 def api(no_threads, clock, car_state):
-    a = new_api()
+    # Observations are stamped and aged on the test clock.
+    master = FakeMaster()
+    master.vehicleRegistry = VehicleRegistry(master.config, clock=clock)
+    a = new_api(master)
     a.storeToken(fleet_token())
     a.addVehicle({"id": 1, "vin": "VIN1", "display_name": "Car"})
     vehicle = a.getCarApiVehicles()[0]
@@ -89,6 +94,11 @@ def _wakes(requests_mock):
 
 def _no_vehicle_data(requests_mock):
     return not any("vehicle_data" in r.url for r in requests_mock.request_history)
+
+
+def _teslamate(vehicle, state, stamp):
+    # A TeslaMate state observation stamped at `stamp`.
+    vehicle.vehicle.observe("state", state, "TeslaMateVehicle", at=stamp)
 
 
 def _send_first_wake(api, clock):
@@ -172,10 +182,8 @@ def test_fresh_telemetry_online_needs_no_request(api, clock, requests_mock):
     vehicle = api.getCarApiVehicles()[0]
 
     # TeslaMate reports the car online.
-    vehicle.syncSource = "TeslaMateVehicle"
-    vehicle.syncState = "online"
     clock.advance(30)
-    vehicle.syncTimestamp = clock.now
+    _teslamate(vehicle, "online", clock.now)
 
     assert api.car_api_available(charge=True) is True
     assert len(requests_mock.request_history) == before
@@ -186,12 +194,10 @@ def test_fresh_telemetry_asleep_needs_no_request(api, clock, requests_mock):
     _send_first_wake(api, clock)
     before = len(requests_mock.request_history)
     vehicle = api.getCarApiVehicles()[0]
-    vehicle.syncSource = "TeslaMateVehicle"
-    vehicle.syncState = "asleep"
 
     for _ in range(10):
         clock.advance(60)
-        vehicle.syncTimestamp = clock.now
+        _teslamate(vehicle, "asleep", clock.now)
         assert api.car_api_available(charge=True) is False
     assert len(requests_mock.request_history) == before
 
@@ -226,9 +232,7 @@ def test_telemetry_from_before_wake_is_not_trusted(
     vehicle = api.getCarApiVehicles()[0]
     # TeslaMate's last word is 'asleep', from before the wake we sent: it
     # can't tell us whether the wake worked.
-    vehicle.syncSource = "TeslaMateVehicle"
-    vehicle.syncState = "asleep"
-    vehicle.syncTimestamp = woke - 10
+    _teslamate(vehicle, "asleep", woke - 10)
 
     car_state.value = "online"
     clock.advance(api.POST_WAKE_POLL_SECS)
@@ -267,12 +271,6 @@ def test_ble_read_does_not_move_wake_window(api, clock, requests_mock):
     clock.now = woke + 30 * 60 + 1
     api.car_api_available(charge=True)
     assert _wakes(requests_mock) == 2
-
-
-def _teslamate(vehicle, state, stamp):
-    vehicle.syncSource = "TeslaMateVehicle"
-    vehicle.syncState = state
-    vehicle.syncTimestamp = stamp
 
 
 def test_stale_telemetry_asleep_does_not_cause_rewakes(
