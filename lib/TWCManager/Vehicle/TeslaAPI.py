@@ -506,17 +506,20 @@ class TeslaAPI:
                     return False
 
                 # Pre-wake delay elapsed.  Honour post-wake retry delay
-                # before issuing another wake command.  wakeVehicle() set
-                # lastAPIAccessTime when it sent wake_up.
-                sinceWake = now - vehicle.lastAPIAccessTime
+                # before issuing another wake command.  Timed from when
+                # wakeVehicle() sent wake_up (not lastAPIAccessTime, which
+                # other reads such as BLE location also move).
+                sinceWake = now - vehicle.lastWakeSentTime
                 if sinceWake <= vehicle.delayNextWakeAttempt:
                     # Early in the hold, look for the car coming online.
                     # firstWakeAttemptTime is set here, so ready() skips its
                     # "touched in the last 2 minutes" shortcut (wakeVehicle
                     # just touched lastAPIAccessTime) and asks is_awake(),
-                    # which uses fresh telemetry, else the free state GET.
+                    # which uses telemetry stamped after the wake, else the
+                    # free state GET.
                     if sinceWake <= self.POST_WAKE_CHECK_SECS and vehicle.ready(
-                        awakeCheckSecs=self.POST_WAKE_POLL_SECS
+                        awakeCheckSecs=self.POST_WAKE_POLL_SECS,
+                        telemetryNotBefore=vehicle.lastWakeSentTime,
                     ):
                         logger.info(
                             vehicle.name
@@ -1957,6 +1960,8 @@ class TeslaAPI:
             return False
         apiResponseDict = None
         vehicle.lastAPIAccessTime = time.time()
+        # Anchors the post-wake check window and retry delay.
+        vehicle.lastWakeSentTime = vehicle.lastAPIAccessTime
 
         url = slot.baseURL + "/"
         url = url + str(vehicle.VIN) + "/wake_up"
@@ -2018,6 +2023,7 @@ class CarApiVehicle:
     firstWakeAttemptTime = 0
     firstChargeNeededTime = 0
     lastAPIAccessTime = 0
+    lastWakeSentTime = 0
     delayNextWakeAttempt = 0
     lastLimitAttemptTime = 0
 
@@ -2094,7 +2100,7 @@ class CarApiVehicle:
                 self.syncSource = "TeslaAPI"
             time.sleep(self.syncTimeout)
 
-    def ready(self, awakeCheckSecs=120):
+    def ready(self, awakeCheckSecs=120, telemetryNotBefore=0):
         if self.carapi.getCarApiRetryRemaining(self):
             # It's been under carApiErrorRetryMins minutes since the car API
             # generated an error on this vehicle. Return that car is not ready.
@@ -2117,7 +2123,9 @@ class CarApiVehicle:
 
         # This can check whether the car is online; if so, it will likely stay online for
         # two minutes.
-        if self.is_awake(minInterval=awakeCheckSecs):
+        if self.is_awake(
+            minInterval=awakeCheckSecs, telemetryNotBefore=telemetryNotBefore
+        ):
             self.firstWakeAttemptTime = 0
             return True
 
@@ -2127,10 +2135,16 @@ class CarApiVehicle:
         )
         return False
 
-    def is_awake(self, minInterval=120):
+    def is_awake(self, minInterval=120, telemetryNotBefore=0):
         # Free sources only: fresh telemetry, else the vehicle state GET
         # (vehicles/{vin}; not charged on the Fleet API). Never vehicle_data.
-        if self.syncSource != "TeslaAPI" and self.syncTimestamp > 0:
+        # telemetryNotBefore: ignore telemetry stamped earlier (e.g. before a
+        # wake_up we sent; it can't tell us whether the wake worked).
+        if (
+            self.syncSource != "TeslaAPI"
+            and self.syncTimestamp > 0
+            and self.syncTimestamp >= telemetryNotBefore
+        ):
             # External sync (e.g. TeslaMate) has provided at least one update.
             if self.syncState in ("asleep", "offline"):
                 # Car is known to be asleep - trust the sync source and avoid
