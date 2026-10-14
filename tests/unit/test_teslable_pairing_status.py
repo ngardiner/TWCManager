@@ -613,3 +613,31 @@ def test_scan_finds_a_car_bluez_already_knows_by_address():
             else (b"[CHG] Device 11:22:33:44:55:66 RSSI: -60\n", b"", 0)
         )
         assert ble.scanForVehicleInRange(VIN) is False
+
+
+def test_scan_ignores_bluez_forgetting_the_car():
+    ble, reg, master = scanner()
+
+    def run(cmd, timeout, use_process_group=True):
+        if cmd[1:] == ["devices"]:
+            return (b"Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n", b"", 0)
+        return (
+            b"[\x1b[0;91mDEL\x1b[0m] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n"
+            b"[DEL] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n",
+            b"",
+            0,
+        )
+
+    ble._run_command_with_timeout = run
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.shutil.which",
+        return_value="/usr/bin/bluetoothctl",
+    ):
+        assert ble.scanForVehicleInRange(VIN) is False
+        # Colour codes around a [NEW] tag still match.
+        ble._run_command_with_timeout = lambda *a, **k: (
+            b"[\x1b[0;92mNEW\x1b[0m] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n",
+            b"",
+            0,
+        )
+        assert ble.scanForVehicleInRange(VIN) is True
