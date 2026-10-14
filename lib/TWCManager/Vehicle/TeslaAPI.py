@@ -2123,11 +2123,8 @@ class CarApiVehicle:
 
     def _liveVehicle(self):
         # The registry's current vehicle for this VIN, or None if it was
-        # forgotten. Never creates one: a read is not a sighting.
-        vehicle = self.carapi.registry.get(self.VIN)
-        if vehicle is not None and vehicle is not self._vehicle:
-            self._bind(vehicle)
-        return vehicle
+        # forgotten. No side effects: a read is not a sighting.
+        return self.carapi.registry.get(self.VIN)
 
     @property
     def vehicle(self):
@@ -2136,8 +2133,8 @@ class CarApiVehicle:
         # a write after a forget rejoins it, as the next listing would.
         vehicle = self._liveVehicle()
         if vehicle is None:
-            vehicle = self._bind(self.carapi.registry.getOrCreate(self.VIN, "TeslaAPI"))
-        return vehicle
+            vehicle = self.carapi.registry.getOrCreate(self.VIN, "TeslaAPI")
+        return self._bind(vehicle)
 
     # Sync state is the latest "state" observation's source and age. The
     # setters keep the legacy names assignable for Telemetry.py until Task 11.
