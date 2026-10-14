@@ -118,6 +118,10 @@ class TWCMaster:
         # under it may do I/O, on any thread.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
+        # Start of the forgetting interval: the first expiry pass runs an
+        # hour after startup, once providers have reclaimed their cars, so a
+        # persisted car Fleet still lists is not expired and re-created.
+        self.lastVehicleExpiry = time.time()
         self.settings = {
             "chargeNowAmps": 0,
             "chargeStopMode": "1",
@@ -1150,6 +1154,9 @@ class TWCMaster:
             for key, value in defaults.items():
                 if key not in self.settings:
                     self.settings[key] = value
+            registryBlob = self.settings.get("vehicleRegistry")
+        # load() tolerates a missing or corrupt blob
+        self.vehicleRegistry.load(registryBlob)
 
         # Step 2 - Send settings to other modules
         # Migration and restore run whether or not token sync is on. The
@@ -1628,6 +1635,13 @@ class TWCMaster:
             self.settings["chargeLimits"][str(ID)] = (outsideLimit, lastApplied)
         self.queue_background_task({"cmd": "saveSettings"})
 
+    def expireVehicles(self):
+        # Forget unclaimed, unasserted vehicles unseen past the forget window
+        expired = self.vehicleRegistry.expire()
+        if expired:
+            self.queue_background_task({"cmd": "saveSettings"})
+        return expired
+
     def saveSettings(self):
         # Saves the volatile application settings (such as charger timings,
         # API credentials, etc) to a JSON file
@@ -1646,7 +1660,10 @@ class TWCMaster:
             self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
             self.settings["carApiTokenSource"] = carapi.fleetSlot.source
             self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
+            self.settings["vehicleRegistry"] = self.vehicleRegistry.toJSON()
             try:
+                # Keep default arguments (C encoder): adding indent/default/cls
+                # would reintroduce the concurrent-mutation race.
                 payload = json.dumps(self.settings)
             except TypeError as e:
                 logger.info("Exception raised while attempting to save settings file:")
