@@ -98,7 +98,8 @@ def test_update_settings_seeds_keyed_entries_as_unproven_and_paired_as_managed()
     assert "ble" not in master.settings["Vehicles"][VIN]  # seeding writes nothing
 
 
-def test_update_settings_ignores_entries_without_a_key():  # ruling 6 / P9
+def test_update_settings_ignores_hand_edited_entries_without_a_key():  # P9
+    # scanForVehicles is mocked: only a hand-edited file has no key here.
     ble, reg, master = make()
     master.settings["Vehicles"] = {VIN: {"chargeSessions": 4, "totalkWh": 12}}
     ble.scanForVehicles = Mock()
@@ -308,3 +309,107 @@ def test_paired_car_refused_outside_window_is_refused():
 def test_no_pairing_attempt_by_default():
     ble, reg, master = make()
     assert ble.blePairingAttempt(VIN) is None
+
+
+# Fix round 1: seeding scope, expiry, VIN form and case
+
+
+def later_boot(master, vins=()):
+    # A saved registry blob means this is not the upgrade boot.
+    master.settings["vehicleRegistry"] = {
+        "version": 1,
+        "vehicles": {v: {"lastSeen": 1.0} for v in vins},
+    }
+
+
+def test_upgrade_boot_real_scan_keys_and_seeds_every_entry():
+    ble, reg, master = make()
+    master.settings["Vehicles"] = {VIN: {"chargeSessions": 4, "totalkWh": 12}}
+    ble.updateSettings()
+    assert "privKey" in master.settings["Vehicles"][VIN]
+    assert reg.get(VIN).claims["TeslaBLE"].status == "unproven"
+
+
+def test_unproven_only_car_ages_out_but_paired_does_not():
+    ble, reg, master = make()
+    master.settings["Vehicles"]["5YJ3E1EA1KF000002"] = {
+        "privKey": "y",
+        "ble": {"status": "paired", "since": 1.0},
+    }
+    ble.scanForVehicles = Mock()
+    ble.updateSettings()
+    for v in reg.vehicles():
+        v.lastSeen -= 365 * 86400
+    assert reg.expire() == [VIN]
+    assert reg.get("5YJ3E1EA1KF000002").tier == "managed"
+
+
+def test_later_boot_does_not_recreate_expired_or_forgotten_car():
+    ble, reg, master = make()
+    later_boot(master)
+    ble.scanForVehicles = Mock()
+    ble.updateSettings()
+    assert reg.get(VIN) is None
+
+
+def test_later_boot_claims_held_and_paired_vins():
+    ble, reg, master = make()
+    held, paired, refused = VIN, "5YJ3E1EA1KF000002", "5YJ3E1EA1KF000003"
+    master.settings["Vehicles"] = {
+        held: {"privKey": "x"},
+        paired: {"privKey": "y", "ble": {"status": "paired", "since": 1.0}},
+        refused: {"privKey": "z", "ble": {"status": "refused", "since": 1.0}},
+    }
+    later_boot(master, [held, refused])
+    reg.load(master.settings["vehicleRegistry"])
+    ble.scanForVehicles = Mock()
+    ble.updateSettings()
+    assert reg.get(held).claims["TeslaBLE"].status == "unproven"
+    assert reg.get(paired).tier == "managed"
+    assert "TeslaBLE" not in reg.get(refused).claims
+
+
+def test_seed_skips_malformed_vins():
+    ble, reg, master = make()
+    master.settings["Vehicles"]["NOT-A-VIN"] = {"privKey": "q"}
+    ble.scanForVehicles = Mock()
+    ble.updateSettings()
+    assert reg.get("NOT-A-VIN") is None and reg.get(VIN) is not None
+
+
+def test_lowercase_form_vin_uses_the_stored_record():
+    ble, reg, master = make()
+    master.settings["Vehicles"][VIN]["pubKeyPEM"] = "cA=="
+    ble.sendPublicKey = Mock(return_value=True)
+    ble._run_command_with_timeout = Mock(return_value=(b"", b"ok", 0))
+    assert ble.peerWithVehicle(VIN.lower()) is True
+    assert list(master.settings["Vehicles"]) == [VIN]
+    assert ble.bleStatus(VIN.lower())["status"] == "pairing"
+    assert ble.bleStatus(VIN)["status"] == "pairing"
+    assert ble.blePairingAttempt(VIN.lower())["ok"] is True
+
+
+def test_legacy_lowercase_record_is_found_by_upper_vin():
+    ble, reg, master = make()
+    master.settings["Vehicles"] = {VIN.lower(): {"privKey": "x"}}
+    ble._run_command_with_timeout = Mock(
+        return_value=(b'{"chargeState": {"batteryLevel": 7}}', b"", 0)
+    )
+    assert ble.get_charge_state(VIN)["batteryLevel"] == 7
+    assert list(master.settings["Vehicles"]) == [VIN.lower()]
+    assert ble.bleStatus(VIN)["status"] == "paired"
+    assert reg.get(VIN).tier == "managed"
+
+
+def test_pairing_failure_keeps_an_unproven_claim():
+    ble, reg, master = make()
+    ble.scanForVehicles = Mock()
+    ble.updateSettings()
+    ble.sendPublicKey = Mock(return_value=False)
+    assert ble.peerWithVehicle(VIN) is False
+    assert ble.bleStatus(VIN)["status"] == "pairing_failed"
+    assert reg.get(VIN).claims["TeslaBLE"].status == "unproven"
+    # Restart: the registry holds the car, so it is claimed again.
+    later_boot(master, [VIN])
+    ble.updateSettings()
+    assert reg.get(VIN).claims["TeslaBLE"].status == "unproven"

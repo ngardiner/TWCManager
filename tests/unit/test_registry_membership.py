@@ -274,3 +274,14 @@ def test_load_logs_added_at_debug(caplog):
         r.load({"vehicles": {VIN: {}}})
     recs = [x for x in caplog.records if "added (persisted)" in x.getMessage()]
     assert recs and all(x.levelno == logging.DEBUG for x in recs)
+
+
+def test_claim_that_does_not_keep_alive_does_not_block_expiry():
+    c = Clock()
+    r = VehicleRegistry({}, clock=c)
+    r.getOrCreate(VIN, "TeslaBLE").claim(
+        "TeslaBLE", False, "unproven", keepsAlive=False
+    )
+    r.getOrCreate(VIN2, "TeslaBLE").claim("TeslaBLE", True, "paired")
+    c.t += 31 * 86400
+    assert r.expire() == [VIN]

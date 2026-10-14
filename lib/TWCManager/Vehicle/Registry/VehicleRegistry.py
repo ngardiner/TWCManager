@@ -136,7 +136,9 @@ class VehicleRegistry:
         with self._lock:
             for key in sorted(self._vehicles):
                 v = self._vehicles[key]
-                if v.isAnonymous or v.userAsserted or v.claims:
+                if v.isAnonymous or v.userAsserted:
+                    continue
+                if any(c.keepsAlive for c in v.claims.values()):
                     continue
                 if now - v.lastSeen > self.forgetAfter:
                     del self._vehicles[key]
