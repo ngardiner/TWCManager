@@ -6,6 +6,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from .Fields import NOT_TRACKED, FieldStore, Observation
+from .ReadSource import cascade
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 
@@ -106,8 +107,19 @@ class Vehicle:
     def fresherThanWrite(self, field: str) -> bool:
         return self._fields.fresherThanWrite(field)
 
-    def read(self, field: str, maxAge: float, allowWake: bool = False):
-        raise NotImplementedError("Vehicle.read arrives with the read cascade")
+    def read(
+        self, field: str, maxAge: Optional[float], allowWake: bool = False
+    ) -> Optional[Observation]:
+        latest = self.latest(field)
+        if maxAge is None or self._registry is None:
+            return latest
+        if latest is not None:
+            age = self.age(field)
+            if age is not None and age <= maxAge:
+                return latest
+        # No lock is held here: sources may do I/O.
+        got = cascade(self, self._registry.readSources(), field, allowWake)
+        return got if got is not None else self.latest(field)
 
     # Claims and tier
 
