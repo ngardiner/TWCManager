@@ -414,9 +414,8 @@ class TestPolicyEdgeCases:
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
         master.setAllowedFlex = Mock()
-        mock_tesla_api = Mock()
         master.vehicleRegistry.attached = Mock(return_value=[])
-        master.getModuleByName = Mock(return_value=mock_tesla_api)
+        master.getModuleByName = Mock(return_value=Mock())
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -511,9 +510,8 @@ class TestPolicyIntegration:
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
         master.setAllowedFlex = Mock()
-        mock_tesla_api = Mock()
         master.vehicleRegistry.attached = Mock(return_value=[])
-        master.getModuleByName = Mock(return_value=mock_tesla_api)
+        master.getModuleByName = Mock(return_value=Mock())
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -590,9 +588,8 @@ class TestDirectPolicyEvaluation:
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
         master.setAllowedFlex = Mock()
-        mock_tesla_api = Mock()
         master.vehicleRegistry.attached = Mock(return_value=[])
-        master.getModuleByName = Mock(return_value=mock_tesla_api)
+        master.getModuleByName = Mock(return_value=Mock())
         master.getModulesByType = Mock(return_value=[])
         return master
     
