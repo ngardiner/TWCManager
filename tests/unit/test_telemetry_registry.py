@@ -458,13 +458,74 @@ def test_forget_then_recreate_remaps_the_feed(clocked):
     assert reg.sourceLiveAt("TeslaMateVehicle", new) is not None
 
 
-def test_forget_then_rename_redelivery_remaps(clocked):
+def test_forget_then_retained_redelivery_does_not_recreate(clocked, caplog):
     t, reg, now = clocked
     tm_msg(t, "display_name", "C", False)
     reg.forget(VIN)
+    caplog.set_level(logging.WARNING)
     tm_msg(t, "display_name", "C", True)  # retained, after a reconnect
-    new = reg.get(VIN)
-    assert new is not None and t.vehicles["7"] is new and new.name == "C"
+    tm_msg(t, "charge_limit_soc", "70", True)
+    assert reg.get(VIN) is None and "7" not in t.vehicles
+    t.retryUnmappedVehicles()  # the retry timer replays the name: retained too
+    assert reg.get(VIN) is None
+
+
+def test_forget_then_live_message_recreates_as_a_sighting(clocked):
+    t, reg, now = clocked
+    tm_msg(t, "display_name", "C", False)
+    reg.forget(VIN)
+    now["t"] = 1100.0
+    tm_msg(t, "charge_limit_soc", "70", False)
+    v = reg.get(VIN)
+    assert v is not None and t.vehicles["7"] is v
+    assert v.latest("chargeLimit").value == 70 and v.lastSeen == 1100.0
+
+
+def test_expired_car_is_not_revived_by_daily_retained_replay(clocked):
+    t, reg, now = clocked
+    tm_msg(t, "display_name", "C", False)
+    tm_msg(t, "state", "asleep", False)
+    now["t"] = 1000.0 + 40 * 86400
+    assert reg.expire() == [VIN]
+    t.mqttDisconnect(None, None, None, 0)  # the daily resetMQTT
+    t.mqttConnect(Mock(), None, None, 0)
+    for topic, payload in (("display_name", "C"), ("state", "asleep")):
+        tm_msg(t, topic, payload, True)
+    t.retryUnmappedVehicles()
+    assert reg.get(VIN) is None
+
+
+def test_orphan_without_a_stored_name_or_vin_does_not_warn(caplog):
+    t, reg = make()
+    v = reg.getOrCreate(VIN, "TeslaAPI")
+    t.vehicles["1"] = v  # mapped, but no name was ever stored
+    reg.forget(VIN)
+    caplog.set_level(logging.WARNING)
+    t.applyDataToVehicle("1", "charge_limit_soc", "80")
+    assert "named ''" not in caplog.text and "1" not in t.vehicles
+
+
+def test_retained_change_published_after_the_echo_is_kept():  # probe D
+    from TWCManager.Vehicle.Registry.Fields import FEED_LAG
+
+    now = {"t": 900.0}
+    t, reg = make(clock=lambda: now["t"])
+    t.vinFor = lambda vid: VIN
+    t.mqttConnect(None, None, None, 0)
+    t.applyDataToVehicle("1", "display_name", "C")
+    t.applyDataToVehicle("1", "charge_limit_soc", "50")
+    v = reg.get(VIN)
+    now["t"] = 1000.0
+    v.noteWrite("chargeLimit", 100, "TeslaBLE")
+    now["t"] = 1010.0
+    t.applyDataToVehicle("1", "charge_limit_soc", "100")  # the feed's echo
+    t.mqttDisconnect(None, None, None, 7)
+    now["t"] = 5000.0  # the owner set 80 in the app meanwhile
+    t.mqttConnect(None, None, None, 0)
+    t.applyDataToVehicle("1", "charge_limit_soc", "80", retained=True)
+    assert v.latest("chargeLimit").value == 80
+    assert v.trusted("chargeLimit").value == 80
+    assert now["t"] - 1000.0 > FEED_LAG
 
 
 def test_teslamate_unmapped_vehicle_assumed_healthy(clocked):
@@ -495,11 +556,31 @@ def test_car_vins_reloaded_by_unmapped_retry(monkeypatch):
     t.scheduleUnmappedRetry = lambda delay=None: None
     t.applyDataToVehicle("7", "display_name", "C")  # no name match, no VINs
     assert "7" not in t.vehicles
-    t.retryUnmappedVehicles()  # reloads the VINs, then maps by VIN
-    assert t.carVINs == {"7": VIN} and t.vehicles["7"] is reg.get(VIN)
+    t.retryUnmappedVehicles()  # reloads the VINs
+    assert t.carVINs == {"7": VIN}
+    t.applyDataToVehicle("7", "battery_level", "61")  # a live report attaches
+    assert t.vehicles["7"] is reg.get(VIN) and reg.get(VIN).name == "C"
 
 
 def test_unmapped_vehicle_uses_its_car_health_by_vin(clocked):
     t, reg, now = clocked
     t.noteHealthy("7", "false")
     assert t.carHealthy(reg.getOrCreate(VIN, "TeslaAPI")) is False
+
+
+def test_fleet_retained_value_does_not_mean_online():
+    t, reg = make(FleetTelemetryMQTT)
+    t.mqtt_prefix = "telemetry"
+    t.applyDataToVehicle(VIN, "VehicleName", "C")
+    v = reg.get(VIN)
+
+    def msg(path, payload, retain):
+        m = Mock(topic="telemetry/" + VIN + path, payload=payload)
+        m.retain = retain
+        t.mqttMessage(None, None, m)
+
+    msg("/connectivity", b'{"Status": "DISCONNECTED"}', False)
+    msg("/v/ChargeLimitSoc", b"80", True)  # redelivered on reconnect
+    assert v.value("state") == "offline" and v.value("chargeLimit") == 80
+    msg("/v/ChargeLimitSoc", b"81", False)  # a live report: the car is online
+    assert v.value("state") == "online"
