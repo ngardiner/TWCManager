@@ -16,6 +16,7 @@ import requests
 import bisect
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
+from TWCManager.Vehicle.Registry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -110,6 +111,7 @@ class TWCMaster:
         # serialise under it and write the file outside it. Lock order:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
         self.settingsLock = threading.RLock()
+        self.vehicleRegistry = VehicleRegistry(config)
         self.settings = {
             "chargeNowAmps": 0,
             "chargeStopMode": "1",
@@ -1244,6 +1246,7 @@ class TWCMaster:
 
                     # Record start of current charging session
                     self.recordVehicleSessionStart(slaveTWC)
+                    self._plugSession(slaveTWC, True)
             else:
                 if slaveTWC.isCharging == 1:
                     # Amps have dropped below threshold. Start debounce timer to
@@ -1270,6 +1273,7 @@ class TWCMaster:
 
                         # Close off the current charging session
                         self.recordVehicleSessionEnd(slaveTWC)
+                        self._plugSession(slaveTWC, False)
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
             carsCharging += slaveTWC.isCharging
@@ -1422,34 +1426,62 @@ class TWCMaster:
             },
         )
 
-    def recordVehicleVIN(self, slaveTWC):
-        # Record Slave TWC ID as being capable of reporting VINs, if it is not
-        # already.
-        twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
-        if not self.settings.get("SlaveTWCs", None):
-            self.settings["SlaveTWCs"] = {}
-        if not self.settings["SlaveTWCs"].get(twcid, None):
-            self.settings["SlaveTWCs"][twcid] = {}
-        if not self.settings["SlaveTWCs"][twcid].get("supportsVINQuery", 0):
-            self.settings["SlaveTWCs"][twcid]["supportsVINQuery"] = 1
-            self.queue_background_task({"cmd": "saveSettings"})
+    def _plugSession(self, slaveTWC, begin):
+        # Serial thread: registry calls are short dict work; never let one
+        # raise into the RS-485 loop.
+        try:
+            twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+            if begin:
+                self.vehicleRegistry.beginPlugSession(twcid)
+            else:
+                self.vehicleRegistry.endPlugSession(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry plug session update failed: %s", e)
 
-        # Increment sessions counter for this VIN in persistent settings file
-        if not self.settings.get("Vehicles", None):
-            self.settings["Vehicles"] = {}
-        if not self.settings["Vehicles"].get(slaveTWC.currentVIN, None):
-            self.settings["Vehicles"][slaveTWC.currentVIN] = {
-                "chargeSessions": 1,
-                "startkWh": slaveTWC.lifetimekWh,
-                "totalkWh": 0,
-            }
-        else:
-            self.settings["Vehicles"][slaveTWC.currentVIN]["chargeSessions"] += 1
-            self.settings["Vehicles"][slaveTWC.currentVIN][
-                "startkWh"
-            ] = slaveTWC.lifetimekWh
-            if not self.settings["Vehicles"][slaveTWC.currentVIN].get("totalkWh", None):
-                self.settings["Vehicles"][slaveTWC.currentVIN]["totalkWh"] = 0
+    def recordVehicleVIN(self, slaveTWC):
+        twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+        # A VIN no known vehicle has is confirmed by a second matching read
+        # before it creates a vehicle or a session record.
+        try:
+            status = self.vehicleRegistry.observeTwcVin(twcid, slaveTWC.currentVIN)
+        except Exception as e:
+            logger.warning("Vehicle registry VIN update failed: %s", e)
+            return
+        if status == "pending":
+            self.queue_background_task(
+                {"cmd": "getVehicleVIN", "slaveTWC": slaveTWC.TWCID, "vinPart": 0},
+                delay=5,
+            )
+            return
+        if status != "confirmed":
+            return
+
+        vin = slaveTWC.currentVIN
+        with self.settingsLock:
+            # Record Slave TWC ID as being capable of reporting VINs, if it is
+            # not already.
+            if not self.settings.get("SlaveTWCs", None):
+                self.settings["SlaveTWCs"] = {}
+            if not self.settings["SlaveTWCs"].get(twcid, None):
+                self.settings["SlaveTWCs"][twcid] = {}
+            if not self.settings["SlaveTWCs"][twcid].get("supportsVINQuery", 0):
+                self.settings["SlaveTWCs"][twcid]["supportsVINQuery"] = 1
+
+            # Increment sessions counter for this VIN in persistent settings file
+            if not self.settings.get("Vehicles", None):
+                self.settings["Vehicles"] = {}
+            if not self.settings["Vehicles"].get(vin, None):
+                self.settings["Vehicles"][vin] = {
+                    "chargeSessions": 1,
+                    "startkWh": slaveTWC.lifetimekWh,
+                    "totalkWh": 0,
+                }
+            else:
+                entry = self.settings["Vehicles"][vin]
+                entry["chargeSessions"] = entry.get("chargeSessions", 0) + 1
+                entry["startkWh"] = slaveTWC.lifetimekWh
+                entry.setdefault("totalkWh", 0)
+        # Saved outside the lock: the save serialises under it itself.
         self.queue_background_task({"cmd": "saveSettings"})
 
         # Update Charge Session details in logging modules
