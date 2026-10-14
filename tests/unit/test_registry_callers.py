@@ -182,3 +182,15 @@ def test_send_teslaapi_command_without_teslaapi_is_400():
         {"commandName": "wakeVehicle", "parameters": "{}", "vehicleVIN": VIN},
     )
     request.send_response.assert_called_with(400)
+
+
+def test_unset_home_location_twice_is_not_an_error():  # M5
+    import threading
+
+    master = _master(VehicleRegistry({}))
+    master.settingsLock = threading.RLock()
+    h = _handler(master)
+    _home(h, {"unset": ["x"]}, None)
+    assert "homeLat" not in master.settings and "homeLon" not in master.settings
+    request = _home(h, {"unset": ["x"]}, None)  # a second click
+    request.send_response.assert_called_with(302)
