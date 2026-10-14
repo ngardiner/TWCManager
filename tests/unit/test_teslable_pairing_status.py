@@ -118,18 +118,29 @@ def test_pairing_failure_status():
 REFUSED = b"Error: vehicle rejected request: your public key has not been paired with the vehicle"
 
 
-def test_refusal_is_recorded_once_across_retries():
+def fast_retries(ble):
+    ble.maxRetries = 2
+    ble._calculate_backoff = Mock(return_value=0)
+
+
+def test_key_refusal_stops_retrying_and_records_once():
     ble, reg, master = make()
     ble._setBleStatus(VIN, "paired")
     master.queue_background_task.reset_mock()
-    ble.maxRetries = 2
-    ble.retryDelay = 0
-    ble._calculate_backoff = Mock(return_value=0)
+    fast_retries(ble)
     ble._run_command_with_timeout = Mock(return_value=(b"", REFUSED, 1))
     assert ble.sendCommand(VIN, "ping") is None
-    assert ble._run_command_with_timeout.call_count == 3
+    assert ble._run_command_with_timeout.call_count == 1
     assert master.queue_background_task.call_count == 1
     assert ble.bleStatus(VIN)["status"] == "refused"
+
+
+def test_other_failures_are_still_retried():
+    ble, reg, master = make()
+    fast_retries(ble)
+    ble._run_command_with_timeout = Mock(return_value=(b"", b"ble: timeout", 1))
+    assert ble.sendCommand(VIN, "ping") is None
+    assert ble._run_command_with_timeout.call_count == 3
 
 
 def test_other_failures_leave_status_alone():
@@ -166,13 +177,18 @@ def test_pairing_exception_records_failure():
     assert ble.bleStatus(VIN)["status"] == "pairing_failed"
 
 
-def test_pairing_with_bad_vin_does_not_raise_or_write():
+def test_malformed_vin_is_rejected_without_writing():
     ble, reg, master = make()
-    ble.sendPublicKey = Mock(return_value=False)
-    assert ble.peerWithVehicle(None) is False
-    assert None not in master.settings["Vehicles"]
-    ble._setBleStatus("badévin", "paired")  # registry refuses it: no raise
-    assert reg.get("badévin") is None
+    ble.sendPublicKey = Mock(return_value=True)
+    before = dict(master.settings["Vehicles"])
+    for bad in (None, "", "not-a-vin", "bad\u00e9vin", "5YJ3E1EA1KF00000I"):
+        assert ble.peerWithVehicle(bad) is False
+        ble._setBleStatus(bad, "paired")
+        ble._setBleStatus(bad, "pairing")
+    assert master.settings["Vehicles"] == before
+    assert ble.sendPublicKey.call_count == 0
+    assert reg.vehicles() == []
+    master.queue_background_task.assert_not_called()
 
 
 def test_bad_registry_key_skipped_when_seeding():
@@ -212,3 +228,83 @@ def test_claimed_vin_reads_from_ble_first():
     obs = reg.get(VIN).read("batteryLevel", maxAge=0)
     assert obs is not None and obs.value == 42 and obs.source == "TeslaBLE"
     assert ble.bleStatus(VIN)["status"] == "paired"
+
+
+def pair(ble):
+    ble.sendPublicKey = Mock(return_value=True)
+    ble._run_command_with_timeout = Mock(return_value=(b"", b"ok", 0))
+    assert ble.peerWithVehicle(VIN) is True
+
+
+def test_pairing_is_an_unproven_claim():
+    ble, reg, master = make()
+    pair(ble)
+    v = reg.get(VIN)
+    assert v.claims["TeslaBLE"].status == "unproven" and v.tier == "observed"
+
+
+def test_refusal_inside_pairing_window_keeps_pairing():
+    ble, reg, master = make()
+    pair(ble)
+    ble._run_command_with_timeout = Mock(return_value=(b"", REFUSED, 1))
+    assert ble._sendCommand_internal(VIN, "ping") is None
+    assert ble.bleStatus(VIN)["status"] == "pairing"
+    assert "TeslaBLE" in reg.get(VIN).claims
+
+
+def test_refusal_after_pairing_window_is_refused():
+    ble, reg, master = make()
+    pair(ble)
+    master.settings["Vehicles"][VIN]["ble"]["pairingSent"] -= (
+        TeslaBLE.PAIRING_WINDOW + 1
+    )
+    ble._run_command_with_timeout = Mock(return_value=(b"", REFUSED, 1))
+    assert ble._sendCommand_internal(VIN, "ping") is None
+    assert ble.bleStatus(VIN)["status"] == "refused"
+    assert "TeslaBLE" not in reg.get(VIN).claims
+
+
+def test_failed_repair_of_paired_car_keeps_paired():
+    ble, reg, master = make()
+    ble._setBleStatus(VIN, "paired")
+    ble.sendPublicKey = Mock(return_value=True)
+    ble._run_command_with_timeout = Mock(return_value=(None, None, -9))
+    assert ble.peerWithVehicle(VIN) is False
+    assert ble.bleStatus(VIN)["status"] == "paired"
+    assert reg.get(VIN).tier == "managed"
+    attempt = ble.blePairingAttempt(VIN)
+    assert attempt["ok"] is False and attempt["message"] and attempt["at"]
+
+
+def test_failed_repair_without_binary_keeps_paired():
+    ble, reg, master = make()
+    ble._setBleStatus(VIN, "paired")
+    ble.binaryPath = None
+    assert ble.peerWithVehicle(VIN) is False
+    assert ble.bleStatus(VIN)["status"] == "paired"
+    assert ble.blePairingAttempt(VIN)["ok"] is False
+
+
+def test_repair_of_paired_car_keeps_paired_and_refusal_in_window_is_ignored():
+    ble, reg, master = make()
+    ble._setBleStatus(VIN, "paired")
+    pair(ble)
+    assert ble.bleStatus(VIN)["status"] == "paired"
+    assert ble.blePairingAttempt(VIN)["ok"] is True
+    ble._run_command_with_timeout = Mock(return_value=(b"", REFUSED, 1))
+    assert ble._sendCommand_internal(VIN, "ping") is None
+    assert ble.bleStatus(VIN)["status"] == "paired"
+    assert reg.get(VIN).tier == "managed"
+
+
+def test_paired_car_refused_outside_window_is_refused():
+    ble, reg, master = make()
+    ble._setBleStatus(VIN, "paired")
+    ble._run_command_with_timeout = Mock(return_value=(b"", REFUSED, 1))
+    assert ble._sendCommand_internal(VIN, "ping") is None
+    assert ble.bleStatus(VIN)["status"] == "refused"
+
+
+def test_no_pairing_attempt_by_default():
+    ble, reg, master = make()
+    assert ble.blePairingAttempt(VIN) is None
