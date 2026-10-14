@@ -60,3 +60,20 @@ def test_session_end_clears_twc_vin_on_the_car():
     r.observeTwcVin("8244", VIN)
     r.endPlugSession("8244")
     assert r.get(VIN).latest("twcVin").value is None and r.pointFor(VIN) is None
+
+
+def test_is_pending_tracks_the_unconfirmed_candidate():
+    r = VehicleRegistry({})
+    r.beginPlugSession("8244")
+    assert not r.isPending("8244")
+    r.observeTwcVin("8244", VIN)
+    assert r.isPending("8244")
+    r.observeTwcVin("8244", VIN)
+    assert not r.isPending("8244")
+    r.observeTwcVin("8245", VIN)  # known now: confirms at once
+    assert not r.isPending("8245")
+    r.observeTwcVin("8246", OTHER)
+    r.observeTwcVin("8246", BAD)  # malformed: no change
+    assert r.isPending("8246")
+    r.endPlugSession("8246")
+    assert not r.isPending("8246")
