@@ -30,6 +30,9 @@ class TelmetryBase:
     vehicleNames = {}
     unmappedRetrySecs = 300
     retryScheduled = False
+    # The car id in every topic is the VIN (Fleet): a live message attaches
+    # without waiting for the name.
+    vinInTopic = False
     registry = None
     # MQTT connection state: the feed's liveness. everConnected and
     # lostConnection let a reconnect after a drop be logged once.
@@ -48,6 +51,10 @@ class TelmetryBase:
         self.vehicles = {}
         self.unknownVehicles = {}
         self.vehicleNames = {}
+        # Car ids whose vehicle was forgotten (never re-created by a list
+        # load), and those already warned about as unmappable.
+        self.orphanedIds = set()
+        self.warnedUnmapped = set()
         self.registry = VehicleRegistry.forMaster(master)
 
         self.config = master.config
@@ -206,12 +213,16 @@ class TelmetryBase:
             orphaned = vehicle is not None and self._dropIfOrphan(id, vehicle)
             if orphaned:
                 vehicle = None
+                self.orphanedIds.add(id)
             if vehicle is None and not retained:
                 # A live report is a sighting: once the car's name is known,
                 # attach now (no I/O here), by VIN (creating the vehicle) or
                 # to a vehicle of that name. A retained copy never creates or
                 # revives one.
-                if name and (self.vinFor(id) or self.registry.findByName(name)):
+                vin = self.vinFor(id)
+                if (name or (vin and self.vinInTopic)) and (
+                    vin or self.registry.findByName(name)
+                ):
                     if self.updateVehicles(id, name, loadList=False):
                         self.replayUnknownEvents(id)
                         vehicle = self.vehicles.get(id)
@@ -221,13 +232,14 @@ class TelmetryBase:
                 field, converter = events[event][0], events[event][1]
                 self._observe(vehicle, field, converter(payload), retained)
             else:
-                # If we don't know this vehicle yet, save the data.
-                if id not in self.unknownVehicles:
-                    self.unknownVehicles[id] = []
+                # If we don't know this vehicle yet, save the data: the
+                # latest per topic, so a car the broker retains but that
+                # never reports live cannot grow it without bound.
                 parked = [event, payload]
                 if retained:
                     parked.append(True)
-                self.unknownVehicles[id].append(parked)
+                kept = [e for e in self.unknownVehicles.get(id, []) if e[0] != event]
+                self.unknownVehicles[id] = kept + [parked]
 
     def _dropIfOrphan(self, vehicle_id, vehicle) -> bool:
         # True (and the mapping dropped) when the registry no longer holds
@@ -290,8 +302,14 @@ class TelmetryBase:
         self.refreshIdentities()
         for vehicle_id, vehicle_name in list(self.vehicleNames.items()):
             if vehicle_id not in self.vehicles:
-                # A replay of a name already received: not a sighting.
-                if self.updateVehicles(vehicle_id, vehicle_name, retained=True):
+                # A replay of a name already received: not a sighting. A
+                # forgotten car is never re-created by a vehicle-list load.
+                if self.updateVehicles(
+                    vehicle_id,
+                    vehicle_name,
+                    loadList=vehicle_id not in self.orphanedIds,
+                    retained=True,
+                ):
                     self.replayUnknownEvents(vehicle_id)
 
         if any(i not in self.vehicles for i in self.vehicleNames):
@@ -328,6 +346,8 @@ class TelmetryBase:
                 if vehicle_name:
                     self._observe(vehicle, "name", vehicle_name, retained)
                 self.vehicles[vehicle_id] = vehicle
+                self.orphanedIds.discard(vehicle_id)
+                self.warnedUnmapped.discard(vehicle_id)
                 logger.info(
                     f"Vehicle {vehicle_name or vin} telemetry being provided by {source}"
                 )
@@ -348,12 +368,18 @@ class TelmetryBase:
 
         if vehicle is not None:
             self.vehicles[vehicle_id] = vehicle
+            self.orphanedIds.discard(vehicle_id)
+            self.warnedUnmapped.discard(vehicle_id)
             logger.info(f"Vehicle {vehicle_name} telemetry being provided by {source}")
             return True
 
-        logger.warning(
+        # Once per car id at WARNING; the retries that follow at DEBUG.
+        level = logging.DEBUG if vehicle_id in self.warnedUnmapped else logging.WARNING
+        self.warnedUnmapped.add(vehicle_id)
+        logger.log(
+            level,
             f"{source}: no known vehicle named "
-            f"'{vehicle_name}' to attach telemetry to; will retry"
+            f"'{vehicle_name}' to attach telemetry to; will retry",
         )
         return False
 

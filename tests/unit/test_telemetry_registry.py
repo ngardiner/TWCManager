@@ -584,3 +584,81 @@ def test_fleet_retained_value_does_not_mean_online():
     assert v.value("state") == "offline" and v.value("chargeLimit") == 80
     msg("/v/ChargeLimitSoc", b"81", False)  # a live report: the car is online
     assert v.value("state") == "online"
+
+
+# Fix round 3.
+
+
+def test_parked_store_keeps_one_entry_per_topic(clocked):
+    t, reg, now = clocked
+    for day in range(10):
+        for topic, payload in (
+            ("display_name", "C"),
+            ("state", "asleep"),
+            ("charge_limit_soc", str(70 + day)),
+            ("battery_level", "61"),
+        ):
+            tm_msg(t, topic, payload, True)  # retained only: never attaches
+    parked = t.unknownVehicles["7"]
+    assert len(parked) == 3
+    assert ["charge_limit_soc", "79", True] in parked
+
+
+def test_unmapped_retry_warns_once_per_car(clocked, caplog):
+    t, reg, now = clocked
+    t.scheduleUnmappedRetry = lambda delay=None: None
+    tm_msg(t, "display_name", "Ghost", True)
+    caplog.set_level(logging.DEBUG)
+    for _ in range(5):
+        t.retryUnmappedVehicles()
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "Ghost" in r.message
+    ]
+    assert len(warnings) <= 1
+
+
+def test_retry_for_a_forgotten_car_never_loads_the_vehicle_list(monkeypatch):
+    monkeypatch.setattr(TeslaMateVehicle, "loadCarVINs", lambda self: {"7": VIN})
+    monkeypatch.setattr(
+        TeslaMateVehicle, "doSyncTokens", lambda self, firstrun=False: None
+    )
+    carapi = Mock()
+    carapi.getCarApiRetryRemaining.return_value = 0
+    t, reg = make(TeslaMateVehicle, carapi=carapi)
+    t.scheduleUnmappedRetry = lambda delay=None: None
+    t.mqttConnect(Mock(), None, None, 0)
+    tm_msg(t, "display_name", "C", False)
+    reg.forget(VIN)
+    tm_msg(t, "charge_limit_soc", "70", True)  # orphan dropped, not revived
+    t.retryUnmappedVehicles()
+    assert not carapi.loadVehicleList.called and reg.get(VIN) is None
+
+
+def test_fleet_derives_no_state_from_retained_values():
+    t, reg = make(FleetTelemetryMQTT)
+    t.mqtt_prefix = "telemetry"
+    t.applyDataToVehicle(VIN, "VehicleName", "C")
+    v = reg.get(VIN)
+
+    def msg(path, payload, retain):
+        m = Mock(topic="telemetry/" + VIN + path, payload=payload)
+        m.retain = retain
+        t.mqttMessage(None, None, m)
+
+    msg("/connectivity", b'{"Status": "DISCONNECTED"}', False)
+    msg("/v/DetailedChargeState", b'"DetailedChargeStateCharging"', True)
+    msg("/v/Gear", b'"D"', True)
+    assert v.value("state") == "offline"
+
+
+def test_fleet_live_message_attaches_by_topic_vin_without_a_name():
+    t, reg = make(FleetTelemetryMQTT)  # after a restart: no name seen
+    t.mqtt_prefix = "telemetry"
+    m = Mock(topic="telemetry/" + VIN + "/v/BatteryLevel", payload=b"55")
+    m.retain = False
+    t.mqttMessage(None, None, m)
+    v = reg.get(VIN)
+    assert v is not None and t.vehicles[VIN] is v
+    assert v.value("batteryLevel") == 55 and v.value("state") == "online"
