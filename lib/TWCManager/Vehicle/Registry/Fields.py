@@ -62,14 +62,30 @@ class FieldStore:
         if field not in FIELDS:
             raise KeyError(field)
 
+    def _store(
+        self,
+        table: Dict[str, Observation],
+        field: str,
+        value: Any,
+        source: str,
+        at: Optional[float],
+    ) -> Observation:
+        # The clock is read under the lock so stored order matches stamp
+        # order. An older stamp never displaces a newer one (equal replaces);
+        # the entry that stays is returned.
+        with self._lock:
+            obs = Observation(value, source, self._clock() if at is None else at)
+            old = table.get(field)
+            if old is not None and obs.at < old.at:
+                return old
+            table[field] = obs
+            return obs
+
     def observe(
         self, field: str, value: Any, source: str, at: Optional[float] = None
     ) -> Observation:
         self._check(field)
-        obs = Observation(value, source, self._clock() if at is None else at)
-        with self._lock:
-            self._latest[field] = obs
-        return obs
+        return self._store(self._latest, field, value, source, at)
 
     def latest(self, field: str) -> Optional[Observation]:
         with self._lock:
@@ -79,10 +95,7 @@ class FieldStore:
         self, field: str, value: Any, source: str, at: Optional[float] = None
     ) -> Observation:
         self._check(field)
-        obs = Observation(value, source, self._clock() if at is None else at)
-        with self._lock:
-            self._writes[field] = obs
-        return obs
+        return self._store(self._writes, field, value, source, at)
 
     def lastWrite(self, field: str) -> Optional[Observation]:
         with self._lock:
