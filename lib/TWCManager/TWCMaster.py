@@ -114,6 +114,8 @@ class TWCMaster:
         # Guards mutation of self.settings from non-serial threads; saves
         # serialise under it and write the file outside it. Lock order:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
+        # The serial thread takes it too (recordVehicleVIN), so nothing
+        # under it may do I/O, on any thread.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
         # Start of the forgetting interval: the first expiry pass runs an
@@ -367,12 +369,21 @@ class TWCMaster:
         result = None
 
         while result is None:
-            # Insert any delayed tasks
-            while (
-                self.backgroundTasksDelayed
-                and self.backgroundTasksDelayed[0][0] <= datetime.now()
-            ):
-                self.queue_background_task(self.backgroundTasksDelayed.pop(0)[-1])
+            # Insert any delayed tasks. Taken under the tasks lock (the serial
+            # thread adds to the list) and queued after it is released:
+            # queue_background_task takes it too.
+            due = []
+            self.getBackgroundTasksLock()
+            try:
+                while (
+                    self.backgroundTasksDelayed
+                    and self.backgroundTasksDelayed[0][0] <= datetime.now()
+                ):
+                    due.append(self.backgroundTasksDelayed.pop(0)[-1])
+            finally:
+                self.releaseBackgroundTasksLock()
+            for task in due:
+                self.queue_background_task(task)
 
             # Get the next task
             try:
@@ -834,6 +845,12 @@ class TWCMaster:
             del self.slaveTWCs[deleteSlaveID]
         except KeyError:
             pass
+        # A retired TWC's plug session (its anonymous car) ends with it.
+        try:
+            twcid = "%02X%02X" % (deleteSlaveID[0], deleteSlaveID[1])
+            self.vehicleRegistry.endPlugSession(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry plug session update failed: %s", e)
 
     def getChargerLoad(self):
         # Calculate in watts the load that the charger is generating so
@@ -1314,10 +1331,18 @@ class TWCMaster:
 
     def queue_background_task(self, task, delay=0):
         if delay > 0:
-            bisect.insort(
-                self.backgroundTasksDelayed,
-                (datetime.now() + timedelta(seconds=delay), next(self._delaySeq), task),
-            )
+            self.getBackgroundTasksLock()
+            try:
+                bisect.insort(
+                    self.backgroundTasksDelayed,
+                    (
+                        datetime.now() + timedelta(seconds=delay),
+                        next(self._delaySeq),
+                        task,
+                    ),
+                )
+            finally:
+                self.releaseBackgroundTasksLock()
             return
 
         if task["cmd"] in VEHICLE_COMMANDS:
