@@ -54,7 +54,8 @@ class VehicleRegistry:
         registry = getattr(master, "vehicleRegistry", None)
         if isinstance(registry, cls):
             return registry
-        return cls(getattr(master, "config", {}) or {})
+        config = getattr(master, "config", None)
+        return cls(config if isinstance(config, dict) else {})
 
     # Membership
 
