@@ -115,7 +115,9 @@ class Vehicle:
             return latest
         if latest is not None:
             age = self.age(field)
-            if age is not None and age <= maxAge:
+            # A value not newer than our own write (inside the feed lag) is
+            # not fresh: it may predate the write.
+            if age is not None and age <= maxAge and self.trusted(field):
                 return latest
         # No lock is held here: sources may do I/O.
         got = cascade(self, self._registry.readSources(), field, allowWake)
