@@ -962,3 +962,20 @@ def test_pairing_that_could_not_start_creates_no_vehicle_record():  # M7
     # A known car still records the failure.
     assert ble.peerWithVehicle(VIN) is False
     assert ble.bleStatus(VIN)["status"] == "pairing_failed"
+
+
+def test_failed_device_lookup_is_range_unknown():  # M3
+    ble, reg, master = scanner()
+
+    def run(cmd, timeout, use_process_group=True):
+        if cmd[1:] == ["devices"]:
+            return (b"Waiting to connect to bluetoothd...\n", b"", 1)
+        return (b"[CHG] Device AA:BB:CC:DD:EE:FF RSSI: -60\n", b"", 0)
+
+    ble._run_command_with_timeout = run
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.shutil.which",
+        return_value="/usr/bin/bluetoothctl",
+    ):
+        assert ble.scanForVehicleInRange(VIN) is None
+    assert ble.rangeStatus(VIN)["inRange"] is None

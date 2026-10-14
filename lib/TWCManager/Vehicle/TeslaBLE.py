@@ -1741,7 +1741,7 @@ class TeslaBLE:
             if heard:
                 known = self._bluezAddresses(name)
                 if known is None:
-                    failure = "device lookup timed out"
+                    failure = "device lookup failed"
                 else:
                     inRange = bool(heard & known)
         if failure is not None:
@@ -1779,11 +1779,11 @@ class TeslaBLE:
 
     def _bluezAddresses(self, name):
         """Addresses BlueZ holds under the car's local name, or None when
-        bluetoothctl did not answer."""
+        bluetoothctl did not answer or failed (its output is then no list)."""
         stdout, stderr, code = self._run_command_with_timeout(
             ["bluetoothctl", "devices"], timeout=5, use_process_group=True
         )
-        if stdout is None:
+        if stdout is None or code != 0:
             return None
         macs = set()
         for line in self._stripAnsi(stdout).splitlines():
