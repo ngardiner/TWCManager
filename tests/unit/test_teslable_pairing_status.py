@@ -641,3 +641,244 @@ def test_scan_ignores_bluez_forgetting_the_car():
             0,
         )
         assert ble.scanForVehicleInRange(VIN) is True
+
+
+# Task 17 fix round 1
+
+
+class Runaway(BaseException):
+    """Escapes runPendingScans' per-VIN except Exception, so a drain that
+    never empties fails the test instead of looping."""
+
+
+def scan_with(ble, scan_out, devices_out=b""):
+    def run(cmd, timeout, use_process_group=True):
+        if cmd[1:] == ["devices"]:
+            return (devices_out, b"", 0)
+        return scan_out
+
+    ble._run_command_with_timeout = run
+
+
+WHICH = "TWCManager.Vehicle.TeslaBLE.shutil.which"
+CAR = b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n"
+
+
+def test_timed_out_scan_is_range_unknown(caplog):
+    ble, reg, master = scanner()
+    reg.getOrCreate(VIN, "TeslaBLE")
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        scan_with(ble, (CAR, b"", 0))
+        assert ble.scanForVehicleInRange(VIN) is True
+        before = reg.get(VIN).latest("bleReach")
+        scan_with(ble, (None, None, None))
+        with caplog.at_level("WARNING"):
+            assert ble.scanForVehicleInRange(VIN) is None
+        st = ble.bleStatus(VIN)
+    # The unknown result replaces the earlier "in range".
+    assert st["inRange"] is None and st["label"] == "Range unknown"
+    assert st["lastScanAge"] is not None
+    assert reg.get(VIN).latest("bleReach") is before
+    assert any(
+        r.levelname == "WARNING" and VIN in r.getMessage() for r in caplog.records
+    )
+
+
+def test_timed_out_scan_records_no_ble_reach():
+    ble, reg, master = scanner()
+    reg.getOrCreate(VIN, "TeslaBLE")
+    scan_with(ble, (None, None, None))
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is None
+    assert reg.get(VIN).latest("bleReach") is None
+
+
+def test_failed_scan_without_a_match_is_range_unknown():
+    ble, reg, master = scanner()
+    reg.getOrCreate(VIN, "TeslaBLE")
+    scan_with(ble, (b"[NEW] Device 11:22:33:44:55:66 Other\n", b"", 1))
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is None
+        assert ble.bleStatus(VIN)["label"] == "Range unknown"
+    assert reg.get(VIN).latest("bleReach") is None
+
+
+def test_match_wins_over_a_nonzero_exit():
+    ble, reg, master = scanner()
+    scan_with(ble, (CAR, b"", 1))
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is True
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        (b"No default controller available\n", b"", 0),
+        (b"", b"No default controller available\n", 0),
+        (b"Waiting to connect to bluetoothd...", b"", 0),
+        (b"Failed to start discovery: org.bluez.Error.NotReady\n", b"", 0),
+    ],
+)
+def test_bluez_error_text_is_range_unknown(out):
+    ble, reg, master = scanner()
+    scan_with(ble, out)
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is None
+        assert ble.bleStatus(VIN)["label"] == "Range unknown"
+
+
+def test_scan_is_pending_while_it_runs():
+    ble, reg, master = scanner()
+    seen = []
+
+    def run(cmd, timeout, use_process_group=True):
+        seen.append(ble.rangeStatus(VIN)["pending"])
+        return (CAR, b"", 0)
+
+    ble._run_command_with_timeout = run
+    ble.requestRangeScan(VIN)
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        ble.runPendingScans()
+        assert seen == [True]
+        assert ble.rangeStatus(VIN)["pending"] is False
+
+
+def test_pending_cleared_when_a_scan_raises():
+    ble, reg, master = scanner()
+    ble.scanForVehicleInRange = Mock(side_effect=RuntimeError("boom"))
+    ble.requestRangeScan(VIN)
+    ble.runPendingScans()
+    assert ble.rangeStatus(VIN)["pending"] is False
+
+
+def test_request_within_ten_seconds_of_a_scan_is_ignored():
+    ble, reg, master = scanner()
+    scan_with(ble, (CAR, b"", 0))
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        ble.scanForVehicleInRange(VIN)
+    master.queue_background_task.reset_mock()
+    ble.requestRangeScan(VIN)
+    master.queue_background_task.assert_not_called()
+    assert ble.rangeStatus(VIN)["pending"] is False
+    ble._rangeScan[VIN]["at"] -= 11
+    ble.requestRangeScan(VIN)
+    master.queue_background_task.assert_called_with({"cmd": "bleScan"})
+    assert ble.rangeStatus(VIN)["pending"] is True
+
+
+def test_request_while_the_vin_is_being_scanned_is_ignored():
+    ble, reg, master = scanner()
+    queued = []
+
+    def scan(vin):
+        # Hard cap: a broken debounce must fail, not loop forever.
+        if len(queued) >= 3:
+            raise Runaway("drain kept rescanning the same VIN")
+        master.queue_background_task.reset_mock()
+        ble.requestRangeScan(VIN)
+        queued.append(master.queue_background_task.called)
+
+    ble.scanForVehicleInRange = scan
+    ble.requestRangeScan(VIN)
+    ble.runPendingScans()
+    assert queued == [False]
+    assert ble.rangeStatus(VIN)["pending"] is False
+
+
+def test_drain_is_bounded_and_leaves_one_follow_up():
+    # A request arriving during every scan: the drain stops after
+    # SCAN_DRAIN_PASSES and the post-task check queues exactly one follow-up.
+    ble, reg, master = scanner()
+    vins = ["5YJ3E1EA1KF%06d" % n for n in range(1, 50)]
+    seen = []
+
+    def scan(vin):
+        if len(seen) >= 40:
+            raise Runaway("drain did not stop")
+        seen.append(vin)
+        ble.requestRangeScan(vins[len(seen)])
+
+    ble.scanForVehicleInRange = scan
+    ble.requestRangeScan(vins[0])
+    master.queue_background_task.reset_mock()
+    ble.runPendingScans()
+    assert len(seen) == ble.SCAN_DRAIN_PASSES
+    master.queue_background_task.reset_mock()
+    ble.requeueIfRequested()
+    master.queue_background_task.assert_called_once_with({"cmd": "bleScan"})
+
+
+def test_mid_scan_request_is_served_without_a_follow_up():
+    ble, reg, master = scanner()
+    seen = []
+
+    def scan(vin):
+        if len(seen) >= 5:
+            raise Runaway("drain did not stop")
+        seen.append(vin)
+        if len(seen) == 1:
+            ble.requestRangeScan("5YJ3E1EA1KF000002")
+
+    ble.scanForVehicleInRange = scan
+    ble.requestRangeScan(VIN)
+    ble.runPendingScans()
+    assert seen == [VIN, "5YJ3E1EA1KF000002"]
+    master.queue_background_task.reset_mock()
+    ble.requeueIfRequested()
+    master.queue_background_task.assert_not_called()
+
+
+def test_requeue_after_the_task_when_requests_remain():
+    ble, reg, master = scanner()
+    master.queue_background_task.reset_mock()
+    ble.requeueIfRequested()
+    master.queue_background_task.assert_not_called()
+    with ble._scanLock:
+        ble._scanRequests[VIN] = __import__("time").time()
+    ble.requeueIfRequested()
+    master.queue_background_task.assert_called_once_with({"cmd": "bleScan"})
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        b"[CHG] Device AA:BB:CC:DD:EE:FF RSSI is nil\n",
+        b"[CHG] Device AA:BB:CC:DD:EE:FF Connected: no\n",
+        b"[CHG] Device AA:BB:CC:DD:EE:FF ServicesResolved: no\n",
+        b"[CHG] Device AA:BB:CC:DD:EE:FF TxPower: -4\n",
+        b"Device AA:BB:CC:DD:EE:FF\n",
+    ],
+)
+def test_mac_fallback_ignores_lines_that_are_not_a_sighting(line):
+    ble, reg, master = scanner()
+    scan_with(ble, (line, b"", 0), b"Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n")
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is False
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        b"[NEW] Device aa:bb:cc:dd:ee:ff aa-bb-cc-dd-ee-ff\n",
+        b"[CHG] Device AA:BB:CC:DD:EE:FF RSSI: 0xffffffb2 (-78)\n",
+        b"[CHG] Device AA:BB:CC:DD:EE:FF RSSI: -60\n",
+    ],
+)
+def test_mac_fallback_accepts_new_and_numeric_rssi_lines(line):
+    ble, reg, master = scanner()
+    scan_with(ble, (line, b"", 0), b"Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n")
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is True
+
+
+def test_mac_fallback_lookup_timeout_is_range_unknown():
+    ble, reg, master = scanner()
+
+    def run(cmd, timeout, use_process_group=True):
+        if cmd[1:] == ["devices"]:
+            return (None, None, None)
+        return (b"[CHG] Device AA:BB:CC:DD:EE:FF RSSI: -60\n", b"", 0)
+
+    ble._run_command_with_timeout = run
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is None
