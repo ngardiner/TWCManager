@@ -2330,16 +2330,17 @@ class CarApiVehicle:
         # every source failed is a failure.
         vehicle = self.vehicle
         before = vehicle.latest(field)
-        start = time.time()
         obs = vehicle.read(field, maxAge=maxAge)
         if obs is None:
             return None
-        fetched = before is None or obs.at > before.at
+        # Each observe stores a new Observation, so identity says a reading
+        # landed during the read without comparing clocks.
+        fetched = obs is not before
         if not (
             fetched or vehicle.age(field) <= maxAge or time.time() < self.statusDeferral
         ):
             return None
-        if fetched and obs.source == "TeslaBLE" and obs.at >= start:
+        if fetched and obs.source == "TeslaBLE":
             # A BLE reply proves the car awake, as an API reply does in
             # get_car_api.
             self.lastAPIAccessTime = time.time()
