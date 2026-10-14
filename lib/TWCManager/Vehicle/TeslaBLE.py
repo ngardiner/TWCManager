@@ -4,10 +4,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
 import functools
+import hashlib
 import json
 import logging
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import subprocess
@@ -103,12 +105,42 @@ class TeslaBLE:
     # After a pairing request reaches the car, the owner has this long to
     # tap the key card; a key refusal inside it is expected, not a refusal.
     PAIRING_WINDOW = 600
+    # bluetoothctl listens this long per range scan.
+    SCAN_SECONDS = 8
+    # A request not served in this long no longer shows as "Scanning...".
+    SCAN_PENDING_MAX = 120
+    # A request for a car scanned (or being scanned) this recently is ignored.
+    SCAN_DEBOUNCE = 10
+    # One bleScan task drains requests at most this many times; anything left
+    # is picked up by requeueIfRequested after the task finishes.
+    SCAN_DRAIN_PASSES = 3
+    # bluetoothctl output meaning the scan never ran (no adapter, bluetoothd
+    # down, discovery refused); compared case-insensitively.
+    SCAN_ERROR_TEXT = (
+        "no default controller",
+        "waiting to connect to bluetoothd",
+        "failed to start discovery",
+    )
+    STATUS_LABELS = {
+        "pairing": "Pairing (tap your key card in the car)",
+        "paired": "Paired",
+        "pairing_failed": "Pairing failed",
+        "refused": "Key refused (re-pair)",
+    }
 
     def __init__(self, master):
         self.registry = VehicleRegistry.forMaster(master)
         self._bleLock = threading.Lock()
         # Last pairing attempt per VIN: transient, for the vehicle page.
         self._pairingAttempts = {}
+        # Last range scan per VIN: {"inRange", "at"}; transient.
+        self._rangeScan = {}
+        # VIN -> request time for scans not yet run. Guarded by its own lock,
+        # never held while taking _bleLock.
+        self._scanRequests = {}
+        # VINs a drain has taken and not finished scanning; same lock.
+        self._scanInProgress = set()
+        self._scanLock = threading.Lock()
         # Set by _sendCommand_internal on a key refusal so the retry loop
         # (same thread) stops: a refused key is refused again on retry.
         self._keyRefusal = threading.local()
@@ -1594,7 +1626,7 @@ class TeslaBLE:
                     return key
         return upper
 
-    def bleStatus(self, vin):
+    def _storedStatus(self, vin):
         vin = self._settingsKey(vin)
         with self.master.settingsLock:
             rec = (self.master.settings.get("Vehicles") or {}).get(vin)
@@ -1602,6 +1634,223 @@ class TeslaBLE:
             if isinstance(ble, dict) and ble.get("status"):
                 return {"status": ble["status"], "since": ble.get("since")}
         return {"status": "unpaired", "since": None}
+
+    def bleStatus(self, vin):
+        """Pairing status for the vehicle page.
+
+        status/since are the persisted pairing state; label is what the
+        page shows: the pairing state when there is one, otherwise the last
+        range scan's result ("Range unknown" before any scan, when no scan
+        is possible, or when the last scan gave no answer)."""
+        st = self._storedStatus(vin)
+        rng = self.rangeStatus(vin)
+        now = time.time()
+        canScan = self.canScan()
+        label = self.STATUS_LABELS.get(st["status"])
+        if label is None:
+            if rng["inRange"] is True:
+                label = "In range (not paired)"
+            elif rng["inRange"] is False:
+                label = "Not in range"
+            else:
+                label = "Range unknown"
+        since = st["since"]
+        attempt = self.blePairingAttempt(vin)
+        if attempt and isinstance(attempt.get("at"), (int, float)):
+            attempt["age"] = max(0.0, now - attempt["at"])
+        st.update(
+            {
+                "label": label,
+                "sinceAge": (
+                    max(0.0, now - since) if isinstance(since, (int, float)) else None
+                ),
+                "inRange": rng["inRange"],
+                "scannedAt": rng["at"],
+                "lastScanAge": (
+                    max(0.0, now - rng["at"]) if rng["at"] is not None else None
+                ),
+                "scanPending": rng["pending"],
+                "canScan": canScan,
+                "attempt": attempt,
+            }
+        )
+        return st
+
+    # Range scan
+    #
+    # tesla-control has no scan subcommand; the car advertises the local
+    # name bleLocalName(vin), which BlueZ's bluetoothctl reports while
+    # scanning. Scans share the adapter with tesla-control, so they run
+    # under _bleLock on the background-task thread; the HTTP thread only
+    # queues a request.
+
+    @staticmethod
+    def bleLocalName(vin):
+        # vehicle-command pkg/connector/ble VehicleLocalName
+        digest = hashlib.sha1(vin.upper().encode("ascii")).hexdigest()
+        return "S" + digest[:16] + "C"
+
+    def canScan(self):
+        return not self.isDocker() and shutil.which("bluetoothctl") is not None
+
+    @_serialized
+    def scanForVehicleInRange(self, vin):
+        """Scan for the car's BLE advertisement. True/False, or None when no
+        scan is possible (Docker or no bluetoothctl) or the scan gave no
+        answer (timed out, failed, or BlueZ reported an error)."""
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
+            return None
+        vin = vin.upper()
+        if not self.canScan():
+            return None
+        stdout, stderr, code = self._run_command_with_timeout(
+            ["bluetoothctl", "--timeout", str(self.SCAN_SECONDS), "scan", "on"],
+            timeout=self.SCAN_SECONDS + 4,
+            use_process_group=True,
+        )
+        # [DEL] lines report BlueZ forgetting a device it no longer hears;
+        # they carry the cached name and address, so they say nothing here.
+        lines = [
+            line
+            for line in self._stripAnsi(stdout).splitlines()
+            if not line.lstrip().startswith("[DEL]")
+        ]
+        output = "\n".join(lines)
+        name = self.bleLocalName(vin)
+        inRange = name in output
+        failure = None
+        if stdout is None:
+            failure = "timed out"
+        if not inRange and failure is None:
+            errors = (output + "\n" + self._stripAnsi(stderr)).lower()
+            if any(text in errors for text in self.SCAN_ERROR_TEXT):
+                failure = "bluetoothctl reported an error"
+            elif code != 0:
+                # A match above wins whatever the exit code; without one, a
+                # failed run says nothing about the car.
+                failure = f"bluetoothctl exited {code}"
+        if not inRange and failure is None:
+            # BlueZ prints a device's name only when it learns it; a car it
+            # already holds (an earlier scan, or tesla-control) shows up by
+            # address alone, so look the address up.
+            heard = self._heardAddresses(lines)
+            if heard:
+                known = self._bluezAddresses(name)
+                if known is None:
+                    failure = "device lookup failed"
+                else:
+                    inRange = bool(heard & known)
+        if failure is not None:
+            self._rangeScan[vin] = {"inRange": None, "at": time.time()}
+            logger.warning(f"BLE scan for {vin}: range unknown ({failure})")
+            return None
+        self._rangeScan[vin] = {"inRange": inRange, "at": time.time()}
+        logger.info(f"BLE scan for {vin}: {'in range' if inRange else 'not in range'}")
+        v = self.registry.get(vin)
+        if v is not None:
+            # Not a sighting: a scan that misses the car says nothing new.
+            self._safeNote(v.observe, "bleReach", inRange, "TeslaBLE", None, False)
+        return inRange
+
+    @staticmethod
+    def _stripAnsi(data):
+        return re.sub(r"\x1b\[[0-9;]*m", "", (data or b"").decode("utf-8", "replace"))
+
+    # Lines that mean BlueZ heard a device during this scan: a new device, or
+    # a fresh numeric RSSI ("RSSI: -60" or "RSSI: 0xffffffb2 (-78)"). Not
+    # "RSSI is nil", "Connected: no" and the like, which a device that is not
+    # advertising can produce.
+    _HEARD_RE = re.compile(
+        r"\[(?:NEW\] Device ([0-9A-Fa-f:]{17})\b"
+        r"|CHG\] Device ([0-9A-Fa-f:]{17}) RSSI: (?:0x[0-9A-Fa-f]+|-?\d+))"
+    )
+
+    def _heardAddresses(self, lines):
+        macs = set()
+        for line in lines:
+            m = self._HEARD_RE.search(line)
+            if m:
+                macs.add((m.group(1) or m.group(2)).upper())
+        return macs
+
+    def _bluezAddresses(self, name):
+        """Addresses BlueZ holds under the car's local name, or None when
+        bluetoothctl did not answer or failed (its output is then no list)."""
+        stdout, stderr, code = self._run_command_with_timeout(
+            ["bluetoothctl", "devices"], timeout=5, use_process_group=True
+        )
+        if stdout is None or code != 0:
+            return None
+        macs = set()
+        for line in self._stripAnsi(stdout).splitlines():
+            parts = line.strip().split(" ", 2)
+            if len(parts) == 3 and parts[0] == "Device" and parts[2].strip() == name:
+                macs.add(parts[1].upper())
+        return macs
+
+    def rangeStatus(self, vin):
+        vin = vin.upper() if isinstance(vin, str) else vin
+        # Unlocked read: _rangeScan entries are replaced whole, never mutated,
+        # and a single dict get is atomic under the GIL.
+        scan = self._rangeScan.get(vin) or {}
+        with self._scanLock:
+            requested = self._scanRequests.get(vin)
+            scanning = vin in self._scanInProgress
+        pending = scanning or (
+            requested is not None and time.time() - requested < self.SCAN_PENDING_MAX
+        )
+        return {
+            "inRange": scan.get("inRange"),
+            "at": scan.get("at"),
+            "pending": pending,
+        }
+
+    def requestRangeScan(self, vin):
+        """Queue a range scan; safe from any thread (it only queues). Ignored
+        for a car being scanned or scanned in the last SCAN_DEBOUNCE s."""
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
+            return
+        vin = vin.upper()
+        # Unlocked read, as in rangeStatus.
+        last = (self._rangeScan.get(vin) or {}).get("at")
+        with self._scanLock:
+            if vin in self._scanInProgress:
+                return
+            if last is not None and time.time() - last < self.SCAN_DEBOUNCE:
+                return
+            self._scanRequests[vin] = time.time()
+        self.master.queue_background_task({"cmd": "bleScan"})
+
+    def runPendingScans(self):
+        """Background task: scan for every requested VIN. The queue keeps one
+        bleScan task, so requests arriving while this runs are drained here,
+        for at most SCAN_DRAIN_PASSES rounds; requeueIfRequested picks up the
+        rest once the task is done."""
+        for _ in range(self.SCAN_DRAIN_PASSES):
+            with self._scanLock:
+                vins = sorted(self._scanRequests)
+                self._scanRequests.clear()
+                # Same critical section: a VIN is never in neither map.
+                self._scanInProgress.update(vins)
+            if not vins:
+                return
+            for vin in vins:
+                try:
+                    self.scanForVehicleInRange(vin)
+                except Exception as e:
+                    logger.error(f"BLE scan for {vin} failed: {type(e).__name__}")
+                finally:
+                    with self._scanLock:
+                        self._scanInProgress.discard(vin)
+
+    def requeueIfRequested(self):
+        """Called after the bleScan task is marked done: a request that came
+        in after the drain's last check was coalesced into the finishing
+        task, so queue one more. Queues at most one task per call."""
+        with self._scanLock:
+            pending = bool(self._scanRequests)
+        if pending:
+            self.master.queue_background_task({"cmd": "bleScan"})
 
     def blePairingAttempt(self, vin):
         """The last pairing attempt this run: {"ok", "at", "message"}, or None.
@@ -1667,7 +1916,7 @@ class TeslaBLE:
         v.claim("TeslaBLE", False, "unproven", keepsAlive=False)
 
     def _noteBleProof(self, vin):
-        if self.bleStatus(vin)["status"] != "paired":
+        if self._storedStatus(vin)["status"] != "paired":
             logger.info(f"BLE key for {vin} accepted")
             self._setBleStatus(vin, "paired")
 
@@ -1680,7 +1929,7 @@ class TeslaBLE:
                 "Pairing request sent; tap your key card on the car" if ok else reason
             ),
         }
-        paired = self.bleStatus(vin)["status"] == "paired"
+        paired = self._storedStatus(vin)["status"] == "paired"
         if ok:
             # A paired car stays paired; the window still opens, so a
             # refusal before the owner taps the card is not a refusal.
@@ -1707,7 +1956,7 @@ class TeslaBLE:
             logger.debug(f"BLE key for {vin} not yet accepted; pairing in progress")
             return True
         # Retries see the same refusal: record it once.
-        if self.bleStatus(vin)["status"] != "refused":
+        if self._storedStatus(vin)["status"] != "refused":
             logger.info(f"BLE key for {vin} refused; re-pair from the vehicle page")
             self._setBleStatus(vin, "refused")
         return True

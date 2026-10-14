@@ -9,6 +9,25 @@
     <p>&nbsp;</p>
     {% set vin = url.path.split("/")[2] %}
     <h3>Vehicle Details</h3>
+    {% set regVehicle = registry.get(vin) %}
+    {% if regVehicle %}
+    {% set row = regVehicle.summary() %}
+    <table>
+      <tr>
+        <th>Name</th><td>&nbsp;</td>
+        <th>Tier</th><td>&nbsp;</td>
+        <th>Providers</th><td>&nbsp;</td>
+        <th>Last seen</th>
+      </tr>
+      <tr>
+        <td>{{ row.name }}</td><td>&nbsp;</td>
+        <td>{{ row.tier }}</td><td>&nbsp;</td>
+        <td>{% for c in row.claims %}{{ c.provider }} ({{ c.status }}){% if not loop.last %}, {% endif %}{% endfor %}</td><td>&nbsp;</td>
+        <td>{{ ageText(row.lastSeenAge) }} via {{ row.lastSeenSource }}</td>
+      </tr>
+    </table>
+    <p>&nbsp;</p>
+    {% endif %}
     {% if vin != "00000000000000000" %}
     <table>
         <tr>
@@ -76,7 +95,7 @@
         </tr>
         <tr>
           <th>Charge Sessions</th>
-          <td>{{ master.settings["Vehicles"][vin]["chargeSessions"] }}
+          <td>{{ master.settings.get("Vehicles", {}).get(vin, {}).get("chargeSessions", 0) }}</td>
         </tr>
     </table>
     {% else %}
@@ -88,34 +107,51 @@
     </table>
     {% endif %}
 
-    {% if 'TeslaBLE' in master.modules %}
-      <p>&nbsp;</b>
+    {% set status = bleStatus(vin) if 'TeslaBLE' in master.modules else none %}
+    {% if status %}
+      <p>&nbsp;</p>
       <h3>BLE Control</h3>
       <table>
         <tr>
           <th>Status</th>
-          <td>Not Implemented</td>
-{% if master.settings["Vehicles"][vin].get("BLEPeeringStatus","") == "peered" %}
-Vehicle is peered.
-{% endif %}
-
+          <td>
+            {{ status.label }}{% if not status.canScan and status.label == "Range unknown" %} (scanning unavailable){% endif %}
+            {% if status.get("sinceAge") is not none %}<br/><small>since {{ ageText(status.sinceAge) }}</small>{% endif %}
+          </td>
+        </tr>
+        {% if status.get("attempt") %}
+        <tr>
+          <th>Last pairing attempt</th>
+          <td>{{ status.attempt.message }}{% if status.attempt.get("age") is not none %} ({{ ageText(status.attempt.age) }}){% endif %}</td>
+        </tr>
+        {% endif %}
+        <tr>
+          <th>Last scan</th>
+          <td>{{ ageText(status.lastScanAge) }}</td>
         </tr>
         <tr>
           <th>Action</th>
           <td>
-            {% if master.settings["Vehicles"][vin].get("BLEPeeringStatus","") == "peered" %}
+            {% if status.canScan %}
             <form method=POST action=/vehicle/localMgmt>
-              <input type=hidden name="operation" value="pair" />
-              <input type=hidden name="vin" value="{{vin}}" />
-              <input type=submit value="Re-pair with Vehicle">
-            </form>
-            {% else %}
-            <form method=POST action=/vehicle/localMgmt>
-              <input type=hidden name="operation" value="pair" />
-              <input type=hidden name="vin" value="{{vin}}" />
-              <input type=submit value="Pair with Vehicle">
+              <input type=hidden name="operation" value="scan" />
+              <input type=hidden name="vin" value="{{ vin }}" />
+              {% if status.scanPending %}
+              <input type=submit value="Scanning…" disabled>
+              {% else %}
+              <input type=submit value="Scan for vehicle">
+              {% endif %}
             </form>
             {% endif %}
+            <form method=POST action=/vehicle/localMgmt>
+              <input type=hidden name="operation" value="pair" />
+              <input type=hidden name="vin" value="{{ vin }}" />
+              {% if status.status in ("paired", "refused") %}
+              <input type=submit value="Re-pair with Vehicle">
+              {% else %}
+              <input type=submit value="Pair with Vehicle">
+              {% endif %}
+            </form>
           </td>
         </tr>
       </table>
@@ -159,6 +195,5 @@ Vehicle is peered.
       </tr>
       {% endfor %}
     </table>
-    </form>
   </body>
 </html>

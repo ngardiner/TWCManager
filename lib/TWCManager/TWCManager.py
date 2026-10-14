@@ -384,6 +384,11 @@ def background_tasks_thread(master):
                         requests.post(task["url"], json=body)
                 elif task["cmd"] == "saveSettings":
                     master.saveSettings()
+                elif task["cmd"] == "bleScan":
+                    # Range scans take seconds: here, never on the serial loop.
+                    ble = master.getModuleByName("TeslaBLE")
+                    if ble:
+                        ble.runPendingScans()
                 elif task["cmd"] == "expireVehicles":
                     master.expireVehicles()
                 elif task["cmd"] == "vehicleIsDefinitelyHome":
@@ -401,6 +406,16 @@ def background_tasks_thread(master):
         # backgroundTasksQueue.join() can then be used to block until all tasks
         # in the queue are done.
         master.doneBackgroundTask(task)
+
+        if task.get("cmd") == "bleScan":
+            # A scan request made between the drain's last check and
+            # doneBackgroundTask was coalesced into this task; queue it now.
+            try:
+                ble = master.getModuleByName("TeslaBLE")
+                if ble:
+                    ble.requeueIfRequested()
+            except Exception as e:
+                logger.error(f"bleScan requeue failed: {type(e).__name__}")
 
 
 def check_green_energy():

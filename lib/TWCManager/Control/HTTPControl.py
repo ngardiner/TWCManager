@@ -18,6 +18,7 @@ import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Control.APIValidator import APIValidator
+from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
 
@@ -49,6 +50,21 @@ def heldLimitText(master, vehicle):
     if applied in (-1, 0, None):
         return "%s%% (restored)" % outside
     return "%s%% (holding %s%%)" % (outside, applied)
+
+
+def vehicleLocalMgmt(master, op, vin):
+    """BLE actions from the vehicle page; returns the redirect location.
+
+    "scan" only queues a request: the scan runs on the background thread."""
+    vin = str(vin or "").strip()
+    if not isWellFormedVIN(vin):
+        return "/vehicles"
+    ble = master.getModuleByName("TeslaBLE")
+    if ble and op == "pair":
+        ble.peerWithVehicle(vin)
+    elif ble and op == "scan":
+        ble.requestRangeScan(vin)
+    return "/vehicleDetail/" + vin
 
 
 def addVehicleByVIN(master, vin):
@@ -260,6 +276,10 @@ def CreateHTTPHandlerClass(master):
                 heldLimitText=lambda v: heldLimitText(master, v)
             )
             self.templateEnv.globals.update(registry=master.vehicleRegistry)
+            bleModule = master.getModuleByName("TeslaBLE")
+            self.templateEnv.globals.update(
+                bleStatus=lambda vin: bleModule.bleStatus(vin) if bleModule else None
+            )
             self.templateEnv.globals.update(
                 locatedVehicles=lambda: [
                     v
@@ -1565,13 +1585,13 @@ def CreateHTTPHandlerClass(master):
                 return
 
             if self.url.path == "/vehicle/localMgmt":
-                op = self.getFieldValue("operation")
-                vin = self.getFieldValue("vin")
-
-                self.master.getModuleByName("TeslaBLE").peerWithVehicle(vin)
-
+                location = vehicleLocalMgmt(
+                    self.master,
+                    self.getFieldValue("operation"),
+                    self.getFieldValue("vin"),
+                )
                 self.send_response(302)
-                self.send_header("Location", "/vehicleDetail/" + vin)
+                self.send_header("Location", location)
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
                 return
