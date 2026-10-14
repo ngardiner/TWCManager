@@ -15,6 +15,7 @@ import threading
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource
+from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("TeslaBLE", "Vehicle")
@@ -99,10 +100,18 @@ class TeslaBLE:
 
     # tesla-control's ErrKeyNotPaired (vehicle-command pkg/protocol/error.go)
     KEY_REFUSED_TEXT = "your public key has not been paired with the vehicle"
+    # After a pairing request reaches the car, the owner has this long to
+    # tap the key card; a key refusal inside it is expected, not a refusal.
+    PAIRING_WINDOW = 600
 
     def __init__(self, master):
         self.registry = VehicleRegistry.forMaster(master)
         self._bleLock = threading.Lock()
+        # Last pairing attempt per VIN: transient, for the vehicle page.
+        self._pairingAttempts = {}
+        # Set by _sendCommand_internal on a key refusal so the retry loop
+        # (same thread) stops: a refused key is refused again on retry.
+        self._keyRefusal = threading.local()
         self.master = master
         try:
             self.config = self.master.config
@@ -421,7 +430,11 @@ class TeslaBLE:
         Pair with a vehicle using BLE key exchange.
         Returns True on success, False on failure.
         """
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
+            logger.error("BLE pairing refused: not a well-formed VIN")
+            return False
         success = False
+        reason = "Pairing request failed"
         try:
             logger.info(f"Initiating BLE pairing with vehicle {vin}")
 
@@ -433,11 +446,13 @@ class TeslaBLE:
                 logger.error(
                     "tesla-control binary not available or not executable for pairing"
                 )
+                reason = "tesla-control is not available"
                 return False
 
             # Send public key before pairing
             if not self.sendPublicKey(vin):
                 logger.error(f"Failed to send public key for pairing with {vin}")
+                reason = "Could not prepare the public key"
                 return False
 
             command_string = [
@@ -464,6 +479,7 @@ class TeslaBLE:
 
             if stdout is None and stderr is None:
                 logger.error(f"BLE pairing with {vin} timed out or failed")
+                reason = "Pairing request timed out; is the car in range?"
                 return False
 
             # Check both stdout and stderr for pairing result
@@ -475,6 +491,7 @@ class TeslaBLE:
             logger.info(f"BLE pairing with {vin}: {'success' if success else 'failed'}")
             if not success:
                 logger.debug(f"Pairing output: {output[:200]}...")
+                reason = "The car did not accept the pairing request"
 
             return success
 
@@ -485,11 +502,7 @@ class TeslaBLE:
         finally:
             # Always ensure pipe is closed after pairing attempt
             self._ensure_pipe_closed()
-            # The request reached the car; it is not proven until the car
-            # accepts a command signed with the key.
-            self._safeNote(
-                self._setBleStatus, vin, "pairing" if success else "pairing_failed"
-            )
+            self._safeNote(self._notePairingResult, vin, success, reason)
 
     def sendCommand(self, vin, command, args=None):
         """
@@ -507,6 +520,7 @@ class TeslaBLE:
         Internal sendCommand implementation (called by retry wrapper).
         Returns command output string or None on failure.
         """
+        self._keyRefusal.refused = False
         try:
             # Validate inputs
             if not vin or not command:
@@ -586,7 +600,9 @@ class TeslaBLE:
                     f"BLE command '{command}' failed with return code {return_code}: {output}"
                 )
                 logger.warning(f"BLE command full error output: {output}")
-                self._safeNote(self._noteBleRefusal, vin, output)
+                if self._isKeyRefusal(output):
+                    self._keyRefusal.refused = True
+                    self._safeNote(self._noteBleRefusal, vin, output)
                 return None
 
             logger.debug(
@@ -1146,7 +1162,13 @@ class TeslaBLE:
 
         for attempt in range(self.maxRetries + 1):
             try:
+                self._keyRefusal.refused = False
                 result = func(vin, *args, **kwargs)
+
+                if result is None and getattr(self._keyRefusal, "refused", False):
+                    # Not transient: the car refuses this key until re-paired.
+                    logger.debug(f"BLE key refused by {vin}; not retrying")
+                    return None
 
                 if result is not None:
                     # Success
@@ -1533,9 +1555,21 @@ class TeslaBLE:
                 return {"status": ble["status"], "since": ble.get("since")}
         return {"status": "unpaired", "since": None}
 
-    def _setBleStatus(self, vin, status):
-        if not isinstance(vin, str) or not vin:
+    def blePairingAttempt(self, vin):
+        """The last pairing attempt this run: {"ok", "at", "message"}, or None.
+
+        Transient: a failed re-pair of a paired car is reported here, not as
+        its status."""
+        attempt = self._pairingAttempts.get(vin)
+        return dict(attempt) if attempt else None
+
+    def _isKeyRefusal(self, output):
+        return bool(output) and self.KEY_REFUSED_TEXT in output.lower()
+
+    def _setBleStatus(self, vin, status, pairingSent=None):
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
             return
+        now = time.time()
         with self.master.settingsLock:
             vehicles = self.master.settings.setdefault("Vehicles", {})
             rec = vehicles.get(vin)
@@ -1545,15 +1579,26 @@ class TeslaBLE:
                     "startkWh": 0,
                     "totalkWh": 0,
                 }
-            rec["ble"] = {"status": status, "since": time.time()}
+            old = rec.get("ble") if isinstance(rec.get("ble"), dict) else {}
+            ble = {"status": status, "since": now}
+            if old.get("status") == status and old.get("since"):
+                ble["since"] = old["since"]
+            sent = pairingSent if pairingSent is not None else old.get("pairingSent")
+            if sent is not None:
+                ble["pairingSent"] = sent
+            rec["ble"] = ble
         self.master.queue_background_task({"cmd": "saveSettings"})
 
-        if status == "paired":
+        if status in ("paired", "pairing"):
             try:
                 v = self.registry.getOrCreate(vin, "TeslaBLE")
             except ValueError:
                 return
-            v.claim("TeslaBLE", True, "paired")
+            if status == "paired":
+                v.claim("TeslaBLE", True, "paired")
+            else:
+                # Unproven: BLE is still tried, the car is not managed yet.
+                v.claim("TeslaBLE", False, "unproven")
         else:
             v = self.registry.get(vin)
             if v is not None:
@@ -1564,9 +1609,40 @@ class TeslaBLE:
             logger.info(f"BLE key for {vin} accepted")
             self._setBleStatus(vin, "paired")
 
+    def _notePairingResult(self, vin, ok, reason):
+        now = time.time()
+        self._pairingAttempts[vin] = {
+            "ok": bool(ok),
+            "at": now,
+            "message": (
+                "Pairing request sent; tap your key card on the car" if ok else reason
+            ),
+        }
+        paired = self.bleStatus(vin)["status"] == "paired"
+        if ok:
+            # A paired car stays paired; the window still opens, so a
+            # refusal before the owner taps the card is not a refusal.
+            self._setBleStatus(vin, "paired" if paired else "pairing", now)
+        elif not paired:
+            # Only a key refusal changes a paired car's status.
+            self._setBleStatus(vin, "pairing_failed")
+
+    def _inPairingWindow(self, vin):
+        with self.master.settingsLock:
+            rec = (self.master.settings.get("Vehicles") or {}).get(vin)
+            ble = rec.get("ble") if isinstance(rec, dict) else None
+            sent = ble.get("pairingSent") if isinstance(ble, dict) else None
+        return (
+            isinstance(sent, (int, float)) and time.time() - sent < self.PAIRING_WINDOW
+        )
+
     def _noteBleRefusal(self, vin, output):
-        if not output or self.KEY_REFUSED_TEXT not in output.lower():
+        if not self._isKeyRefusal(output):
             return False
+        if self._inPairingWindow(vin):
+            # The owner has not tapped the key card yet.
+            logger.debug(f"BLE key for {vin} not yet accepted; pairing in progress")
+            return True
         # Retries see the same refusal: record it once.
         if self.bleStatus(vin)["status"] != "refused":
             logger.info(f"BLE key for {vin} refused; re-pair from the vehicle page")
