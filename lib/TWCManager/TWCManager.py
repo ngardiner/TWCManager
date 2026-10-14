@@ -587,8 +587,9 @@ def update_sunrise_sunset():
     latlong = master.getHomeLatLon()
     if latlong[0] == 10000:
         # We don't know where home is; keep defaults
-        master.settings["sunrise"] = 6
-        master.settings["sunset"] = 20
+        with master.settingsLock:
+            master.settings["sunrise"] = 6
+            master.settings["sunset"] = 20
     else:
         sunrise = 6
         sunset = 20
@@ -627,8 +628,9 @@ def update_sunrise_sunset():
             except Exception as e:
                 logger.debug(f"Error parsing sunset time: {e}")
 
-        master.settings["sunrise"] = sunrise
-        master.settings["sunset"] = sunset
+        with master.settingsLock:
+            master.settings["sunrise"] = sunrise
+            master.settings["sunset"] = sunset
 
     tomorrow = datetime.datetime.combine(
         datetime.datetime.today(), datetime.time(hour=1)

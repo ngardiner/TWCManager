@@ -106,6 +106,10 @@ class TWCMaster:
         self.vehicleCommandQueue = VehicleCommandQueue(
             self._resolveVehicleCommandModule
         )
+        # Guards mutation of self.settings from non-serial threads; saves
+        # serialise under it and write the file outside it. Lock order:
+        # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
+        self.settingsLock = threading.RLock()
         self.settings = {
             "chargeNowAmps": 0,
             "chargeStopMode": "1",
@@ -1026,29 +1030,32 @@ class TWCMaster:
 
         if not os.path.exists(fileName):
             # Initialize with class defaults if file doesn't exist
-            self.settings = {
-                "chargeNowAmps": 0,
-                "chargeStopMode": "1",
-                "chargeNowTimeEnd": 0,
-                "homeLat": 10000,
-                "homeLon": 10000,
-                "hourResumeTrackGreenEnergy": -1,
-                "kWhDelivered": 119,
-                "nonScheduledAmpsMax": 0,
-                "respondToSlaves": 1,
-                "scheduledAmpsDaysBitmap": 0x7F,
-                "scheduledAmpsEndHour": -1,
-                "scheduledAmpsMax": 0,
-                "scheduledAmpsStartHour": -1,
-                "sendServerTime": 0,
-            }
+            with self.settingsLock:
+                self.settings = {
+                    "chargeNowAmps": 0,
+                    "chargeStopMode": "1",
+                    "chargeNowTimeEnd": 0,
+                    "homeLat": 10000,
+                    "homeLon": 10000,
+                    "hourResumeTrackGreenEnergy": -1,
+                    "kWhDelivered": 119,
+                    "nonScheduledAmpsMax": 0,
+                    "respondToSlaves": 1,
+                    "scheduledAmpsDaysBitmap": 0x7F,
+                    "scheduledAmpsEndHour": -1,
+                    "scheduledAmpsMax": 0,
+                    "scheduledAmpsStartHour": -1,
+                    "sendServerTime": 0,
+                }
             return
 
-        # Try to load the main settings file
+        # Read and parse the file(s) into a local with no lock held; the
+        # result is assigned under settingsLock below.
+        loaded = None
         loadSuccess = False
         with open(fileName, "r") as inconfig:
             try:
-                self.settings = json.load(inconfig)
+                loaded = json.load(inconfig)
                 loadSuccess = True
             except Exception as e:
                 logger.info(
@@ -1063,7 +1070,7 @@ class TWCMaster:
             )
             try:
                 with open(backupFileName, "r") as inconfig:
-                    self.settings = json.load(inconfig)
+                    loaded = json.load(inconfig)
                     loadSuccess = True
                 logger.info("Successfully restored settings from backup file")
                 # Restore the backup to the main file
@@ -1108,9 +1115,12 @@ class TWCMaster:
             "scheduledAmpsStartHour": -1,
             "sendServerTime": 0,
         }
-        for key, value in defaults.items():
-            if key not in self.settings:
-                self.settings[key] = value
+        with self.settingsLock:
+            if loaded is not None:
+                self.settings = loaded
+            for key, value in defaults.items():
+                if key not in self.settings:
+                    self.settings[key] = value
 
         # Step 2 - Send settings to other modules
         # Migration and restore run whether or not token sync is on. The
@@ -1149,25 +1159,26 @@ class TWCMaster:
             mod["ref"].updateSettings()
 
         # If particular details are missing from the Settings dict, create them
-        if not self.settings.get("VehicleGroups", None):
-            self.settings["VehicleGroups"] = {}
-        if not self.settings["VehicleGroups"].get("Allow Charging", None):
-            self.settings["VehicleGroups"]["Allow Charging"] = {
-                "Description": "Built-in Group - Vehicles in this Group can charge on managed TWCs",
-                "Built-in": 1,
-                "Members": [],
-            }
-        if not self.settings["VehicleGroups"].get("Deny Charging", None):
-            self.settings["VehicleGroups"]["Deny Charging"] = {
-                "Description": "Built-in Group - Vehicles in this Group cannot charge on managed TWCs",
-                "Built-in": 1,
-                "Members": [],
-            }
-        # Fill in old defaults as bridge
-        if not self.settings.get("sunrise", None):
-            self.settings["sunrise"] = 6
-        if not self.settings.get("sunset", None):
-            self.settings["sunset"] = 20
+        with self.settingsLock:
+            if not self.settings.get("VehicleGroups", None):
+                self.settings["VehicleGroups"] = {}
+            if not self.settings["VehicleGroups"].get("Allow Charging", None):
+                self.settings["VehicleGroups"]["Allow Charging"] = {
+                    "Description": "Built-in Group - Vehicles in this Group can charge on managed TWCs",
+                    "Built-in": 1,
+                    "Members": [],
+                }
+            if not self.settings["VehicleGroups"].get("Deny Charging", None):
+                self.settings["VehicleGroups"]["Deny Charging"] = {
+                    "Description": "Built-in Group - Vehicles in this Group cannot charge on managed TWCs",
+                    "Built-in": 1,
+                    "Members": [],
+                }
+            # Fill in old defaults as bridge
+            if not self.settings.get("sunrise", None):
+                self.settings["sunrise"] = 6
+            if not self.settings.get("sunset", None):
+                self.settings["sunset"] = 20
 
     def master_id_conflict(self):
         # We're playing fake slave, and we got a message from a master with our TWCID.
@@ -1486,15 +1497,24 @@ class TWCMaster:
             logger.warning("Tried to released module %s that was not loaded", module)
 
     def removeNormalChargeLimit(self, ID):
-        if "chargeLimits" in self.settings and str(ID) in self.settings["chargeLimits"]:
-            del self.settings["chargeLimits"][str(ID)]
+        with self.settingsLock:
+            if (
+                "chargeLimits" in self.settings
+                and str(ID) in self.settings["chargeLimits"]
+            ):
+                del self.settings["chargeLimits"][str(ID)]
+                changed = True
+            else:
+                changed = False
+        if changed:
             self.queue_background_task({"cmd": "saveSettings"})
 
     def resetChargeNowAmps(self):
         # Sets chargeNowAmps back to zero, so we follow the green energy
         # tracking again
-        self.settings["chargeNowAmps"] = 0
-        self.settings["chargeNowTimeEnd"] = 0
+        with self.settingsLock:
+            self.settings["chargeNowAmps"] = 0
+            self.settings["chargeNowTimeEnd"] = 0
         self.queue_background_task({"cmd": "saveSettings"})
 
     def retryVINQuery(self):
@@ -1521,10 +1541,11 @@ class TWCMaster:
                 slaveTWC.lastVINQuery = 0
 
     def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
-        if not "chargeLimits" in self.settings:
-            self.settings["chargeLimits"] = dict()
+        with self.settingsLock:
+            if not "chargeLimits" in self.settings:
+                self.settings["chargeLimits"] = dict()
 
-        self.settings["chargeLimits"][str(ID)] = (outsideLimit, lastApplied)
+            self.settings["chargeLimits"][str(ID)] = (outsideLimit, lastApplied)
         self.queue_background_task({"cmd": "saveSettings"})
 
     def saveSettings(self):
@@ -1536,21 +1557,30 @@ class TWCMaster:
 
         # Step 1 - Merge any config from other modules
         carapi = self.getModuleByName("TeslaAPI")
-        self.settings["carApiBearerToken"] = carapi.fleetSlot.accessToken
-        self.settings["carApiRefreshToken"] = carapi.fleetSlot.refreshToken
-        self.settings["carApiTokenExpireTime"] = carapi.fleetSlot.expireTime
-        self.settings["ownerApiBearerToken"] = carapi.ownerSlot.accessToken
-        self.settings["ownerApiRefreshToken"] = carapi.ownerSlot.refreshToken
-        self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
-        self.settings["carApiTokenSource"] = carapi.fleetSlot.source
-        self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
+        with self.settingsLock:
+            self.settings["carApiBearerToken"] = carapi.fleetSlot.accessToken
+            self.settings["carApiRefreshToken"] = carapi.fleetSlot.refreshToken
+            self.settings["carApiTokenExpireTime"] = carapi.fleetSlot.expireTime
+            self.settings["ownerApiBearerToken"] = carapi.ownerSlot.accessToken
+            self.settings["ownerApiRefreshToken"] = carapi.ownerSlot.refreshToken
+            self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
+            self.settings["carApiTokenSource"] = carapi.fleetSlot.source
+            self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
+            try:
+                payload = json.dumps(self.settings)
+            except TypeError as e:
+                logger.info("Exception raised while attempting to save settings file:")
+                logger.info(str(e))
+                self.lastSaveFailed = 1
+                return
 
-        # Step 2 - Write the settings dict to a JSON file atomically
+        # Step 2 - Write the serialised settings to a JSON file atomically,
+        # outside the lock so file I/O never blocks settings writers
         # Use temp file + rename to ensure atomic write and prevent corruption
         try:
             # Write to temp file first
             with open(tempFileName, "w") as outconfig:
-                json.dump(self.settings, outconfig)
+                outconfig.write(payload)
                 outconfig.flush()
                 os.fsync(outconfig.fileno())
 
@@ -1607,7 +1637,8 @@ class TWCMaster:
             key: The setting key to set
             value: The value to set
         """
-        self.settings[key] = value
+        with self.settingsLock:
+            self.settings[key] = value
 
     def send_master_linkready1(self):
         logger.log(logging.INFO8, "Send master linkready1")
@@ -1746,10 +1777,12 @@ class TWCMaster:
         elif amps < 0:
             logger.info("setChargeNowAmps failed as specified amps is less than 0")
         else:
-            self.settings["chargeNowAmps"] = amps
+            with self.settingsLock:
+                self.settings["chargeNowAmps"] = amps
 
     def setChargeNowTimeEnd(self, timeadd):
-        self.settings["chargeNowTimeEnd"] = time.time() + timeadd
+        with self.settingsLock:
+            self.settings["chargeNowTimeEnd"] = time.time() + timeadd
 
     def setConsumption(self, source, value):
         # Accepts consumption values from one or more data sources
@@ -1769,17 +1802,21 @@ class TWCMaster:
         self.generationValues[source] = value
 
     def setHomeLat(self, lat):
-        self.settings["homeLat"] = lat
+        with self.settingsLock:
+            self.settings["homeLat"] = lat
 
     def setHomeLon(self, lon):
-        self.settings["homeLon"] = lon
+        with self.settingsLock:
+            self.settings["homeLon"] = lon
 
     def setHourResumeTrackGreenEnergy(self, hour):
-        self.settings["hourResumeTrackGreenEnergy"] = hour
+        with self.settingsLock:
+            self.settings["hourResumeTrackGreenEnergy"] = hour
 
     def setkWhDelivered(self, kWh):
-        self.settings["kWhDelivered"] = kWh
-        return True
+        with self.settingsLock:
+            self.settings["kWhDelivered"] = kWh
+            return True
 
     def setMasterTWCID(self, twcid):
         # This is called when TWCManager is in Slave mode, to track the
@@ -1828,29 +1865,37 @@ class TWCMaster:
         self.queue_background_task({"cmd": "updateStatus"})
 
     def setNonScheduledAmpsMax(self, amps):
-        self.settings["nonScheduledAmpsMax"] = amps
+        with self.settingsLock:
+            self.settings["nonScheduledAmpsMax"] = amps
 
     def setSendServerTime(self, val):
-        self.settings["sendServerTime"] = val
+        with self.settingsLock:
+            self.settings["sendServerTime"] = val
 
     def setScheduledAmpsDaysBitmap(self, bitmap):
-        self.settings["scheduledAmpsDaysBitmap"] = bitmap
+        with self.settingsLock:
+            self.settings["scheduledAmpsDaysBitmap"] = bitmap
 
     def setScheduledAmpsBatterySize(self, batterySize):
         if batterySize > 40:
-            self.settings["scheduledAmpsBatterySize"] = batterySize
+            with self.settingsLock:
+                self.settings["scheduledAmpsBatterySize"] = batterySize
 
     def setScheduledAmpsMax(self, amps):
-        self.settings["scheduledAmpsMax"] = amps
+        with self.settingsLock:
+            self.settings["scheduledAmpsMax"] = amps
 
     def setScheduledAmpsStartHour(self, hour):
-        self.settings["scheduledAmpsStartHour"] = hour
+        with self.settingsLock:
+            self.settings["scheduledAmpsStartHour"] = hour
 
     def setScheduledAmpsEndHour(self, hour):
-        self.settings["scheduledAmpsEndHour"] = hour
+        with self.settingsLock:
+            self.settings["scheduledAmpsEndHour"] = hour
 
     def setScheduledAmpsFlexStart(self, enabled):
-        self.settings["scheduledAmpsFlexStart"] = enabled
+        with self.settingsLock:
+            self.settings["scheduledAmpsFlexStart"] = enabled
 
     def setSpikeAmps(self, amps):
         self.spikeAmpsToCancel6ALimit = amps
@@ -1877,22 +1922,23 @@ class TWCMaster:
         if avgCurrent > 0:
             periodTimestamp = snaptime - timedelta(minutes=5)
 
-            if not "history" in self.settings:
-                self.settings["history"] = []
+            with self.settingsLock:
+                if not "history" in self.settings:
+                    self.settings["history"] = []
 
-            self.settings["history"].append(
-                (
-                    periodTimestamp.isoformat(timespec="seconds"),
-                    self.convertAmpsToWatts(avgCurrent)
-                    * self.getRealPowerFactor(avgCurrent),
+                self.settings["history"].append(
+                    (
+                        periodTimestamp.isoformat(timespec="seconds"),
+                        self.convertAmpsToWatts(avgCurrent)
+                        * self.getRealPowerFactor(avgCurrent),
+                    )
                 )
-            )
 
-            self.settings["history"] = [
-                e
-                for e in self.settings["history"]
-                if datetime.fromisoformat(e[0]) >= (now - timedelta(days=2))
-            ]
+                self.settings["history"] = [
+                    e
+                    for e in self.settings["history"]
+                    if datetime.fromisoformat(e[0]) >= (now - timedelta(days=2))
+                ]
             self.queue_background_task({"cmd": "saveSettings"})
 
     def startCarsCharging(self, vin=None):

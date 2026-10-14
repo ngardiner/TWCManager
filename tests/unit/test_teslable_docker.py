@@ -9,6 +9,7 @@ group, so every command needs a group of its own, never TWCManager's.
 
 import base64
 import os
+import threading
 from unittest.mock import Mock, patch
 
 import pytest
@@ -28,6 +29,7 @@ CALL_PATHS = {
 @pytest.fixture
 def ble(tmp_path):
     master = Mock()
+    master.settingsLock = threading.RLock()
     master.config = {"config": {"teslaControlPath": BINARY}}
     master.settings = {
         "Vehicles": {
