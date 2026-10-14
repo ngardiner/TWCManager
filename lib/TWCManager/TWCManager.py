@@ -384,6 +384,8 @@ def background_tasks_thread(master):
                         requests.post(task["url"], json=body)
                 elif task["cmd"] == "saveSettings":
                     master.saveSettings()
+                elif task["cmd"] == "expireVehicles":
+                    master.expireVehicles()
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
 
@@ -981,6 +983,12 @@ while True:
         # response, and if we haven't queried more than 5 times already for this
         # slave TWC, repeat the query
         master.retryVINQuery()
+
+        # Hourly, forget vehicles no one has claimed or seen for the window.
+        # Housekeeping, so not gated on fakeMaster.
+        if (time.time() - master.lastVehicleExpiry) > 3600:
+            master.lastVehicleExpiry = time.time()
+            master.queue_background_task({"cmd": "expireVehicles"})
 
         # Periodically refresh the Tesla Fleet API token even if no vehicle
         # command has run recently, so read-only features like Storm Watch
