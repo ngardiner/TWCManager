@@ -26,6 +26,13 @@
         <td>{{ ageText(row.lastSeenAge) }} via {{ row.lastSeenSource }}</td>
       </tr>
     </table>
+    {% if canForget(vin) %}
+    <form method=POST action="/vehicle/forget">
+      <input type=hidden name="vin" value="{{ vin }}" />
+      <input type=submit value="Forget this vehicle">
+      <small>Added by VIN and not seen by any provider: removes it and its BLE key.</small>
+    </form>
+    {% endif %}
     <p>&nbsp;</p>
     {% endif %}
     {% if vin != "00000000000000000" %}

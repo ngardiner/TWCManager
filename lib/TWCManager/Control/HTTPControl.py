@@ -76,13 +76,69 @@ def addVehicleByVIN(master, vin):
     with master.settingsLock:
         known = master.settings.setdefault("Vehicles", {})
         if not any(k.upper() == vin for k in known):
-            known[vin] = {"chargeSessions": 0, "startkWh": 0, "totalkWh": 0}
+            # addedByVIN: Forget may remove this record (and its key).
+            known[vin] = {
+                "chargeSessions": 0,
+                "startkWh": 0,
+                "totalkWh": 0,
+                "addedByVIN": True,
+            }
     # Outside the lock: key generation may do I/O
     ble = master.getModuleByName("TeslaBLE")
     if ble:
         ble.scanForVehicles()
     master.queue_background_task({"cmd": "saveSettings"})
     return "/vehicleDetail/" + vin
+
+
+def _vehicleRecordKey(vehicles, vin):
+    # settings["Vehicles"] keys may be in any case (as _settingsKey).
+    for key in list(vehicles):
+        if isinstance(key, str) and key.upper() == vin:
+            return key
+    return None
+
+
+def canForgetVehicle(master, vin):
+    """Phase 1's narrow Forget: a car the user added by VIN that no provider
+    has attached to and whose BLE key was never proven (a mistyped VIN).
+    Forgetting anything else is Phase 6: a provider would bring it back."""
+    if not isinstance(vin, str) or not isWellFormedVIN(vin):
+        return False
+    vehicle = master.vehicleRegistry.get(vin)
+    if vehicle is None or not vehicle.userAsserted or vehicle.attachmentNames():
+        return False
+    with master.settingsLock:
+        vehicles = master.settings.get("Vehicles") or {}
+        rec = vehicles.get(_vehicleRecordKey(vehicles, vehicle.vin))
+        ble = rec.get("ble") if isinstance(rec, dict) else None
+        return not (isinstance(ble, dict) and ble.get("status") == "paired")
+
+
+def forgetVehicle(master, vin):
+    """The Forget action; returns the redirect location."""
+    vin = str(vin or "").strip().upper()
+    if not isWellFormedVIN(vin):
+        return "/vehicles"
+    if not canForgetVehicle(master, vin):
+        return "/vehicleDetail/" + vin
+    master.vehicleRegistry.forget(vin)
+    with master.settingsLock:
+        vehicles = master.settings.get("Vehicles") or {}
+        key = _vehicleRecordKey(vehicles, vin)
+        rec = vehicles.get(key)
+        # Only a record Add-by-VIN made, and only while it holds no charge
+        # history: history is not ours to drop. The record holds the
+        # (never paired) BLE key, so that goes with it.
+        if (
+            isinstance(rec, dict)
+            and rec.get("addedByVIN")
+            and not rec.get("chargeSessions")
+            and not rec.get("totalkWh")
+        ):
+            del vehicles[key]
+    master.queue_background_task({"cmd": "saveSettings"})
+    return "/vehicles"
 
 
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
@@ -276,6 +332,9 @@ def CreateHTTPHandlerClass(master):
                 heldLimitText=lambda v: heldLimitText(master, v)
             )
             self.templateEnv.globals.update(registry=master.vehicleRegistry)
+            self.templateEnv.globals.update(
+                canForget=lambda vin: canForgetVehicle(master, vin)
+            )
             bleModule = master.getModuleByName("TeslaBLE")
             self.templateEnv.globals.update(
                 bleStatus=lambda vin: bleModule.bleStatus(vin) if bleModule else None
@@ -1590,6 +1649,14 @@ def CreateHTTPHandlerClass(master):
                     self.getFieldValue("operation"),
                     self.getFieldValue("vin"),
                 )
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            if self.url.path == "/vehicle/forget":
+                location = forgetVehicle(self.master, self.getFieldValue("vin"))
                 self.send_response(302)
                 self.send_header("Location", location)
                 self.end_headers()
