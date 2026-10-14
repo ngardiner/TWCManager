@@ -72,6 +72,7 @@ def test_attachments_and_summary():
         "value": 42,
         "source": "TeslaBLE",
         "age": 10.0,
+        "changedAge": 10.0,
     }
     assert s["lastSeenAge"] == 10.0 and s["point"] is None
     assert Vehicle("anon:8244", None, registry=None).summary()["point"] == "8244"
@@ -108,7 +109,58 @@ def test_twc_vin_point_and_read_stub():
 
 
 def test_rejected_older_stamp_keeps_last_seen_pair_consistent():
-    v = Vehicle(VIN, VIN, registry=None, clock=Clock())
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=None, clock=c)
+    c.t = 3000.0
     v.observe("chargeLimit", 80, "TeslaMateVehicle", at=2000.0)
     v.observe("chargeLimit", 70, "TeslaAPI", at=1500.0)
     assert (v.lastSeen, v.lastSeenSource) == (2000.0, "TeslaMateVehicle")
+
+
+def test_vin_rejects_non_ascii():
+    assert not isWellFormedVIN("5YJ3E1EA1KF00000ß")
+    assert not isWellFormedVIN("5YJ3E1EA1KF00000ſ")
+
+
+def test_future_stamp_clamped_to_clock():
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=None, clock=c)
+    v.observe("chargeLimit", 80, "TeslaMateVehicle", at=5000.0)
+    assert v.lastSeen == 1000.0
+
+
+def test_raising_claim_counts_as_false():
+    def boom():
+        raise RuntimeError("x")
+
+    v = Vehicle(VIN, VIN, registry=None)
+    v.claim("TeslaAPI", boom)
+    assert v.tier == "observed"
+    assert v.summary()["claims"][0]["commands"] is False
+
+
+def test_summary_tier_from_single_claim_evaluation():
+    calls = []
+
+    def once():
+        calls.append(1)
+        return len(calls) == 1
+
+    v = Vehicle(VIN, VIN, registry=None)
+    v.claim("TeslaAPI", once)
+    s = v.summary()
+    assert len(calls) == 1
+    assert s["tier"] == "managed" and s["claims"][0]["commands"] is True
+
+
+def test_summary_field_age_is_liveness_aware():
+    class Reg:
+        def sourceLiveAt(self, source, vehicle):
+            return 1500.0
+
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=Reg(), clock=c)
+    v.observe("chargeLimit", 80, "TeslaMateVehicle", at=1000.0)
+    c.t = 1600.0
+    f = v.summary()["fields"]["chargeLimit"]
+    assert f["age"] == 100.0 and f["changedAge"] == 600.0
