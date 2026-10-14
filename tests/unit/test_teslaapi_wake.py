@@ -321,3 +321,15 @@ def test_our_get_newer_than_telemetry_wins(api, clock, car_state, requests_mock)
     clock.advance(120)
     assert vehicle.is_awake() is True
     assert _gets(requests_mock) == gets + 1
+
+
+def test_stale_telemetry_asleep_falls_through_to_get(
+    api, clock, car_state, requests_mock
+):
+    # An hour-old 'asleep' with no GET of our own yet: telemetry is stale,
+    # so check the car (free state GET) instead of trusting it.
+    vehicle = api.getCarApiVehicles()[0]
+    _teslamate(vehicle, "asleep", clock.now - 3600)
+    car_state.value = "online"
+    assert vehicle.is_awake() is True
+    assert _gets(requests_mock) == 1
