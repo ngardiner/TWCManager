@@ -25,6 +25,7 @@ def _number(value: Any) -> Optional[float]:
 
 class VehicleRegistry:
     DEFAULT_FORGET_DAYS = 30
+    CONFIRM_ATTEMPTS = 3
 
     def __init__(self, config: dict, clock: Callable[[], float] = time.time):
         vehicleConfig = (config or {}).get("vehicle", {})
@@ -45,6 +46,8 @@ class VehicleRegistry:
         self._vehicles: Dict[str, Vehicle] = {}
         self._sources: List[ReadSource] = []
         self._liveness: Dict[str, Callable[[Vehicle], Optional[float]]] = {}
+        # Per point: {"candidate": vin, "attempts": int, "rejected": bool}.
+        self._pending: Dict[str, dict] = {}
 
     @classmethod
     def forMaster(cls, master) -> "VehicleRegistry":
@@ -140,6 +143,100 @@ class VehicleRegistry:
                 int(self.forgetAfter // 86400),
             )
         return gone
+
+    # Plug sessions and TWC VIN confirmation. Called from the serial thread:
+    # dict work under the leaf lock only, logging and vehicle writes outside.
+
+    def beginPlugSession(self, pointId: str) -> Vehicle:
+        key = ANON_PREFIX + pointId
+        with self._lock:
+            v = self._vehicles.get(key)
+            if v is None:
+                v = Vehicle(key, None, self, clock=self._clock)
+                self._vehicles[key] = v
+            return v
+
+    def endPlugSession(self, pointId: str) -> None:
+        key = ANON_PREFIX + pointId
+        with self._lock:
+            v = self._vehicles.get(key)
+            if v is not None and v.isAnonymous:
+                del self._vehicles[key]
+            self._pending.pop(pointId, None)
+        for v in self._attributedTo(pointId):
+            v.observe("twcVin", None, "TWC", seen=False)
+
+    def observeTwcVin(self, pointId: str, vin: str) -> str:
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
+            return "rejected"
+        vin = vin.upper()
+        rejectedNow = False
+        with self._lock:
+            if vin in self._vehicles:
+                status = "confirmed"
+            else:
+                state = self._pending.setdefault(
+                    pointId, {"candidate": None, "attempts": 0, "rejected": False}
+                )
+                if state["rejected"]:
+                    return "rejected"
+                state["attempts"] += 1
+                if state["candidate"] == vin:
+                    status = "confirmed"
+                elif state["attempts"] >= self.CONFIRM_ATTEMPTS:
+                    state["rejected"] = rejectedNow = True
+                    status = "rejected"
+                else:
+                    state["candidate"] = vin
+                    status = "pending"
+            if status == "confirmed":
+                self._pending.pop(pointId, None)
+        if rejectedNow:
+            logger.info("TWC %s VIN %s not confirmed; ignoring", pointId, vin)
+        if status != "confirmed":
+            return status
+        v = self.getOrCreate(vin, "TWC")
+        key = ANON_PREFIX + pointId
+        with self._lock:
+            anon = self._vehicles.pop(key, None)
+        if anon is not None:
+            # Older stamps never displace newer ones, so the car's own
+            # newer values survive the merge.
+            for field, obs in anon._fields.snapshot().items():
+                v.observe(field, obs.value, obs.source, at=obs.at)
+        v.observe("twcVin", pointId, "TWC")
+        return "confirmed"
+
+    def isPending(self, pointId: str) -> bool:
+        # True while the point has an unconfirmed, not-yet-rejected candidate.
+        with self._lock:
+            state = self._pending.get(pointId)
+            return (
+                state is not None
+                and state["candidate"] is not None
+                and not state["rejected"]
+            )
+
+    def _attributedTo(self, pointId: str) -> List[Vehicle]:
+        found = []
+        for v in self.vehicles():
+            if v.isAnonymous:
+                continue
+            obs = v.latest("twcVin")
+            if obs is not None and obs.value == pointId:
+                found.append((obs.at, v))
+        found.sort(key=lambda p: p[0], reverse=True)
+        return [v for _, v in found]
+
+    def pointFor(self, vin: str) -> Optional[str]:
+        v = self.get(vin)
+        return None if v is None else v.value("twcVin")
+
+    def vehicleAt(self, pointId: str) -> Optional[Vehicle]:
+        attributed = self._attributedTo(pointId)
+        if attributed:
+            return attributed[0]
+        return self.get(ANON_PREFIX + pointId)
 
     # Read sources and liveness
 

@@ -14,8 +14,10 @@ import math
 import random
 import requests
 import bisect
+import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
+from TWCManager.Vehicle.Registry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -31,6 +33,9 @@ class TWCMaster:
     backgroundTasksCmds = {}
     backgroundTasksLock = threading.Lock()
     backgroundTasksDelayed = []
+    # Tie-breaker for delayed tasks due at the same instant: entries never
+    # fall through to comparing task dicts.
+    _delaySeq = itertools.count()
     config = None
     consumptionValues = {}
     consumptionAmpsValues = {}
@@ -109,7 +114,10 @@ class TWCMaster:
         # Guards mutation of self.settings from non-serial threads; saves
         # serialise under it and write the file outside it. Lock order:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
+        # The serial thread takes it too (recordVehicleVIN), so nothing
+        # under it may do I/O, on any thread.
         self.settingsLock = threading.RLock()
+        self.vehicleRegistry = VehicleRegistry(config)
         self.settings = {
             "chargeNowAmps": 0,
             "chargeStopMode": "1",
@@ -322,19 +330,25 @@ class TWCMaster:
     def countSlaveTWC(self):
         return int(len(self.slaveTWCRoundRobin))
 
+    @staticmethod
+    def _taskKey(task):
+        # Tasks dedupe per cmd, except VIN queries, which dedupe per TWC so
+        # one TWC's query never replaces another's.
+        if task["cmd"] == "getVehicleVIN":
+            return ("getVehicleVIN", bytes(task.get("slaveTWC") or b""))
+        return task["cmd"]
+
     def delete_background_task(self, task):
-        if (
-            task["cmd"] in self.backgroundTasksCmds
-            and self.backgroundTasksCmds[task["cmd"]] == task
-        ):
-            del self.backgroundTasksCmds[task["cmd"]]["cmd"]
-            del self.backgroundTasksCmds[task["cmd"]]
+        key = self._taskKey(task)
+        if key in self.backgroundTasksCmds and self.backgroundTasksCmds[key] == task:
+            del self.backgroundTasksCmds[key]["cmd"]
+            del self.backgroundTasksCmds[key]
 
     def doneBackgroundTask(self, task):
         # Delete task['cmd'] from backgroundTasksCmds such that
         # queue_background_task() can queue another task['cmd'] in the future.
         if "cmd" in task:
-            del self.backgroundTasksCmds[task["cmd"]]
+            del self.backgroundTasksCmds[self._taskKey(task)]
 
         # task_done() must be called to let the queue know the task is finished.
         # backgroundTasksQueue.join() can then be used to block until all tasks
@@ -348,12 +362,21 @@ class TWCMaster:
         result = None
 
         while result is None:
-            # Insert any delayed tasks
-            while (
-                self.backgroundTasksDelayed
-                and self.backgroundTasksDelayed[0][0] <= datetime.now()
-            ):
-                self.queue_background_task(self.backgroundTasksDelayed.pop(0)[1])
+            # Insert any delayed tasks. Taken under the tasks lock (the serial
+            # thread adds to the list) and queued after it is released:
+            # queue_background_task takes it too.
+            due = []
+            self.getBackgroundTasksLock()
+            try:
+                while (
+                    self.backgroundTasksDelayed
+                    and self.backgroundTasksDelayed[0][0] <= datetime.now()
+                ):
+                    due.append(self.backgroundTasksDelayed.pop(0)[-1])
+            finally:
+                self.releaseBackgroundTasksLock()
+            for task in due:
+                self.queue_background_task(task)
 
             # Get the next task
             try:
@@ -815,6 +838,12 @@ class TWCMaster:
             del self.slaveTWCs[deleteSlaveID]
         except KeyError:
             pass
+        # A retired TWC's plug session (its anonymous car) ends with it.
+        try:
+            twcid = "%02X%02X" % (deleteSlaveID[0], deleteSlaveID[1])
+            self.vehicleRegistry.endPlugSession(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry plug session update failed: %s", e)
 
     def getChargerLoad(self):
         # Calculate in watts the load that the charger is generating so
@@ -1244,6 +1273,7 @@ class TWCMaster:
 
                     # Record start of current charging session
                     self.recordVehicleSessionStart(slaveTWC)
+                    self._plugSession(slaveTWC, True)
             else:
                 if slaveTWC.isCharging == 1:
                     # Amps have dropped below threshold. Start debounce timer to
@@ -1270,6 +1300,7 @@ class TWCMaster:
 
                         # Close off the current charging session
                         self.recordVehicleSessionEnd(slaveTWC)
+                        self._plugSession(slaveTWC, False)
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
             carsCharging += slaveTWC.isCharging
@@ -1290,10 +1321,18 @@ class TWCMaster:
 
     def queue_background_task(self, task, delay=0):
         if delay > 0:
-            bisect.insort(
-                self.backgroundTasksDelayed,
-                (datetime.now() + timedelta(seconds=delay), task),
-            )
+            self.getBackgroundTasksLock()
+            try:
+                bisect.insort(
+                    self.backgroundTasksDelayed,
+                    (
+                        datetime.now() + timedelta(seconds=delay),
+                        next(self._delaySeq),
+                        task,
+                    ),
+                )
+            finally:
+                self.releaseBackgroundTasksLock()
             return
 
         if task["cmd"] in VEHICLE_COMMANDS:
@@ -1302,17 +1341,18 @@ class TWCMaster:
 
         self.getBackgroundTasksLock()
         try:
-            if task["cmd"] in self.backgroundTasksCmds:
+            key = self._taskKey(task)
+            if key in self.backgroundTasksCmds:
                 # Some tasks, like cmd='charge', will be called once per second until
                 # a charge starts or we determine the car is done charging.  To avoid
                 # wasting memory queing up a bunch of these tasks when we're handling
                 # a charge cmd already, don't queue two of the same task.
-                self.backgroundTasksCmds[task["cmd"]].update(task)
+                self.backgroundTasksCmds[key].update(task)
                 return
 
             # Insert task['cmd'] in backgroundTasksCmds to prevent queuing another
             # task['cmd'] till we've finished handling this one.
-            self.backgroundTasksCmds[task["cmd"]] = task
+            self.backgroundTasksCmds[key] = task
         finally:
             self.releaseBackgroundTasksLock()
 
@@ -1422,34 +1462,66 @@ class TWCMaster:
             },
         )
 
-    def recordVehicleVIN(self, slaveTWC):
-        # Record Slave TWC ID as being capable of reporting VINs, if it is not
-        # already.
-        twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
-        if not self.settings.get("SlaveTWCs", None):
-            self.settings["SlaveTWCs"] = {}
-        if not self.settings["SlaveTWCs"].get(twcid, None):
-            self.settings["SlaveTWCs"][twcid] = {}
-        if not self.settings["SlaveTWCs"][twcid].get("supportsVINQuery", 0):
-            self.settings["SlaveTWCs"][twcid]["supportsVINQuery"] = 1
-            self.queue_background_task({"cmd": "saveSettings"})
+    def _plugSession(self, slaveTWC, begin):
+        # Serial thread: registry calls are short dict work; never let one
+        # raise into the RS-485 loop.
+        try:
+            twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+            if begin:
+                self.vehicleRegistry.beginPlugSession(twcid)
+            else:
+                self.vehicleRegistry.endPlugSession(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry plug session update failed: %s", e)
 
-        # Increment sessions counter for this VIN in persistent settings file
-        if not self.settings.get("Vehicles", None):
-            self.settings["Vehicles"] = {}
-        if not self.settings["Vehicles"].get(slaveTWC.currentVIN, None):
-            self.settings["Vehicles"][slaveTWC.currentVIN] = {
-                "chargeSessions": 1,
-                "startkWh": slaveTWC.lifetimekWh,
-                "totalkWh": 0,
-            }
-        else:
-            self.settings["Vehicles"][slaveTWC.currentVIN]["chargeSessions"] += 1
-            self.settings["Vehicles"][slaveTWC.currentVIN][
-                "startkWh"
-            ] = slaveTWC.lifetimekWh
-            if not self.settings["Vehicles"][slaveTWC.currentVIN].get("totalkWh", None):
-                self.settings["Vehicles"][slaveTWC.currentVIN]["totalkWh"] = 0
+    def recordVehicleVIN(self, slaveTWC):
+        twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+        # A VIN no known vehicle has is confirmed by a second matching read
+        # before it creates a vehicle or a session record.
+        try:
+            status = self.vehicleRegistry.observeTwcVin(twcid, slaveTWC.currentVIN)
+            if status == "pending":
+                self.queue_background_task(
+                    {"cmd": "getVehicleVIN", "slaveTWC": slaveTWC.TWCID, "vinPart": 0},
+                    delay=5,
+                )
+                # retryVINQuery re-asks on the first read's budget if this
+                # confirmation read is lost.
+                slaveTWC.lastVINQuery = time.time()
+                slaveTWC.vinQueryAttempt = 1
+                return
+        except Exception as e:
+            logger.warning("Vehicle registry VIN update failed: %s", e)
+            return
+        if status != "confirmed":
+            return
+
+        vin = slaveTWC.currentVIN
+        with self.settingsLock:
+            # Record Slave TWC ID as being capable of reporting VINs, if it is
+            # not already.
+            if not self.settings.get("SlaveTWCs", None):
+                self.settings["SlaveTWCs"] = {}
+            if not self.settings["SlaveTWCs"].get(twcid, None):
+                self.settings["SlaveTWCs"][twcid] = {}
+            if not self.settings["SlaveTWCs"][twcid].get("supportsVINQuery", 0):
+                self.settings["SlaveTWCs"][twcid]["supportsVINQuery"] = 1
+
+            # Increment sessions counter for this VIN in persistent settings file
+            if not self.settings.get("Vehicles", None):
+                self.settings["Vehicles"] = {}
+            if not self.settings["Vehicles"].get(vin, None):
+                self.settings["Vehicles"][vin] = {
+                    "chargeSessions": 1,
+                    "startkWh": slaveTWC.lifetimekWh,
+                    "totalkWh": 0,
+                }
+            else:
+                entry = self.settings["Vehicles"][vin]
+                entry["chargeSessions"] = entry.get("chargeSessions", 0) + 1
+                entry["startkWh"] = slaveTWC.lifetimekWh
+                entry.setdefault("totalkWh", 0)
+        # Saved outside the lock: the save serialises under it itself.
         self.queue_background_task({"cmd": "saveSettings"})
 
         # Update Charge Session details in logging modules
@@ -1525,7 +1597,7 @@ class TWCMaster:
                 if (
                     slaveTWC.lastVINQuery > 0
                     and slaveTWC.vinQueryAttempt < 6
-                    and not slaveTWC.currentVIN
+                    and (not slaveTWC.currentVIN or self._vinPending(slaveTWC))
                 ):
                     if (time.time() - slaveTWC.lastVINQuery) >= 60:
                         self.queue_background_task(
@@ -1539,6 +1611,14 @@ class TWCMaster:
                         slaveTWC.lastVINQuery = time.time()
             else:
                 slaveTWC.lastVINQuery = 0
+
+    def _vinPending(self, slaveTWC):
+        try:
+            twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+            return self.vehicleRegistry.isPending(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry pending check failed: %s", e)
+            return False
 
     def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
         with self.settingsLock:
