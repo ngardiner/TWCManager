@@ -433,6 +433,7 @@ class TeslaBLE:
         if not isinstance(vin, str) or not isWellFormedVIN(vin):
             logger.error("BLE pairing refused: not a well-formed VIN")
             return False
+        vin = self._settingsKey(vin)
         success = False
         reason = "Pairing request failed"
         try:
@@ -526,6 +527,7 @@ class TeslaBLE:
             if not vin or not command:
                 logger.error("sendCommand called with invalid vin or command")
                 return None
+            vin = self._settingsKey(vin)
 
             if (
                 not self.binaryPath
@@ -974,6 +976,7 @@ class TeslaBLE:
         """Run `tesla-control state STATE_TYPE` and return parsed JSON dict, or None."""
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
             return None
+        vin = self._settingsKey(vin)
         if not self.master.settings.get("Vehicles", {}).get(vin):
             return None
 
@@ -1547,7 +1550,26 @@ class TeslaBLE:
         except Exception as e:
             logger.debug(f"BLE status update failed: {type(e).__name__}")
 
+    def _settingsKey(self, vin):
+        """The settings["Vehicles"] key for this VIN, matched without regard
+        to case (older releases stored form VINs as typed); upper case for a
+        VIN not stored yet."""
+        if not isinstance(vin, str):
+            return vin
+        with self.master.settingsLock:
+            vehicles = self.master.settings.get("Vehicles") or {}
+            if vin in vehicles:
+                return vin
+            upper = vin.upper()
+            if upper in vehicles:
+                return upper
+            for key in list(vehicles):
+                if isinstance(key, str) and key.upper() == upper:
+                    return key
+        return upper
+
     def bleStatus(self, vin):
+        vin = self._settingsKey(vin)
         with self.master.settingsLock:
             rec = (self.master.settings.get("Vehicles") or {}).get(vin)
             ble = rec.get("ble") if isinstance(rec, dict) else None
@@ -1560,7 +1582,9 @@ class TeslaBLE:
 
         Transient: a failed re-pair of a paired car is reported here, not as
         its status."""
-        attempt = self._pairingAttempts.get(vin)
+        if not isinstance(vin, str):
+            return None
+        attempt = self._pairingAttempts.get(vin.upper())
         return dict(attempt) if attempt else None
 
     def _isKeyRefusal(self, output):
@@ -1569,6 +1593,7 @@ class TeslaBLE:
     def _setBleStatus(self, vin, status, pairingSent=None):
         if not isinstance(vin, str) or not isWellFormedVIN(vin):
             return
+        vin = self._settingsKey(vin)
         now = time.time()
         with self.master.settingsLock:
             vehicles = self.master.settings.setdefault("Vehicles", {})
@@ -1597,12 +1622,18 @@ class TeslaBLE:
             if status == "paired":
                 v.claim("TeslaBLE", True, "paired")
             else:
-                # Unproven: BLE is still tried, the car is not managed yet.
-                v.claim("TeslaBLE", False, "unproven")
-        else:
+                self._claimUnproven(v)
+        elif status == "refused":
             v = self.registry.get(vin)
             if v is not None:
                 v.dropClaim("TeslaBLE")
+        # pairing_failed leaves any claim as it was: a request that did not
+        # reach the car says nothing about the key the car already holds.
+
+    def _claimUnproven(self, v):
+        # BLE is still tried, the car is not managed, and the claim does not
+        # keep an unseen car in the registry past the forget window.
+        v.claim("TeslaBLE", False, "unproven", keepsAlive=False)
 
     def _noteBleProof(self, vin):
         if self.bleStatus(vin)["status"] != "paired":
@@ -1611,7 +1642,7 @@ class TeslaBLE:
 
     def _notePairingResult(self, vin, ok, reason):
         now = time.time()
-        self._pairingAttempts[vin] = {
+        self._pairingAttempts[vin.upper()] = {
             "ok": bool(ok),
             "at": now,
             "message": (
@@ -1628,6 +1659,7 @@ class TeslaBLE:
             self._setBleStatus(vin, "pairing_failed")
 
     def _inPairingWindow(self, vin):
+        vin = self._settingsKey(vin)
         with self.master.settingsLock:
             rec = (self.master.settings.get("Vehicles") or {}).get(vin)
             ble = rec.get("ble") if isinstance(rec, dict) else None
@@ -1653,29 +1685,43 @@ class TeslaBLE:
         # The one place settings["Vehicles"] feeds the registry: it is the BLE
         # key store. Releases before 1.4.0 never recorded pairing, and
         # scanForVehicles makes a key for every known VIN, so a key is the
-        # only evidence there is. Seed keyed VINs as unproven claims, which
-        # keep BLE being tried without making the car managed; proof moves
-        # a claim to paired, a refusal drops it.
+        # only evidence there is. On the upgrade boot (no saved registry yet)
+        # every keyed VIN is seeded with an unproven claim, which keeps BLE
+        # being tried without making the car managed; proof moves a claim to
+        # paired, a refusal drops it. Later boots claim only cars the
+        # registry still holds, plus paired ones, so an expired or forgotten
+        # car is not brought back on every restart.
         with self.master.settingsLock:
+            blob = self.master.settings.get("vehicleRegistry")
+            upgradeBoot = not (
+                isinstance(blob, dict) and isinstance(blob.get("vehicles"), dict)
+            )
             entries = list((self.master.settings.get("Vehicles") or {}).items())
             seeds = []
             for vin, rec in entries:
                 if not isinstance(rec, dict) or "privKey" not in rec:
+                    continue
+                if not isinstance(vin, str) or not isWellFormedVIN(vin):
                     continue
                 ble = rec.get("ble")
                 status = ble.get("status") if isinstance(ble, dict) else None
                 seeds.append((vin, status))
         for vin, status in seeds:
             try:
-                v = self.registry.getOrCreate(vin, "TeslaBLE")
+                if status == "paired":
+                    self.registry.getOrCreate(vin, "TeslaBLE").claim(
+                        "TeslaBLE", True, "paired"
+                    )
+                    continue
+                if upgradeBoot:
+                    v = self.registry.getOrCreate(vin, "TeslaBLE")
+                else:
+                    v = self.registry.get(vin)
             except ValueError:
                 continue
-            if status == "paired":
-                v.claim("TeslaBLE", True, "paired")
-            elif status in ("refused", "pairing_failed"):
-                continue
-            else:
-                v.claim("TeslaBLE", False, "unproven")
+            # A refused key is not claimed; the upgrade boot still lists the car.
+            if v is not None and status != "refused":
+                self._claimUnproven(v)
 
     def __del__(self):
         self._stop_dbus_session()

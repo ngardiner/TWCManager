@@ -18,11 +18,15 @@ class Claim:
         canCommand: Union[bool, Callable[[], bool]],
         status: str = "",
         since: float = 0.0,
+        keepsAlive: bool = True,
     ):
         self.provider = provider
         self.canCommand = canCommand
         self.status = status
         self.since = since
+        # False for a speculative claim (an unproven BLE key): it must not
+        # keep an unseen car in the registry past the forget window.
+        self.keepsAlive = keepsAlive
 
     @property
     def commands(self) -> bool:
@@ -154,8 +158,9 @@ class Vehicle:
         provider: str,
         canCommand: Union[bool, Callable[[], bool]],
         status: str = "",
+        keepsAlive: bool = True,
     ) -> Claim:
-        c = Claim(provider, canCommand, status, self._clock())
+        c = Claim(provider, canCommand, status, self._clock(), keepsAlive)
         with self._lock:
             self._claims[provider] = c
         return c
