@@ -15,6 +15,7 @@ logger = LoggerFactory.get_logger("FleetTLM", "Vehicle")
 class FleetTelemetryMQTT(TelmetryBase):
     configName = "teslaFleetTelemetryMQTT"
     vehicleNameTopic = "VehicleName"
+    vinInTopic = True
     events = {
         "BatteryLevel": ["batteryLevel", lambda a: int(float(a))],
         "ChargeLimitSoc": ["chargeLimit", lambda a: int(float(a))],
@@ -67,9 +68,7 @@ class FleetTelemetryMQTT(TelmetryBase):
         syncState = obs.value if obs else None
         newSyncState = None
         if len(topic) > 3 and topic[2] == "v":
-            # A broker redelivering a stored value says nothing about the
-            # car being online now.
-            newSyncState = None if retained else "online"
+            newSyncState = "online"
             if topic[3] == "Gear":
                 if payload in (
                     "R",
@@ -99,6 +98,10 @@ class FleetTelemetryMQTT(TelmetryBase):
                     )
             else:
                 self.applyDataToVehicle(topic[1], topic[3], payload, retained=retained)
+            if retained:
+                # A broker redelivering a stored value says nothing about the
+                # car's state now: only retained connectivity sets it.
+                newSyncState = None
         elif len(topic) > 2 and topic[2] == "connectivity":
             status = payload.get("Status")
             if status == "CONNECTED":
