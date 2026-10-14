@@ -29,6 +29,8 @@ from typing import Dict, List, Optional
 import requests
 import websockets
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Registry.Sources import HomeAssistantReadSource
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("V_HASS", "Vehicle")
 
@@ -90,11 +92,16 @@ class HaVehicle:
             ent = self.entity_ids.get(key)
             return api._get_state(ent) if ent else None
 
+        # Only what this pass parsed is observed: an absent or unparsable
+        # entity leaves the registry's earlier value to age out.
+        seen: Dict[str, object] = {}
+
         # Battery level
         st = get_state("battery_level_sensor")
         if st is not None:
             try:
                 self.battery_level = float(st.get("state"))
+                seen["batteryLevel"] = self.battery_level
             except (TypeError, ValueError):
                 pass
 
@@ -103,6 +110,7 @@ class HaVehicle:
         if st is not None:
             try:
                 self.charge_limit = float(st.get("state"))
+                seen["chargeLimit"] = self.charge_limit
             except (TypeError, ValueError):
                 pass
 
@@ -111,6 +119,7 @@ class HaVehicle:
         if st is not None:
             try:
                 self.available_current = float(st.get("state"))
+                seen["availableCurrent"] = self.available_current
             except (TypeError, ValueError):
                 pass
 
@@ -119,6 +128,7 @@ class HaVehicle:
         if st is not None:
             state = st.get("state", "").lower()
             self.charging = state in ("charging", "starting", "on")
+            seen["chargingState"] = "Charging" if self.charging else "Stopped"
 
         # Location
         st = get_state("location_tracker")
@@ -127,6 +137,8 @@ class HaVehicle:
             try:
                 self.lat = float(attrs.get("latitude"))
                 self.lon = float(attrs.get("longitude"))
+                seen["lat"] = self.lat
+                seen["lon"] = self.lon
             except (TypeError, ValueError):
                 pass
 
@@ -136,6 +148,12 @@ class HaVehicle:
                 self.at_home = api.is_location_home(self.lat, self.lon)
 
         self.last_state_update = time.time()
+
+        # A forgotten vehicle is not recreated by a read.
+        v = api.registry.get(self.vin)
+        if v is not None:
+            for field, value in seen.items():
+                v.observe(field, value, "HomeAssistant")
         return True
 
 
@@ -156,6 +174,7 @@ class HomeAssistant:
         self._enabled: bool = cfg.get("enabled", False)
         self.url: str = cfg.get("url", "").rstrip("/")
         self.token: Optional[str] = cfg.get("longLivedToken")
+        self.registry = VehicleRegistry.forMaster(master)
 
         if not self._enabled:
             logger.info("HomeAssistant vehicle module disabled.")
@@ -219,6 +238,8 @@ class HomeAssistant:
             logger.error("Failed to verify HomeAssistant connectivity: %s", str(e))
             self._enabled = False
             return
+
+        self.registry.registerReadSource(HomeAssistantReadSource(self))
 
         try:
             self._discover_vehicles()
@@ -356,7 +377,22 @@ class HomeAssistant:
                 logger.debug("Device '%s' missing charge_switch entity", name)
                 continue
 
-            self.carApiVehicles.append(HaVehicle(name, vin, d.get("id"), entity_ids))
+            hv = HaVehicle(name, vin, d.get("id"), entity_ids)
+            self.carApiVehicles.append(hv)
+            try:
+                v = self.registry.getOrCreate(vin, "HomeAssistant")
+            except ValueError:
+                logger.debug("Device '%s' VIN rejected by the registry", name)
+                continue
+            v.attach("HomeAssistant", hv)
+            v.observe("name", name, "HomeAssistant")
+            v.claim(
+                "HomeAssistant",
+                hv.has_charge_switch
+                or hv.has_charge_limit_number
+                or hv.has_charge_current_number,
+                "entities",
+            )
 
     @staticmethod
     def _extract_vin_from_identifiers(identifiers):
