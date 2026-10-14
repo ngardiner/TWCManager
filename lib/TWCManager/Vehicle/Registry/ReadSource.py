@@ -26,6 +26,11 @@ class ReadSource:
 def cascade(
     vehicle, sources: List[ReadSource], field: str, allowWake: bool
 ) -> Optional[Observation]:
+    """Try sources in the order given (callers pass them pre-sorted by
+    `order`). A source whose canRead or fetch raises is treated as skipped or
+    failed; only the exception type is logged, never its message. A source
+    that returns a result without `field` is passed over after its
+    observations are recorded."""
     for source in sources:
         if field not in source.fields:
             continue
@@ -33,14 +38,19 @@ def cascade(
             if not source.canRead(vehicle):
                 continue
             result = source.fetch(vehicle, field, allowWake)
-        except Exception:
+        except Exception as e:
             logger.debug(
-                "Read source %s failed for %s", source.name, field, exc_info=True
+                "Read source %s failed for %s: %s",
+                source.name,
+                field,
+                type(e).__name__,
             )
             continue
         if result is None:
             continue
         for k, v in result.items():
             vehicle.observe(k, v, source.name)
-        return vehicle.latest(field)
+        # {} means the source recorded its observations itself.
+        if field in result or (not result and vehicle.latest(field) is not None):
+            return vehicle.latest(field)
     return None
