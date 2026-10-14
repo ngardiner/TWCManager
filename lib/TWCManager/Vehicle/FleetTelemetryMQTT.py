@@ -67,7 +67,9 @@ class FleetTelemetryMQTT(TelmetryBase):
         syncState = obs.value if obs else None
         newSyncState = None
         if len(topic) > 3 and topic[2] == "v":
-            newSyncState = "online"
+            # A broker redelivering a stored value says nothing about the
+            # car being online now.
+            newSyncState = None if retained else "online"
             if topic[3] == "Gear":
                 if payload in (
                     "R",

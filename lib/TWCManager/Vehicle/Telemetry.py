@@ -202,15 +202,21 @@ class TelmetryBase:
 
         elif event in events:
             vehicle = self.vehicles.get(id, None)
-            if vehicle is not None and self._dropIfOrphan(id, vehicle):
-                # Forgotten since it was mapped: map again (no I/O here).
+            name = self.vehicleNames.get(id)
+            orphaned = vehicle is not None and self._dropIfOrphan(id, vehicle)
+            if orphaned:
                 vehicle = None
-                if self.updateVehicles(
-                    id, self.vehicleNames.get(id, ""), loadList=False, retained=True
-                ):
-                    vehicle = self.vehicles.get(id)
-                else:
-                    self.scheduleUnmappedRetry()
+            if vehicle is None and not retained:
+                # A live report is a sighting: once the car's name is known,
+                # attach now (no I/O here), by VIN (creating the vehicle) or
+                # to a vehicle of that name. A retained copy never creates or
+                # revives one.
+                if name and (self.vinFor(id) or self.registry.findByName(name)):
+                    if self.updateVehicles(id, name, loadList=False):
+                        self.replayUnknownEvents(id)
+                        vehicle = self.vehicles.get(id)
+            if orphaned and vehicle is None and name:
+                self.scheduleUnmappedRetry()
             if vehicle:
                 field, converter = events[event][0], events[event][1]
                 self._observe(vehicle, field, converter(payload), retained)
@@ -245,9 +251,13 @@ class TelmetryBase:
         if mine is not None and mine.value == value:
             return
         # A different retained value may predate our own write: stamped no
-        # later than the write, so FEED_LAG decides whether it stands.
+        # later than the write, so FEED_LAG decides whether it stands. Not
+        # when this source reported after the write: the broker keeps only
+        # the latest publish, so this one came later still.
         write = vehicle.lastWrite(field)
-        at = min(self.registry.now(), write.at) if write is not None else None
+        at = None
+        if write is not None and (mine is None or mine.at <= write.at):
+            at = min(self.registry.now(), write.at)
         vehicle.observe(field, value, source, at=at, seen=False)
 
     def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
@@ -293,30 +303,38 @@ class TelmetryBase:
         pass
 
     def updateVehicles(self, vehicle_id, vehicle_name, loadList=True, retained=False):
-        # Called each time the vehicle name topic arrives: attaches the
-        # telemetry car id to a registry vehicle, by VIN where the feed knows
-        # it, else by name.
+        # Attaches the telemetry car id to a registry vehicle, by VIN where
+        # the feed knows it, else by name. A retained message (or a replay of
+        # one) only attaches to a vehicle the registry holds: it never
+        # creates one, or revives one that was forgotten or expired.
         source = self.__class__.__name__
         vehicle = self.vehicles.get(vehicle_id, None)
         if vehicle is not None and not self._dropIfOrphan(vehicle_id, vehicle):
             # Already mapped: a rename.
-            self._observe(vehicle, "name", vehicle_name, retained)
+            if vehicle_name:
+                self._observe(vehicle, "name", vehicle_name, retained)
             return True
 
         vin = self.vinFor(vehicle_id)
         if vin:
             try:
-                vehicle = self.registry.getOrCreate(vin, source)
+                if retained:
+                    vehicle = self.registry.get(vin)
+                else:
+                    vehicle = self.registry.getOrCreate(vin, source)
             except ValueError:
                 vehicle = None
             if vehicle is not None:
-                self._observe(vehicle, "name", vehicle_name, retained)
+                if vehicle_name:
+                    self._observe(vehicle, "name", vehicle_name, retained)
                 self.vehicles[vehicle_id] = vehicle
                 logger.info(
-                    f"Vehicle {vehicle_name} telemetry being provided by {source}"
+                    f"Vehicle {vehicle_name or vin} telemetry being provided by {source}"
                 )
                 return True
 
+        if not vehicle_name:
+            return False
         vehicle = self.registry.findByName(vehicle_name)
         if vehicle is None and loadList:
             # The API vehicle list is otherwise only loaded when a command
