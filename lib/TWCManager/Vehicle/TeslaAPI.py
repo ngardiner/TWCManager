@@ -14,6 +14,7 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Registry.Fields import TELEMETRY_SOURCES
+from TWCManager.Vehicle.Registry.Sources import TeslaAPIReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 
@@ -150,6 +151,7 @@ class TeslaAPI:
     def __init__(self, master):
         self.master = master
         self.registry = VehicleRegistry.forMaster(master)
+        self.registry.registerReadSource(TeslaAPIReadSource(self))
         # slot.changes when a skipped sync was last logged, per slot.
         self.syncSkipLoggedAt = {"owner": None, "fleet": None}
 
@@ -2067,6 +2069,8 @@ class CarApiVehicle:
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
     statusDeferral = 0
+    # update_charge reuses a charge reading up to this old (seconds).
+    READ_MAX_AGE = 300
 
     # Per-vehicle fields are views onto the registry Vehicle: reads give the
     # latest observation (or the legacy default), writes observe.
@@ -2367,58 +2371,42 @@ class CarApiVehicle:
             self.carapi.updateCarApiLastErrorTime(self)
             return (False, None)
 
+    def _readFresh(self, field, maxAge):
+        # Reads field through the registry cascade (BLE, then the cloud API;
+        # never a wake). Success is a newer observation, one within maxAge,
+        # or an API status deferral (which reports stored values unfetched,
+        # as update_vehicle_data always has). A stale value handed back after
+        # every source failed is a failure.
+        vehicle = self.vehicle
+        before = vehicle.latest(field)
+        start = time.time()
+        obs = vehicle.read(field, maxAge=maxAge)
+        if obs is None:
+            return None
+        fetched = before is None or obs.at > before.at
+        if not (
+            fetched or vehicle.age(field) <= maxAge or time.time() < self.statusDeferral
+        ):
+            return None
+        if fetched and obs.source == "TeslaBLE" and obs.at >= start:
+            # A BLE reply proves the car awake, as an API reply does in
+            # get_car_api.
+            self.lastAPIAccessTime = time.time()
+        return obs
+
     def update_location(self, minInterval=0):
-        if self.syncSource == "TeslaAPI":
-            if minInterval > 0:
-                now = time.time()
-                if now - self.lastAPIAccessTime < minInterval:
-                    return True
-
-            # Try BLE first if policy allows
-            try:
-                vp = self.carapi.master.getModuleByName("VehiclePriority")
-                policy = vp.commandPolicy if vp else "prefer_ble"
-            except Exception:
-                policy = "prefer_ble"
-
-            if policy != "api_only":
-                ble = self.carapi.master.getModuleByName("TeslaBLE")
-                if ble:
-                    loc_data = ble.get_location_state(self.VIN)
-                    # If state fetch failed and car might be asleep, try wake + retry
-                    if (
-                        loc_data is None
-                        and time.time() - self.lastAPIAccessTime >= 2 * 60
-                    ):
-                        if ble.wakeVehicle(self.VIN):
-                            loc_data = ble.get_location_state(self.VIN)
-
-                    if loc_data is not None:
-                        now = time.time()
-                        if loc_data.get("latitude") is not None:
-                            self.lat = loc_data["latitude"]
-                        if loc_data.get("longitude") is not None:
-                            self.lon = loc_data["longitude"]
-                        gpsAsOf = loc_data.get("gpsAsOf") or 0
-                        if gpsAsOf:
-                            self.gpsAsOf = gpsAsOf
-                        gpsAge = (now - gpsAsOf) if gpsAsOf else None
-                        self.atHome = self.carapi.is_location_home(
-                            self.lat, self.lon, gpsAge
-                        )
-                        self.lastAPIAccessTime = now
-                        logger.debug(
-                            f"BLE location state fetch succeeded for {self.VIN}"
-                        )
-                        return True
-
-            return self.update_vehicle_data()
-
-        else:
-            # Telemetry observes lat/lon directly; just place the car.
-            self.atHome = self.carapi.is_location_home(self.lat, self.lon)
-
-            return True
+        # minInterval 0 forces a fresh read (vehicleIsDefinitelyHome relies
+        # on it).
+        obs = self._readFresh("lat", minInterval)
+        if obs is None:
+            return False
+        gps = self.vehicle.latest("gpsAsOf")
+        # A fix time from an older read than this position says nothing
+        # about it.
+        gpsAsOf = gps.value if gps is not None and gps.at >= obs.at else 0
+        gpsAge = (time.time() - gpsAsOf) if gpsAsOf else None
+        self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
+        return True
 
     def update_vehicle_data(self):
         path = (
@@ -2472,7 +2460,7 @@ class CarApiVehicle:
             # Only keys present in the response are observed: a default or a
             # carried-over value is not a fresh TeslaAPI reading.
             gpsAsOf = drive.get("gps_as_of") or 0
-            if "gps_as_of" in drive:
+            if gpsAsOf:
                 self.gpsAsOf = gpsAsOf
             gpsAge = (now - gpsAsOf) if gpsAsOf else None
             self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
@@ -2518,56 +2506,13 @@ class CarApiVehicle:
         return result
 
     def update_charge(self):
-        if self.syncSource == "TeslaAPI":
-            # Try BLE first if policy allows
-            try:
-                vp = self.carapi.master.getModuleByName("VehiclePriority")
-                policy = vp.commandPolicy if vp else "prefer_ble"
-            except Exception:
-                policy = "prefer_ble"
-
-            if policy != "api_only":
-                ble = self.carapi.master.getModuleByName("TeslaBLE")
-                if ble:
-                    charge_data = ble.get_charge_state(self.VIN)
-                    # If state fetch failed and car might be asleep, try wake + retry
-                    if (
-                        charge_data is None
-                        and time.time() - self.lastAPIAccessTime >= 2 * 60
-                    ):
-                        if ble.wakeVehicle(self.VIN):
-                            charge_data = ble.get_charge_state(self.VIN)
-
-                    if charge_data is not None:
-                        now = time.time()
-                        if charge_data.get("batteryLevel") is not None:
-                            self.batteryLevel = charge_data["batteryLevel"]
-                        if charge_data.get("chargeLimit") is not None:
-                            self.chargeLimit = charge_data["chargeLimit"]
-                        if charge_data.get("chargingState") is not None:
-                            self.chargingState = charge_data["chargingState"]
-                        if charge_data.get("availableCurrent") is not None:
-                            self.availableCurrent = charge_data["availableCurrent"]
-                        if charge_data.get("actualCurrent") is not None:
-                            self.actualCurrent = charge_data["actualCurrent"]
-                        if charge_data.get("voltage") is not None:
-                            self.voltage = charge_data["voltage"]
-                        if charge_data.get("phases") is not None:
-                            self.phases = charge_data["phases"]
-                        if charge_data.get("scheduledChargingPending") is not None:
-                            self.scheduledChargingPending = charge_data[
-                                "scheduledChargingPending"
-                            ]
-                        if charge_data.get("timeToFullCharge") is not None:
-                            self.timeToFullCharge = charge_data["timeToFullCharge"]
-                        self.lastAPIAccessTime = now
-                        logger.debug(f"BLE charge state fetch succeeded for {self.VIN}")
-                        return True
-
-            return self.update_vehicle_data()
-
-        else:
-            return True
+        current = self._actualCurrent
+        ok = self._readFresh("batteryLevel", self.READ_MAX_AGE) is not None
+        if self._actualCurrent != current:
+            # A read source observes the field directly, bypassing the
+            # actualCurrent setter.
+            self.lastCurrentChangeTime = time.time()
+        return ok
 
     @property
     def actualCurrent(self):
