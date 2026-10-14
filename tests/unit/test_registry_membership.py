@@ -285,3 +285,17 @@ def test_claim_that_does_not_keep_alive_does_not_block_expiry():
     r.getOrCreate(VIN2, "TeslaBLE").claim("TeslaBLE", True, "paired")
     c.t += 31 * 86400
     assert r.expire() == [VIN]
+
+
+def test_get_or_create_rejects_a_malformed_vin():  # I4
+    r = VehicleRegistry({})
+    for bad in ("STATUS", "5YJ3E1EA1KF00000I", VIN + "1", "0" * 17):
+        with pytest.raises(ValueError):
+            r.getOrCreate(bad, "FleetTelemetryMQTT")
+    assert r.vehicles() == []
+
+
+def test_load_drops_a_persisted_malformed_key_without_raising():  # I4
+    r = VehicleRegistry({})
+    r.load({"vehicles": {"STATUS": {"lastSeen": 1.0}, VIN: {"lastSeen": 1.0}}})
+    assert [v.key for v in r.vehicles()] == [VIN]

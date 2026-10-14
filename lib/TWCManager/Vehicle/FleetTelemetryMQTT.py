@@ -6,6 +6,7 @@ import time
 import json
 from typing import Optional
 
+from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 from TWCManager.Vehicle.Telemetry import TelmetryBase
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
@@ -32,8 +33,11 @@ class FleetTelemetryMQTT(TelmetryBase):
     }
 
     def vinFor(self, vehicle_id) -> Optional[str]:
-        # The topic id is the VIN.
-        return vehicle_id
+        # The topic id is the VIN. Anything else under the prefix (another
+        # publisher's status topics) is not a car.
+        if isinstance(vehicle_id, str) and isWellFormedVIN(vehicle_id):
+            return vehicle_id
+        return None
 
     def mqttConnect(self, client, userdata, flags, rc, properties=None):
         super().mqttConnect(client, userdata, flags, rc, properties)

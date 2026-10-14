@@ -82,7 +82,7 @@ class TestTeslaAPIRefusesCommands:
     def test_fleet_token_is_not_refused(self, owner_api, requests_mock):
         owner_api.storeToken(fleet_token())
         cmd = requests_mock.post(
-            re.compile(r".*/VIN1/command/set_charging_amps"),
+            re.compile(r".*/5YJ3E1EA1KF000001/command/set_charging_amps"),
             json={"response": {"result": True, "reason": ""}},
         )
         vehicle = owner_api.getCarApiVehicles()[0]
@@ -131,7 +131,7 @@ class TestRefusalLogging:
 class TestReadsStillRun:
     def test_vehicle_data_read_uses_owner_api(self, owner_api, requests_mock):
         data = requests_mock.get(
-            OWNER_URL + "/VIN1/vehicle_data",
+            OWNER_URL + "/5YJ3E1EA1KF000001/vehicle_data",
             json={
                 "response": {
                     "drive_state": {"latitude": 37.0, "longitude": -122.0},
@@ -153,7 +153,7 @@ class TestReadsStillRun:
             OWNER_URL[: -len("vehicles")] + "products",
             json={
                 "count": 1,
-                "response": [{"id": 1, "vin": "VIN1", "display_name": "Car"}],
+                "response": [{"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"}],
             },
         )
         assert api.car_api_available() is True
@@ -216,7 +216,7 @@ class TestTeslaAPIEVSE:
         master = Mock()
         master.config = {"config": {}}
         master.getModuleByName = Mock(return_value=carapi)
-        return TeslaAPIEVSE(Mock(VIN="VIN1"), Mock(), master)
+        return TeslaAPIEVSE(Mock(VIN="5YJ3E1EA1KF000001"), Mock(), master)
 
     def test_read_only_follows_tesla_api(self, owner_api):
         evse = self.make_evse(owner_api)

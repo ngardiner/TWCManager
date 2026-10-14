@@ -22,8 +22,10 @@ from tests.unit.teslatokens import (  # noqa: F401 (no_threads is a fixture)
     no_threads,
 )
 
-STATE_URL = FLEET_NA_URL + "/VIN1"
-WAKE_URL = FLEET_NA_URL + "/VIN1/wake_up"
+# The registry takes only a well-formed VIN.
+VIN = "5YJ3E1EA1KF000001"
+STATE_URL = FLEET_NA_URL + "/" + VIN
+WAKE_URL = STATE_URL + "/wake_up"
 
 
 class Clock:
@@ -55,7 +57,7 @@ def car_state(requests_mock):
         value = "asleep"
 
     def reply(request, context):
-        return {"response": {"state": State.value, "vin": "VIN1"}}
+        return {"response": {"state": State.value, "vin": VIN}}
 
     requests_mock.get(STATE_URL, json=reply)
     requests_mock.post(WAKE_URL, json={"response": {"state": "offline"}})
@@ -71,7 +73,7 @@ def api(no_threads, clock, car_state):
     master.vehicleRegistry = VehicleRegistry(master.config, clock=clock)
     a = new_api(master)
     a.storeToken(fleet_token())
-    a.addVehicle({"id": 1, "vin": "VIN1", "display_name": "Car"})
+    a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
     vehicle = a.getCarApiVehicles()[0]
     vehicle.atHome = True
     return a
@@ -209,12 +211,12 @@ def test_state_check_uses_owner_slot_when_present(no_threads, clock, requests_mo
     a = new_api()
     a.storeToken(fleet_token())
     a.storeToken(owner_token())
-    a.addVehicle({"id": 1, "vin": "VIN1", "display_name": "Car"})
+    a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
     vehicle = a.getCarApiVehicles()[0]
     vehicle.atHome = True
     assert a.slotFor("read") is a.ownerSlot
 
-    requests_mock.get(OWNER_API_URL + "/VIN1", json={"response": {"state": "asleep"}})
+    requests_mock.get(OWNER_API_URL + "/" + VIN, json={"response": {"state": "asleep"}})
     requests_mock.post(WAKE_URL, json={"response": {"state": "offline"}})
     _send_first_wake(a, clock)
     clock.advance(a.POST_WAKE_POLL_SECS)
@@ -222,8 +224,8 @@ def test_state_check_uses_owner_slot_when_present(no_threads, clock, requests_mo
 
     state_gets = [r for r in requests_mock.request_history if r.method == "GET"]
     assert state_gets
-    assert all(r.url == OWNER_API_URL + "/VIN1" for r in state_gets)
-    assert _count(requests_mock, "GET", OWNER_API_URL + "/VIN1") == 3
+    assert all(r.url == OWNER_API_URL + "/" + VIN for r in state_gets)
+    assert _count(requests_mock, "GET", OWNER_API_URL + "/" + VIN) == 3
 
 
 def test_telemetry_from_before_wake_is_not_trusted(
