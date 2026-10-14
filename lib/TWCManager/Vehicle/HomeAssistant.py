@@ -681,6 +681,9 @@ class HomeAssistant:
                 result = "error"
             else:
                 vehicles_processed += 1
+                registryVehicle = self.registry.get(v.vin)
+                if registryVehicle is not None:
+                    registryVehicle.noteWrite("chargeLimit", limit, "HomeAssistant")
 
         if vehicles_processed == 0 and result == "success":
             logger.info("No vehicles processed for charge limit %d%% command", limit)
