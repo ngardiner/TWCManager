@@ -95,3 +95,24 @@ class TeslaAPIReadSource(ReadSource):
             return None
         # update_vehicle_data observes through the CarApiVehicle fields.
         return {} if car.update_vehicle_data() else None
+
+
+class HomeAssistantReadSource(ReadSource):
+    name = "HomeAssistant"
+    order = 1
+    fields = CHARGE_FIELDS | LOCATION_FIELDS
+
+    def __init__(self, ha):
+        self.ha = ha
+
+    def canRead(self, vehicle) -> bool:
+        return vehicle.attachment("HomeAssistant") is not None
+
+    def fetch(self, vehicle, field: str, allowWake: bool) -> Optional[Dict[str, Any]]:
+        # Home Assistant never wakes the car. refresh_from_home_assistant
+        # observes through the registry itself.
+        hv = vehicle.attachment("HomeAssistant")
+        if hv is None:
+            return None
+        hv.refresh_from_home_assistant(self.ha)
+        return {}
