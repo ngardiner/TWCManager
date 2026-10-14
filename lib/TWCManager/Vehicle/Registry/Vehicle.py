@@ -1,10 +1,13 @@
 # One vehicle in the registry: identity (VIN, or an anonymous plug session),
 # provider claims, observed/managed tier, attachments and a summary.
+import logging
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from .Fields import NOT_TRACKED, FieldStore, Observation
+
+logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 
 
 class Claim:
@@ -23,7 +26,13 @@ class Claim:
     @property
     def commands(self) -> bool:
         c = self.canCommand
-        return bool(c() if callable(c) else c)
+        if not callable(c):
+            return bool(c)
+        try:
+            return bool(c())
+        except Exception:
+            logger.debug("Claim %s canCommand raised; counted as False", self.provider)
+            return False
 
 
 class Vehicle:
@@ -64,8 +73,10 @@ class Vehicle:
         obs = self._fields.observe(field, value, source, at)
         if seen:
             with self._lock:
-                if obs.at >= self.lastSeen:
-                    self.lastSeen = obs.at
+                # A future stamp must not push lastSeen ahead of now.
+                at = min(obs.at, self._clock())
+                if at >= self.lastSeen:
+                    self.lastSeen = at
                     self.lastSeenSource = obs.source
         return obs
 
@@ -122,12 +133,11 @@ class Vehicle:
 
     @property
     def tier(self) -> str:
-        if self.isAnonymous:
-            return "observed"
         # Callables run outside the lock: they may call into other modules.
-        return (
-            "managed" if any(c.commands for c in self.claims.values()) else "observed"
-        )
+        return self._tierOf([c.commands for c in self.claims.values()])
+
+    def _tierOf(self, commands: List[bool]) -> str:
+        return "managed" if not self.isAnonymous and any(commands) else "observed"
 
     # Attachments
 
@@ -150,23 +160,29 @@ class Vehicle:
             {"provider": c.provider, "status": c.status, "commands": c.commands}
             for c in self.claims.values()
         ]
+        tier = self._tierOf([c["commands"] for c in claims])
         if self.isAnonymous:
             point = self.key[5:]
         else:
             point = self.value("twcVin")
         with self._lock:
             lastSeen, lastSeenSource = self.lastSeen, self.lastSeenSource
-        fields = {
-            f: {"value": o.value, "source": o.source, "age": now - o.at}
-            for f, o in self._fields.snapshot().items()
-        }
+        fields = {}
+        for f, o in self._fields.snapshot().items():
+            liveAt = self._liveAt(o)
+            fields[f] = {
+                "value": o.value,
+                "source": o.source,
+                "age": self._fields.age(f, now=now, liveAt=liveAt),
+                "changedAge": now - o.at,
+            }
         return {
             "key": self.key,
             "vin": self.vin,
             "name": self.name,
             "anonymous": self.isAnonymous,
             "userAsserted": self.userAsserted,
-            "tier": self.tier,
+            "tier": tier,
             "claims": claims,
             "point": point,
             "lastSeen": lastSeen,
