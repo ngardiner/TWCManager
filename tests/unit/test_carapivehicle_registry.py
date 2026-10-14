@@ -87,20 +87,12 @@ def test_is_awake_trusts_fresh_telemetry_and_asleep_without_api_call():
     assert car.is_awake() is True
 
 
-def test_legacy_sync_setters_still_feed_the_registry():  # P7
+def test_sync_timestamp_is_the_state_observation_time():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.getCarApiVehicles()[0]
-    car.get_car_api = Mock(side_effect=AssertionError("no API call"))
-    car.syncTimestamp = 123.0
-    car.syncSource = "TeslaMateVehicle"
-    car.syncState = "asleep"
-    car.syncLat = 1.5
-    obs = reg.get(VIN).latest("state")
-    assert (obs.value, obs.source) == ("asleep", "TeslaMateVehicle")
-    assert reg.get(VIN).latest("lat").value == 1.5
-    assert car.is_awake() is False and car.syncSource == "TeslaMateVehicle"
-    assert car.syncTimestamp == obs.at
+    obs = reg.get(VIN).observe("state", "asleep", "TeslaMateVehicle", at=123.0)
+    assert car.syncTimestamp == obs.at == 123.0
 
 
 def test_sync_getters_have_legacy_defaults_before_any_state():
@@ -108,7 +100,6 @@ def test_sync_getters_have_legacy_defaults_before_any_state():
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.getCarApiVehicles()[0]
     assert car.syncSource == "TeslaAPI" and car.syncTimestamp == 0
-    assert car.syncState == "asleep" and car.syncLat == 10000 and car.syncLon == 10000
 
 
 def test_update_vehicle_data_observes_only_present_keys():  # P15
@@ -195,14 +186,14 @@ def test_relisting_the_api_attaches_the_new_car():
     assert old.batteryLevel == 70  # the old object reads the live vehicle too
 
 
-def test_legacy_telemetry_feed_drives_a_real_car():  # P7, until Task 11
+def test_telemetry_feed_drives_a_real_car():
     from TWCManager.Vehicle.Telemetry import TelmetryBase
 
     class TeslaMateVehicle(TelmetryBase):  # named as the real module
         configName = "Probe"
         events = {
-            "state": ["syncState", lambda a: a],
-            "latitude": ["syncLat", lambda a: float(a)],
+            "state": ["state", lambda a: a],
+            "latitude": ["lat", lambda a: float(a)],
             "plugged_in": ["pluggedIn", lambda a: a == "true"],
         }
 
@@ -216,7 +207,7 @@ def test_legacy_telemetry_feed_drives_a_real_car():  # P7, until Task 11
     master.config["vehicle"]["Probe"] = {"enabled": True}
     feed = TeslaMateVehicle(master)
     feed.applyDataToVehicle("1", "display_name", "TestCar")
-    assert feed.vehicles["1"] is car
+    assert feed.vehicles["1"] is reg.get(VIN)
     feed.applyDataToVehicle("1", "state", "online")
     feed.applyDataToVehicle("1", "latitude", "1.5")
     feed.applyDataToVehicle("1", "plugged_in", "true")
@@ -224,4 +215,4 @@ def test_legacy_telemetry_feed_drives_a_real_car():  # P7, until Task 11
     assert (obs.value, obs.source) == ("online", "TeslaMateVehicle")
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
     assert car.syncSource == "TeslaMateVehicle" and car.pluggedIn is True
-    assert car.syncLat == 1.5 and car.lat == 1.5
+    assert car.lat == 1.5

@@ -56,6 +56,9 @@ class FieldStore:
         self._lock = threading.Lock()
         self._latest: Dict[str, Observation] = {}
         self._writes: Dict[str, Observation] = {}
+        # Each source's own latest observation per field, so a report-on-change
+        # feed can vouch for a field another source observed after it.
+        self._bySource: Dict[str, Dict[str, Observation]] = {}
 
     @staticmethod
     def _check(field: str) -> None:
@@ -69,12 +72,19 @@ class FieldStore:
         value: Any,
         source: str,
         at: Optional[float],
+        bySource: Optional[Dict[str, Dict[str, Observation]]] = None,
     ) -> Observation:
         # The clock is read under the lock so stored order matches stamp
         # order. An older stamp never displaces a newer one (equal replaces);
-        # the entry that stays is returned.
+        # the entry that stays is returned. bySource, when given, keeps the
+        # same rule per source.
         with self._lock:
             obs = Observation(value, source, self._clock() if at is None else at)
+            if bySource is not None:
+                mine = bySource.setdefault(field, {})
+                prev = mine.get(source)
+                if prev is None or obs.at >= prev.at:
+                    mine[source] = obs
             old = table.get(field)
             if old is not None and obs.at < old.at:
                 return old
@@ -85,7 +95,12 @@ class FieldStore:
         self, field: str, value: Any, source: str, at: Optional[float] = None
     ) -> Observation:
         self._check(field)
-        return self._store(self._latest, field, value, source, at)
+        return self._store(self._latest, field, value, source, at, self._bySource)
+
+    def reported(self, field: str) -> Dict[str, Observation]:
+        """Each source's latest observation of field."""
+        with self._lock:
+            return dict(self._bySource.get(field, {}))
 
     def latest(self, field: str) -> Optional[Observation]:
         with self._lock:
@@ -111,7 +126,8 @@ class FieldStore:
             now = self._clock()
         if liveAt is NOT_TRACKED or liveAt is None:
             return now - obs.at
-        return now - max(obs.at, liveAt)
+        # A live feed's liveAt can be a moment past now; age is never negative.
+        return max(0.0, now - max(obs.at, liveAt))
 
     @staticmethod
     def _fresher(obs: Optional[Observation], write: Optional[Observation]) -> bool:

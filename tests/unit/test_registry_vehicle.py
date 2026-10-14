@@ -1,5 +1,6 @@
 from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 from TWCManager.Vehicle.Registry.Vehicle import Vehicle
+from TWCManager.Vehicle.Registry.Fields import NOT_TRACKED
 
 VIN = "5YJ3E1EA1KF000001"
 
@@ -158,3 +159,101 @@ def test_summary_field_age_is_liveness_aware():
     c.t = 1600.0
     f = v.summary()["fields"]["chargeLimit"]
     assert f["age"] == 100.0 and f["changedAge"] == 600.0
+
+
+class FeedReg:
+    """Feed is a live report-on-change source; everything else is polled."""
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.live = True
+
+    def sourceLiveAt(self, source, vehicle):
+        if source != "Feed":
+            return NOT_TRACKED
+        return self.clock() if self.live else None
+
+
+def test_live_feed_vouches_for_an_equal_value_another_source_observed():  # P8/3
+    # TeslaMate publishes on change: once the API or BLE re-observes the value
+    # the feed last reported, only the feed's own record can vouch for it.
+    c = Clock()
+    reg = FeedReg(c)
+    v = Vehicle(VIN, VIN, registry=reg, clock=c)
+    v.observe("chargeLimit", 80, "Feed", at=100.0)
+    v.observe("chargeLimit", 80, "TeslaAPI", at=900.0)
+    c.t = 5000.0
+    assert v.latest("chargeLimit").source == "TeslaAPI"
+    assert v.age("chargeLimit") == 0.0
+    assert v.summary()["fields"]["chargeLimit"]["age"] == 0.0
+    reg.live = False  # feed down: the API reading ages normally
+    assert v.age("chargeLimit") == 4100.0
+
+
+def test_live_feed_vouches_for_a_different_value_another_source_observed():  # C1
+    # A healthy feed vouches for a field it has reported, whatever value a
+    # polled source saw since: it would have reported a change.
+    c = Clock()
+    reg = FeedReg(c)
+    v = Vehicle(VIN, VIN, registry=reg, clock=c)
+    v.observe("chargeLimit", 80, "Feed", at=100.0)
+    v.observe("chargeLimit", 90, "TeslaBLE", at=900.0)
+    c.t = 5000.0
+    assert v.age("chargeLimit") == 0.0 and v.value("chargeLimit") == 90
+    reg.live = False
+    assert v.age("chargeLimit") == 4100.0
+
+
+def test_feed_vouches_only_for_fields_it_reported():
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=FeedReg(c), clock=c)
+    v.observe("chargeLimit", 80, "Feed", at=100.0)
+    v.observe("lat", 51.5, "TeslaBLE", at=900.0)
+    c.t = 5000.0
+    assert v.age("lat") == 4100.0
+
+
+def test_feed_outage_costs_one_cloud_read_not_one_per_window():  # C1 probe
+    from TWCManager.Vehicle.Registry.ReadSource import ReadSource
+    from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+
+    for cloudLat in (51.50000001, 51.5):  # differing digits, then identical
+        c = Clock()
+        live = {"up": False}
+        reg = VehicleRegistry({}, clock=c)
+        reg.registerLiveness("TeslaMateVehicle", lambda v: c.t if live["up"] else None)
+        calls = []
+
+        class Cloud(ReadSource):
+            name = "TeslaAPI"
+            order = 1
+            fields = frozenset({"lat"})
+
+            def fetch(self, vehicle, field, allowWake):
+                calls.append(c.t)
+                return {"lat": cloudLat}
+
+        reg.registerReadSource(Cloud())
+        v = reg.getOrCreate(VIN, "test")
+        v.observe("lat", 51.5, "TeslaMateVehicle", at=100.0)
+        assert v.read("lat", maxAge=0).source == "TeslaAPI"  # feed down
+        assert len(calls) == 1
+        live["up"] = True  # feed back, car parked: no new latitude
+        for step in range(1, 7):
+            c.t = 1000.0 + 301 * step
+            v.read("lat", maxAge=300)
+        assert len(calls) == 1, cloudLat
+
+
+def test_feed_vouch_resolves_own_write_after_feed_lag():
+    from TWCManager.Vehicle.Registry.Fields import FEED_LAG
+
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=FeedReg(c), clock=c)
+    v.observe("chargeLimit", 50, "Feed", at=100.0)
+    v.observe("chargeLimit", 50, "TeslaAPI", at=900.0)
+    v.noteWrite("chargeLimit", 100, "TeslaBLE")  # at 1000
+    c.t = 1003.0
+    assert v.trusted("chargeLimit") is None
+    c.t = 1000.0 + FEED_LAG + 1
+    assert v.trusted("chargeLimit").value == 50

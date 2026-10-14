@@ -84,18 +84,42 @@ class Vehicle:
     def latest(self, field: str) -> Optional[Observation]:
         return self._fields.latest(field)
 
-    def _liveAt(self, obs: Optional[Observation]) -> Any:
+    def reportedBy(self, field: str, source: str) -> Optional[Observation]:
+        """source's own latest observation of field."""
+        return self._fields.reported(field).get(source)
+
+    def lastWrite(self, field: str) -> Optional[Observation]:
+        return self._fields.lastWrite(field)
+
+    def _liveAt(self, field: str, obs: Optional[Observation]) -> Any:
         if obs is None or self._registry is None:
             return NOT_TRACKED
-        return self._registry.sourceLiveAt(obs.source, self)
+        live = self._registry.sourceLiveAt(obs.source, self)
+        # A report-on-change feed sends nothing while a value holds, so a
+        # healthy feed that has reported this field vouches for it even after
+        # another source observed it, whatever value that source saw: the
+        # feed would have reported a change. Requiring equal values made a
+        # parked car whose cloud lat differs from TeslaMate's in the last
+        # digit cost a paid read per window after one feed outage.
+        for source in self._fields.reported(field):
+            if source == obs.source:
+                continue
+            other = self._registry.sourceLiveAt(source, self)
+            if other is NOT_TRACKED or other is None:
+                continue
+            live = other if live is NOT_TRACKED or live is None else max(live, other)
+        return live
 
     def age(self, field: str) -> Optional[float]:
+        # now is read before liveness: a live feed's liveAt is "now", and a
+        # later now would make its value a hair old and miss maxAge 0.
+        now = self._clock()
         obs = self._fields.latest(field)
-        return self._fields.age(field, liveAt=self._liveAt(obs))
+        return self._fields.age(field, now=now, liveAt=self._liveAt(field, obs))
 
     def trusted(self, field: str) -> Optional[Observation]:
         obs = self._fields.latest(field)
-        return self._fields.trusted(field, liveAt=self._liveAt(obs))
+        return self._fields.trusted(field, liveAt=self._liveAt(field, obs))
 
     def value(self, field: str, default: Any = None) -> Any:
         obs = self._fields.latest(field)
@@ -183,7 +207,7 @@ class Vehicle:
             lastSeen, lastSeenSource = self.lastSeen, self.lastSeenSource
         fields = {}
         for f, o in self._fields.snapshot().items():
-            liveAt = self._liveAt(o)
+            liveAt = self._liveAt(f, o)
             fields[f] = {
                 "value": o.value,
                 "source": o.source,

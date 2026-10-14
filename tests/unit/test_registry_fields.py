@@ -138,3 +138,13 @@ def test_clock_read_inside_lock():
     s.observe("lat", 1.0, "x")
     s.noteWrite("lat", 1.0, "x")
     assert held == [True, True]
+
+
+def test_per_source_record_keeps_newest_stamp():
+    s = FieldStore(Clock())
+    s.observe("chargeLimit", 80, "Feed", at=200.0)
+    s.observe("chargeLimit", 70, "Feed", at=100.0)
+    s.observe("chargeLimit", 60, "TeslaAPI", at=300.0)
+    rep = s.reported("chargeLimit")
+    assert rep["Feed"].value == 80 and rep["TeslaAPI"].value == 60
+    assert s.reported("lat") == {}

@@ -45,7 +45,7 @@ class VehicleRegistry:
         self._lock = threading.RLock()
         self._vehicles: Dict[str, Vehicle] = {}
         self._sources: List[ReadSource] = []
-        self._liveness: Dict[str, Callable[[Vehicle], Optional[float]]] = {}
+        self._liveness: Dict[str, Callable[[Optional[Vehicle]], Optional[float]]] = {}
         # Per point: {"candidate": vin, "attempts": int, "rejected": bool}.
         self._pending: Dict[str, dict] = {}
 
@@ -56,6 +56,10 @@ class VehicleRegistry:
             return registry
         config = getattr(master, "config", None)
         return cls(config if isinstance(config, dict) else {})
+
+    def now(self) -> float:
+        """The registry's clock: observation stamps and ages use it."""
+        return self._clock()
 
     # Membership
 
@@ -255,12 +259,13 @@ class VehicleRegistry:
         ]
 
     def registerLiveness(
-        self, source: str, liveAt: Callable[[Vehicle], Optional[float]]
+        self, source: str, liveAt: Callable[[Optional[Vehicle]], Optional[float]]
     ) -> None:
         with self._lock:
             self._liveness[source] = liveAt
 
-    def sourceLiveAt(self, source: str, vehicle: Vehicle) -> Any:
+    def sourceLiveAt(self, source: str, vehicle: Optional[Vehicle] = None) -> Any:
+        # vehicle None asks about the feed as a whole (e.g. its connection).
         with self._lock:
             liveAt = self._liveness.get(source)
         if liveAt is None:
