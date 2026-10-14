@@ -96,3 +96,79 @@ def test_local_mgmt_pair_and_scan():
     assert ble.peerWithVehicle.call_count == 1
     m.getModuleByName = lambda n: None
     assert vehicleLocalMgmt(m, "scan", VIN) == "/vehicleDetail/" + VIN
+
+
+TYPO = "5YJ3E1EA1KF000004"
+
+
+def added(m, vin=TYPO):
+    from TWCManager.Control.HTTPControl import addVehicleByVIN
+
+    m.queue_background_task = Mock()
+    assert addVehicleByVIN(m, vin) == "/vehicleDetail/" + vin
+    m.settings["Vehicles"][vin]["privKey"] = "k"  # scanForVehicles' key
+    return m.vehicleRegistry.get(vin)
+
+
+def test_forget_an_added_vin_removes_vehicle_record_and_key():  # I1
+    from TWCManager.Control.HTTPControl import canForgetVehicle, forgetVehicle
+
+    m = master()
+    added(m)
+    assert canForgetVehicle(m, TYPO)
+    assert forgetVehicle(m, TYPO) == "/vehicles"
+    assert m.vehicleRegistry.get(TYPO) is None and TYPO not in m.settings["Vehicles"]
+    m.queue_background_task.assert_called_with({"cmd": "saveSettings"})
+    html = render(m, None, vin=TYPO)
+    assert "Forget" not in html
+
+
+def test_forget_button_only_for_an_unattached_user_asserted_vehicle():  # I1
+    m = master()
+    v = added(m)
+    from TWCManager.Control.HTTPControl import canForgetVehicle
+
+    m.modules = {}
+    assert 'action="/vehicle/forget"' in render(m, None, vin=TYPO)
+    assert 'action="/vehicle/forget"' not in render(m, None, vin=VIN)
+    v.attach("TeslaAPI", object())  # the account lists it: not ours to forget
+    assert not canForgetVehicle(m, TYPO)
+    assert 'action="/vehicle/forget"' not in render(m, None, vin=TYPO)
+
+
+def test_forget_refuses_listed_paired_and_unknown_vehicles():  # I1
+    from TWCManager.Control.HTTPControl import canForgetVehicle, forgetVehicle
+
+    m = master()
+    m.queue_background_task = Mock()
+    # Not user-asserted (seen by a TWC): Phase 6.
+    assert not canForgetVehicle(m, VIN)
+    assert forgetVehicle(m, VIN) == "/vehicleDetail/" + VIN
+    assert m.vehicleRegistry.get(VIN) is not None and VIN in m.settings["Vehicles"]
+    # Attached by a provider.
+    v = added(m)
+    v.attach("HomeAssistant", object())
+    assert forgetVehicle(m, TYPO) == "/vehicleDetail/" + TYPO
+    assert m.vehicleRegistry.get(TYPO) is v
+    # A proven BLE key: a real car, not a typo.
+    m2 = master()
+    added(m2)
+    m2.settings["Vehicles"][TYPO]["ble"] = {"status": "paired", "since": 1.0}
+    assert not canForgetVehicle(m2, TYPO)
+    # Bad input never reaches the registry or the Location header.
+    assert forgetVehicle(m, "x\r\nSet-Cookie: a=b") == "/vehicles"
+    assert not canForgetVehicle(m, "5YJ3E1EA1KF000009")
+
+
+def test_forget_keeps_a_record_that_has_history():  # I1
+    from TWCManager.Control.HTTPControl import forgetVehicle
+
+    m = master()
+    m.queue_background_task = Mock()
+    # Known to settings before the add (charge history): only the
+    # registry entry goes.
+    m.settings["Vehicles"][TYPO] = {"chargeSessions": 2, "totalkWh": 5}
+    added(m)
+    assert forgetVehicle(m, TYPO) == "/vehicles"
+    assert m.vehicleRegistry.get(TYPO) is None
+    assert m.settings["Vehicles"][TYPO]["chargeSessions"] == 2

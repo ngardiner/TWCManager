@@ -192,6 +192,10 @@ class Vehicle:
         with self._lock:
             return self._attachments.get(name)
 
+    def attachmentNames(self) -> List[str]:
+        with self._lock:
+            return sorted(self._attachments)
+
     @property
     def name(self) -> str:
         obs = self._fields.latest("name")
