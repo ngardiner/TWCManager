@@ -681,6 +681,9 @@ class HomeAssistant:
                 result = "error"
             else:
                 vehicles_processed += 1
+                registryVehicle = self.registry.get(str(v.vin).upper())
+                if registryVehicle is not None:
+                    registryVehicle.noteWrite("chargeLimit", limit, "HomeAssistant")
 
         if vehicles_processed == 0 and result == "success":
             logger.info("No vehicles processed for charge limit %d%% command", limit)
@@ -744,6 +747,11 @@ class HomeAssistant:
 
         if not ok:
             logger.warning("Failed to set charge rate for %s", vehicle.name)
+        else:
+            # As TeslaAPI and TeslaBLE: our own write, stamped (never creates).
+            registryVehicle = self.registry.get(str(vehicle.vin).upper())
+            if registryVehicle is not None:
+                registryVehicle.noteWrite("availableCurrent", amps, "HomeAssistant")
 
         return ok
 

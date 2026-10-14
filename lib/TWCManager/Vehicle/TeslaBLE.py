@@ -620,6 +620,17 @@ class TeslaBLE:
             # Always ensure pipe is closed after command
             self._ensure_pipe_closed()
 
+    def _stampWrite(self, vin, field, value):
+        """Record a command that just succeeded as our own write. Only an
+        existing registry vehicle is stamped; a write path never creates one.
+        The registry lock is a leaf, so holding _bleLock here is fine."""
+        try:
+            v = self.registry.get(str(vin).upper())
+            if v is not None:
+                v.noteWrite(field, value, "TeslaBLE")
+        except Exception as e:
+            logger.debug(f"Could not stamp {field} write for {vin}: {e}")
+
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         """
         Set charge rate for vehicle(s) with enhanced error handling.
@@ -647,6 +658,8 @@ class TeslaBLE:
                     return False
 
                 success = self.parseCommandOutput(ret)
+                if success:
+                    self._stampWrite(vehicle, "availableCurrent", charge_rate)
                 logger.info(
                     f"Set charge rate {charge_rate}A for {vehicle}: {'success' if success else 'failed'}"
                 )
@@ -682,6 +695,9 @@ class TeslaBLE:
                         )
                         if ret is not None and self.parseCommandOutput(ret):
                             success_count += 1
+                            self._stampWrite(
+                                vehicle_vin, "availableCurrent", charge_rate
+                            )
                             logger.debug(
                                 f"Set charge rate successful for vehicle {vehicle_vin}"
                             )
@@ -788,6 +804,7 @@ class TeslaBLE:
                     )
                     if ret is not None and self.parseCommandOutput(ret):
                         success_count += 1
+                        self._stampWrite(vehicle_vin, "chargeLimit", target_limit)
                         if limit == -1:
                             # Restore: remove the flag and saved limit
                             self._stopTryingToApplyLimit.pop(vehicle_vin, None)
