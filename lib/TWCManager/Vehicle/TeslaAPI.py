@@ -1870,6 +1870,10 @@ class TeslaAPI:
     def _recordChargeRate(vehicle, charge_rate):
         vehicle.lastChargeRateSent = charge_rate
         vehicle.lastChargeRateSentTime = time.monotonic()
+        # Own-write stamp, so a later read can tell our write from the feed.
+        registryVehicle = getattr(vehicle, "vehicle", None)
+        if registryVehicle is not None:
+            registryVehicle.noteWrite("availableCurrent", charge_rate, "TeslaAPI")
 
     def updateCarApiLastErrorTime(self, vehicle=None):
         timestamp = time.time()
@@ -2496,6 +2500,9 @@ class CarApiVehicle:
                 result = False
 
             if result is True or reason == "already_set":
+                registryVehicle = self._liveVehicle()
+                if registryVehicle is not None:
+                    registryVehicle.noteWrite("chargeLimit", limit, "TeslaAPI")
                 self.stopTryingToApplyLimit = True
                 self.lastAPIAccessTime = now
                 self.carapi.resetCarApiLastErrorTime(self)
