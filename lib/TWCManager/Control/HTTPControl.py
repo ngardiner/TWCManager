@@ -206,7 +206,14 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(optionList=self.optionList)
             self.templateEnv.globals.update(timeList=self.timeList)
             self.templateEnv.globals.update(
-                vehicles=master.getModuleByName("TeslaAPI").getCarApiVehicles
+                vehicles=lambda: master.vehicleRegistry.vehicles()
+            )
+            self.templateEnv.globals.update(
+                locatedVehicles=lambda: [
+                    v
+                    for v in master.vehicleRegistry.vehicles()
+                    if v.value("lat") is not None and v.value("lon") is not None
+                ]
             )
             teslaModule = master.getModuleByName("TeslaAPI")
             self.templateEnv.globals.update(
@@ -781,12 +788,15 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
                     return
                 command = str(data.get("commandName", None))
-                vehicle = str(data.get("vehicleID", None))
+                vin = data.get("vehicleVIN", None)
                 params = str(data.get("parameters", None))
 
-                res = master.getModuleByName("TeslaAPI").apiDebugInterface(
-                    command, vehicle, params
-                )
+                carapi = master.getModuleByName("TeslaAPI")
+                if carapi is None:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                res = carapi.apiDebugInterface(command, vin, params)
                 if res == True:
                     self.send_response(200)
                     self.end_headers()
@@ -1622,13 +1632,17 @@ def CreateHTTPHandlerClass(master):
             # If unset was selected, unset account
             if "unset" in self.fields:
                 with master.settingsLock:
-                    del master.settings["homeLat"]
-                    del master.settings["homeLon"]
+                    # Already unset (a second click) is not an error.
+                    master.settings.pop("homeLat", None)
+                    master.settings.pop("homeLon", None)
 
             # If learn was selected, learn location
             if "learn" in self.fields:
-                loc = self.getFieldValue("vehicle").split(",")
-                if len(loc) >= 2:
+                selected = str(self.getFieldValue("vehicle") or "")
+                loc = selected.split(",")
+                if not selected:
+                    logger.info("No vehicle selected; home location unchanged")
+                elif len(loc) >= 2:
                     master.setHomeLon(loc[0])
                     master.setHomeLat(loc[1])
                 else:

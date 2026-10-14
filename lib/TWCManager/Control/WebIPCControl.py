@@ -344,8 +344,8 @@ class WebIPCControl:
                         + "\n"
                     )
 
-                    for vehicle in carapi.getCarApiVehicles():
-                        webResponseMsg += str(vehicle.__dict__) + "\n"
+                    for s in self.master.vehicleRegistry.summaries():
+                        webResponseMsg += str(s) + "\n"
 
                     webResponseMsg += "slaveTWCRoundRobin:\n"
                     for slaveTWC in self.master.getSlaveTWCs():
