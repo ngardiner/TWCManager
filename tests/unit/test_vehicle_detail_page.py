@@ -58,7 +58,7 @@ def test_scan_pending_and_no_bluetoothctl():
     html = render(
         m, status(label="Range unknown", inRange=None, canScan=False, lastScanAge=None)
     )
-    assert "Range unknown (bluetoothctl not found)" in html
+    assert "Range unknown (scanning unavailable)" in html
     assert 'value="scan"' not in html
 
 

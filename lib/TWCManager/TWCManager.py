@@ -407,6 +407,16 @@ def background_tasks_thread(master):
         # in the queue are done.
         master.doneBackgroundTask(task)
 
+        if task.get("cmd") == "bleScan":
+            # A scan request made between the drain's last check and
+            # doneBackgroundTask was coalesced into this task; queue it now.
+            try:
+                ble = master.getModuleByName("TeslaBLE")
+                if ble:
+                    ble.requeueIfRequested()
+            except Exception as e:
+                logger.error(f"bleScan requeue failed: {type(e).__name__}")
+
 
 def check_green_energy():
     global config, master
