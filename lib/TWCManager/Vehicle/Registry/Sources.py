@@ -95,3 +95,32 @@ class TeslaAPIReadSource(ReadSource):
             return None
         # update_vehicle_data observes through the CarApiVehicle fields.
         return {} if car.update_vehicle_data() else None
+
+
+# What Home Assistant's entities can report.
+HA_FIELDS = frozenset(
+    {"batteryLevel", "chargeLimit", "availableCurrent", "chargingState", "lat", "lon"}
+)
+
+
+class HomeAssistantReadSource(ReadSource):
+    name = "HomeAssistant"
+    # After the cloud API (1): HA mirrors the cloud, so it reads last.
+    order = 2
+    fields = HA_FIELDS
+
+    def __init__(self, ha):
+        self.ha = ha
+
+    def canRead(self, vehicle) -> bool:
+        return vehicle.attachment("HomeAssistant") is not None
+
+    def fetch(self, vehicle, field: str, allowWake: bool) -> Optional[Dict[str, Any]]:
+        # Home Assistant never wakes the car. The cascade records what comes
+        # back; None (unreachable, nothing answered) lets it fail rather than
+        # report a stale value as a read.
+        hv = vehicle.attachment("HomeAssistant")
+        if hv is None:
+            return None
+        seen = hv.parse_from_home_assistant(self.ha)
+        return seen or None
