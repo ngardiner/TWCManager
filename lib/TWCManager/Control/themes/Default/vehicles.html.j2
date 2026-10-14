@@ -9,6 +9,47 @@
     <p>&nbsp;</p>
     <h3>Vehicles</h3>
     <table>
+      <tr>
+        <th>VIN</th><td>&nbsp;</td>
+        <th>Name</th><td>&nbsp;</td>
+        <th>Tier</th><td>&nbsp;</td>
+        <th>Providers</th><td>&nbsp;</td>
+        <th>Last seen</th><td>&nbsp;</td>
+        <th>Held limit</th>
+      </tr>
+      {% for v in registry.vehicles() %}
+        {% set row = v.summary() %}
+        <tr>
+          <td>
+            {% if row.anonymous %}Unknown car on TWC {{ row.point }}
+            {% else %}<a href="/vehicleDetail/{{ row.vin }}">{{ row.vin }}</a>{% endif %}
+          </td>
+          <td>&nbsp;</td>
+          <td>{{ row.name }}</td>
+          <td>&nbsp;</td>
+          <td>{{ row.tier }}</td>
+          <td>&nbsp;</td>
+          <td>{% for c in row.claims %}{{ c.provider }} ({{ c.status }}){% if not loop.last %}, {% endif %}{% endfor %}</td>
+          <td>&nbsp;</td>
+          <td>{{ ageText(row.lastSeenAge) }} via {{ row.lastSeenSource }}</td>
+          <td>&nbsp;</td>
+          <td>{{ heldLimitText(v) }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+
+    {% if addVehicleError %}
+    <p style="color: red;">{{ addVehicleError }}</p>
+    {% endif %}
+    <form method=POST action="/vehicle/add">
+      <b>Add vehicle by VIN</b>
+      <input name="vin" maxlength="17" />
+      <input type=submit value="Add vehicle" />
+    </form>
+
+    <p>&nbsp;</p>
+    <h3>Charge history</h3>
+    <table>
         <tr>
           <th>Vehicle VIN</th>
           <td>&nbsp;</td>
