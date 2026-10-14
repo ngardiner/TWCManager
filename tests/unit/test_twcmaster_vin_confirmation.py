@@ -1,3 +1,5 @@
+import threading
+from datetime import timedelta
 from unittest.mock import Mock
 import pytest
 from TWCManager.TWCMaster import TWCMaster
@@ -251,3 +253,43 @@ def test_background_thread_dispatches_the_home_check():
     src = ast.get_source_segment(text, fn)
     assert 'task["cmd"] == "vehicleIsDefinitelyHome"' in src
     assert 'master.vehicleIsDefinitelyHome(task["vin"])' in src
+
+
+def test_delayed_task_list_is_only_touched_under_the_tasks_lock(queued):  # M2
+    # The serial thread inserts (VIN confirmation reads) while the
+    # background thread pops.
+    lock = queued.backgroundTasksLock = threading.Lock()
+
+    class Guarded(list):
+        def insert(self, *a):
+            assert lock.locked()
+            return super().insert(*a)
+
+        def pop(self, *a):
+            assert lock.locked()
+            return super().pop(*a)
+
+    queued.backgroundTasksDelayed = Guarded()
+    queued.queue_background_task({"cmd": "later"}, delay=5)
+    queued.backgroundTasksDelayed[0] = (
+        datetime.now() - timedelta(seconds=1),
+        0,
+        {"cmd": "later"},
+    )
+    queued.backgroundTasksQueue.get = Mock(return_value={"cmd": "later"})
+    assert queued.getBackgroundTask() == {"cmd": "later"}
+    queued.backgroundTasksQueue.put.assert_called_once_with({"cmd": "later"})
+    assert not lock.locked() and len(queued.backgroundTasksDelayed) == 0
+
+
+def test_deleting_a_twc_ends_its_plug_session(master):  # M6
+    from types import SimpleNamespace
+
+    twcid = b"\x82\x44"
+    slave = SimpleNamespace(TWCID=twcid)
+    master.slaveTWCs[twcid] = slave
+    master.slaveTWCRoundRobin = [slave]
+    master.vehicleRegistry.beginPlugSession("8244")
+    master.deleteSlaveTWC(twcid)
+    assert master.vehicleRegistry.get("anon:8244") is None
+    assert master.slaveTWCRoundRobin == []
