@@ -227,3 +227,50 @@ def test_summaries_sorted_by_key():
     r.getOrCreate(VIN2, "x")
     r.getOrCreate(VIN, "x")
     assert [s["key"] for s in r.summaries()] == [VIN, VIN2]
+
+
+def test_get_or_create_rejects_non_ascii_like_load():
+    r = VehicleRegistry({})
+    with pytest.raises(ValueError):
+        r.getOrCreate("ÿ1", "TeslaAPI")
+    assert r.vehicles() == []
+
+
+def test_liveness_non_number_counts_as_not_live():
+    r = VehicleRegistry({})
+    v = r.getOrCreate(VIN, "S")
+    for bad in ("soon", True, float("nan"), object()):
+        r.registerLiveness("S", lambda vehicle, b=bad: b)
+        assert r.sourceLiveAt("S", v) is None
+    r.registerLiveness("S", lambda vehicle: 5)
+    assert r.sourceLiveAt("S", v) == 5.0
+    r.registerLiveness("S", lambda vehicle: "x")
+    v.observe("chargeLimit", 50, "S", at=10.0)
+    v.age("chargeLimit")
+    v.summary()
+
+
+@pytest.mark.parametrize("bad", [0, -3, "x", None, True])
+def test_forget_days_invalid_falls_back_to_default(bad):
+    r = VehicleRegistry({"vehicle": {"forgetAfterDays": bad}})
+    assert r.forgetAfter == 30 * 86400
+
+
+def test_to_json_omits_anonymous():
+    from TWCManager.Vehicle.Registry.Vehicle import Vehicle
+
+    r = VehicleRegistry({})
+    r.getOrCreate(VIN, "TWC")
+    with r._lock:
+        r._vehicles["anon:abc"] = Vehicle("anon:abc", None, r)
+    assert list(r.toJSON()["vehicles"]) == [VIN]
+
+
+def test_load_logs_added_at_debug(caplog):
+    import logging
+
+    r = VehicleRegistry({})
+    with caplog.at_level(logging.DEBUG):
+        r.load({"vehicles": {VIN: {}}})
+    recs = [x for x in caplog.records if "added (persisted)" in x.getMessage()]
+    assert recs and all(x.levelno == logging.DEBUG for x in recs)
