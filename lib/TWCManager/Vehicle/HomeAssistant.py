@@ -88,9 +88,34 @@ class HaVehicle:
     # ---- Refresh from Home Assistant via REST ----
 
     def refresh_from_home_assistant(self, api: "HomeAssistant") -> bool:
+        seen = self.parse_from_home_assistant(api)
+        if seen is None:
+            return False
+        # A forgotten vehicle is not recreated by a read.
+        v = api.registry.get(self.vin)
+        if v is not None:
+            for field, value in seen.items():
+                v.observe(field, value, "HomeAssistant")
+        return True
+
+    def parse_from_home_assistant(self, api: "HomeAssistant") -> Optional[dict]:
+        """Read the entities and update the cached state. Returns the registry
+        fields this pass observed, or None if Home Assistant could not be
+        reached or no entity answered. Does not touch the registry."""
+        answered = False
+        failures = api.connectionFailures
+
         def get_state(key: str) -> Optional[dict]:
+            nonlocal answered
             ent = self.entity_ids.get(key)
-            return api._get_state(ent) if ent else None
+            # Fail fast: after a connection error, skip the remaining calls
+            # rather than waiting out a timeout for each.
+            if not ent or api.connectionFailures != failures:
+                return None
+            st = api._get_state(ent)
+            if st is not None:
+                answered = True
+            return st
 
         # Only what this pass parsed is observed: an absent or unparsable
         # entity leaves the registry's earlier value to age out.
@@ -147,14 +172,10 @@ class HaVehicle:
             elif self.lat is not None and self.lon is not None:
                 self.at_home = api.is_location_home(self.lat, self.lon)
 
+        if not answered:
+            return None
         self.last_state_update = time.time()
-
-        # A forgotten vehicle is not recreated by a read.
-        v = api.registry.get(self.vin)
-        if v is not None:
-            for field, value in seen.items():
-                v.observe(field, value, "HomeAssistant")
-        return True
+        return seen
 
 
 class HomeAssistant:
@@ -164,6 +185,7 @@ class HomeAssistant:
     lastChargeLimitApplied = -1
     minChargeLevel = -1
     lastStateRefreshTime = 0
+    connectionFailures = 0  # bumped by _get_state on a connection error
     stateRefreshInterval = 30  # Minimum seconds between state refreshes per vehicle
 
     def __init__(self, master):
@@ -378,12 +400,12 @@ class HomeAssistant:
                 continue
 
             hv = HaVehicle(name, vin, d.get("id"), entity_ids)
-            self.carApiVehicles.append(hv)
             try:
                 v = self.registry.getOrCreate(vin, "HomeAssistant")
             except ValueError:
-                logger.debug("Device '%s' VIN rejected by the registry", name)
+                logger.warning("Device '%s' VIN rejected by the registry", name)
                 continue
+            self.carApiVehicles.append(hv)
             v.attach("HomeAssistant", hv)
             v.observe("name", name, "HomeAssistant")
             v.claim(
@@ -473,6 +495,7 @@ class HomeAssistant:
                 resp.raise_for_status()
                 return resp.json()
             except requests.exceptions.Timeout:
+                self.connectionFailures += 1
                 logger.debug("HA: timeout reading state %s (5s)", entity_id)
                 return None
             except requests.exceptions.HTTPError as e:
@@ -484,6 +507,10 @@ class HomeAssistant:
                         e.response.status_code,
                         entity_id,
                     )
+                return None
+            except requests.exceptions.ConnectionError as exc:
+                self.connectionFailures += 1
+                logger.warning("HA: failed reading state %s: %s", entity_id, exc)
                 return None
             except Exception as exc:
                 logger.warning("HA: failed reading state %s: %s", entity_id, exc)
