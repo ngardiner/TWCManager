@@ -124,10 +124,12 @@ def no_threads():
     tests that request it need not change."""
 
 
-def add_home_vehicle(api, command_signing=None, vin="VIN1", name="Car", id=1):
-    """Add a vehicle (VIN1 by default), at home and recently contacted, so
-    ready() is True without an HTTP call. command_signing is the /products
-    field; None leaves it out. Use with the no_threads fixture."""
+def add_home_vehicle(
+    api, command_signing=None, vin="5YJ3E1EA1KF000001", name="Car", id=1
+):
+    """Add a vehicle (5YJ3E1EA1KF000001 by default), at home and recently
+    contacted, so ready() is True without an HTTP call. command_signing is the
+    /products field; None leaves it out. Use with the no_threads fixture."""
     entry = {"id": id, "vin": vin, "display_name": name}
     if command_signing is not None:
         entry["command_signing"] = command_signing

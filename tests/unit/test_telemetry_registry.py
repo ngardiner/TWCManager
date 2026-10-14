@@ -162,6 +162,13 @@ def test_fleet_telemetry_topic_id_is_the_vin():
     assert t.vinFor(VIN) == VIN and FleetTelemetryMQTT.events["syncState"][0] == "state"
 
 
+def test_fleet_telemetry_topic_id_that_is_not_a_vin_maps_to_none():  # I3
+    t, reg = make(FleetTelemetryMQTT)
+    assert t.vinFor("status") is None and t.vinFor("0" * 17) is None
+    t.applyDataToVehicle("status", "display_name", "Ghost")
+    assert reg.vehicles() == []
+
+
 # Controller rulings on top of the brief.
 
 

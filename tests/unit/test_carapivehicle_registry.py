@@ -63,8 +63,8 @@ def test_actual_current_change_time_only_moves_on_change():
 def test_master_without_registry_gets_a_private_one():
     api = new_api()
     api.carApiVehicles = []
-    api.addVehicle({"id": 1, "vin": "V1", "display_name": "x"})
-    assert api.getCarApiVehicles()[0].VIN == "V1" and isinstance(
+    api.addVehicle({"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "x"})
+    assert api.getCarApiVehicles()[0].VIN == "5YJ3E1EA1KF000001" and isinstance(
         api.registry, VehicleRegistry
     )
 

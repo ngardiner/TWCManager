@@ -88,7 +88,7 @@ class TestTeslaAPIRefusesCommands:
     def test_fleet_token_is_not_refused(self, owner_api, requests_mock):
         owner_api.storeToken(fleet_token())
         cmd = requests_mock.post(
-            re.compile(r".*/VIN1/command/set_charging_amps"),
+            re.compile(r".*/5YJ3E1EA1KF000001/command/set_charging_amps"),
             json={"response": {"result": True, "reason": ""}},
         )
         vehicle = owner_api.getCarApiVehicles()[0]
@@ -137,7 +137,7 @@ class TestRefusalLogging:
 class TestReadsStillRun:
     def test_vehicle_data_read_uses_owner_api(self, owner_api, requests_mock):
         data = requests_mock.get(
-            OWNER_URL + "/VIN1/vehicle_data",
+            OWNER_URL + "/5YJ3E1EA1KF000001/vehicle_data",
             json={
                 "response": {
                     "drive_state": {"latitude": 37.0, "longitude": -122.0},
@@ -159,7 +159,9 @@ class TestReadsStillRun:
             OWNER_URL[: -len("vehicles")] + "products",
             json={
                 "count": 1,
-                "response": [{"id": 1, "vin": "VIN1", "display_name": "Car"}],
+                "response": [
+                    {"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"}
+                ],
             },
         )
         assert api.car_api_available() is True
@@ -237,7 +239,7 @@ class TestTeslaAPIEVSE:
         master = Mock()
         master.config = {"config": {}}
         master.getModuleByName = Mock(return_value=carapi)
-        return TeslaAPIEVSE(Mock(VIN="VIN1"), Mock(), master)
+        return TeslaAPIEVSE(Mock(VIN="5YJ3E1EA1KF000001"), Mock(), master)
 
     def test_read_only_follows_tesla_api(self, owner_api):
         evse = self.make_evse(owner_api)
@@ -259,7 +261,7 @@ VCP_403 = {
 ACCEPTED = {"response": {"result": True, "reason": ""}}
 ONLINE = {"response": {"state": "online"}}
 
-# Each owner-command path: the endpoint under /VIN1 and how to send it.
+# Each owner-command path: the endpoint under /5YJ3E1EA1KF000001 and how to send it.
 COMMANDS = {
     "set_charging_amps": (
         "/command/set_charging_amps",
@@ -362,7 +364,7 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr(teslaapi.time, "sleep", lambda secs: None)
 
 
-def add_car(api, command_signing, vin="VIN1", name="Car", id=1):
+def add_car(api, command_signing, vin="5YJ3E1EA1KF000001", name="Car", id=1):
     """A car at home whose charge and location reads succeed without HTTP,
     on a master that tracks charge limits."""
     vehicle = add_home_vehicle(api, command_signing, vin=vin, name=name, id=id)
@@ -407,7 +409,9 @@ class TestOwnerCommandsForUnsignedVehicles:
     ):
         api, vehicle = owner_car("off")
         suffix, send = COMMANDS[command]
-        cmd = requests_mock.post(OWNER_URL + "/VIN1" + suffix, json=reply_for(command))
+        cmd = requests_mock.post(
+            OWNER_URL + "/5YJ3E1EA1KF000001" + suffix, json=reply_for(command)
+        )
 
         assert api.readOnly is False
         assert api.readOnlyFor(vehicle) is False
@@ -423,7 +427,7 @@ class TestOwnerCommandsForUnsignedVehicles:
         api, vehicle = owner_car("off")
         api.ownerSlot.pause()
         cmd = requests_mock.post(
-            OWNER_URL + "/VIN1/command/set_charging_amps", json=ACCEPTED
+            OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps", json=ACCEPTED
         )
         assert api.setChargeRate(10, vehicle) == ACCEPTED
         assert cmd.call_count == 1
@@ -455,11 +459,11 @@ class TestRefusedVehicles:
 
 @pytest.fixture
 def mixed_fleet(no_threads, no_sleep):
-    """Owner token only; VIN1 takes Owner API commands, VIN2 needs signing."""
+    """Owner token only; 5YJ3E1EA1KF000001 takes Owner API commands, 5YJ3E1EA1KF000002 needs signing."""
     api = new_api()
     api.storeToken(owner_token())
     unsigned = add_car(api, "off")
-    signed = add_car(api, "required", vin="VIN2", name="Signed", id=2)
+    signed = add_car(api, "required", vin="5YJ3E1EA1KF000002", name="Signed", id=2)
     return api, unsigned, signed
 
 
@@ -477,7 +481,7 @@ class TestMixedFleet:
         assert amps.call_count == 0
         assert api.setChargeRate(10, unsigned) == ACCEPTED
         assert amps.call_count == 1
-        assert amps.last_request.url.startswith(OWNER_URL + "/VIN1/")
+        assert amps.last_request.url.startswith(OWNER_URL + "/5YJ3E1EA1KF000001/")
         assert no_error_recorded(api)
         assert signed.lastErrorTime == 0
 
@@ -489,7 +493,10 @@ class TestMixedFleet:
         # VehiclePriority tries the next module.
         assert api.car_api_charge({"charge": False}) == "error"
         assert stop.call_count == 1
-        assert stop.last_request.url == OWNER_URL + "/VIN1/command/charge_stop"
+        assert (
+            stop.last_request.url
+            == OWNER_URL + "/5YJ3E1EA1KF000001/command/charge_stop"
+        )
         assert signed.lastErrorTime == 0
         assert no_error_recorded(api)
 
@@ -510,7 +517,7 @@ class TestMixedFleet:
     ):
         api, unsigned, signed = mixed_fleet
         amps = requests_mock.post(
-            OWNER_URL + "/VIN1/command/set_charging_amps", json=ACCEPTED
+            OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps", json=ACCEPTED
         )
         ble = Mock()
         ble.setChargeRate = Mock(return_value=True)
@@ -532,7 +539,7 @@ class TestMixedFleet:
 
 
 # Each owner-command path as VehiclePriority calls it: the endpoint under
-# /VIN1 and how to call it.
+# /5YJ3E1EA1KF000001 and how to call it.
 PRIORITY_CALLS = {
     "setChargeRate": (
         "/command/set_charging_amps",
@@ -567,7 +574,9 @@ class TestOwnerCommandRefusedByTesla:
         api, vehicle = owner_car("off")
         suffix, send = COMMANDS[command]
         first, after = REFUSED_RETURNS[command]
-        cmd = requests_mock.post(OWNER_URL + "/VIN1" + suffix, **ALL_REFUSALS[refusal])
+        cmd = requests_mock.post(
+            OWNER_URL + "/5YJ3E1EA1KF000001" + suffix, **ALL_REFUSALS[refusal]
+        )
 
         assert send(api, vehicle) == first
 
@@ -585,7 +594,9 @@ class TestOwnerCommandRefusedByTesla:
 
         # Reads still run on the Owner token.
         assert api.ownerSlot.usable("read")
-        data = requests_mock.get(OWNER_URL + "/VIN1/vehicle_data", json=VEHICLE_DATA)
+        data = requests_mock.get(
+            OWNER_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA
+        )
         assert vehicle.update_vehicle_data() is True
         assert data.call_count == 1
 
@@ -600,7 +611,8 @@ class TestOwnerCommandRefusedByTesla:
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car("off")
         requests_mock.post(
-            OWNER_URL + "/VIN1/command/set_charging_amps", **ALL_REFUSALS[refusal]
+            OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps",
+            **ALL_REFUSALS[refusal]
         )
         api.setChargeRate(10, vehicle)
 
@@ -638,9 +650,11 @@ class TestOwnerCommandRefusedByTesla:
         api, vehicle = owner_car("off")
         vehicle.lastAPIAccessTime = 0  # not known to be awake
         vehicle.firstChargeNeededTime = 1  # pre-wake hold long over
-        requests_mock.get(OWNER_URL + "/VIN1", json={"response": {"state": "asleep"}})
+        requests_mock.get(
+            OWNER_URL + "/5YJ3E1EA1KF000001", json={"response": {"state": "asleep"}}
+        )
         wake = requests_mock.post(
-            OWNER_URL + "/VIN1/wake_up", status_code=403, json=VCP_403
+            OWNER_URL + "/5YJ3E1EA1KF000001/wake_up", status_code=403, json=VCP_403
         )
 
         api.car_api_available(charge=True)
@@ -656,7 +670,9 @@ class TestOwnerCommandRefusedByTesla:
     ):
         api, vehicle = owner_car("off")
         suffix, call = PRIORITY_CALLS[method]
-        cmd = requests_mock.post(OWNER_URL + "/VIN1" + suffix, **ALL_REFUSALS[refusal])
+        cmd = requests_mock.post(
+            OWNER_URL + "/5YJ3E1EA1KF000001" + suffix, **ALL_REFUSALS[refusal]
+        )
         ble = Mock()
         setattr(ble, method, Mock(return_value=True))
 
@@ -671,7 +687,9 @@ class TestOwnerCommandRefusedByTesla:
         assert getattr(ble, method).call_count == 2
         assert no_error_recorded(api)
 
-        data = requests_mock.get(OWNER_URL + "/VIN1/vehicle_data", json=VEHICLE_DATA)
+        data = requests_mock.get(
+            OWNER_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA
+        )
         assert vehicle.update_vehicle_data() is True
         assert data.call_count == 1
 
@@ -700,7 +718,7 @@ class TestOwnerCommandRefusedByTesla:
         api, vehicle = owner_car("off", fleet=fleet_token())
         suffix, send = COMMANDS[command]
         answer = self.FLEET_REFUSALS[refusal]
-        cmd = requests_mock.post(FLEET_URL + "/VIN1" + suffix, **answer)
+        cmd = requests_mock.post(FLEET_URL + "/5YJ3E1EA1KF000001" + suffix, **answer)
 
         assert send(api, vehicle) == self.FLEET_RETURNS[command](answer["json"])
 
@@ -721,7 +739,7 @@ class TestBothTokens:
         api.setChargeRate(10, vehicle)
 
         assert amps.call_count == 1
-        assert amps.last_request.url.startswith(FLEET_URL + "/VIN1/")
+        assert amps.last_request.url.startswith(FLEET_URL + "/5YJ3E1EA1KF000001/")
         bearer = amps.last_request.headers["Authorization"]
         assert bearer == "Bearer " + api.fleetSlot.accessToken
 
@@ -737,7 +755,7 @@ class TestBothTokens:
 
         assert api.commandSlotFor(vehicle) is api.ownerSlot
         api.setChargeRate(10, vehicle)
-        assert amps.last_request.url.startswith(OWNER_URL + "/VIN1/")
+        assert amps.last_request.url.startswith(OWNER_URL + "/5YJ3E1EA1KF000001/")
 
     def test_fleet_carries_commands_for_signed_car(self, owner_car):
         api, vehicle = owner_car("required", fleet=fleet_token())
@@ -793,7 +811,7 @@ class TestVehiclesNotYetListed:
                 "response": [
                     {
                         "id": 1,
-                        "vin": "VIN1",
+                        "vin": "5YJ3E1EA1KF000001",
                         "display_name": "Car",
                         "command_signing": "required",
                     }
@@ -864,7 +882,7 @@ class TestPerVehicleRefusalLogging:
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car("off")
         requests_mock.post(
-            OWNER_URL + "/VIN1/command/set_charging_amps",
+            OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps",
             status_code=403,
             json=VCP_403,
         )

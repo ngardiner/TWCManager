@@ -16,8 +16,8 @@ def api(monkeypatch, requests_mock):
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     a = new_api()
     a.storeToken(fleet_token())
-    a.addVehicle({"id": 1, "vin": "V1", "display_name": "Car1"})
-    a.addVehicle({"id": 2, "vin": "V2", "display_name": "Car2"})
+    a.addVehicle({"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car1"})
+    a.addVehicle({"id": 2, "vin": "5YJ3E1EA1KF000002", "display_name": "Car2"})
     for v in a.getCarApiVehicles():
         v.atHome = True
         v.lastAPIAccessTime = time.time()
@@ -45,8 +45,8 @@ def _posts(requests_mock):
 def test_vin_stop_commands_only_that_vehicle(api, requests_mock):
     v1, v2 = api.getCarApiVehicles()
     v2.firstChargeNeededTime = 123
-    api.car_api_charge({"cmd": "charge", "charge": False, "vin": "V1"})
-    assert _posts(requests_mock) == [["V1", "command", "charge_stop"]]
+    api.car_api_charge({"cmd": "charge", "charge": False, "vin": "5YJ3E1EA1KF000001"})
+    assert _posts(requests_mock) == [["5YJ3E1EA1KF000001", "command", "charge_stop"]]
     v2.update_charge.assert_not_called()
     v2.update_location.assert_not_called()
     assert v2.firstChargeNeededTime == 123  # wake state of V2 not reset
@@ -57,8 +57,8 @@ def test_vin_start_does_not_wake_other_vehicles(api, requests_mock):
     v1.chargingState = "Stopped"
     v2.chargingState = "Stopped"
     v2.lastAPIAccessTime = 0  # asleep: an untargeted start would defer/wake it
-    api.car_api_charge({"cmd": "charge", "charge": True, "vin": "V1"})
-    assert _posts(requests_mock) == [["V1", "command", "charge_start"]]
+    api.car_api_charge({"cmd": "charge", "charge": True, "vin": "5YJ3E1EA1KF000001"})
+    assert _posts(requests_mock) == [["5YJ3E1EA1KF000001", "command", "charge_start"]]
     v2.update_charge.assert_not_called()
     assert v2.firstChargeNeededTime == 0
 
@@ -66,6 +66,6 @@ def test_vin_start_does_not_wake_other_vehicles(api, requests_mock):
 def test_no_vin_still_commands_every_vehicle(api, requests_mock):
     api.car_api_charge({"cmd": "charge", "charge": False})
     assert sorted(_posts(requests_mock)) == [
-        ["V1", "command", "charge_stop"],
-        ["V2", "command", "charge_stop"],
+        ["5YJ3E1EA1KF000001", "command", "charge_stop"],
+        ["5YJ3E1EA1KF000002", "command", "charge_stop"],
     ]

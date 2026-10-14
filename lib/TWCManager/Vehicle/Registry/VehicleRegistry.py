@@ -70,13 +70,9 @@ class VehicleRegistry:
         return key
 
     def _getOrCreate(self, vin: str, source: str):
-        # load() applies the same rule, so what toJSON wrote always reloads.
-        if (
-            not isinstance(vin, str)
-            or not vin
-            or not vin.isascii()
-            or vin.startswith(ANON_PREFIX)
-        ):
+        # The one gate for every provider: only a well-formed VIN becomes a
+        # vehicle (anonymous vehicles come from beginPlugSession).
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
             raise ValueError("a VIN is required")
         vin = vin.upper()
         with self._lock:
@@ -305,8 +301,9 @@ class VehicleRegistry:
             try:
                 if not isinstance(entry, dict):
                     continue
-                # Same acceptance as getOrCreate, so what toJSON wrote loads.
-                if not isinstance(vin, str) or not vin.isascii():
+                # Same acceptance as getOrCreate: an entry an older release
+                # persisted under a malformed key is dropped, not raised.
+                if not isinstance(vin, str) or not isWellFormedVIN(vin):
                     continue
                 self._loadOne(vin, entry, now)
             except Exception as e:

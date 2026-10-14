@@ -18,6 +18,7 @@ def test_vin_format():
     assert not isWellFormedVIN("5YJ3E1EA1KF00000I")  # I
     assert not isWellFormedVIN("5YJ3E1EA1KF0000011")  # 18 chars
     assert not isWellFormedVIN("")
+    assert not isWellFormedVIN("0" * 17)  # legacy placeholder (M9)
 
 
 def test_identity_and_tier_default_observed():

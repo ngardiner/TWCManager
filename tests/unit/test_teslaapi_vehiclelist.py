@@ -28,7 +28,7 @@ def resp(text):
     return r
 
 
-VEHICLES = '{"count": 1, "response": [{"id": 1, "vin": "VIN1", "display_name": "Car"}]}'
+VEHICLES = '{"count": 1, "response": [{"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"}]}'
 
 
 def test_loads_once(no_threads):
@@ -37,7 +37,7 @@ def test_loads_once(no_threads):
         assert api.loadVehicleList() is True
         assert api.loadVehicleList() is True
     assert get.call_count == 1
-    assert [v.VIN for v in api.getCarApiVehicles()] == ["VIN1"]
+    assert [v.VIN for v in api.getCarApiVehicles()] == ["5YJ3E1EA1KF000001"]
 
 
 def test_failure_returns_false_and_records_error():
