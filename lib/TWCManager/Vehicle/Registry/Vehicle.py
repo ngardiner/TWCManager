@@ -66,7 +66,7 @@ class Vehicle:
             with self._lock:
                 if obs.at >= self.lastSeen:
                     self.lastSeen = obs.at
-                    self.lastSeenSource = source
+                    self.lastSeenSource = obs.source
         return obs
 
     def latest(self, field: str) -> Optional[Observation]:
