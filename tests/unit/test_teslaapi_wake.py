@@ -140,8 +140,8 @@ def test_car_online_after_offline_wake_is_noticed(api, clock, car_state, request
 def test_car_never_online_polls_in_window_then_waits(api, clock, requests_mock):
     woke = _send_first_wake(api, clock)
     gets_at_wake = _gets(requests_mock)
-    poll = getattr(api, "POST_WAKE_POLL_SECS", 60)
-    window = getattr(api, "POST_WAKE_CHECK_SECS", 600)
+    poll = api.POST_WAKE_POLL_SECS
+    window = api.POST_WAKE_CHECK_SECS
 
     # Inside the window, called every 10 s: one state GET per poll interval.
     while clock.now + 10 - woke <= window:
@@ -210,7 +210,7 @@ def test_state_check_uses_owner_slot_when_present(no_threads, clock, requests_mo
     requests_mock.get(OWNER_API_URL + "/VIN1", json={"response": {"state": "asleep"}})
     requests_mock.post(WAKE_URL, json={"response": {"state": "offline"}})
     _send_first_wake(a, clock)
-    clock.advance(getattr(a, "POST_WAKE_POLL_SECS", 60))
+    clock.advance(a.POST_WAKE_POLL_SECS)
     assert a.car_api_available(charge=True) is False
 
     state_gets = [r for r in requests_mock.request_history if r.method == "GET"]
@@ -231,7 +231,7 @@ def test_telemetry_from_before_wake_is_not_trusted(
     vehicle.syncTimestamp = woke - 10
 
     car_state.value = "online"
-    clock.advance(getattr(api, "POST_WAKE_POLL_SECS", 60))
+    clock.advance(api.POST_WAKE_POLL_SECS)
     assert api.car_api_available(charge=True) is True
     assert _wakes(requests_mock) == 1
     assert vehicle.delayNextWakeAttempt == 0
@@ -267,3 +267,66 @@ def test_ble_read_does_not_move_wake_window(api, clock, requests_mock):
     clock.now = woke + 30 * 60 + 1
     api.car_api_available(charge=True)
     assert _wakes(requests_mock) == 2
+
+
+def _teslamate(vehicle, state, stamp):
+    vehicle.syncSource = "TeslaMateVehicle"
+    vehicle.syncState = state
+    vehicle.syncTimestamp = stamp
+
+
+def test_stale_telemetry_asleep_does_not_cause_rewakes(
+    api, clock, car_state, requests_mock
+):
+    # TeslaMate's last 'asleep' is an hour old. The car comes online after
+    # one wake_up, but the charge command keeps failing, so every cycle
+    # asks again for an hour. Every caller must see the same answer as the
+    # window did, and the car must not be re-woken at the 30-minute retry.
+    vehicle = api.getCarApiVehicles()[0]
+    _teslamate(vehicle, "asleep", clock.now - 3600)
+    start = clock.now
+    woke = None
+    while clock.now - start <= 60 * 60:
+        if woke is None and _wakes(requests_mock) == 1:
+            woke = clock.now
+        if woke is not None and clock.now - woke >= 120:
+            car_state.value = "online"
+        if api.car_api_available(charge=True):
+            # car_api_charge then checks the car before commanding it.
+            vehicle.ready()
+        clock.advance(10)
+    assert _wakes(requests_mock) == 1
+
+
+def test_fresh_telemetry_newer_than_our_get_is_trusted(api, clock, requests_mock):
+    vehicle = api.getCarApiVehicles()[0]
+    car_state_online = {"response": {"state": "online"}}
+    requests_mock.get(STATE_URL, json=car_state_online)
+    assert vehicle.is_awake() is True
+    gets = _gets(requests_mock)
+
+    clock.advance(300)
+    _teslamate(vehicle, "asleep", clock.now)
+    assert vehicle.is_awake() is False
+    assert _gets(requests_mock) == gets
+
+
+def test_our_get_newer_than_telemetry_wins(api, clock, car_state, requests_mock):
+    vehicle = api.getCarApiVehicles()[0]
+    _teslamate(vehicle, "asleep", clock.now)
+
+    car_state.value = "online"
+    clock.advance(5)
+    # E.g. the post-wake window, ignoring telemetry from before the wake.
+    assert vehicle.is_awake(telemetryNotBefore=clock.now - 1) is True
+    gets = _gets(requests_mock)
+
+    # A default caller: the fresh 'asleep' is older than our GET.
+    clock.advance(5)
+    assert vehicle.is_awake() is True
+    assert _gets(requests_mock) == gets
+    # Once our result is past its throttle, GET again rather than fall back
+    # to the older telemetry.
+    clock.advance(120)
+    assert vehicle.is_awake() is True
+    assert _gets(requests_mock) == gets + 1

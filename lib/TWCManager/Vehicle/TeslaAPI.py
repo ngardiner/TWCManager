@@ -2136,27 +2136,23 @@ class CarApiVehicle:
         return False
 
     def is_awake(self, minInterval=120, telemetryNotBefore=0):
-        # Free sources only: fresh telemetry, else the vehicle state GET
+        # Free sources only: telemetry, else the vehicle state GET
         # (vehicles/{vin}; not charged on the Fleet API). Never vehicle_data.
-        # telemetryNotBefore: ignore telemetry stamped earlier (e.g. before a
-        # wake_up we sent; it can't tell us whether the wake worked).
+        # The newest observation wins: telemetry (any state) is trusted only
+        # while fresh and newer than our own last state GET; otherwise use
+        # that GET's cached result or GET again.
+        # telemetryNotBefore: also ignore telemetry stamped earlier (e.g.
+        # before a wake_up we sent; it can't tell us whether the wake worked).
+        now = time.time()
         if (
             self.syncSource != "TeslaAPI"
             and self.syncTimestamp > 0
+            and self.syncTimestamp >= now - self.syncTimeout / 4
+            and self.syncTimestamp > self.lastVehicleAwakeTime
             and self.syncTimestamp >= telemetryNotBefore
         ):
-            # External sync (e.g. TeslaMate) has provided at least one update.
-            if self.syncState in ("asleep", "offline"):
-                # Car is known to be asleep - trust the sync source and avoid
-                # Fleet API calls that cost money just to confirm it's still asleep.
-                return False
-            if self.syncTimestamp >= (time.time() - self.syncTimeout / 4):
-                # Fresh data and car is not asleep - trust it.
-                return self.syncState in ("online", "charging", "updating", "driving")
-            # Stale data but car was last known active - fall through to API check
-            # in case the sync source dropped while the car was still awake.
+            return self.syncState in ("online", "charging", "updating", "driving")
 
-        now = time.time()
         # Don't check more often than every minInterval seconds (2 minutes
         # unless the caller is watching for a car it just woke).
         if now - self.lastVehicleAwakeTime < minInterval:
