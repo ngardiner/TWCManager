@@ -206,7 +206,7 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(optionList=self.optionList)
             self.templateEnv.globals.update(timeList=self.timeList)
             self.templateEnv.globals.update(
-                vehicles=master.getModuleByName("TeslaAPI").getCarApiVehicles
+                vehicles=lambda: master.vehicleRegistry.vehicles()
             )
             teslaModule = master.getModuleByName("TeslaAPI")
             self.templateEnv.globals.update(
@@ -781,12 +781,15 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
                     return
                 command = str(data.get("commandName", None))
-                vehicle = str(data.get("vehicleID", None))
+                vin = data.get("vehicleVIN", None)
                 params = str(data.get("parameters", None))
 
-                res = master.getModuleByName("TeslaAPI").apiDebugInterface(
-                    command, vehicle, params
-                )
+                carapi = master.getModuleByName("TeslaAPI")
+                if carapi is None:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                res = carapi.apiDebugInterface(command, vin, params)
                 if res == True:
                     self.send_response(200)
                     self.end_headers()
