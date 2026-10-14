@@ -33,7 +33,11 @@ class VehicleRegistry:
             if isinstance(vehicleConfig, dict)
             else None
         )
-        if days is None:
+        if days is None or days <= 0:
+            logger.warning(
+                "vehicle.forgetAfterDays must be a positive number; using %d",
+                self.DEFAULT_FORGET_DAYS,
+            )
             days = self.DEFAULT_FORGET_DAYS
         self.forgetAfter = days * 86400
         self._clock = clock
@@ -58,7 +62,13 @@ class VehicleRegistry:
         return key
 
     def _getOrCreate(self, vin: str, source: str):
-        if not isinstance(vin, str) or not vin or vin.startswith(ANON_PREFIX):
+        # load() applies the same rule, so what toJSON wrote always reloads.
+        if (
+            not isinstance(vin, str)
+            or not vin
+            or not vin.isascii()
+            or vin.startswith(ANON_PREFIX)
+        ):
             raise ValueError("a VIN is required")
         vin = vin.upper()
         with self._lock:
@@ -67,7 +77,9 @@ class VehicleRegistry:
                 return v, False
             v = Vehicle(vin, vin, self, clock=self._clock)
             self._vehicles[vin] = v
-        logger.info("Vehicle %s added (%s)", vin, source)
+        # A load restores known cars: not news.
+        level = logging.DEBUG if source == "persisted" else logging.INFO
+        logger.log(level, "Vehicle %s added (%s)", vin, source)
         return v, True
 
     def getOrCreate(self, vin: str, source: str) -> Vehicle:
@@ -156,7 +168,8 @@ class VehicleRegistry:
         if liveAt is None:
             return NOT_TRACKED
         try:
-            return liveAt(vehicle)
+            # Anything but a finite number counts as not live.
+            return _number(liveAt(vehicle))
         except Exception as e:
             logger.debug("Liveness for %s raised %s", source, type(e).__name__)
             return None
