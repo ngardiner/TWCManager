@@ -187,3 +187,29 @@ def test_api_charge_rate_does_not_revive_forgotten_vehicle():
     assert api.registry.get(VIN) is None
     TeslaAPI._recordChargeRate(car, 16)
     assert api.registry.get(VIN) is None
+
+
+def _ha_rate(ok):
+    from TWCManager.Vehicle.HomeAssistant import HaVehicle
+
+    ha, reg = make_ha()
+    hv = HaVehicle("Car", VIN, "d1", {"charge_current_number": "number.amps"})
+    hv.refresh_from_home_assistant = Mock()
+    ha.carApiVehicles = [hv]
+    ha._is_vehicle_connected = Mock(return_value=True)
+    ha._call_service = Mock(return_value=ok)
+    reg.getOrCreate(VIN, "HomeAssistant")
+    return ha, reg
+
+
+def test_ha_set_charge_rate_stamps_on_success():  # M4
+    ha, reg = _ha_rate(True)
+    assert ha.setChargeRate(16) is True
+    w = reg.get(VIN).lastWrite("availableCurrent")
+    assert w.value == 16 and w.source == "HomeAssistant"
+
+
+def test_ha_set_charge_rate_failure_no_stamp():  # M4
+    ha, reg = _ha_rate(False)
+    assert ha.setChargeRate(16) is False
+    assert reg.get(VIN).lastWrite("availableCurrent") is None

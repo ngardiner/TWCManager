@@ -747,6 +747,11 @@ class HomeAssistant:
 
         if not ok:
             logger.warning("Failed to set charge rate for %s", vehicle.name)
+        else:
+            # As TeslaAPI and TeslaBLE: our own write, stamped (never creates).
+            registryVehicle = self.registry.get(str(vehicle.vin).upper())
+            if registryVehicle is not None:
+                registryVehicle.noteWrite("availableCurrent", amps, "HomeAssistant")
 
         return ok
 
