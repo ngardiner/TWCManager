@@ -105,3 +105,36 @@ def test_trusted_edge_cases():
     s.noteWrite("batteryLevel", 6, "TeslaBLE")
     c.t = 1000.0 + FEED_LAG  # exactly FEED_LAG: strictly greater required
     assert s.trusted("batteryLevel", liveAt=c.t) is None
+
+
+def test_older_observation_does_not_overwrite_newer():
+    s = FieldStore(clock=Clock())
+    s.observe("lat", 2.0, "TeslaAPI", at=950.0)
+    kept = s.observe("lat", 1.0, "TeslaMateVehicle", at=900.0)
+    assert s.latest("lat") == Observation(2.0, "TeslaAPI", 950.0)
+    assert kept == Observation(2.0, "TeslaAPI", 950.0)
+
+
+def test_equal_timestamp_observation_replaces():
+    s = FieldStore(clock=Clock())
+    s.observe("lat", 1.0, "TeslaAPI", at=950.0)
+    s.observe("lat", 2.0, "TeslaMateVehicle", at=950.0)
+    assert s.latest("lat") == Observation(2.0, "TeslaMateVehicle", 950.0)
+
+
+def test_older_write_does_not_overwrite_newer_write():
+    s = FieldStore(clock=Clock())
+    s.noteWrite("chargeLimit", 80, "TeslaBLE", at=950.0)
+    s.noteWrite("chargeLimit", 70, "TeslaAPI", at=900.0)
+    assert s.lastWrite("chargeLimit") == Observation(80, "TeslaBLE", 950.0)
+    s.noteWrite("chargeLimit", 60, "TeslaAPI", at=950.0)
+    assert s.lastWrite("chargeLimit") == Observation(60, "TeslaAPI", 950.0)
+
+
+def test_clock_read_inside_lock():
+    s = FieldStore()
+    held = []
+    s._clock = lambda: (held.append(s._lock.locked()), 1000.0)[1]
+    s.observe("lat", 1.0, "x")
+    s.noteWrite("lat", 1.0, "x")
+    assert held == [True, True]
