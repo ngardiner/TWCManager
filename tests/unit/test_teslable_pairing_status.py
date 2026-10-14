@@ -948,3 +948,17 @@ def test_no_usable_key_fails_the_all_vehicle_command():  # I2
     assert ble.setChargeRate(16) is False
     assert ble.applyChargeLimit(80) is False
     assert commanded(ble) == set()
+
+
+def test_pairing_that_could_not_start_creates_no_vehicle_record():  # M7
+    ble, reg, master = make()
+    ble.sendPublicKey = Mock(return_value=False)  # key preparation failed
+    assert ble.peerWithVehicle(VIN2) is False
+    assert VIN2 not in master.settings["Vehicles"] and reg.get(VIN2) is None
+    assert {"cmd": "saveSettings"} not in [
+        c.args[0] for c in master.queue_background_task.call_args_list
+    ]
+    assert "public key" in ble.blePairingAttempt(VIN2)["message"]
+    # A known car still records the failure.
+    assert ble.peerWithVehicle(VIN) is False
+    assert ble.bleStatus(VIN)["status"] == "pairing_failed"

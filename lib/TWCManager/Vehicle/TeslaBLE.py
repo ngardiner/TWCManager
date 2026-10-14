@@ -1878,6 +1878,11 @@ class TeslaBLE:
             vehicles = self.master.settings.setdefault("Vehicles", {})
             rec = vehicles.get(vin)
             if not isinstance(rec, dict):
+                if status == "pairing_failed":
+                    # A failed request for a VIN we hold nothing for (the
+                    # key could not even be prepared) is no reason to start
+                    # a record; the attempt is still shown on the page.
+                    return
                 rec = vehicles[vin] = {
                     "chargeSessions": 0,
                     "startkWh": 0,
