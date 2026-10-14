@@ -96,16 +96,10 @@ def test_registry_liveness_feeds_age_and_trusted():
     assert v.age("name") is None
 
 
-def test_twc_vin_point_and_read_stub():
+def test_twc_vin_point():
     v = Vehicle(VIN, VIN, registry=None)
     v.observe("twcVin", "1234", "TWC")
     assert v.summary()["point"] == "1234"
-    try:
-        v.read("name", 10)
-    except NotImplementedError:
-        pass
-    else:
-        raise AssertionError("read should be a stub")
 
 
 def test_rejected_older_stamp_keeps_last_seen_pair_consistent():
