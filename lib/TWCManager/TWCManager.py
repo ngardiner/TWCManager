@@ -384,6 +384,11 @@ def background_tasks_thread(master):
                         requests.post(task["url"], json=body)
                 elif task["cmd"] == "saveSettings":
                     master.saveSettings()
+                elif task["cmd"] == "bleScan":
+                    # Range scans take seconds: here, never on the serial loop.
+                    ble = master.getModuleByName("TeslaBLE")
+                    if ble:
+                        ble.runPendingScans()
                 elif task["cmd"] == "expireVehicles":
                     master.expireVehicles()
                 elif task["cmd"] == "vehicleIsDefinitelyHome":
