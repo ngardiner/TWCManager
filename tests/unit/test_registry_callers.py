@@ -1,4 +1,5 @@
 import json
+import pathlib
 import subprocess
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
@@ -8,6 +9,7 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.TWCSlave import TWCSlave
 
 VIN = "5YJ3E1EA1KF000001"
+REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
 def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
@@ -15,6 +17,7 @@ def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
         ["git", "grep", "-l", "getCarApiVehicles", "--", "lib/TWCManager"],
         capture_output=True,
         text=True,
+        cwd=REPO,
     ).stdout.split()
     assert sorted(out) == [
         "lib/TWCManager/EVSEController/TeslaAPIController.py",
@@ -75,7 +78,11 @@ def _registry():
     v.observe("name", "Callandor", "TeslaAPI")
     v.observe("lat", 47.5, "TeslaAPI")
     v.observe("lon", -122.25, "TeslaAPI")
-    reg.getOrCreate("5YJ3E1EA1KF000002", "TeslaAPI")  # no name, no location
+    v.attach("TeslaAPI", object())
+    # No name, no location, but cloud-listed
+    reg.getOrCreate("5YJ3E1EA1KF000002", "TeslaAPI").attach("TeslaAPI", object())
+    # Known only by VIN (e.g. a BLE claim): apiDebugInterface cannot reach it
+    reg.getOrCreate("5YJ3E1EA1KF000003", "TeslaBLE")
     reg.beginPlugSession("AB")  # anonymous anon:AB
     return reg
 
@@ -101,6 +108,7 @@ def test_debug_page_lists_registry_vehicles_by_vin():
     assert '<option value="%s">Callandor</option>' % VIN in out
     assert '<option value="5YJ3E1EA1KF000002">5YJ3E1EA1KF000002</option>' in out
     assert "anon:" not in out
+    assert "000003" not in out
 
 
 def test_settings_page_lists_only_located_vehicles():
@@ -110,6 +118,41 @@ def test_settings_page_lists_only_located_vehicles():
     assert "Callandor Current Location" in out
     assert '<option value="-122.25,47.5">Callandor</option>' in out
     assert "000002" not in out and "anon:" not in out
+    assert "name=learn" in out
+
+
+def test_settings_page_hides_learn_without_a_located_vehicle():
+    reg = VehicleRegistry({})
+    reg.getOrCreate(VIN, "TeslaAPI").attach("TeslaAPI", object())
+    h = _handler(_master(reg))
+    out = _render_loop(h, "settings.html.j2", "L.marker({lon: {{ master", "</form>")
+    assert "name=unset" in out
+    assert "name=learn" not in out and "<select name=vehicle>" not in out
+
+
+def _home(h, fields, value):
+    request = Mock()
+    request.fields = fields
+    request.getFieldValue = lambda key: value
+    h.process_home_location.__func__(request)
+    return request
+
+
+def test_learn_home_location_without_a_selection_is_a_noop():
+    master = _master(VehicleRegistry({}))
+    h = _handler(master)
+    request = _home(h, {"learn": ["x"]}, None)
+    master.setHomeLon.assert_not_called()
+    master.setHomeLat.assert_not_called()
+    request.send_response.assert_called_with(302)
+
+
+def test_learn_home_location_from_selection():
+    master = _master(VehicleRegistry({}))
+    h = _handler(master)
+    _home(h, {"learn": ["x"]}, "-122.25,47.5")
+    master.setHomeLon.assert_called_once_with("-122.25")
+    master.setHomeLat.assert_called_once_with("47.5")
 
 
 def _post(h, body):

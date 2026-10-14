@@ -253,7 +253,7 @@
 
       // show a marker on the map
       L.marker({lon: {{ master.settings.get("homeLon", "0")}}, lat: {{ master.settings.get("homeLat", "0")}}}).bindPopup('Home Location').addTo(map);
-      {% for vehicle in vehicles() if vehicle.value("lat") is not none and vehicle.value("lon") is not none %}
+      {% for vehicle in locatedVehicles() %}
       L.marker({lon: {{ vehicle.value("lon") }}, lat: {{ vehicle.value("lat") }}}).bindPopup('{{ vehicle.name or vehicle.key }} Current Location').addTo(map);
       {% endfor %}
     </script>
@@ -263,12 +263,14 @@
     </ul>
     <form method=POST action='/settings/homeLocation'>
       <input class='btn btn-outline-success' type=submit name=unset value='Unset Home Location' />
+      {% if locatedVehicles() %}
       <input class='btn btn-outline-success' type=submit name=learn value='Make Vehicle Location Home Location' />
       <select name=vehicle>
-      {% for vehicle in vehicles() if vehicle.value("lat") is not none and vehicle.value("lon") is not none %}
+      {% for vehicle in locatedVehicles() %}
       <option value="{{ vehicle.value("lon") }},{{ vehicle.value("lat") }}">{{ vehicle.name or vehicle.key }}</option>
       {% endfor %}
       </select>
+      {% endif %}
     </form>
 
 </body>

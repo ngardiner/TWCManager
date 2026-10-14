@@ -208,6 +208,13 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(
                 vehicles=lambda: master.vehicleRegistry.vehicles()
             )
+            self.templateEnv.globals.update(
+                locatedVehicles=lambda: [
+                    v
+                    for v in master.vehicleRegistry.vehicles()
+                    if v.value("lat") is not None and v.value("lon") is not None
+                ]
+            )
             teslaModule = master.getModuleByName("TeslaAPI")
             self.templateEnv.globals.update(
                 teslaLogin=(
@@ -1630,8 +1637,11 @@ def CreateHTTPHandlerClass(master):
 
             # If learn was selected, learn location
             if "learn" in self.fields:
-                loc = self.getFieldValue("vehicle").split(",")
-                if len(loc) >= 2:
+                selected = str(self.getFieldValue("vehicle") or "")
+                loc = selected.split(",")
+                if not selected:
+                    logger.info("No vehicle selected; home location unchanged")
+                elif len(loc) >= 2:
                     master.setHomeLon(loc[0])
                     master.setHomeLat(loc[1])
                 else:
