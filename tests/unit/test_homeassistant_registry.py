@@ -117,13 +117,84 @@ def test_disabled_registers_nothing():
     assert ha.registry is reg and reg.readSources() == []
 
 
-def test_read_source_fetch_refreshes_attachment():
+def test_read_source_fetch_returns_observed_fields():
     ha, reg = make_ha()
     src = reg.readSources()[0]
     v = reg.getOrCreate(VIN, "HomeAssistant")
     assert not src.canRead(v)
-    hv = Mock()
+    hv = HaVehicle("Car", VIN, "d1", {"battery_level_sensor": "sensor.b"})
     v.attach("HomeAssistant", hv)
     assert src.canRead(v)
-    assert src.fetch(v, "batteryLevel", False) == {}
-    hv.refresh_from_home_assistant.assert_called_once_with(ha)
+    ha._get_state = Mock(return_value={"state": "61"})
+    assert src.fetch(v, "batteryLevel", False) == {"batteryLevel": 61.0}
+
+
+def test_ha_down_is_a_failed_read_and_cascade_continues():
+    from TWCManager.Vehicle.Registry.ReadSource import cascade
+
+    ha, reg = make_ha()
+    v = reg.getOrCreate(VIN, "HomeAssistant")
+    v.observe("batteryLevel", 40.0, "TeslaBLE")
+    hv = HaVehicle("Car", VIN, "d1", {"battery_level_sensor": "sensor.b"})
+    v.attach("HomeAssistant", hv)
+    ha._get_state = Mock(return_value=None)
+    src = reg.readSources()[0]
+    assert src.fetch(v, "batteryLevel", False) is None
+    assert hv.refresh_from_home_assistant(ha) is False
+
+    class Next:
+        name = "Next"
+        order = 3
+        fields = frozenset({"batteryLevel"})
+        canRead = lambda self, v: True
+        fetch = lambda self, v, f, w: {"batteryLevel": 55.0}
+
+    obs = cascade(v, [src, Next()], "batteryLevel", False)
+    assert (obs.value, obs.source) == (55.0, "Next")
+
+
+def test_unobserved_field_not_advertised_and_order_after_api():
+    from TWCManager.Vehicle.Registry.Sources import TeslaAPIReadSource
+
+    ha, reg = make_ha()
+    src = reg.readSources()[0]
+    assert "voltage" not in src.fields and "gpsAsOf" not in src.fields
+    assert src.order > TeslaAPIReadSource.order
+
+
+def test_refresh_fails_fast_after_connection_error():
+    ha, reg = make_ha()
+    hv = HaVehicle(
+        "Car",
+        VIN,
+        "d1",
+        {
+            "battery_level_sensor": "a",
+            "charge_limit_number": "b",
+            "charging_sensor": "c",
+        },
+    )
+    calls = []
+
+    def get(ent):
+        calls.append(ent)
+        ha.connectionFailures += 1
+        return None
+
+    ha._get_state = get
+    assert hv.refresh_from_home_assistant(ha) is False
+    assert calls == ["a"]
+
+
+def test_failed_registration_does_not_append_vehicle():
+    ha, reg = make_ha()
+    devices = [
+        {"id": "d1", "name": "Car", "manufacturer": "Tesla", "serial_number": VIN}
+    ]
+    with patch.object(
+        ha,
+        "_map_tesla_entities",
+        return_value={"charge_switch": "s.c", "battery_level_sensor": "s.b"},
+    ), patch.object(reg, "getOrCreate", side_effect=ValueError("bad")):
+        ha._build_vehicles_from_registry(devices, [])
+    assert ha.carApiVehicles == []
