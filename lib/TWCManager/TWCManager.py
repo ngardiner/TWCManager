@@ -386,6 +386,8 @@ def background_tasks_thread(master):
                     master.saveSettings()
                 elif task["cmd"] == "expireVehicles":
                     master.expireVehicles()
+                elif task["cmd"] == "vehicleIsDefinitelyHome":
+                    master.vehicleIsDefinitelyHome(task["vin"])
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
 

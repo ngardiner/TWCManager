@@ -337,9 +337,12 @@ class TWCMaster:
     @staticmethod
     def _taskKey(task):
         # Tasks dedupe per cmd, except VIN queries, which dedupe per TWC so
-        # one TWC's query never replaces another's.
+        # one TWC's query never replaces another's, and home checks, per VIN.
         if task["cmd"] == "getVehicleVIN":
             return ("getVehicleVIN", bytes(task.get("slaveTWC") or b""))
+        if task["cmd"] == "vehicleIsDefinitelyHome":
+            # Per VIN, so two TWCs' cars are both checked.
+            return ("vehicleIsDefinitelyHome", task.get("vin"))
         return task["cmd"]
 
     def delete_background_task(self, task):
@@ -1544,10 +1547,16 @@ class TWCMaster:
             },
         )
 
-        # If vehicle is charging, it's at home no matter what we previously thought.
+        # If vehicle is charging, it's at home no matter what we previously
+        # thought. The check reads the vehicle (BLE, HTTP), so it runs on the
+        # background thread, not this (serial) one.
+        self.queue_background_task({"cmd": "vehicleIsDefinitelyHome", "vin": vin})
+
+    def vehicleIsDefinitelyHome(self, vin):
+        # Background thread: may do vehicle I/O.
         tesla_api = self.getModuleByName("TeslaAPI")
         if tesla_api:
-            tesla_api.vehicleIsDefinitelyHome(slaveTWC.currentVIN)
+            tesla_api.vehicleIsDefinitelyHome(vin)
 
     def releaseBackgroundTasksLock(self):
         self.backgroundTasksLock.release()

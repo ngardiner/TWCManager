@@ -14,6 +14,8 @@ import subprocess
 import threading
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("TeslaBLE", "Vehicle")
 
@@ -181,6 +183,11 @@ class TeslaBLE:
             return
         else:
             logger.info(f"tesla-control binary found at: {self.binaryPath}")
+
+        # Reads cascade BLE first (local and free), then the cloud.
+        VehicleRegistry.forMaster(master).registerReadSource(
+            TeslaBLEReadSource(self, master)
+        )
 
     def _scheduleBlocksStart(self, vin):
         # Don't override the car's own Scheduled Charging / Departure timer

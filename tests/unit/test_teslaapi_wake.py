@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.teslatokens import (  # noqa: F401 (no_threads is a fixture)
     FLEET_NA_URL,
@@ -252,7 +253,11 @@ class _FakeBLE:
 def test_ble_read_does_not_move_wake_window(api, clock, requests_mock):
     woke = _send_first_wake(api, clock)
     vehicle = api.getCarApiVehicles()[0]
-    api.master.modules["TeslaBLE"] = _FakeBLE()
+    ble = _FakeBLE()
+    api.master.modules["TeslaBLE"] = ble
+    # Reads cascade BLE first for a car TeslaBLE has claimed.
+    api.registry.registerReadSource(TeslaBLEReadSource(ble, api.master))
+    vehicle.vehicle.claim("TeslaBLE", True, "paired")
 
     # A BLE location read inside the window touches lastAPIAccessTime.
     clock.advance(300)
