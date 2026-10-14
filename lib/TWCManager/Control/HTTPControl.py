@@ -1783,8 +1783,9 @@ def CreateHTTPHandlerClass(master):
             # If unset was selected, unset account
             if "unset" in self.fields:
                 with master.settingsLock:
-                    del master.settings["homeLat"]
-                    del master.settings["homeLon"]
+                    # Already unset (a second click) is not an error.
+                    master.settings.pop("homeLat", None)
+                    master.settings.pop("homeLon", None)
 
             # If learn was selected, learn location
             if "learn" in self.fields:
