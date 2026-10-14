@@ -5,6 +5,7 @@ This document logs the changes per release of TWCManager.
 ## v1.4.0 - Upcoming
 
 * Features
+    * (@MikeBishop) - The vehicle page shows BLE status (not in range, in range, pairing, paired, pairing failed, key refused) with a Bluetooth scan for the car
     * (@MikeBishop) - The Vehicles page lists the vehicle registry (tier, providers, last seen, held limit) and can add a vehicle by VIN so a VIN-less TWC with BLE only can be set up
     * (@MikeBishop) - Apply charge limit over BLE
     * (@MikeBishop) - Fetch charge and location state over BLE, falling back to Fleet API when BLE is unavailable
