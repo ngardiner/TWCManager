@@ -4,6 +4,7 @@ import paho.mqtt.client as mqtt
 import threading
 import time
 import json
+from typing import Optional
 
 from TWCManager.Vehicle.Telemetry import TelmetryBase
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -18,9 +19,9 @@ class FleetTelemetryMQTT(TelmetryBase):
         "BatteryLevel": ["batteryLevel", lambda a: int(float(a))],
         "ChargeLimitSoc": ["chargeLimit", lambda a: int(float(a))],
         "VehicleName": ["name", lambda a: a],
-        "latitude": ["syncLat", lambda a: float(a)],
-        "longitude": ["syncLon", lambda a: float(a)],
-        "syncState": ["syncState", lambda a: a],
+        "latitude": ["lat", lambda a: float(a)],
+        "longitude": ["lon", lambda a: float(a)],
+        "syncState": ["state", lambda a: a],
         "TimeToFullCharge": ["timeToFullCharge", lambda a: float(a)],
         "ChargeCurrentRequest": ["availableCurrent", lambda a: int(a)],
         "ChargeAmps": ["actualCurrent", lambda a: float(a)],
@@ -29,8 +30,14 @@ class FleetTelemetryMQTT(TelmetryBase):
         "DetailedChargeState": ["chargingState", lambda a: a[19:]],
     }
 
+    def vinFor(self, vehicle_id) -> Optional[str]:
+        # The topic id is the VIN.
+        return vehicle_id
+
     def mqttConnect(self, client, userdata, flags, rc, properties=None):
-        logger.log(logging.INFO5, "MQTT Connected.")
+        super().mqttConnect(client, userdata, flags, rc, properties)
+        if not self.connected:
+            return
         logger.log(logging.INFO5, "Subscribe to " + self.mqtt_prefix + "/#")
         res = self.client.subscribe(self.mqtt_prefix + "/#", qos=1)
         logger.log(logging.INFO5, "Res: " + str(res))
@@ -40,16 +47,21 @@ class FleetTelemetryMQTT(TelmetryBase):
         try:
             payload = json.loads(message.payload.decode("utf-8"))
         except json.decoder.JSONDecodeError:
-            logger.warning(f"Can't decode payload {payload} in topic {message.topic}")
+            logger.warning(
+                f"Can't decode payload {message.payload!r} in topic {message.topic}"
+            )
             return
 
         # Topic format is telemetry/VEHICLE-VIN/v/ChargerVoltage
         if topic[0] != self.mqtt_prefix:
             return
 
-        syncState = (
-            self.vehicles[topic[1]].syncState if self.vehicles.get(topic[1]) else None
+        obs = (
+            self.vehicles[topic[1]].latest("state")
+            if self.vehicles.get(topic[1])
+            else None
         )
+        syncState = obs.value if obs else None
         newSyncState = None
         if len(topic) > 3 and topic[2] == "v":
             newSyncState = "online"

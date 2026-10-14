@@ -84,18 +84,33 @@ class Vehicle:
     def latest(self, field: str) -> Optional[Observation]:
         return self._fields.latest(field)
 
-    def _liveAt(self, obs: Optional[Observation]) -> Any:
+    def _liveAt(self, field: str, obs: Optional[Observation]) -> Any:
         if obs is None or self._registry is None:
             return NOT_TRACKED
-        return self._registry.sourceLiveAt(obs.source, self)
+        live = self._registry.sourceLiveAt(obs.source, self)
+        # A report-on-change feed sends nothing while a value holds, so once
+        # another source re-observes the value the feed last reported, the
+        # feed's liveness still vouches for it. A different value is not
+        # vouched for: it ages until a source confirms it.
+        for source, mine in self._fields.reported(field).items():
+            if source == obs.source or mine.value != obs.value:
+                continue
+            other = self._registry.sourceLiveAt(source, self)
+            if other is NOT_TRACKED or other is None:
+                continue
+            live = other if live is NOT_TRACKED or live is None else max(live, other)
+        return live
 
     def age(self, field: str) -> Optional[float]:
+        # now is read before liveness: a live feed's liveAt is "now", and a
+        # later now would make its value a hair old and miss maxAge 0.
+        now = self._clock()
         obs = self._fields.latest(field)
-        return self._fields.age(field, liveAt=self._liveAt(obs))
+        return self._fields.age(field, now=now, liveAt=self._liveAt(field, obs))
 
     def trusted(self, field: str) -> Optional[Observation]:
         obs = self._fields.latest(field)
-        return self._fields.trusted(field, liveAt=self._liveAt(obs))
+        return self._fields.trusted(field, liveAt=self._liveAt(field, obs))
 
     def value(self, field: str, default: Any = None) -> Any:
         obs = self._fields.latest(field)
@@ -183,7 +198,7 @@ class Vehicle:
             lastSeen, lastSeenSource = self.lastSeen, self.lastSeenSource
         fields = {}
         for f, o in self._fields.snapshot().items():
-            liveAt = self._liveAt(o)
+            liveAt = self._liveAt(f, o)
             fields[f] = {
                 "value": o.value,
                 "source": o.source,

@@ -57,6 +57,10 @@ class VehicleRegistry:
         config = getattr(master, "config", None)
         return cls(config if isinstance(config, dict) else {})
 
+    def now(self) -> float:
+        """The registry's clock: observation stamps and ages use it."""
+        return self._clock()
+
     # Membership
 
     @staticmethod
@@ -260,7 +264,8 @@ class VehicleRegistry:
         with self._lock:
             self._liveness[source] = liveAt
 
-    def sourceLiveAt(self, source: str, vehicle: Vehicle) -> Any:
+    def sourceLiveAt(self, source: str, vehicle: Optional[Vehicle] = None) -> Any:
+        # vehicle None asks about the feed as a whole (e.g. its connection).
         with self._lock:
             liveAt = self._liveness.get(source)
         if liveAt is None:

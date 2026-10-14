@@ -1,8 +1,10 @@
 import logging
 import paho.mqtt.client as mqtt
 import threading
-import time
+from typing import Optional
+
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("Telemetry", "Vehicle")
 
@@ -28,6 +30,12 @@ class TelmetryBase:
     vehicleNames = {}
     unmappedRetrySecs = 300
     retryScheduled = False
+    registry = None
+    # MQTT connection state: the feed's liveness. everConnected and
+    # lostConnection let a reconnect after a drop be logged once.
+    connected = False
+    everConnected = False
+    lostConnection = False
 
     # Empty default events
     events = {
@@ -40,6 +48,7 @@ class TelmetryBase:
         self.vehicles = {}
         self.unknownVehicles = {}
         self.vehicleNames = {}
+        self.registry = VehicleRegistry.forMaster(master)
 
         self.config = master.config
         try:
@@ -56,6 +65,10 @@ class TelmetryBase:
         if not self.status or self.__class__.__name__ == "TelmetryBase":
             self.master.releaseModule("lib.TWCManager.Vehicle", self.__class__.__name__)
             return None
+
+        # A report-on-change source: while the feed is live, its silence
+        # means its last values still hold.
+        self.registry.registerLiveness(self.__class__.__name__, self.feedLiveAt)
 
         # Configure MQTT parameters
         self.mqtt_host = self.configModule.get("mqtt_host", None)
@@ -111,21 +124,51 @@ class TelmetryBase:
         timer.start()
 
     def resetMQTT(self):
+        # A planned reconnect: not live until connected again, not a drop.
+        self.connected = False
         self.client.disconnect()
         self.client.loop_stop()
         self.doMQTT()
 
     def mqttConnect(self, client, userdata, flags, rc, properties=None):
+        # Subscriptions are the child class's; subclasses call this first.
+        # paho also calls this for a refused connection.
+        failed = rc.is_failure if hasattr(rc, "is_failure") else rc != 0
+        if failed:
+            self.connected = False
+            logger.log(logging.INFO5, f"MQTT connection refused ({rc}).")
+            return
         logger.log(logging.INFO5, "MQTT Connected.")
-        # No default subscriptions, should be handled by child class
+        if self.everConnected and self.lostConnection:
+            logger.info(f"Telemetry from {self.__class__.__name__} has resumed")
+        self.connected = True
+        self.everConnected = True
+        self.lostConnection = False
 
     def mqttDisconnect(
         self, client, userdata, disconnect_flags, reason_code, properties=None
     ):
+        self.connected = False
         if reason_code != 0:
+            self.lostConnection = True
             logger.log(
                 logging.INFO5, "MQTT Disconnected. Should reconnect automatically."
             )
+
+    def carHealthy(self, vehicle) -> bool:
+        # Per-car health, where the feed reports it (TeslaMate).
+        return True
+
+    def feedLiveAt(self, vehicle=None) -> Optional[float]:
+        # Registered liveness: "now" while connected and healthy, so a value
+        # this feed last reported is current; None otherwise.
+        if self.connected and self.carHealthy(vehicle):
+            return self.registry.now()
+        return None
+
+    def vinFor(self, vehicle_id) -> Optional[str]:
+        # The VIN for a telemetry car id, where the feed can tell.
+        return None
 
     def mqttMessage(self, client, userdata, message):
         # No defaults, should be handled by child class
@@ -158,18 +201,8 @@ class TelmetryBase:
         elif event in events:
             vehicle = self.vehicles.get(id, None)
             if vehicle:
-                property_name = events[event][0]
-                converter = events[event][1]
-
-                setattr(vehicle, property_name, converter(payload))
-                vehicle.syncTimestamp = time.time()
-
-                # If sync timed out and has recovered, log it
-                if vehicle.syncSource != self.__class__.__name__:
-                    vehicle.syncSource = self.__class__.__name__
-                    logger.info(
-                        f"Vehicle {vehicle.name} telemetry has resumed being provided by {self.__class__.__name__}"
-                    )
+                field, converter = events[event][0], events[event][1]
+                vehicle.observe(field, converter(payload), self.__class__.__name__)
             else:
                 # If we don't know this vehicle yet, save the data.
                 if id not in self.unknownVehicles:
@@ -210,38 +243,48 @@ class TelmetryBase:
             self.scheduleUnmappedRetry()
 
     def updateVehicles(self, vehicle_id, vehicle_name, loadList=True):
-        # Called by mqttMessage each time we get the display_name topic
-        # We check to see if this aligns with a vehicle we know of from the API
-
+        # Called each time the vehicle name topic arrives: attaches the
+        # telemetry car id to a registry vehicle, by VIN where the feed knows
+        # it, else by name.
+        source = self.__class__.__name__
         vehicle = self.vehicles.get(vehicle_id, None)
         if vehicle:
-            # We already have this vehicle mapped
-            vehicle.name = vehicle_name
+            # Already mapped: a rename.
+            vehicle.observe("name", vehicle_name, source)
             return True
 
-        carapi = self.master.getModuleByName("TeslaAPI")
-        if not carapi:
-            return False
-
-        # The API vehicle list is otherwise only loaded when a command needs
-        # the API, which may never happen when BLE handles everything. Callers
-        # on latency-sensitive threads pass loadList=False.
-        if loadList and not carapi.getCarApiRetryRemaining():
-            carapi.loadVehicleList()
-
-        for apiVehicle in carapi.getCarApiVehicles():
-            if apiVehicle.name == vehicle_name:
-                # Found a match
-                self.vehicles[vehicle_id] = apiVehicle
-                apiVehicle.syncSource = self.__class__.__name__
-
+        vin = self.vinFor(vehicle_id)
+        if vin:
+            try:
+                vehicle = self.registry.getOrCreate(vin, source)
+            except ValueError:
+                vehicle = None
+            if vehicle is not None:
+                vehicle.observe("name", vehicle_name, source)
+                self.vehicles[vehicle_id] = vehicle
                 logger.info(
-                    f"Vehicle {vehicle_name} telemetry being provided by {self.__class__.__name__}"
+                    f"Vehicle {vehicle_name} telemetry being provided by {source}"
                 )
                 return True
 
+        vehicle = self.registry.findByName(vehicle_name)
+        if vehicle is None and loadList:
+            # The API vehicle list is otherwise only loaded when a command
+            # needs the API, which may never happen when BLE handles
+            # everything. Callers on latency-sensitive threads pass
+            # loadList=False.
+            carapi = self.master.getModuleByName("TeslaAPI")
+            if carapi and not carapi.getCarApiRetryRemaining():
+                carapi.loadVehicleList()
+                vehicle = self.registry.findByName(vehicle_name)
+
+        if vehicle is not None:
+            self.vehicles[vehicle_id] = vehicle
+            logger.info(f"Vehicle {vehicle_name} telemetry being provided by {source}")
+            return True
+
         logger.warning(
-            f"{self.__class__.__name__}: no Tesla API vehicle named "
+            f"{source}: no known vehicle named "
             f"'{vehicle_name}' to attach telemetry to; will retry"
         )
         return False
