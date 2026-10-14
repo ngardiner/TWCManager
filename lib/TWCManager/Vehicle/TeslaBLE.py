@@ -854,7 +854,7 @@ class TeslaBLE:
 
         # Ensure we have a Private Key defined for each known vehicle
         if self.master.settings.get("Vehicles", None):
-            for vehicle in self.master.settings["Vehicles"].keys():
+            for vehicle in list(self.master.settings["Vehicles"].keys()):
                 if not "privKey" in self.master.settings["Vehicles"][vehicle]:
                     logger.log(
                         logging.INFO2,
@@ -865,32 +865,33 @@ class TeslaBLE:
                     private_key = ec.generate_private_key(
                         ec.SECP256R1(), default_backend()
                     )
-                    self.master.settings["Vehicles"][vehicle]["privKey"] = (
-                        base64.b64encode(
-                            private_key.private_bytes(
-                                serialization.Encoding.PEM,
-                                serialization.PrivateFormat.PKCS8,
-                                serialization.NoEncryption(),
-                            )
-                        ).decode()
-                    )
-                    public_key = private_key.public_key()
-                    self.master.settings["Vehicles"][vehicle]["pubKey"] = (
-                        base64.b64encode(
-                            public_key.public_bytes(
-                                serialization.Encoding.X962,
-                                serialization.PublicFormat.UncompressedPoint,
-                            )
-                        ).decode()
-                    )
-                    self.master.settings["Vehicles"][vehicle]["pubKeyPEM"] = (
-                        base64.b64encode(
-                            public_key.public_bytes(
-                                serialization.Encoding.PEM,
-                                serialization.PublicFormat.SubjectPublicKeyInfo,
-                            )
-                        ).decode()
-                    )
+                    with self.master.settingsLock:
+                        self.master.settings["Vehicles"][vehicle]["privKey"] = (
+                            base64.b64encode(
+                                private_key.private_bytes(
+                                    serialization.Encoding.PEM,
+                                    serialization.PrivateFormat.PKCS8,
+                                    serialization.NoEncryption(),
+                                )
+                            ).decode()
+                        )
+                        public_key = private_key.public_key()
+                        self.master.settings["Vehicles"][vehicle]["pubKey"] = (
+                            base64.b64encode(
+                                public_key.public_bytes(
+                                    serialization.Encoding.X962,
+                                    serialization.PublicFormat.UncompressedPoint,
+                                )
+                            ).decode()
+                        )
+                        self.master.settings["Vehicles"][vehicle]["pubKeyPEM"] = (
+                            base64.b64encode(
+                                public_key.public_bytes(
+                                    serialization.Encoding.PEM,
+                                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                                )
+                            ).decode()
+                        )
                     self.master.queue_background_task({"cmd": "saveSettings"})
         else:
             logger.log(logging.INFO2, "No known vehicles.")
