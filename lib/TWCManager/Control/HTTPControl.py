@@ -22,6 +22,53 @@ from TWCManager.Control.APIValidator import APIValidator
 logger = LoggerFactory.get_logger("HTTP", "Control")
 
 
+def ageText(seconds):
+    if seconds is None:
+        return "never"
+    seconds = int(seconds)
+    if seconds < 60:
+        return "%d s ago" % seconds
+    if seconds < 3600:
+        return "%d min ago" % (seconds // 60)
+    if seconds < 86400:
+        return "%d h ago" % (seconds // 3600)
+    return "%d d ago" % (seconds // 86400)
+
+
+def heldLimitText(master, vehicle):
+    # BLE keys chargeLimits by VIN; the Fleet API path keys them by numeric ID.
+    found, outside, applied = (False, None, None)
+    if vehicle.vin:
+        found, outside, applied = master.getNormalChargeLimit(vehicle.vin)
+    if not found:
+        car = vehicle.attachment("TeslaAPI")
+        if car is not None and getattr(car, "ID", None) is not None:
+            found, outside, applied = master.getNormalChargeLimit(car.ID)
+    if not found:
+        return "\u2014"
+    if applied in (-1, 0, None):
+        return "%s%% (restored)" % outside
+    return "%s%% (holding %s%%)" % (outside, applied)
+
+
+def addVehicleByVIN(master, vin):
+    try:
+        vehicle = master.vehicleRegistry.addUserAsserted(str(vin or "").strip().upper())
+    except ValueError as e:
+        return "/vehicles?error=" + urllib.parse.quote_plus(str(e))
+    vin = vehicle.vin
+    with master.settingsLock:
+        known = master.settings.setdefault("Vehicles", {})
+        if not any(k.upper() == vin for k in known):
+            known[vin] = {"chargeSessions": 0, "startkWh": 0, "totalkWh": 0}
+    # Outside the lock: key generation may do I/O
+    ble = master.getModuleByName("TeslaBLE")
+    if ble:
+        ble.scanForVehicles()
+    master.queue_background_task({"cmd": "saveSettings"})
+    return "/vehicleDetail/" + vin
+
+
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
     address_family = socket.AF_INET6
 
@@ -208,6 +255,11 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(
                 vehicles=lambda: master.vehicleRegistry.vehicles()
             )
+            self.templateEnv.globals.update(ageText=ageText)
+            self.templateEnv.globals.update(
+                heldLimitText=lambda v: heldLimitText(master, v)
+            )
+            self.templateEnv.globals.update(registry=master.vehicleRegistry)
             self.templateEnv.globals.update(
                 locatedVehicles=lambda: [
                     v
@@ -1183,6 +1235,10 @@ def CreateHTTPHandlerClass(master):
                 self.do_API_GET()
                 return
 
+            self.addVehicleError = urllib.parse.parse_qs(self.url.query).get(
+                "error", [""]
+            )[0]
+
             webroutes = [
                 {"route": "/debug", "tmpl": "debug.html.j2"},
                 {"route": "/schedule", "tmpl": "schedule.html.j2"},
@@ -1516,6 +1572,14 @@ def CreateHTTPHandlerClass(master):
 
                 self.send_response(302)
                 self.send_header("Location", "/vehicleDetail/" + vin)
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            if self.url.path == "/vehicle/add":
+                location = addVehicleByVIN(self.master, self.getFieldValue("vin"))
+                self.send_response(302)
+                self.send_header("Location", location)
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
                 return
