@@ -57,7 +57,7 @@ class FieldStore:
         self._latest: Dict[str, Observation] = {}
         self._writes: Dict[str, Observation] = {}
         # Each source's own latest observation per field, so a report-on-change
-        # feed can vouch for a value another source re-observed after it.
+        # feed can vouch for a field another source observed after it.
         self._bySource: Dict[str, Dict[str, Observation]] = {}
 
     @staticmethod
