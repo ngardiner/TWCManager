@@ -152,7 +152,8 @@ def test_load_clamps_future_times_and_skips_bad_vins():
             "version": 1,
             "vehicles": {
                 VIN: {"firstSeen": 9e9, "lastSeen": 9e9},
-                "BAD": {"name": "x"},
+                "": {"name": "x"},
+                "anon:abc": {},
                 5: {},
                 VIN2: {"name": 7, "lastSeen": "x", "userAsserted": "yes"},
             },

@@ -187,7 +187,8 @@ class VehicleRegistry:
             try:
                 if not isinstance(entry, dict):
                     continue
-                if not isinstance(vin, str) or not isWellFormedVIN(vin):
+                # Same acceptance as getOrCreate, so what toJSON wrote loads.
+                if not isinstance(vin, str) or not vin.isascii():
                     continue
                 self._loadOne(vin, entry, now)
             except Exception as e:
