@@ -110,3 +110,32 @@ def test_add_vehicle_by_vin():
         len([v for v in m.vehicleRegistry.vehicles() if v.vin == "5YJ3E1EA1KF000002"])
         == 1
     )
+
+
+def test_add_vehicle_numeric_input_does_not_crash():
+    m = master()
+    m.queue_background_task = Mock()
+    # getFieldValue returns an int for an all-digit string
+    assert addVehicleByVIN(m, 12345).startswith("/vehicles?error=")
+    # 17 digits is a well-formed VIN
+    assert addVehicleByVIN(m, 12345678901234567) == "/vehicleDetail/12345678901234567"
+
+
+def test_add_known_vin_marks_user_asserted_without_duplicate():
+    m = master()
+    m.queue_background_task = Mock()
+    assert addVehicleByVIN(m, VIN) == "/vehicleDetail/" + VIN
+    assert m.vehicleRegistry.get(VIN).userAsserted
+    assert len([v for v in m.vehicleRegistry.vehicles() if v.vin == VIN]) == 1
+
+
+def test_add_vin_dedupes_settings_case_insensitively():
+    m = master()
+    m.queue_background_task = Mock()
+    lower = "5yj3e1ea1kf000003"
+    m.settings["Vehicles"][lower] = {"chargeSessions": 7}
+    addVehicleByVIN(m, lower.upper())
+    assert list(k for k in m.settings["Vehicles"] if k.upper() == lower.upper()) == [
+        lower
+    ]
+    assert m.settings["Vehicles"][lower]["chargeSessions"] == 7

@@ -53,7 +53,7 @@ def heldLimitText(master, vehicle):
 
 def addVehicleByVIN(master, vin):
     try:
-        vehicle = master.vehicleRegistry.addUserAsserted((vin or "").strip().upper())
+        vehicle = master.vehicleRegistry.addUserAsserted(str(vin or "").strip().upper())
     except ValueError as e:
         return "/vehicles?error=" + urllib.parse.quote_plus(str(e))
     vin = vehicle.vin
