@@ -209,9 +209,32 @@ def test_feed_vouches_for_a_value_the_api_reobserved(teslamate):  # ruling 3
     car.lon = -122.0
     assert reg.get(VIN).latest("lat").source == "TeslaAPI"
     assert car.update_location(0) is True and not car.get_car_api.called
-    car.lat = 38.0  # a value the feed never reported is not vouched for
+    car.lat = 38.0  # a different value: the live feed still vouches (C1)
+    assert car.update_location(0) is True and not car.get_car_api.called
+    tm.mqttDisconnect(None, None, None, 7)  # feed down: the value ages
     car.update_location(0)
     assert car.get_car_api.called
+
+
+def test_feed_outage_then_recovery_pays_one_cloud_read(teslamate):  # C1
+    tm, car, reg = teslamate
+    feed(tm, state="online", latitude="37.0", longitude="-122.0")
+    calls = []
+
+    def vehicleData():
+        calls.append(1)
+        car.lat = 37.00000001  # the API's digits differ from TeslaMate's
+        car.lon = -122.0
+        return True
+
+    car.update_vehicle_data = vehicleData
+    car.is_awake = lambda: True
+    tm.mqttDisconnect(None, None, None, 7)  # broker blip
+    assert car.update_location(0) is True and len(calls) == 1
+    tm.mqttConnect(Mock(), None, None, 0)  # back; parked car publishes nothing
+    for _ in range(5):
+        assert car.update_location(0) is True
+    assert len(calls) == 1
 
 
 def test_sleeping_car_on_healthy_feed_stays_telemetry_sourced(teslamate):  # ruling 2

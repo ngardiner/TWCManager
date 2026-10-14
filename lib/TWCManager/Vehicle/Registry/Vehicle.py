@@ -99,14 +99,14 @@ class Vehicle:
         if obs is None or self._registry is None:
             return NOT_TRACKED
         live = self._registry.sourceLiveAt(obs.source, self)
-        # A report-on-change feed sends nothing while a value holds, so once
-        # another source re-observes the value the feed last reported, the
-        # feed's liveness still vouches for it. A different value is not
-        # vouched for: it ages until a source confirms it. Floats compare
-        # exactly: TeslaMate republishes the API's own lat/lon digits, and a
-        # mismatch only costs a fetch.
-        for source, mine in self._fields.reported(field).items():
-            if source == obs.source or mine.value != obs.value:
+        # A report-on-change feed sends nothing while a value holds, so a
+        # healthy feed that has reported this field vouches for it even after
+        # another source observed it, whatever value that source saw: the
+        # feed would have reported a change. Requiring equal values made a
+        # parked car whose cloud lat differs from TeslaMate's in the last
+        # digit cost a paid read per window after one feed outage.
+        for source in self._fields.reported(field):
+            if source == obs.source:
                 continue
             other = self._registry.sourceLiveAt(source, self)
             if other is NOT_TRACKED or other is None:
