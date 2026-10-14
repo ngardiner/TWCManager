@@ -105,3 +105,10 @@ def test_twc_vin_point_and_read_stub():
         pass
     else:
         raise AssertionError("read should be a stub")
+
+
+def test_rejected_older_stamp_keeps_last_seen_pair_consistent():
+    v = Vehicle(VIN, VIN, registry=None, clock=Clock())
+    v.observe("chargeLimit", 80, "TeslaMateVehicle", at=2000.0)
+    v.observe("chargeLimit", 70, "TeslaAPI", at=1500.0)
+    assert (v.lastSeen, v.lastSeenSource) == (2000.0, "TeslaMateVehicle")
