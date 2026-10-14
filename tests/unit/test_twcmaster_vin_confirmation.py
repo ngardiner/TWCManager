@@ -192,3 +192,62 @@ def test_delayed_tasks_with_equal_due_times_do_not_compare_dicts(queued):
         queued.queue_background_task({"cmd": "first"}, delay=5)
         queued.queue_background_task({"cmd": "second"}, delay=5)
     assert [e[-1]["cmd"] for e in queued.backgroundTasksDelayed] == ["first", "second"]
+
+
+def test_confirmed_vin_queues_the_home_check_off_the_serial_thread(master):
+    # recordVehicleVIN runs on the RS-485 thread: the home check reads the
+    # vehicle (BLE, HTTP), so it must be queued, never run here.
+    api = Mock()
+    master.getModuleByName = Mock(
+        side_effect=lambda n: api if n == "TeslaAPI" else None
+    )
+    master.vehicleRegistry.getOrCreate(VIN, "TeslaAPI")
+    master.recordVehicleVIN(slave(VIN))
+    api.vehicleIsDefinitelyHome.assert_not_called()
+    master.queue_background_task.assert_any_call(
+        {"cmd": "vehicleIsDefinitelyHome", "vin": VIN}
+    )
+
+
+def test_home_checks_for_two_vins_do_not_collapse():
+    import queue
+
+    m = TWCMaster("AB", CONFIG)
+    # The queue and its dedupe table are class attributes: use fresh ones.
+    m.backgroundTasksQueue = queue.Queue()
+    m.backgroundTasksCmds = {}
+    m.queue_background_task({"cmd": "vehicleIsDefinitelyHome", "vin": VIN})
+    m.queue_background_task(
+        {"cmd": "vehicleIsDefinitelyHome", "vin": "5YJ3E1EA1KF000002"}
+    )
+    m.queue_background_task({"cmd": "vehicleIsDefinitelyHome", "vin": VIN})
+    assert m.backgroundTasksQueue.qsize() == 2
+
+
+def test_master_home_check_delegates_to_teslaapi(master):
+    api = Mock()
+    master.getModuleByName = Mock(
+        side_effect=lambda n: api if n == "TeslaAPI" else None
+    )
+    master.vehicleIsDefinitelyHome(VIN)
+    api.vehicleIsDefinitelyHome.assert_called_once_with(VIN)
+    master.getModuleByName = Mock(return_value=None)
+    master.vehicleIsDefinitelyHome(VIN)  # no TeslaAPI: no-op
+
+
+def test_background_thread_dispatches_the_home_check():
+    # TWCManager.py starts the app on import; check the handler's source.
+    import ast, os
+
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "lib", "TWCManager", "TWCManager.py"
+    )
+    text = open(path).read()
+    fn = next(
+        n
+        for n in ast.walk(ast.parse(text))
+        if isinstance(n, ast.FunctionDef) and n.name == "background_tasks_thread"
+    )
+    src = ast.get_source_segment(text, fn)
+    assert 'task["cmd"] == "vehicleIsDefinitelyHome"' in src
+    assert 'master.vehicleIsDefinitelyHome(task["vin"])' in src

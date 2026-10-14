@@ -7,9 +7,9 @@ from tests.unit.teslatokens import FakeMaster, new_api
 VIN = "5YJ3E1EA1KF000001"
 
 
-def setup(ble_result):
+def setup(ble_result, clock=time.time):
     master = FakeMaster()
-    reg = master.vehicleRegistry = VehicleRegistry({})
+    reg = master.vehicleRegistry = VehicleRegistry({}, clock=clock)
     ble = Mock()
     ble.get_charge_state.return_value = ble_result
     ble.get_location_state.return_value = None
@@ -228,3 +228,22 @@ def test_ble_reply_with_no_values_falls_through_to_api():
     }
     car.update_location()
     car.update_vehicle_data.assert_called_once()
+
+
+def test_ble_read_on_an_injected_clock_marks_car_awake():
+    # The registry clock and time.time() must not be compared.
+    car, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
+    car.lastAPIAccessTime = 0
+    assert car.update_charge() is True and car.lastAPIAccessTime > 0
+
+
+def test_read_stamped_like_the_previous_one_still_counts_as_fetched():
+    # A coarse clock can stamp a real read equal to the last one.
+    car, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
+    v = reg.get(VIN)
+    v.observe("batteryLevel", 40, "TeslaBLE")
+    v.noteWrite("batteryLevel", 40, "TeslaAPI")  # equal stamp: not trusted
+    car.lastAPIAccessTime = 0
+    assert car.update_charge() is True and car.batteryLevel == 61
+    ble.get_charge_state.assert_called_once()
+    assert car.lastAPIAccessTime > 0
