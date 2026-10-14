@@ -315,12 +315,16 @@ class TeslaBLE:
                     logger.error("No vehicles configured for BLE operation")
                     return False
 
+                targets = self._allVehicleTargets()
+                if not targets:
+                    logger.warning("No vehicle has a usable BLE key")
+                    return False
+
                 success_count = 0
                 attempted_count = 0
                 skipped_count = 0
-                total_vehicles = len(self.master.settings["Vehicles"])
 
-                for vehicle in list(self.master.settings["Vehicles"].keys()):
+                for vehicle in targets:
                     try:
                         if charge:
                             if self._stopAskingToStartCharging.get(vehicle):
@@ -707,10 +711,15 @@ class TeslaBLE:
                     logger.error("No vehicles configured for charge rate setting")
                     return False
 
-                success_count = 0
-                total_vehicles = len(self.master.settings["Vehicles"])
+                targets = self._allVehicleTargets()
+                if not targets:
+                    logger.warning("No vehicle has a usable BLE key")
+                    return False
 
-                for vehicle_vin in list(self.master.settings["Vehicles"].keys()):
+                success_count = 0
+                total_vehicles = len(targets)
+
+                for vehicle_vin in targets:
                     try:
                         # Wake vehicle first - don't fail if wake fails, but log it
                         wake_result = self.wakeVehicle(vehicle_vin)
@@ -775,12 +784,16 @@ class TeslaBLE:
                 f"Applying charge limit {limit}{'% to all vehicles' if limit != -1 else ' (restore default) to all vehicles'}"
             )
 
+            targets = self._allVehicleTargets()
+            if not targets:
+                logger.warning("No vehicle has a usable BLE key")
+                return False
+
             success_count = 0
             attempted_count = 0
             skipped_count = 0
-            total_vehicles = len(self.master.settings["Vehicles"])
 
-            for vehicle_vin in list(self.master.settings["Vehicles"].keys()):
+            for vehicle_vin in targets:
                 try:
                     # Skip if we've already successfully applied this exact limit to this vehicle
                     if (
@@ -1946,6 +1959,23 @@ class TeslaBLE:
             logger.info(f"BLE key for {vin} refused; re-pair from the vehicle page")
             self._setBleStatus(vin, "refused")
         return True
+
+    def _allVehicleTargets(self):
+        """VINs an all-vehicle command is sent to: every one with a key the
+        car has not refused. A key with no recorded pairing state (every
+        pre-1.4.0 key) is still tried; a refused key or a VIN without one
+        would only cost a tesla-control timeout per command."""
+        with self.master.settingsLock:
+            entries = list((self.master.settings.get("Vehicles") or {}).items())
+        targets = []
+        for vin, rec in entries:
+            if not isinstance(rec, dict) or "privKey" not in rec:
+                continue
+            ble = rec.get("ble")
+            if isinstance(ble, dict) and ble.get("status") == "refused":
+                continue
+            targets.append(vin)
+        return targets
 
     def _claimKeyedVehicles(self):
         # The one place settings["Vehicles"] feeds the registry: it is the BLE
