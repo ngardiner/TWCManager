@@ -6,7 +6,12 @@ from unittest.mock import Mock
 import jinja2
 
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
-from TWCManager.Control.HTTPControl import ageText, addVehicleByVIN, heldLimitText
+from TWCManager.Control.HTTPControl import (
+    ageText,
+    addVehicleByVIN,
+    canForgetVehicle,
+    heldLimitText,
+)
 
 VIN = "5YJ3E1EA1KF000001"
 THEME = Path(__file__).resolve().parents[2] / "lib/TWCManager/Control/themes/Default"
@@ -21,6 +26,7 @@ def env(master):
         heldLimitText=lambda v: heldLimitText(master, v),
         registry=master.vehicleRegistry,
         vehicles=master.vehicleRegistry.vehicles,
+        canForget=lambda vin: canForgetVehicle(master, vin),
     )
     return e
 
