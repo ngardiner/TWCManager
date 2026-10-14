@@ -52,6 +52,9 @@ class FleetTelemetryMQTT(TelmetryBase):
             )
             return
 
+        # The broker's stored copy, redelivered on (re)subscribe.
+        retained = getattr(message, "retain", False) is True
+
         # Topic format is telemetry/VEHICLE-VIN/v/ChargerVoltage
         if topic[0] != self.mqtt_prefix:
             return
@@ -78,18 +81,22 @@ class FleetTelemetryMQTT(TelmetryBase):
                 elif syncState == "driving":
                     syncState = None
             elif topic[3] == "DetailedChargeState":
-                self.applyDataToVehicle(topic[1], topic[3], payload)
+                self.applyDataToVehicle(topic[1], topic[3], payload, retained=retained)
                 if payload == "DetailedChargeStateCharging":
                     newSyncState = "charging"
                 elif syncState == "charging":
                     syncState = None
             elif topic[3] == "Location" and isinstance(payload, dict):
                 if payload.get("latitude"):
-                    self.applyDataToVehicle(topic[1], "latitude", payload["latitude"])
+                    self.applyDataToVehicle(
+                        topic[1], "latitude", payload["latitude"], retained=retained
+                    )
                 if payload.get("longitude"):
-                    self.applyDataToVehicle(topic[1], "longitude", payload["longitude"])
+                    self.applyDataToVehicle(
+                        topic[1], "longitude", payload["longitude"], retained=retained
+                    )
             else:
-                self.applyDataToVehicle(topic[1], topic[3], payload)
+                self.applyDataToVehicle(topic[1], topic[3], payload, retained=retained)
         elif len(topic) > 2 and topic[2] == "connectivity":
             status = payload.get("Status")
             if status == "CONNECTED":
@@ -101,4 +108,6 @@ class FleetTelemetryMQTT(TelmetryBase):
             and syncState != newSyncState
             and not (newSyncState == "online" and syncState in ("driving", "charging"))
         ):
-            self.applyDataToVehicle(topic[1], "syncState", newSyncState)
+            self.applyDataToVehicle(
+                topic[1], "syncState", newSyncState, retained=retained
+            )

@@ -72,12 +72,19 @@ class FieldStore:
         value: Any,
         source: str,
         at: Optional[float],
+        bySource: Optional[Dict[str, Dict[str, Observation]]] = None,
     ) -> Observation:
         # The clock is read under the lock so stored order matches stamp
         # order. An older stamp never displaces a newer one (equal replaces);
-        # the entry that stays is returned.
+        # the entry that stays is returned. bySource, when given, keeps the
+        # same rule per source.
         with self._lock:
             obs = Observation(value, source, self._clock() if at is None else at)
+            if bySource is not None:
+                mine = bySource.setdefault(field, {})
+                prev = mine.get(source)
+                if prev is None or obs.at >= prev.at:
+                    mine[source] = obs
             old = table.get(field)
             if old is not None and obs.at < old.at:
                 return old
@@ -88,17 +95,7 @@ class FieldStore:
         self, field: str, value: Any, source: str, at: Optional[float] = None
     ) -> Observation:
         self._check(field)
-        with self._lock:
-            obs = Observation(value, source, self._clock() if at is None else at)
-            mine = self._bySource.setdefault(field, {})
-            prev = mine.get(source)
-            if prev is None or obs.at >= prev.at:
-                mine[source] = obs
-            old = self._latest.get(field)
-            if old is not None and obs.at < old.at:
-                return old
-            self._latest[field] = obs
-            return obs
+        return self._store(self._latest, field, value, source, at, self._bySource)
 
     def reported(self, field: str) -> Dict[str, Observation]:
         """Each source's latest observation of field."""

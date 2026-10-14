@@ -84,6 +84,13 @@ class Vehicle:
     def latest(self, field: str) -> Optional[Observation]:
         return self._fields.latest(field)
 
+    def reportedBy(self, field: str, source: str) -> Optional[Observation]:
+        """source's own latest observation of field."""
+        return self._fields.reported(field).get(source)
+
+    def lastWrite(self, field: str) -> Optional[Observation]:
+        return self._fields.lastWrite(field)
+
     def _liveAt(self, field: str, obs: Optional[Observation]) -> Any:
         if obs is None or self._registry is None:
             return NOT_TRACKED
@@ -91,7 +98,9 @@ class Vehicle:
         # A report-on-change feed sends nothing while a value holds, so once
         # another source re-observes the value the feed last reported, the
         # feed's liveness still vouches for it. A different value is not
-        # vouched for: it ages until a source confirms it.
+        # vouched for: it ages until a source confirms it. Floats compare
+        # exactly: TeslaMate republishes the API's own lat/lon digits, and a
+        # mismatch only costs a fetch.
         for source, mine in self._fields.reported(field).items():
             if source == obs.source or mine.value != obs.value:
                 continue

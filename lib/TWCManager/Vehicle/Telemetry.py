@@ -174,7 +174,9 @@ class TelmetryBase:
         # No defaults, should be handled by child class
         pass
 
-    def applyDataToVehicle(self, id, event, payload):
+    def applyDataToVehicle(self, id, event, payload, retained=False):
+        # retained: the broker's stored copy, redelivered on every
+        # (re)subscribe, not a new report.
         logger.log(logging.INFO8, f"applyDataToVehicle event={event} payload={payload}")
 
         # Do not try to apply unset event payloads
@@ -193,21 +195,60 @@ class TelmetryBase:
             # Only match against the already-loaded vehicle list here: this
             # runs on the MQTT network thread, which must not block on a cloud
             # call. If it doesn't match, a timer thread loads the list.
-            if self.updateVehicles(id, payload, loadList=False):
+            if self.updateVehicles(id, payload, loadList=False, retained=retained):
                 self.replayUnknownEvents(id)
             else:
                 self.scheduleUnmappedRetry(delay=1)
 
         elif event in events:
             vehicle = self.vehicles.get(id, None)
+            if vehicle is not None and self._dropIfOrphan(id, vehicle):
+                # Forgotten since it was mapped: map again (no I/O here).
+                vehicle = None
+                if self.updateVehicles(
+                    id, self.vehicleNames.get(id, ""), loadList=False, retained=True
+                ):
+                    vehicle = self.vehicles.get(id)
+                else:
+                    self.scheduleUnmappedRetry()
             if vehicle:
                 field, converter = events[event][0], events[event][1]
-                vehicle.observe(field, converter(payload), self.__class__.__name__)
+                self._observe(vehicle, field, converter(payload), retained)
             else:
                 # If we don't know this vehicle yet, save the data.
                 if id not in self.unknownVehicles:
                     self.unknownVehicles[id] = []
-                self.unknownVehicles[id].append([event, payload])
+                parked = [event, payload]
+                if retained:
+                    parked.append(True)
+                self.unknownVehicles[id].append(parked)
+
+    def _dropIfOrphan(self, vehicle_id, vehicle) -> bool:
+        # True (and the mapping dropped) when the registry no longer holds
+        # this vehicle object: it was forgotten, and perhaps re-created.
+        if self.registry.get(vehicle.key) is vehicle:
+            return False
+        if self.vehicles.get(vehicle_id) is vehicle:
+            del self.vehicles[vehicle_id]
+        return True
+
+    def _observe(self, vehicle, field, value, retained=False):
+        source = self.__class__.__name__
+        if not retained:
+            vehicle.observe(field, value, source)
+            return
+        # A retained redelivery is not a sighting. One that repeats this
+        # source's last report is not news either: restamping it would make
+        # a stale value look newer than our own write, and an unhealthy
+        # feed's value look current.
+        mine = vehicle.reportedBy(field, source)
+        if mine is not None and mine.value == value:
+            return
+        # A different retained value may predate our own write: stamped no
+        # later than the write, so FEED_LAG decides whether it stands.
+        write = vehicle.lastWrite(field)
+        at = min(self.registry.now(), write.at) if write is not None else None
+        vehicle.observe(field, value, source, at=at, seen=False)
 
     def mqttSubscribe(self, client, userdata, mid, reason_codes, properties=None):
         logger.info("Subscribe operation completed with mid " + str(mid))
@@ -216,7 +257,9 @@ class TelmetryBase:
         if vehicle_id in self.vehicles and vehicle_id in self.unknownVehicles:
             pastEvents = self.unknownVehicles.pop(vehicle_id)
             for pastEvent in pastEvents:
-                self.applyDataToVehicle(vehicle_id, pastEvent[0], pastEvent[1])
+                self.applyDataToVehicle(
+                    vehicle_id, pastEvent[0], pastEvent[1], len(pastEvent) > 2
+                )
 
     def scheduleUnmappedRetry(self, delay=None):
         if self.retryScheduled:
@@ -234,23 +277,30 @@ class TelmetryBase:
         # vehicle list wasn't available when the name arrived), rescheduling
         # until every known name is mapped.
         self.retryScheduled = False
+        self.refreshIdentities()
         for vehicle_id, vehicle_name in list(self.vehicleNames.items()):
             if vehicle_id not in self.vehicles:
-                if self.updateVehicles(vehicle_id, vehicle_name):
+                # A replay of a name already received: not a sighting.
+                if self.updateVehicles(vehicle_id, vehicle_name, retained=True):
                     self.replayUnknownEvents(vehicle_id)
 
         if any(i not in self.vehicles for i in self.vehicleNames):
             self.scheduleUnmappedRetry()
 
-    def updateVehicles(self, vehicle_id, vehicle_name, loadList=True):
+    def refreshIdentities(self):
+        # Reload what vinFor uses, if an earlier load failed. Runs on the
+        # retry timer thread, never the MQTT thread.
+        pass
+
+    def updateVehicles(self, vehicle_id, vehicle_name, loadList=True, retained=False):
         # Called each time the vehicle name topic arrives: attaches the
         # telemetry car id to a registry vehicle, by VIN where the feed knows
         # it, else by name.
         source = self.__class__.__name__
         vehicle = self.vehicles.get(vehicle_id, None)
-        if vehicle:
+        if vehicle is not None and not self._dropIfOrphan(vehicle_id, vehicle):
             # Already mapped: a rename.
-            vehicle.observe("name", vehicle_name, source)
+            self._observe(vehicle, "name", vehicle_name, retained)
             return True
 
         vin = self.vinFor(vehicle_id)
@@ -260,7 +310,7 @@ class TelmetryBase:
             except ValueError:
                 vehicle = None
             if vehicle is not None:
-                vehicle.observe("name", vehicle_name, source)
+                self._observe(vehicle, "name", vehicle_name, retained)
                 self.vehicles[vehicle_id] = vehicle
                 logger.info(
                     f"Vehicle {vehicle_name} telemetry being provided by {source}"
