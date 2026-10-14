@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import subprocess
@@ -1683,7 +1684,15 @@ class TeslaBLE:
             timeout=self.SCAN_SECONDS + 4,
             use_process_group=True,
         )
-        output = (stdout or b"").decode("utf-8", "replace")
+        # [DEL] lines report BlueZ forgetting a device it no longer hears;
+        # they carry the cached name and address, so they say nothing here.
+        output = "\n".join(
+            line
+            for line in re.sub(
+                r"\x1b\[[0-9;]*m", "", (stdout or b"").decode("utf-8", "replace")
+            ).splitlines()
+            if not line.lstrip().startswith("[DEL]")
+        )
         name = self.bleLocalName(vin)
         inRange = name in output
         if not inRange and output:
