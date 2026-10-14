@@ -14,6 +14,7 @@ import math
 import random
 import requests
 import bisect
+import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 from TWCManager.Vehicle.Registry import VehicleRegistry
@@ -32,6 +33,9 @@ class TWCMaster:
     backgroundTasksCmds = {}
     backgroundTasksLock = threading.Lock()
     backgroundTasksDelayed = []
+    # Tie-breaker for delayed tasks due at the same instant: entries never
+    # fall through to comparing task dicts.
+    _delaySeq = itertools.count()
     config = None
     consumptionValues = {}
     consumptionAmpsValues = {}
@@ -324,19 +328,25 @@ class TWCMaster:
     def countSlaveTWC(self):
         return int(len(self.slaveTWCRoundRobin))
 
+    @staticmethod
+    def _taskKey(task):
+        # Tasks dedupe per cmd, except VIN queries, which dedupe per TWC so
+        # one TWC's query never replaces another's.
+        if task["cmd"] == "getVehicleVIN":
+            return ("getVehicleVIN", bytes(task.get("slaveTWC") or b""))
+        return task["cmd"]
+
     def delete_background_task(self, task):
-        if (
-            task["cmd"] in self.backgroundTasksCmds
-            and self.backgroundTasksCmds[task["cmd"]] == task
-        ):
-            del self.backgroundTasksCmds[task["cmd"]]["cmd"]
-            del self.backgroundTasksCmds[task["cmd"]]
+        key = self._taskKey(task)
+        if key in self.backgroundTasksCmds and self.backgroundTasksCmds[key] == task:
+            del self.backgroundTasksCmds[key]["cmd"]
+            del self.backgroundTasksCmds[key]
 
     def doneBackgroundTask(self, task):
         # Delete task['cmd'] from backgroundTasksCmds such that
         # queue_background_task() can queue another task['cmd'] in the future.
         if "cmd" in task:
-            del self.backgroundTasksCmds[task["cmd"]]
+            del self.backgroundTasksCmds[self._taskKey(task)]
 
         # task_done() must be called to let the queue know the task is finished.
         # backgroundTasksQueue.join() can then be used to block until all tasks
@@ -355,7 +365,7 @@ class TWCMaster:
                 self.backgroundTasksDelayed
                 and self.backgroundTasksDelayed[0][0] <= datetime.now()
             ):
-                self.queue_background_task(self.backgroundTasksDelayed.pop(0)[1])
+                self.queue_background_task(self.backgroundTasksDelayed.pop(0)[-1])
 
             # Get the next task
             try:
@@ -1296,7 +1306,7 @@ class TWCMaster:
         if delay > 0:
             bisect.insort(
                 self.backgroundTasksDelayed,
-                (datetime.now() + timedelta(seconds=delay), task),
+                (datetime.now() + timedelta(seconds=delay), next(self._delaySeq), task),
             )
             return
 
@@ -1306,17 +1316,18 @@ class TWCMaster:
 
         self.getBackgroundTasksLock()
         try:
-            if task["cmd"] in self.backgroundTasksCmds:
+            key = self._taskKey(task)
+            if key in self.backgroundTasksCmds:
                 # Some tasks, like cmd='charge', will be called once per second until
                 # a charge starts or we determine the car is done charging.  To avoid
                 # wasting memory queing up a bunch of these tasks when we're handling
                 # a charge cmd already, don't queue two of the same task.
-                self.backgroundTasksCmds[task["cmd"]].update(task)
+                self.backgroundTasksCmds[key].update(task)
                 return
 
             # Insert task['cmd'] in backgroundTasksCmds to prevent queuing another
             # task['cmd'] till we've finished handling this one.
-            self.backgroundTasksCmds[task["cmd"]] = task
+            self.backgroundTasksCmds[key] = task
         finally:
             self.releaseBackgroundTasksLock()
 
@@ -1444,14 +1455,18 @@ class TWCMaster:
         # before it creates a vehicle or a session record.
         try:
             status = self.vehicleRegistry.observeTwcVin(twcid, slaveTWC.currentVIN)
+            if status == "pending":
+                self.queue_background_task(
+                    {"cmd": "getVehicleVIN", "slaveTWC": slaveTWC.TWCID, "vinPart": 0},
+                    delay=5,
+                )
+                # retryVINQuery re-asks on the first read's budget if this
+                # confirmation read is lost.
+                slaveTWC.lastVINQuery = time.time()
+                slaveTWC.vinQueryAttempt = 1
+                return
         except Exception as e:
             logger.warning("Vehicle registry VIN update failed: %s", e)
-            return
-        if status == "pending":
-            self.queue_background_task(
-                {"cmd": "getVehicleVIN", "slaveTWC": slaveTWC.TWCID, "vinPart": 0},
-                delay=5,
-            )
             return
         if status != "confirmed":
             return
@@ -1557,7 +1572,7 @@ class TWCMaster:
                 if (
                     slaveTWC.lastVINQuery > 0
                     and slaveTWC.vinQueryAttempt < 6
-                    and not slaveTWC.currentVIN
+                    and (not slaveTWC.currentVIN or self._vinPending(slaveTWC))
                 ):
                     if (time.time() - slaveTWC.lastVINQuery) >= 60:
                         self.queue_background_task(
@@ -1571,6 +1586,14 @@ class TWCMaster:
                         slaveTWC.lastVINQuery = time.time()
             else:
                 slaveTWC.lastVINQuery = 0
+
+    def _vinPending(self, slaveTWC):
+        try:
+            twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+            return self.vehicleRegistry.isPending(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry pending check failed: %s", e)
+            return False
 
     def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
         with self.settingsLock:

@@ -207,6 +207,16 @@ class VehicleRegistry:
         v.observe("twcVin", pointId, "TWC")
         return "confirmed"
 
+    def isPending(self, pointId: str) -> bool:
+        # True while the point has an unconfirmed, not-yet-rejected candidate.
+        with self._lock:
+            state = self._pending.get(pointId)
+            return (
+                state is not None
+                and state["candidate"] is not None
+                and not state["rejected"]
+            )
+
     def _attributedTo(self, pointId: str) -> List[Vehicle]:
         found = []
         for v in self.vehicles():
