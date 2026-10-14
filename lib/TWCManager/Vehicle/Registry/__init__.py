@@ -1,3 +1,4 @@
+from .VehicleRegistry import VehicleRegistry
 from .Fields import (
     FEED_LAG,
     FIELDS,
@@ -8,6 +9,7 @@ from .Fields import (
 )
 
 __all__ = [
+    "VehicleRegistry",
     "FEED_LAG",
     "FIELDS",
     "NOT_TRACKED",
