@@ -681,7 +681,7 @@ class HomeAssistant:
                 result = "error"
             else:
                 vehicles_processed += 1
-                registryVehicle = self.registry.get(v.vin)
+                registryVehicle = self.registry.get(str(v.vin).upper())
                 if registryVehicle is not None:
                     registryVehicle.noteWrite("chargeLimit", limit, "HomeAssistant")
 

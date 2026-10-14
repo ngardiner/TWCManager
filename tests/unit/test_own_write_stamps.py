@@ -17,7 +17,7 @@ VIN = "5YJ3E1EA1KF000001"
 def test_api_charge_rate_stamps_available_current():
     reg = VehicleRegistry({})
     v = reg.getOrCreate(VIN, "TeslaAPI")
-    car = Mock(VIN=VIN, vehicle=v)
+    car = Mock(VIN=VIN, _liveVehicle=Mock(return_value=v))
     TeslaAPI._recordChargeRate(car, 16)
     assert v.lastWrite("availableCurrent").value == 16
     assert v.lastWrite("availableCurrent").source == "TeslaAPI"
@@ -176,3 +176,14 @@ def test_ha_apply_charge_limit_failure_no_stamp():
     reg.getOrCreate(VIN, "HomeAssistant")
     assert ha.applyChargeLimit(80) == "error"
     assert reg.get(VIN).lastWrite("chargeLimit") is None
+
+
+def test_api_charge_rate_does_not_revive_forgotten_vehicle():
+    api = new_api()
+    api.storeToken(fleet_token())
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
+    car = api.getCarApiVehicles()[-1]
+    api.registry.forget(VIN)
+    assert api.registry.get(VIN) is None
+    TeslaAPI._recordChargeRate(car, 16)
+    assert api.registry.get(VIN) is None
