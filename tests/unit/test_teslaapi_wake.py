@@ -217,3 +217,44 @@ def test_state_check_uses_owner_slot_when_present(no_threads, clock, requests_mo
     assert state_gets
     assert all(r.url == OWNER_API_URL + "/VIN1" for r in state_gets)
     assert _count(requests_mock, "GET", OWNER_API_URL + "/VIN1") == 3
+
+
+def test_telemetry_from_before_wake_is_not_trusted(
+    api, clock, car_state, requests_mock
+):
+    woke = _send_first_wake(api, clock)
+    vehicle = api.getCarApiVehicles()[0]
+    # TeslaMate's last word is 'asleep', from before the wake we sent: it
+    # can't tell us whether the wake worked.
+    vehicle.syncSource = "TeslaMateVehicle"
+    vehicle.syncState = "asleep"
+    vehicle.syncTimestamp = woke - 10
+
+    car_state.value = "online"
+    clock.advance(getattr(api, "POST_WAKE_POLL_SECS", 60))
+    assert api.car_api_available(charge=True) is True
+    assert _wakes(requests_mock) == 1
+    assert vehicle.delayNextWakeAttempt == 0
+
+
+def test_other_access_does_not_move_wake_window(api, clock, requests_mock):
+    woke = _send_first_wake(api, clock)
+    vehicle = api.getCarApiVehicles()[0]
+
+    # Another access inside the window (e.g. set_charging_amps, or a BLE read
+    # on main) touches lastAPIAccessTime. 1.3.4 has no BLE location read.
+    clock.advance(300)
+    vehicle.lastAPIAccessTime = clock.now
+
+    # The window still ends 600 s after the wake: no state GET after it.
+    clock.now = woke + 600
+    api.car_api_available(charge=True)
+    gets = _gets(requests_mock)
+    clock.now = woke + 700
+    assert api.car_api_available(charge=True) is False
+    assert _gets(requests_mock) == gets
+
+    # The retry is still 30 minutes after the wake, not after the access.
+    clock.now = woke + 30 * 60 + 1
+    api.car_api_available(charge=True)
+    assert _wakes(requests_mock) == 2
