@@ -45,7 +45,7 @@ class VehicleRegistry:
         self._lock = threading.RLock()
         self._vehicles: Dict[str, Vehicle] = {}
         self._sources: List[ReadSource] = []
-        self._liveness: Dict[str, Callable[[Vehicle], Optional[float]]] = {}
+        self._liveness: Dict[str, Callable[[Optional[Vehicle]], Optional[float]]] = {}
         # Per point: {"candidate": vin, "attempts": int, "rejected": bool}.
         self._pending: Dict[str, dict] = {}
 
@@ -259,7 +259,7 @@ class VehicleRegistry:
         ]
 
     def registerLiveness(
-        self, source: str, liveAt: Callable[[Vehicle], Optional[float]]
+        self, source: str, liveAt: Callable[[Optional[Vehicle]], Optional[float]]
     ) -> None:
         with self._lock:
             self._liveness[source] = liveAt

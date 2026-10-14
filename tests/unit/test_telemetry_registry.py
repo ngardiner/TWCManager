@@ -345,3 +345,161 @@ def test_refused_connection_is_not_live():
     assert not t.connected
     t.mqttConnect(None, None, None, Mock(is_failure=False))
     assert t.connected
+
+
+# Fix round 1: retained MQTT redelivery and forget.
+
+
+@pytest.fixture
+def clocked(monkeypatch):
+    """A TeslaMate feed on an injected registry clock, connected and mapped."""
+    monkeypatch.setattr(TeslaMateVehicle, "loadCarVINs", lambda self: {"7": VIN})
+    monkeypatch.setattr(
+        TeslaMateVehicle, "doSyncTokens", lambda self, firstrun=False: None
+    )
+    now = {"t": 1000.0}
+    t, reg = make(TeslaMateVehicle, clock=lambda: now["t"])
+    t.mqttConnect(Mock(), None, None, 0)
+    return t, reg, now
+
+
+def tm_msg(t, topic, payload, retain):
+    msg = Mock(topic="teslamate/cars/7/" + topic, payload=payload.encode())
+    msg.retain = retain
+    t.mqttMessage(None, None, msg)
+
+
+def test_retained_replay_after_reconnect_does_not_beat_own_write(clocked):
+    t, reg, now = clocked
+    tm_msg(t, "display_name", "C", False)
+    tm_msg(t, "charge_limit_soc", "50", False)
+    v = reg.get(VIN)
+    v.noteWrite("chargeLimit", 100, "TeslaBLE")  # at 1000
+    now["t"] = 1005.0
+    t.mqttDisconnect(None, None, None, 7)
+    t.mqttConnect(Mock(), None, None, 0)
+    tm_msg(t, "display_name", "C", True)
+    tm_msg(t, "charge_limit_soc", "50", True)  # the broker's retained copy
+    assert v.trusted("chargeLimit") is None  # inside FEED_LAG: our write stands
+    assert v.latest("chargeLimit").at == 1000.0  # not restamped
+
+
+def test_retained_differing_value_after_own_write_waits_for_feed_lag(clocked):
+    from TWCManager.Vehicle.Registry.Fields import FEED_LAG
+
+    t, reg, now = clocked
+    tm_msg(t, "display_name", "C", False)
+    v = reg.get(VIN)
+    v.observe("chargeLimit", 60, "TeslaAPI", at=900.0)
+    v.noteWrite("chargeLimit", 100, "TeslaBLE")  # at 1000
+    now["t"] = 1005.0
+    tm_msg(t, "charge_limit_soc", "50", True)  # TeslaMate's pre-write value
+    obs = v.latest("chargeLimit")
+    assert (obs.value, obs.at) == (50, 1000.0)
+    assert v.trusted("chargeLimit") is None
+    now["t"] = 1000.0 + FEED_LAG + 1
+    assert v.trusted("chargeLimit").value == 50
+    tm_msg(t, "charge_limit_soc", "100", False)  # a live change is news
+    assert v.trusted("chargeLimit").value == 100
+
+
+def test_unhealthy_feed_retained_replay_keeps_ageing_and_is_not_a_sighting(
+    clocked,
+):
+    t, reg, now = clocked
+    tm_msg(t, "display_name", "C", False)
+    tm_msg(t, "state", "online", False)
+    v = reg.get(VIN)
+    seen = v.lastSeen
+    tm_msg(t, "healthy", "false", True)
+    now["t"] = 1000.0 + 40 * 86400
+    t.mqttDisconnect(None, None, None, 7)
+    t.mqttConnect(Mock(), None, None, 0)
+    for topic, payload in (("display_name", "C"), ("state", "online")):
+        tm_msg(t, topic, payload, True)
+    assert v.latest("state").at == 1000.0
+    assert v.age("state") == 40 * 86400
+    assert v.lastSeen == seen
+    assert reg.expire() == [VIN]
+
+
+def test_retained_value_never_seen_is_observed_but_not_a_sighting(clocked):
+    t, reg, now = clocked
+    tm_msg(t, "display_name", "C", False)
+    v = reg.get(VIN)
+    seen = v.lastSeen
+    now["t"] = 2000.0
+    tm_msg(t, "battery_level", "61", True)
+    assert v.latest("batteryLevel").value == 61 and v.lastSeen == seen
+
+
+def test_retained_flag_survives_parking():
+    now = {"t": 1000.0}
+    t, reg = make(clock=lambda: now["t"])
+    t.vinFor = lambda vid: VIN
+    v = reg.getOrCreate(VIN, "TeslaAPI")
+    v.observe("name", "C", "TeslaAPI")
+    now["t"] = 2000.0
+    t.applyDataToVehicle("1", "charge_limit_soc", "80", retained=True)
+    t.applyDataToVehicle("1", "display_name", "C", retained=True)
+    assert t.vehicles["1"] is v and v.latest("chargeLimit").value == 80
+    assert v.lastSeen == 1000.0  # a retained replay is not a sighting
+
+
+def test_forget_then_recreate_remaps_the_feed(clocked):
+    t, reg, now = clocked
+    tm_msg(t, "display_name", "C", False)
+    old = reg.get(VIN)
+    assert reg.forget(VIN)
+    new = reg.getOrCreate(VIN, "TeslaAPI")
+    tm_msg(t, "charge_limit_soc", "70", False)
+    assert t.vehicles["7"] is new and new.latest("chargeLimit").value == 70
+    assert old.latest("chargeLimit") is None
+    assert reg.sourceLiveAt("TeslaMateVehicle", new) is not None
+
+
+def test_forget_then_rename_redelivery_remaps(clocked):
+    t, reg, now = clocked
+    tm_msg(t, "display_name", "C", False)
+    reg.forget(VIN)
+    tm_msg(t, "display_name", "C", True)  # retained, after a reconnect
+    new = reg.get(VIN)
+    assert new is not None and t.vehicles["7"] is new and new.name == "C"
+
+
+def test_teslamate_unmapped_vehicle_assumed_healthy(clocked):
+    t, reg, now = clocked
+    other = reg.getOrCreate("5YJ3E1EA1KF000002", "TeslaAPI")
+    assert t.carHealthy(other) is True
+
+
+def test_car_vins_reloaded_by_unmapped_retry(monkeypatch):
+    import TWCManager.Vehicle.TeslaMateVehicle as mod
+
+    monkeypatch.setattr(
+        TeslaMateVehicle, "doSyncTokens", lambda self, firstrun=False: None
+    )
+    conn = Mock()
+    conn.cursor.return_value.fetchall.return_value = [(7, VIN)]
+    connect = Mock(side_effect=[mod.psycopg2.OperationalError("down"), conn])
+    monkeypatch.setattr(mod.psycopg2, "connect", connect)
+    reg = VehicleRegistry({})
+    master = Mock()
+    master.vehicleRegistry = reg
+    master.getModuleByName = Mock(return_value=None)
+    db = {"db_host": "h", "db_name": "n", "db_user": "u", "db_pass": "p"}
+    master.config = {"config": {}, "vehicle": {"TeslaMate": dict(enabled=True, **db)}}
+    t = TeslaMateVehicle(master)
+    assert t.carVINs == {}
+    assert connect.call_args.kwargs["connect_timeout"] == 5
+    t.scheduleUnmappedRetry = lambda delay=None: None
+    t.applyDataToVehicle("7", "display_name", "C")  # no name match, no VINs
+    assert "7" not in t.vehicles
+    t.retryUnmappedVehicles()  # reloads the VINs, then maps by VIN
+    assert t.carVINs == {"7": VIN} and t.vehicles["7"] is reg.get(VIN)
+
+
+def test_unmapped_vehicle_uses_its_car_health_by_vin(clocked):
+    t, reg, now = clocked
+    t.noteHealthy("7", "false")
+    assert t.carHealthy(reg.getOrCreate(VIN, "TeslaAPI")) is False

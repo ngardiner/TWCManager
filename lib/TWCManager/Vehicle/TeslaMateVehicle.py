@@ -117,6 +117,7 @@ class TeslaMateVehicle(TelmetryBase):
                 database=self.__db_name,
                 user=self.__db_user,
                 password=self.__db_pass,
+                connect_timeout=5,
             )
         except Exception as e:
             # The error type only: a driver message can name the host or user.
@@ -142,6 +143,11 @@ class TeslaMateVehicle(TelmetryBase):
             conn.close()
         return {str(car_id): vin for car_id, vin in rows if car_id is not None and vin}
 
+    def refreshIdentities(self):
+        # A database that was down at startup: try again for VINs.
+        if not self.carVINs:
+            self.carVINs = self.loadCarVINs()
+
     def vinFor(self, vehicle_id) -> Optional[str]:
         return self.carVINs.get(str(vehicle_id))
 
@@ -163,8 +169,12 @@ class TeslaMateVehicle(TelmetryBase):
             if mapped is vehicle:
                 # Unpublished: assume healthy.
                 return self.healthy.get(car_id, True)
-        # Not a car this feed has attached to: it cannot vouch for it.
-        return False
+        # Not attached (yet, or again after a forget): its car id by VIN if
+        # known, else assume healthy, as for an unpublished healthy topic.
+        for car_id, vin in list(self.carVINs.items()):
+            if vin == vehicle.vin:
+                return self.healthy.get(car_id, True)
+        return True
 
     def scheduleTokenResync(self):
         resync = threading.Timer(3600, self.resyncTokens)
@@ -397,4 +407,9 @@ class TeslaMateVehicle(TelmetryBase):
             if topic[3] == "healthy":
                 self.noteHealthy(topic[2], payload)
             else:
-                self.applyDataToVehicle(topic[2], topic[3], payload)
+                self.applyDataToVehicle(
+                    topic[2],
+                    topic[3],
+                    payload,
+                    getattr(message, "retain", False) is True,
+                )
