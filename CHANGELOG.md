@@ -20,6 +20,7 @@ This document logs the changes per release of TWCManager.
     * (@ngardiner) - Gen3 TWC support via Neurio Modbus emulation
     * (@MikeBishop) - Run vehicle commands on a dedicated worker thread and serialize tesla-control calls, so BLE retries no longer stall the RS485 loop (#668)
     * (@MikeBishop) - Shut down gracefully on SIGTERM, saving settings and sending pending stop-charging commands before exit (#668)
+    * (@MikeBishop) - Serialise settings.json saves under a settings lock so a save no longer races writers on other threads
     * (@MikeBishop) - Evaluate charging policy on its own thread instead of the RS485 loop, only when acting as master (#670)
 * Bugfixes
     * (@MikeBishop) - Queue vehicle commands per VIN and really cancel pending stop-charging commands when charging resumes (closes #667)

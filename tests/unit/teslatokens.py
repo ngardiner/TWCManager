@@ -6,6 +6,7 @@ master stand-in whose tokenSyncEnabled() follows the TeslaMate module the way
 TWCMaster.tokenSyncEnabled() does.
 """
 
+import threading
 import time
 
 import jwt
@@ -85,6 +86,7 @@ class FakeMaster:
         cfg = {"teslaApiClientID": "my-client-id"}
         cfg.update(config_overrides)
         self.config = {"config": cfg, "vehicle": {"teslaAPI": {"enabled": True}}}
+        self.settingsLock = threading.RLock()
         self.settings = {}
         self.modules = {}
         self.tasks = []
