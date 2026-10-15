@@ -79,3 +79,23 @@ def test_teslaapi_broadcast_limit_is_unchanged():
     with patch("time.sleep"):
         assert api.applyChargeLimit(80) == "success"
     assert car.apply_charge_limit.call_count == other.apply_charge_limit.call_count == 1
+
+
+def test_teslaapi_targeted_limit_never_wakes_another_car():
+    # The real car_api_available, not a mock: a targeted limit must not send
+    # a paid wake to an at-home car it was not asked about
+    api, (car, other) = api2()
+    del api.car_api_available
+    api.refreshTokenIfNeeded = Mock()
+    api.wakeVehicle = Mock(return_value={"response": {"state": "online"}})
+    for c in (car, other):
+        c.ready = Mock(return_value=False)
+        c.stopTryingToApplyLimit = False
+        c.firstChargeNeededTime = 1
+        c.lastAPIAccessTime = 0
+        c.delayNextWakeAttempt = 0
+    with patch("time.sleep"):
+        api.applyChargeLimit(80, vin=VIN, remoteOnly=True)
+    woken = [c.args[0] for c in api.wakeVehicle.call_args_list]
+    assert other not in woken
+    assert woken == [car]
