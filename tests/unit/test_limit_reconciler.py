@@ -507,3 +507,13 @@ def test_an_unreached_limit_whose_one_rearm_is_spent_no_longer_blocks_the_start(
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); limit = m.desired.record(VIN, CHARGE_LIMIT)
     limit.paidSends, limit.paidReached, limit.rearmed = 2, False, False; assert not r._limitSpent(limit)   # it can still ride the start's wake
     limit.rearmed = True; assert r._limitSpent(limit)
+
+def test_a_limit_whose_ride_wake_failed_does_not_block_the_start_forever():   # c4 with the I2 cap, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI")
+    v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_()   # asleep: the lower and its retry
+    c.t += 7200; m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()   # the limit rides the start's wake, which fails
+    assert names(f) == ["setChargeLimit", "setChargeLimit", "wake"] and m.desired.record(VIN, CHARGE_LIMIT).rearmed
+    for _ in range(60):                                                       # an hour of TeslaMate republishing, unchanged
+        c.t += 60; v.observe("chargeLimit", 90, "TeslaMateVehicle"); v.observe("chargingState", "Stopped", "TeslaMateVehicle"); r.pass_()
+    assert names(f)[3] == "wake" and len(f.calls) <= 6                        # the start went with its own wake: bounded, not stalled

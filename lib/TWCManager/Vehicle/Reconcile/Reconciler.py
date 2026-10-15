@@ -480,14 +480,17 @@ class VehicleReconciler(threading.Thread):
     def _limitSpent(self, limit) -> bool:
         # The limit cannot be delivered, so it no longer holds the start
         # (c4): every provider declaring it is excluded, ready or not (M11);
-        # its paid sends are used up on a car that answered, or with the
-        # re-arm spent too; or it is held unsent by a refusal
+        # both paid sends went to a car that answered; its one re-arm is
+        # used with no blind retry left; or a refusal holds it unsent
         declared = self.master.providerOrder.ordered(SET_CHARGE_LIMIT)
         last = limit.lastOutcome
         return (
             all(p.name in limit.excluded for p in declared)
             or limit.paidSends >= 2
-            and (limit.paidReached or limit.rearmed)
+            and limit.paidReached
+            or limit.paidSends
+            and limit.rearmed
+            and not limit.paidRetryDue
             or last is not None
             and last.detail in _REFUSALS
         )
