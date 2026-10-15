@@ -358,16 +358,17 @@ class DesiredStore:
                     record.paidAt = now
             if outcome.kind in SETTLED:
                 record.settledAt = now
-                if freeProvider:
-                    state.free.success(now)
-            elif (
-                freeProvider
+            if not freeProvider:
+                pass
+            elif outcome.kind in SETTLED or outcome.detail == "pairing":
+                # Inside the pairing window the car answers, refusing the key
+                # until the card is tapped: the channel works, and the paid
+                # fallback waits
+                state.free.success(now)
+            elif not isNotSent(outcome) and (
                 # A failure of the free channel needs a request to it
-                and not isNotSent(outcome)
-                and (
-                    (outcome.kind in RETRYABLE and outcome.detail != "pairing")
-                    or outcome.kind == REFUSED
-                )
+                outcome.kind in RETRYABLE
+                or outcome.kind == REFUSED
             ):
                 state.free.failure(now)
             if outcome.kind in EXCLUDING:
