@@ -377,24 +377,24 @@ def test_owner_401_clears_owner_and_next_read_uses_fleet(
     assert owner not in caplog.text and fleet not in caplog.text
 
 
-def test_owner_412_pauses_for_an_hour_then_returns(
-    no_threads, requests_mock, monkeypatch
-):
+def test_owner_412_pauses_until_the_token_changes(no_threads, requests_mock):
     api = new_api()
     owner, _ = store_both(api)
     products = requests_mock.get(OWNER_API_URL[:-8] + "products", status_code=412)
     fleetList = requests_mock.get(FLEET_NA_URL, json=LISTING)
-    now = time.time()
 
     assert api.car_api_available() is False
     assert api.ownerSlot.accessToken == owner
-    assert abs(api.ownerSlot.pausedUntil - (now + 3600)) < 5
+    assert api.ownerSlot.pausedUntil == float("inf")
+    assert api.ownerSlot.status()["paused"] is True
     assert products.call_count == 1
 
     assert api.car_api_available() is True
     assert fleetList.call_count == 1
 
-    monkeypatch.setattr(time, "time", lambda: now + 3601)
+    # Latched: an hour later the Fleet slot still reads; a new token ends it
+    assert api.ownerSlot.usable("read", now=time.time() + 3601) is False
+    api.storeToken(owner_token(jti="new"))
     assert api.slotFor("read") is api.ownerSlot
 
 

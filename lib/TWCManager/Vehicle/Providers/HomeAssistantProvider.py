@@ -3,6 +3,7 @@
 # ranked after Fleet. It cannot wake the car.
 from typing import Optional, Tuple
 
+from ..Reconcile.Outcome import UNSUPPORTED, Outcome
 from .Capability import (
     HA_BILLED,
     READ_CHARGE,
@@ -12,8 +13,12 @@ from .Capability import (
     START_CHARGING,
     STOP_CHARGING,
     Declaration,
+    RateLimit,
 )
 from .Provider import Provider, vehicleMaxAmps
+
+# HA's former 10 s gate between charge switch calls, now per car
+CHARGE_SWITCH_LIMIT = RateLimit(1, 10)
 
 CAPABILITIES = (
     READ_CHARGE,
@@ -36,7 +41,11 @@ class HomeAssistantProvider(Provider):
         self.module = ha
 
     def declarations(self):
-        return {capability: Declaration(HA_BILLED) for capability in CAPABILITIES}
+        declared = {capability: Declaration(HA_BILLED) for capability in CAPABILITIES}
+        for capability in (START_CHARGING, STOP_CHARGING):
+            # At most one start or stop per car every 10 s (the lane applies it)
+            declared[capability] = Declaration(HA_BILLED, CHARGE_SWITCH_LIMIT)
+        return declared
 
     def attempts(self) -> int:
         # HomeAssistant had no VehiclePriority priority: one call, as when it
@@ -70,11 +79,41 @@ class HomeAssistantProvider(Provider):
         configConfig = (getattr(self.ha.master, "config", None) or {}).get("config")
         return (1, vehicleMaxAmps(vehicle, configConfig or {}))
 
-    def setAmps(self, vin: str, amps: int) -> bool:
+    # Command methods: one service call each through HomeAssistant's
+    # _post_service, which classifies it
+
+    def _entity(self, vin: str, kind: str):
+        # (HaVehicle, entity ID of kind) for vin; either may be None
         vehicle = self.ha.registry.get(vin)
-        if vehicle is None:
-            return False
-        hv = vehicle.attachment("HomeAssistant")
+        hv = vehicle.attachment("HomeAssistant") if vehicle is not None else None
         if hv is None:
-            return False
-        return bool(self.ha.setChargeRate(amps, vehicle=hv))
+            return None, None
+        return hv, (hv.entity_ids or {}).get(kind)
+
+    def _call(self, vin: str, kind: str, domain: str, service: str, extra=None):
+        hv, ent = self._entity(vin, kind)
+        if hv is None:
+            return Outcome(UNSUPPORTED, "not listed")
+        if not ent:
+            return Outcome(UNSUPPORTED, "no " + kind + " entity")
+        data = {"entity_id": ent}
+        data.update(extra or {})
+        return self.ha._post_service(domain, service, data)
+
+    def setChargeLimit(self, vin: str, limit: int) -> Outcome:
+        return self._call(
+            vin, "charge_limit_number", "number", "set_value", {"value": int(limit)}
+        )
+
+    def startCharging(self, vin: str) -> Outcome:
+        return self._call(vin, "charge_switch", "switch", "turn_on")
+
+    def stopCharging(self, vin: str) -> Outcome:
+        return self._call(vin, "charge_switch", "switch", "turn_off")
+
+    def setAmps(self, vin: str, amps: int) -> Outcome:
+        # Clamped to 1..32 A (typical Tesla charger limits), as setChargeRate
+        value = min(32.0, max(1.0, float(amps)))
+        return self._call(
+            vin, "charge_current_number", "number", "set_value", {"value": value}
+        )

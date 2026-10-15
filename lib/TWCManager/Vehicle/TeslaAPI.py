@@ -17,6 +17,14 @@ from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
     FleetAPIProvider,
     OwnerAPIProvider,
 )
+from TWCManager.Vehicle.Reconcile.Outcome import (
+    DONE,
+    ERROR,
+    REFUSED,
+    SATISFIED,
+    UNREACHABLE,
+    Outcome,
+)
 from TWCManager.Vehicle.Registry.Fields import TELEMETRY_SOURCES
 from TWCManager.Vehicle.Registry.Sources import TeslaAPIReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
@@ -65,6 +73,23 @@ class TeslaAPI:
     ENERGY_SITES_TTL = 3600
     # Seconds a free energy-site request may take (background thread)
     ENERGY_TIMEOUT = 10
+    # Seconds a billed command or wake_up may take (a lane thread)
+    COMMAND_TIMEOUT = 10
+    # A command refused for one of these reasons found the car already
+    # where it was asked to be
+    COMMAND_SATISFIED_REASONS = (
+        "already_set",
+        "charging",
+        "is_charging",
+        "not_charging",
+        "complete",
+        "disconnected",
+        "requested",
+    )
+    # A command refused for one of these reasons did not reach the car
+    COMMAND_UNREACHABLE_REASONS = ("could_not_wake_buses", "vehicle_unavailable")
+    # Seconds between failed wake_up attempts on one car (a wake is $0.02)
+    WAKE_RETRY_SECONDS = 30 * 60
     regionURL = {
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
@@ -158,6 +183,10 @@ class TeslaAPI:
 
     def __init__(self, master):
         self.master = master
+        # The module's clock for the command and wake paths (wakeDue,
+        # wakeOutcome, CarApiVehicle.is_awake): a test replaces it instead of
+        # the process-wide time.time
+        self.now = time.time
         self.registry = VehicleRegistry.forMaster(master)
         # One read source per token slot, Owner first: the Fleet source reads
         # (paid) only when the Owner slot cannot.
@@ -300,7 +329,15 @@ class TeslaAPI:
             )
             slot.clear()
             self.master.queue_background_task({"cmd": "saveSettings"})
-        elif code in (403, 410, 412):
+        elif code == 412:
+            # "Only available on fleetapi": Tesla will keep refusing this
+            # kind of token, so it is not retried until it changes
+            logger.error(
+                "Tesla %s API refused a read (HTTP 412); not using that token "
+                "for reads until it is replaced." % label
+            )
+            slot.pause(latch=True)
+        elif code in (403, 410):
             logger.error(
                 "Tesla %s API refused a read (HTTP %d); not using that token "
                 "for reads for an hour." % (label, code)
@@ -2011,6 +2048,217 @@ class TeslaAPI:
         # tokenSyncEnabled() is already true. Returns storeToken's result.
         return self.storeToken(accessToken, "", "synced")
 
+    # Command paths for the providers: each returns an Outcome and makes at
+    # most one billed request (two only when an expired token is refreshed
+    # in between). Nothing here retries a billed request.
+
+    def command(self, vehicle, name: str, body: Optional[dict] = None) -> Outcome:
+        # One Fleet API command (name, e.g. "set_charge_limit") to vehicle
+        slot = self.slotFor("command")
+        if slot is None:
+            return Outcome(REFUSED, "no command token")
+        if self.getCarApiRetryRemaining(vehicle):
+            return Outcome(UNREACHABLE, "backoff")
+        outcome, response = self._paidPost(vehicle, slot, "command/" + name, body)
+        if outcome is None:
+            reason = response.get("reason") or ""
+            if not isinstance(reason, str):
+                reason = type(reason).__name__
+            if response.get("result") is True:
+                outcome = Outcome(DONE)
+            elif reason in self.COMMAND_SATISFIED_REASONS:
+                outcome = Outcome(SATISFIED, reason)
+            elif reason in self.COMMAND_UNREACHABLE_REASONS:
+                outcome = Outcome(UNREACHABLE, reason)
+            else:
+                outcome = Outcome(ERROR, reason or "not accepted")
+            if outcome.kind in (DONE, SATISFIED):
+                # The car answered: it is awake (ready() reads this)
+                vehicle.lastAPIAccessTime = self.now()
+        logger.log(
+            logging.INFO8,
+            "Car API cmd %s for %s: %s %s"
+            % (name, vehicle.name, outcome.kind, outcome.detail),
+        )
+        return outcome
+
+    def _paidPost(self, vehicle, slot, path, body=None):
+        # POSTs <VIN>/<path> with slot's token. Returns (Outcome, None) when
+        # the request failed, or (None, response) for an HTTP 200 whose
+        # "response" object the caller classifies. An expired token is
+        # refreshed and the request sent once more; nothing else is retried.
+        refreshed = False
+        while True:
+            # Built per attempt, so the retry after a refresh sends the new token
+            url = slot.baseURL + "/" + str(vehicle.VIN) + "/" + path
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + slot.accessToken,
+            }
+            try:
+                req = requests.post(
+                    url,
+                    headers=headers,
+                    json=body,
+                    verify=slot.verifyCert,
+                    timeout=self.COMMAND_TIMEOUT,
+                )
+            except requests.exceptions.RequestException as e:
+                return Outcome(ERROR, type(e).__name__), None
+            code = req.status_code
+            if code == 401:
+                if (
+                    not refreshed
+                    and "expired" in req.text
+                    and slot.source != "synced"
+                    and slot.refreshToken
+                ):
+                    refreshed = True
+                    result = self.refreshSlot(slot)
+                    if result == "success":
+                        continue
+                    if result == "unreachable":
+                        return Outcome(UNREACHABLE, "token refresh"), None
+                    return Outcome(REFUSED, "401"), None
+                self.commandRefused(slot, 401)
+                return Outcome(REFUSED, "401"), None
+            if code == 403:
+                slot.reportScopeRefused("command", refused=True)
+                return Outcome(REFUSED, "403"), None
+            if code == 412:
+                slot.pause(latch=True)
+                return Outcome(REFUSED, "412"), None
+            if code == 408:
+                return Outcome(UNREACHABLE, "408"), None
+            if code == 429:
+                # Explicitly told to back off: as get_car_api does
+                self.errorCount = max(30, self.errorCount)
+                self.updateCarApiLastErrorTime(vehicle)
+                return Outcome(ERROR, "429"), None
+            if code != 200:
+                return Outcome(ERROR, str(code)), None
+            try:
+                response = json.loads(req.text)["response"]
+                if not isinstance(response, dict):
+                    raise TypeError("response")
+            except (ValueError, KeyError, TypeError) as e:
+                return Outcome(ERROR, type(e).__name__), None
+            return None, response
+
+    def commandRefused(self, slot, code):
+        # Retires a slot Tesla refused a command or wake with
+        if code == 401:
+            logger.error(
+                "Tesla %s API token was rejected (HTTP 401); removing it."
+                % slot.kind.capitalize()
+            )
+            slot.clear()
+            self.master.queue_background_task({"cmd": "saveSettings"})
+
+    def wakeDue(self, vehicle, now=None) -> bool:
+        # Whether the hold schedule lets a wake_up go to vehicle now: not
+        # during the API error backoff, not until wakeDelayMins after the
+        # charge need was first seen (the car may start on the TWC's offer),
+        # and not within delayNextWakeAttempt of the last wake_up.
+        now = self.now() if now is None else now
+        if self.getCarApiRetryRemaining(vehicle):
+            return False
+        if (
+            vehicle.firstChargeNeededTime
+            and now - vehicle.firstChargeNeededTime < self.wakeDelayMins * 60
+        ):
+            return False
+        if (
+            vehicle.delayNextWakeAttempt
+            and now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt
+        ):
+            return False
+        return True
+
+    def wakeOutcome(self, vehicle, now=None) -> Outcome:
+        # Wakes vehicle through the Fleet API, but only after the free
+        # online check (vehicles/{vin}, cached 120 s) says it is not online
+        # and wakeDue allows it. One wake_up at most.
+        now = self.now() if now is None else now
+        slot = self.slotFor("command")
+        if slot is None:
+            return Outcome(REFUSED, "no command token")
+        # The command slot's account, unless it cannot read; the Owner API
+        # answers the same free check
+        checkSlot = slot if slot.usable("read") else self.slotFor("read")
+        if vehicle.is_awake(slot=checkSlot, now=now):
+            self._wakeSettled(vehicle)
+            return Outcome(SATISFIED, "online")
+        if not vehicle.lastVehicleAwakeKnown:
+            # No free answer (no read token, an error): never wake blind
+            return Outcome(UNREACHABLE, "online check failed")
+        if vehicle.firstChargeNeededTime == 0:
+            vehicle.firstChargeNeededTime = now
+            if self.wakeDelayMins:
+                logger.info(
+                    vehicle.name
+                    + ": deferring wake for "
+                    + str(self.wakeDelayMins)
+                    + " minutes"
+                )
+        if not self.wakeDue(vehicle, now):
+            return Outcome(UNREACHABLE, "wake held")
+
+        # The wake hold is measured from here
+        vehicle.lastAPIAccessTime = now
+        outcome, response = self._paidPost(vehicle, slot, "wake_up")
+        state = "error"
+        if outcome is None:
+            state = response.get("state", "")
+            if not isinstance(state, str):
+                state = "error"
+        if state == "online":
+            self.resetCarApiLastErrorTime()
+            self._wakeSettled(vehicle)
+            # A command sent at once after a wake can fail with
+            # could_not_wake_buses; let the car settle
+            time.sleep(5)
+            return Outcome(DONE)
+
+        # Every failed wake waits WAKE_RETRY_SECONDS before the next: rapid
+        # retries cost $0.02 each and do not help an asleep or offline car
+        if vehicle.firstWakeAttemptTime == 0:
+            vehicle.firstWakeAttemptTime = now
+        vehicle.delayNextWakeAttempt = self.WAKE_RETRY_SECONDS
+        if state in ("asleep", "waking", "offline"):
+            self.resetCarApiLastErrorTime()
+            outcome = Outcome(UNREACHABLE, state)
+        elif outcome is None:
+            # HTTP 200 with an unexpected state
+            self.updateCarApiLastErrorTime(vehicle)
+            outcome = Outcome(ERROR, "state")
+        logger.info(
+            "Car API wake %s failed (%s %s). Will try again in %d seconds."
+            % (vehicle.name, outcome.kind, outcome.detail, vehicle.delayNextWakeAttempt)
+        )
+        if (
+            vehicle.firstWakeAttemptTime > 0
+            and now - vehicle.firstWakeAttemptTime > 60 * 60
+        ):
+            # It should never take over an hour to wake a car
+            logger.info(
+                "ERROR: We have failed to wake %s (%s) for %.1f hours.\n"
+                "Please file an issue at https://github.com/ngardiner/TWCManager/."
+                % (
+                    vehicle.name,
+                    outcome.detail,
+                    (now - vehicle.firstWakeAttemptTime) / 60 / 60,
+                )
+            )
+        return outcome
+
+    @staticmethod
+    def _wakeSettled(vehicle):
+        # The car is online: the next need starts a new hold schedule
+        vehicle.firstWakeAttemptTime = 0
+        vehicle.firstChargeNeededTime = 0
+        vehicle.delayNextWakeAttempt = 0
+
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         # As a fallback to allow initial implementation of the charge rate functionality for single car installs,
         # If no vehicle is specified, we take the first returned to us.
@@ -2273,6 +2521,9 @@ class CarApiVehicle:
     lastVehicleStatusTime = 0
     lastVehicleAwakeTime = 0
     lastVehicleAwakeState = False
+    # Whether lastVehicleAwakeState came from an answer (a sync source or
+    # vehicles/{vin}), not a failed check
+    lastVehicleAwakeKnown = False
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
     statusDeferral = 0
@@ -2418,7 +2669,7 @@ class CarApiVehicle:
         )
         return False
 
-    def is_awake(self, minInterval=120, telemetryNotBefore=0, slot=None):
+    def is_awake(self, minInterval=120, telemetryNotBefore=0, slot=None, now=None):
         # Free sources only: telemetry, else the vehicle state GET
         # (vehicles/{vin}; not charged on the Fleet API). Never vehicle_data.
         # The newest observation wins: telemetry (any state) is trusted only
@@ -2426,7 +2677,11 @@ class CarApiVehicle:
         # that GET's cached result or GET again.
         # telemetryNotBefore: also ignore telemetry stamped earlier (e.g.
         # before a wake_up we sent; it can't tell us whether the wake worked).
-        now = time.time()
+        # Fresh is the registry's age, so a live feed keeps an old reading
+        # fresh; it still loses to a state GET made after it.
+        # now (default: the module's clock) measures the cache, so a caller
+        # on a test clock drives it
+        now = self.carapi.now() if now is None else now
         obs, age = self._telemetryState()
         if (
             age is not None
@@ -2434,6 +2689,7 @@ class CarApiVehicle:
             and obs.at >= self.lastVehicleAwakeTime
             and obs.at >= telemetryNotBefore
         ):
+            self.lastVehicleAwakeKnown = True
             return obs.value in ("online", "charging", "updating", "driving")
 
         # Don't check more often than every minInterval seconds (2 minutes
@@ -2443,8 +2699,9 @@ class CarApiVehicle:
         result, response = self.get_car_api(
             str(self.VIN), checkReady=False, provesOnline=False, slot=slot
         )
-        awakeState = result and response.get("state", "") == "online"
+        awakeState = bool(result) and response.get("state", "") == "online"
         self.lastVehicleAwakeState = awakeState
+        self.lastVehicleAwakeKnown = bool(result)
         self.lastVehicleAwakeTime = now
         return awakeState
 
