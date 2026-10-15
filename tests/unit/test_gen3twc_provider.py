@@ -122,3 +122,12 @@ def test_controller_refresh_and_background_task_branch():
     with open(os.path.join(os.path.dirname(__file__), "..", "..", "lib", "TWCManager", "TWCManager.py")) as f:
         src = f.read()
     assert 'task["cmd"] == "gen3Vitals"' in src and "Gen3TWCProvider(gen3, master)" in src
+
+
+def test_an_unplugged_occupant_is_not_a_candidate_for_the_next_car():
+    m, ctl, p = make(); (u,) = ctl.devices(); reg = m.vehicleRegistry
+    car = reg.getOrCreate(VIN1, "TeslaMateVehicle"); car.observe("pluggedIn", True, "TeslaMateVehicle")
+    vitals(u, True); assert u.vehicleKey == VIN1
+    vitals(u, False); assert car.value("pluggedIn") is False
+    vitals(u, True)                                                            # another car, before TeslaMate's unplug
+    assert u.vehicleKey == "anon:" + u.ID and car.value("twcVin") is None

@@ -150,6 +150,12 @@ class Gen3TWC(EVSEInstance):
             registry.beginPlugSession(self.pointId)
             self._correlate()
         elif falling:
+            # Before the session ends, while the car is still at the point:
+            # this unit's own pluggedIn=True would otherwise keep it a fresh
+            # correlation candidate for the next car
+            vehicle = registry.vehicleAt(self.pointId)
+            if vehicle is not None:
+                vehicle.observe("pluggedIn", False, "Gen3TWC")
             registry.endPlugSession(self.pointId)
         if connected:
             vehicle = registry.vehicleAt(self.pointId)
