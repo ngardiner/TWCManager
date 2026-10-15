@@ -395,6 +395,11 @@ def background_tasks_thread(master):
                     master.vehicleIsDefinitelyHome(task["vin"])
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
+                elif task["cmd"] == "gen3Vitals":
+                    # Gen3 vitals are HTTP: here, never on the serial loop.
+                    g = master.getModuleByName("Gen3TWCs")
+                    if g:
+                        g.refreshVitals()
 
         except Exception as e:
             logger.error(
@@ -797,15 +802,21 @@ _gen3_cfg = master.config.get("controller.Gen3TWCs", {})
 if _gen3_cfg.get("enabled", False):
     try:
         from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
+        from TWCManager.Vehicle.Providers.Gen3TWCProvider import Gen3TWCProvider
 
+        gen3 = Gen3TWCs(master)
         master.registerModule(
             {
                 "name": "Gen3TWCs",
-                "ref": Gen3TWCs(master),
+                "ref": gen3,
                 "type": "EVSEController",
             }
         )
         logger.info("Registered Gen3TWCs EVSEController")
+        try:
+            master.providerOrder.register(Gen3TWCProvider(gen3, master))
+        except Exception as _e:
+            logger.warning("Could not register the Gen3TWC provider: %s", _e)
     except Exception as _e:
         logger.warning("Could not register Gen3TWCs: %s", _e)
 
