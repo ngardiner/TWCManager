@@ -3,6 +3,7 @@
 # Concern rulings, item 2: the real TeslaBLE and TeslaAPI applyChargeLimit
 # take the facade's vin and remoteOnly. A targeted call acts on that car
 # only; a broadcast is unchanged.
+import time
 from unittest.mock import Mock, patch
 
 from tests.unit.teslatokens import add_home_vehicle, fleet_token, new_api
@@ -91,7 +92,9 @@ def test_teslaapi_targeted_limit_never_wakes_another_car():
     for c in (car, other):
         c.ready = Mock(return_value=False)
         c.stopTryingToApplyLimit = False
+        # A need asked for continuously, whose wakeDelayMins grace is over
         c.firstChargeNeededTime = 1
+        c.lastChargeNeededTime = time.time()
         c.lastAPIAccessTime = 0
         c.delayNextWakeAttempt = 0
     with patch("time.sleep"):

@@ -544,6 +544,8 @@ class HomeAssistant:
                 return Outcome(UNREACHABLE, "timeout")
             except requests.exceptions.HTTPError as e:
                 status = getattr(e.response, "status_code", None)
+                if status is None:
+                    return Outcome(ERROR, type(e).__name__)
                 if status in (401, 403):
                     if not self._refusalLogged:
                         self._refusalLogged = True

@@ -94,7 +94,7 @@ def test_backoff_429_and_412_send_nothing_more(requests_mock):
     assert p.setChargeLimit(VIN, 80) == O.Outcome(O.ERROR, "429")
     assert p.setChargeLimit(VIN, 80) == O.Outcome(O.UNREACHABLE, "backoff") and len(calls(requests_mock, "set_charge_limit")) == 1
     api, reg, p = fleet(requests_mock, status=412)
-    assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "412") and api.fleetSlot.pausedUntil == float("inf")
+    assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "412") and not api.fleetSlot.usable("command") and api.fleetSlot.usable("read")
 
 def test_no_wake_without_a_free_answer(requests_mock):
     from tests.unit.reconcile_helpers import Clock
@@ -120,3 +120,102 @@ def test_ha_never_logs_the_response_body(caplog):
         ha._session.post = Mock(return_value=resp)
         assert p.startCharging(VIN).kind == (O.REFUSED if code == 403 else O.ERROR)
     assert "secret-token" not in caplog.text and caplog.text.count("check the long-lived token") == 1 and "HTTP 500" in caplog.text
+
+
+# Fix round 1
+
+def test_a_command_412_retires_commands_and_wakes_until_the_token_changes(requests_mock, monkeypatch):   # I1
+    import TWCManager.Vehicle.TeslaAPI as T
+    from tests.unit.reconcile_helpers import Clock
+    monkeypatch.setattr(T.time, "sleep", Mock())
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock, status=412); api.storeToken(owner_token())   # an Owner slot could answer the free check
+    p.clock = clk; api.now = clk; api.wakeDelayMins = 0
+    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
+    requests_mock.post(re.compile(r".*/wake_up$"), status_code=412, json={})
+    assert p.setChargeLimit(VIN, 80) == O.Outcome(O.REFUSED, "412")
+    assert api.fleetSlot.usable("read") and api.fleetSlot.pausedUntil == 0              # a command 412 latches no reads
+    before = len(requests_mock.request_history)
+    for _ in range(40):                                                                   # 40 rounds over 40 minutes
+        for call in (lambda: p.setChargeLimit(VIN, 80), lambda: p.startCharging(VIN), lambda: p.stopCharging(VIN), lambda: p.setAmps(VIN, 4), lambda: p.wake(VIN)):
+            assert call() == O.Outcome(O.REFUSED, "no command token")
+        clk.t += 60
+    assert len(requests_mock.request_history) == before                                   # nothing more, not even the free check
+    assert p.ready(reg.get(VIN), C.SET_AMPS) is False and api.readOnly
+    api.storeToken(fleet_token(jti="new")); assert api.fleetSlot.usable("command")
+
+def test_a_wake_412_retires_wakes_too(requests_mock):   # I1
+    from tests.unit.reconcile_helpers import Clock
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); api.storeToken(owner_token()); p.clock = clk; api.now = clk; api.wakeDelayMins = 0
+    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
+    wake = requests_mock.post(re.compile(r".*/wake_up$"), status_code=412, json={})
+    for _ in range(360):                                                                   # an hour in 10 s steps
+        p.wake(VIN); clk.t += 10
+    assert wake.call_count == 1 and not api.fleetSlot.usable("command") and api.fleetSlot.usable("read")
+
+def test_a_read_412_still_latches_reads_only(requests_mock):   # I1
+    api, reg = api_with_registry(); api.storeToken(fleet_token())
+    requests_mock.get(re.compile(r".*/api/1/vehicles$"), status_code=412, json={})
+    assert api.loadVehicleList() is False
+    assert api.fleetSlot.usable("read") is False and api.fleetSlot.usable("command") is True
+
+def test_an_unrefreshable_expired_token_is_retired(requests_mock):   # M1
+    api, reg, p = fleet(requests_mock); api.fleetSlot.refreshToken = "rt"; api.fleetSlot.clientID = ""
+    requests_mock.post(re.compile(r".*/command/.*"), status_code=401, text="token expired")
+    for _ in range(3):
+        p.stopCharging(VIN)
+    assert len(calls(requests_mock, "charge_stop")) == 1 and api.fleetSlot.empty()
+
+def test_an_ended_need_gets_a_fresh_grace_through_wake_outcome(requests_mock):   # M3/c4
+    from tests.unit.reconcile_helpers import Clock
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); p.clock = clk; api.now = clk      # wakeDelayMins 3
+    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
+    wake = requests_mock.post(re.compile(r".*/wake_up$"), json={"response": {"state": "asleep"}})
+    car = api.getCarApiVehicles()[0]
+    assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "wake held") and car.firstChargeNeededTime == 5000.0
+    clk.t += 601                                                                           # nobody asked for 10 minutes: that need ended
+    assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "wake held") and wake.call_count == 0 and car.firstChargeNeededTime == clk()
+    clk.t += 120; assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "wake held")                # one continuing need: asked within 600 s
+    clk.t += 61; assert p.wake(VIN).kind == O.UNREACHABLE and wake.call_count == 1          # its grace is over
+
+def test_an_ended_need_gets_a_fresh_grace_on_the_legacy_path(requests_mock):   # M3/c4
+    import time
+    api, reg, p = fleet(requests_mock); car = api.getCarApiVehicles()[0]; car.atHome = True
+    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
+    wake = requests_mock.post(re.compile(r".*/wake_up$"), json={"response": {"state": "asleep"}})
+    car.firstChargeNeededTime = car.lastChargeNeededTime = time.time() - 700                # a need that ended 700 s ago
+    assert api.car_api_available(charge=True) is False and wake.call_count == 0
+    assert abs(car.firstChargeNeededTime - time.time()) < 5
+
+def test_wake_due_reads_the_backoff_on_its_clock(requests_mock):   # M4
+    from tests.unit.reconcile_helpers import Clock
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.getCarApiVehicles()[0]
+    car.lastErrorTime = clk() - 10; car.errorCount = 5                                     # a 4-minute backoff, 10 s in
+    assert api.wakeDue(car, now=clk()) is False
+    assert api.wakeDue(car, now=clk() + 240) is True
+
+def test_no_free_check_during_the_backoff(requests_mock):   # L2
+    from tests.unit.reconcile_helpers import Clock
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.getCarApiVehicles()[0]; p.clock = clk; api.now = clk
+    check = requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
+    car.lastErrorTime = clk() - 10; car.errorCount = 5
+    assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "backoff") and check.call_count == 0
+
+def test_a_cached_failed_check_stays_unknown(requests_mock):   # L1
+    from tests.unit.reconcile_helpers import Clock
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.getCarApiVehicles()[0]; api.now = clk
+    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), status_code=503)
+    assert car.is_awake(now=clk()) is False and car.lastVehicleAwakeKnown is False
+    car.lastVehicleAwakeKnown = True                                                       # as a telemetry answer leaves it
+    assert car.is_awake(now=clk() + 10) is False and car.lastVehicleAwakeKnown is False    # the cache hit restores its own flag
+
+def test_odd_reasons_are_not_carried(requests_mock):   # L3
+    api, reg, p = fleet(requests_mock, result=False, reason="x" * 300)
+    assert p.stopCharging(VIN) == O.Outcome(O.ERROR, "not accepted")
+    api, reg, p = fleet(requests_mock, result=False, reason="Some Text")
+    assert p.stopCharging(VIN) == O.Outcome(O.ERROR, "not accepted")
+
+def test_ha_http_error_without_a_response(requests_mock):   # L4
+    import requests
+    ha, reg = make_ha()
+    resp = Mock(); resp.raise_for_status = Mock(side_effect=requests.exceptions.HTTPError()); ha._session.post = Mock(return_value=resp)
+    assert ha._post_service("switch", "turn_on", {}) == O.Outcome(O.ERROR, "HTTPError")
