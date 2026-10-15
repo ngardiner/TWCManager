@@ -9,7 +9,27 @@
 # with the outside limit as the value put back.
 from typing import NamedTuple, Optional
 
+from .Desired import CHARGE_LIMIT, CHARGING
 from .HeldLimits import MAX_LIMIT, MIN_LIMIT, HeldLimit
+
+# Observations that never adopt and never stand for the car's own state
+VEHICLE_SOURCES_EXCLUDED = frozenset({"TWC", "Gen2TWC", "Gen3TWC"})
+CHARGING_LIKE = frozenset({"Charging", "Starting", "Complete"})
+_STOPPED_LIKE = frozenset({"Stopped", "Complete", "Disconnected", "NoPower"})
+
+
+def satisfied(aspect, desired, believed) -> bool:
+    if believed is None:
+        return False
+    value = believed.value
+    if aspect == CHARGE_LIMIT:
+        return value == desired
+    if aspect == CHARGING:
+        return value in (CHARGING_LIKE if desired is True else _STOPPED_LIKE)
+    try:
+        return int(value) == int(desired)
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 class ChargeLimitDecision(NamedTuple):

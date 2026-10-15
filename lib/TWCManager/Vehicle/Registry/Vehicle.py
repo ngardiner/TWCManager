@@ -88,9 +88,9 @@ class Vehicle:
     def latest(self, field: str) -> Optional[Observation]:
         return self._fields.latest(field)
 
-    def reportedBy(self, field: str, source: str) -> Optional[Observation]:
-        """source's own latest observation of field."""
-        return self._fields.reported(field).get(source)
+    def reported(self, field: str) -> Dict[str, Observation]:
+        """Each source's own latest observation of field."""
+        return self._fields.reported(field)
 
     def lastWrite(self, field: str) -> Optional[Observation]:
         return self._fields.lastWrite(field)

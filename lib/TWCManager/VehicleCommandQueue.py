@@ -11,8 +11,8 @@
 #
 # Two kinds of instance: the legacy one (run=None) dispatches command dicts
 # to the vehicle module (normally VehiclePriority) until Task 13; the
-# attempt workers (Vehicle/Reconcile/Run.py) pass their own run, key, isHigh,
-# report and lost. Every entry such an instance accepts is reported exactly
+# reconciler's attempt queues (Vehicle/Reconcile/Reconciler.py) pass their
+# own run, key, isHigh, report and lost. Every entry such an instance accepts is reported exactly
 # once, through report or lost. Callbacks never run under _cond.
 import collections
 import threading
@@ -68,7 +68,6 @@ class VehicleCommandQueue:
         isHigh=None,
         report=None,
         lost=None,
-        inline=False,
     ):
         self._resolve_module = resolve_module
         self.name = name
@@ -78,12 +77,10 @@ class VehicleCommandQueue:
         self._isHigh = isHigh or self._is_high_priority
         self._report = report
         self._lost = lost
-        self.inline = inline
         self._cond = threading.Condition()
         self._high = collections.OrderedDict()
         self._low = collections.OrderedDict()
         self._busy = False
-        self._running = None
         self._draining = False
         self._thread = None
         # The worker thread is between start() and its exit
@@ -105,7 +102,7 @@ class VehicleCommandQueue:
 
     def start(self):
         with self._cond:
-            if self._thread is not None or self.inline or self._draining:
+            if self._thread is not None or self._draining:
                 return
             self._thread = threading.Thread(
                 target=self._run, name=self.name, daemon=True
@@ -153,14 +150,12 @@ class VehicleCommandQueue:
             return False
         losers, accepted, warn = [], True, False
         with self._cond:
-            dead = not self.inline and self._thread is not None and not self._live
-            if dead or (self._draining and not (high and (self.inline or self._live))):
+            dead = self._thread is not None and not self._live
+            if dead or (self._draining and not (high and self._live)):
                 # A dead or exited worker takes nothing; shutting down, only
                 # a stop a worker can still run is taken
                 losers.append((entry, "dropped"))
                 accepted = False
-            elif self.inline:
-                self._running, self._busy = entry, True
             else:
                 table, other = (
                     (self._high, self._low) if high else (self._low, self._high)
@@ -193,8 +188,6 @@ class VehicleCommandQueue:
                 self.MAX_PENDING,
             )
         self._lose(losers)
-        if accepted and self.inline:
-            self._runOne(entry, callback)
         return accepted
 
     def remove(self, match) -> int:
@@ -213,33 +206,6 @@ class VehicleCommandQueue:
     def cancel(self, cmd, match):
         # Legacy: until Task 13
         return self.remove(lambda task: task["cmd"] == cmd and match(task))
-
-    def pending(self) -> int:
-        with self._cond:
-            return len(self._high) + len(self._low)
-
-    @property
-    def busy(self) -> bool:
-        with self._cond:
-            return self._busy
-
-    def _entries(self):
-        # Test-only snapshot, high then low
-        with self._cond:
-            return [e for e, _ in list(self._high.values()) + list(self._low.values())]
-
-    def summary(self) -> dict:
-        with self._cond:
-            running = self._running
-            if running is not None and hasattr(running, "_asdict"):
-                running = running._asdict()
-            return {
-                "pending": len(self._high) + len(self._low),
-                "busy": self._busy,
-                "running": running,
-                "started": self._thread is not None,
-                "closed": self._draining,
-            }
 
     # --- shutdown ---
 
@@ -263,10 +229,10 @@ class VehicleCommandQueue:
         # entries and the running one; on timeout, what has not started
         # never will
         with self._cond:
-            if self._thread is None and not self.inline:
+            if self._thread is None:
                 # Never started (startup died first): nothing will run them
                 done = False
-            elif not self.inline and not self._live:
+            elif not self._live:
                 # The worker has exited or died: there is nothing to wait for
                 done = not self._high and not self._busy
             else:
@@ -307,7 +273,7 @@ class VehicleCommandQueue:
                 return None
             table = self._high if self._high else self._low
             _, (entry, callback) = table.popitem(last=False)
-            self._running, self._busy = entry, True
+            self._busy = True
             if not self._high and not self._low:
                 # The backlog has cleared: the next overflow warns again
                 self._overflowWarned = False
@@ -346,12 +312,9 @@ class VehicleCommandQueue:
                 self._deliver(entry, callback, result)
         finally:
             # Clear even on BaseException so waitDrained and waiters aren't
-            # left blocked on a dead worker. Inline callers may overlap: busy
-            # shows the latest one running
+            # left blocked on a dead worker
             with self._cond:
-                if self._running is entry:
-                    self._running = None
-                self._busy = self._running is not None
+                self._busy = False
                 self._cond.notify_all()
 
     def _run(self):

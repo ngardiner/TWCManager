@@ -13,12 +13,8 @@ from .Capability import (
     START_CHARGING,
     STOP_CHARGING,
     Declaration,
-    RateLimit,
 )
 from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
-
-# HA's former 10 s gate between charge switch calls, now per car
-CHARGE_SWITCH_LIMIT = RateLimit(1, 10)
 
 CAPABILITIES = (
     READ_CHARGE,
@@ -39,9 +35,8 @@ class HomeAssistantProvider(Provider):
         READ_CHARGE: Declaration(HA_BILLED),
         READ_LOCATION: Declaration(HA_BILLED),
         SET_CHARGE_LIMIT: Declaration(HA_BILLED),
-        # At most one start or stop per car every 10 s (the worker applies it)
-        START_CHARGING: Declaration(HA_BILLED, CHARGE_SWITCH_LIMIT),
-        STOP_CHARGING: Declaration(HA_BILLED, CHARGE_SWITCH_LIMIT),
+        START_CHARGING: Declaration(HA_BILLED),
+        STOP_CHARGING: Declaration(HA_BILLED),
         SET_AMPS: Declaration(HA_BILLED),
     }
     SUPPRESSED = CLOUD_SUPPRESSED
