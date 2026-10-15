@@ -23,8 +23,12 @@ from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 from TWCManager.Vehicle.Providers.Capability import START_CHARGING, STOP_CHARGING
 from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
-from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
-from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, targetsFor
+from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler, newerReading
+from TWCManager.Vehicle.Reconcile.Targets import (
+    applyPolicyLimit,
+    broadcastVehicles,
+    targetsFor,
+)
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -197,10 +201,39 @@ class TWCMaster:
         # Drops a stop not yet delivered: the desire and any queued attempt.
         # A start is never cancelled. Returns how many desires were cleared
         cleared = 0
-        for v in targetsFor(self, vin or None, STOP_CHARGING):
+        for v in self._chargeTargets(vin, STOP_CHARGING):
             cleared += self.desired.clearIf(v.key, CHARGING, False)
             self.reconciler.cancel(v.key)
         return cleared
+
+    def withdrawStartCharging(self, vin):
+        # A start not wanted any more (too little on offer): its desire goes;
+        # its record stays for the next start (I4)
+        for v in self._chargeTargets(vin, START_CHARGING):
+            self.desired.clearIf(v.key, CHARGING, True)
+
+    def _chargeTargets(self, vin, capability):
+        # As main: a named car; for an anonymous point, a mode-1 start or
+        # stop and a mode-3 start went unaddressed (broadcastVehicles)
+        targets = targetsFor(self, vin or None, capability)
+        mode = int(self.settings.get("chargeStopMode", 1))
+        if (
+            len(targets) == 1
+            and targets[0].isAnonymous
+            and (mode == 1 or mode == 3 and capability == START_CHARGING)
+        ):
+            # The anonymous car itself has no candidate in these modes
+            targets = broadcastVehicles(self, capability)
+        return targets
+
+    def _wantCharging(self, vin, value):
+        capability = START_CHARGING if value else STOP_CHARGING
+        for v in self._chargeTargets(vin, capability):
+            # The same value withdrawn earlier keeps its record unless the
+            # car has reported since its last send
+            rec = self.desired.record(v.key, CHARGING)
+            keep = rec.lastSentAt > 0 and not newerReading(v, CHARGING, rec.lastSentAt)
+            self.desired.set(v.key, CHARGING, value, "distributor", keep=keep)
 
     def checkForUpdates(self):
         # This function is used by the Web UI and later on will be used by the console to detect TWCManager Updates
@@ -2028,8 +2061,7 @@ class TWCMaster:
         # Desired state, decided again each cycle: the reconciler sends it
         # once per our own write, a limit first. vin is a registry key (a VIN
         # or an anon: key); None is every present car
-        for v in targetsFor(self, vin or None, START_CHARGING):
-            self.desired.set(v.key, CHARGING, True, "distributor")
+        self._wantCharging(vin, True)
         if int(self.settings.get("chargeStopMode", 1)) == 1:
             policy = self.getModuleByName("Policy")
             if policy:
@@ -2040,8 +2072,7 @@ class TWCMaster:
         # car (BLE, the Tesla API), 2 refusing to answer the slaves, 3 the
         # TWC stop command; 2 and 3 are the Gen2 provider's, which the
         # reconciler reaches once a free stop is not to be had
-        for v in targetsFor(self, vin or None, STOP_CHARGING):
-            self.desired.set(v.key, CHARGING, False, "distributor")
+        self._wantCharging(vin, False)
         if int(self.settings.get("chargeStopMode", 1)) == 1:
             if self.stopTimeout == datetime.max:
                 self.stopTimeout = datetime.now() + timedelta(seconds=10)

@@ -125,6 +125,10 @@ class AttemptRecord:
         self.rearmed = False
         self.settledAt: Optional[float] = None
         self.pendingSave: Any = None
+        # Sends that found the current value unreadable (a limit's c4 backstop)
+        self.unread = 0
+        # The value a clearIf withdrew; set() may take the record back (I4)
+        self.clearedValue: Any = None
 
     def newDesire(self) -> None:
         # UNSUPPORTED can depend on the value (amps outside a range); a
@@ -141,6 +145,8 @@ class AttemptRecord:
         self.paidRetryDue = False
         self.rearmed = False
         self.settledAt = None
+        self.unread = 0
+        self.clearedValue = None
 
     def exclude(self, provider: str, kind: str) -> None:
         self.excluded[provider] = kind
@@ -250,8 +256,18 @@ class DesiredStore:
     # --- writes ---
 
     def set(
-        self, key, aspect, value, by, decision=False, restore=False, lift=False
+        self,
+        key,
+        aspect,
+        value,
+        by,
+        decision=False,
+        restore=False,
+        lift=False,
+        keep=False,
     ) -> bool:
+        # keep: a value clearIf withdrew comes back on its old record, so
+        # its paid budget is not spent again (I4)
         _checkAspect(aspect)
         ignored = False
         changed = False
@@ -275,7 +291,9 @@ class DesiredStore:
                 state.desired[aspect] = Desired(
                     value, by, self._clock(), False, restore, lift
                 )
-                self._record(state, aspect).newDesire()
+                record = self._record(state, aspect)
+                if not (keep and existing is None and record.clearedValue == value):
+                    record.newDesire()
                 changed = True
         if ignored:
             logger.debug(
@@ -308,6 +326,7 @@ class DesiredStore:
             removed = existing is not None and existing.value == value
             if removed:
                 del state.desired[aspect]
+                self._record(state, aspect).clearedValue = value
         if removed:
             self._notify(key, aspect)
         return removed
@@ -363,6 +382,7 @@ class DesiredStore:
                 record.lastOutcome = outcome
                 record.lastOutcomeAt = now
                 record.lastProvider = attempt.provider
+                record.unread += outcome.detail.startswith("rules: could not read")
             sent = not isNotSent(outcome)
             if sent and outcome.kind not in EXCLUDING:
                 # Even for a replaced desire: a start still in flight when

@@ -92,10 +92,16 @@ class Gen2TWC(EVSEInstance, TWCSlave):
 
     @property
     def vehicleKey(self):
-        if self.currentVIN:
-            return self.currentVIN.upper()
+        reg = self.master.vehicleRegistry
         anonKey = ANON_PREFIX + self.twcid
-        if self.master.vehicleRegistry.get(anonKey) is not None:
+        if self.currentVIN and (
+            reg.get(self.currentVIN.upper()) is not None
+            or reg.isPending(self.twcid)
+            or reg.get(anonKey) is None
+        ):
+            return self.currentVIN.upper()
+        if reg.get(anonKey) is not None:
+            # Also for a VIN the registry rejected: the session stays anonymous
             return anonKey
         if self.lastVIN and self.reportedState in self.PLUGGED_STATES:
             # The car last confirmed here has shown no unplug evidence

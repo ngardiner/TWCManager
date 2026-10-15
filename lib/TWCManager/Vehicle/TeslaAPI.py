@@ -132,6 +132,8 @@ class TeslaAPI:
     __loginRegion = None
     __loginVerifier = None
     carApiLastErrorTime = 0
+    # The last reason loadList logged for having no usable token
+    _noTokenLogged = None
     wakeDelayMins = 3
     # The never-expires expiry earlier releases saved with a synced token.
     # Only compared against, when restoring saved settings.
@@ -146,7 +148,6 @@ class TeslaAPI:
     __email = None
     errorCount = 0
     maxLoginRetries = 10
-    minChargeLevel = -1
     params = None
     __password = None
     fleetRefreshURL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
@@ -210,7 +211,6 @@ class TeslaAPI:
             self.redirectURI = self.config["config"].get("teslaApiRedirectUri", "")
             self.region = self.config["config"].get("teslaApiRegion", "NA")
             self.scope = self.config["config"].get("teslaApiScope", self.scope)
-            self.minChargeLevel = self.config["config"].get("minChargeLevel", -1)
             self.chargeUpdateInterval = self.config["config"].get(
                 "cloudUpdateInterval", 1800
             )
@@ -424,6 +424,21 @@ class TeslaAPI:
             self.refreshTokenIfNeeded()
             if self.slotFor("read") is not None:
                 self.loadVehicleList()
+            else:
+                self._noTokenReason(time.time())
+
+    def _noTokenReason(self, now):
+        # Why no slot can read, logged once per change of reason
+        slots = (self.ownerSlot, self.fleetSlot)
+        if any(s.accessToken and s.tokenType != s.kind for s in slots):
+            reason = "token type unknown"
+        elif any(now < s.pausedUntil for s in slots):
+            reason = "paused"
+        else:
+            reason = "no Tesla API token yet"
+        if reason != self._noTokenLogged:
+            self._noTokenLogged = reason
+            logger.log(logging.INFO8, "No usable Tesla API token (%s)" % reason)
 
     def resolveHeldLimits(self, listedSlot=None, listed=None):
         # Held limits older releases keyed by vehicle ID move under the VIN
@@ -1441,6 +1456,10 @@ class TeslaAPI:
         if state == "online":
             self.resetCarApiLastErrorTime()
             self._wakeSettled(vehicle)
+            # The wake's answer replaces the cached "asleep": the read that
+            # follows it goes out (C1)
+            vehicle.lastVehicleAwakeState = vehicle.lastVehicleAwakeChecked = True
+            vehicle.lastVehicleAwakeTime = now
             # A command sent at once after a wake can fail with
             # could_not_wake_buses; let the car settle
             time.sleep(5)
@@ -1480,9 +1499,8 @@ class TeslaAPI:
 
     # A charge need (the wakeDelayMins grace, firstChargeNeededTime) has
     # ended when nothing asked for a wake for this long. Ending it can only
-    # delay a wake, never bring one forward. The explicit end (desired
-    # charging off, a departure) belongs to the reconciler; this is the
-    # backstop for every path, legacy included, that never says so.
+    # delay a wake, never bring one forward. A need also ends when the free
+    # online check finds the car awake (_wakeSettled); this is the backstop.
     CHARGE_NEED_IDLE_SECONDS = 600
 
     def _chargeNeedEnded(self, vehicle, now):
