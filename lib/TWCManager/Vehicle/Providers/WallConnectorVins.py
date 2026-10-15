@@ -77,7 +77,7 @@ class WallConnectorVinReader:
         for provider in candidates:
             if not self._allowed(provider):
                 continue
-            self._calls[provider.name].append(self.clock())
+            self._calls.setdefault(provider.name, []).append(self.clock())
             vins = provider.wallConnectorVins()
             if vins is not None:
                 return vins
@@ -113,7 +113,7 @@ class WallConnectorVinReader:
             self._apply(list(units))
         except Exception as e:
             # A cloud or registry hiccup never stops the vitals loop
-            logger.debug("Wall Connector VINs: %s", type(e).__name__)
+            logger.debug("Wall Connector VINs: %s", type(e).__name__, exc_info=True)
 
     def _apply(self, units) -> None:
         for unit in units:

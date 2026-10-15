@@ -283,7 +283,7 @@ class Gen3TWCs(EVSEController):
         vitals cadence, then asks the energy site which car is connected
         while a session is anonymous."""
         self.republish()
-        if unit._version is None:
+        if unit._version is None and not unit.device_cfg.get("din"):
             unit.refreshVersion()
         if rising:
             self.vinReader.noteConnect()
