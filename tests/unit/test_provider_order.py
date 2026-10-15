@@ -126,3 +126,10 @@ def test_debug_command_goes_through_the_order():
 def test_debug_command_refuses_an_infinite_rate(params):
     m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); f = fleet(); o = order(m, f)
     assert o.debugCommand("setChargeRate", VIN, params) is False and f.calls == []
+
+def test_debug_command_tries_each_provider_once():
+    # User-initiated: a failed wake is never sent twice
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); b = ble(); b._result = False; f = fleet(); f._result = False
+    o = order(m, b, f)
+    assert o.debugCommand("wakeVehicle", VIN, "{}") is False and b.calls == [("wake", VIN)] and f.calls == [("wake", VIN)]
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 3}') is False and b.calls[1:] == [("setAmps", VIN, 3)]   # BLE covers 3 A: Fleet stays off

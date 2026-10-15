@@ -64,11 +64,10 @@ def test_targeted_call_skips_providers_not_ready_for_that_car():
     assert vp.applyChargeLimit(limit=80, vin=VIN) == "success" and ble.applyChargeLimit.call_count == 0
     assert vp.applyChargeLimit(limit=80) is True and ble.applyChargeLimit.call_count == 1      # broadcast: readiness unknown
 
-def test_set_charge_rate_target_and_amps_apply_the_default_fleet_rule():
+def test_set_charge_rate_targets_the_car():
     twc = P("Gen2TWC", 0, True, None, amps=(6, 32)); api = mod(setChargeRate=True)
     m, vp = make({}, twc, P("FleetAPI", 5, False, api, caps={C.SET_AMPS: C.Declaration(C.FLEET_COMMAND)})); m.vehicleRegistry.getOrCreate(VIN, "t")
     car = Mock(VIN=VIN)
-    assert vp.setChargeRate(10, car) is False and api.setChargeRate.call_count == 0            # TWC covers 10 A
     assert vp.setChargeRate(4, car) is True and api.setChargeRate.call_args.args == (4, car)   # below the floor
     assert VehiclePriority.targetVIN("setChargeRate", (10, car), {}) == VIN and VehiclePriority.targetVIN("wakeVehicle", (VIN.lower(),), {}) == VIN
     assert VehiclePriority.targetVIN("car_api_charge", ({"charge": False, "vin": VIN},), {}) == VIN
@@ -121,3 +120,57 @@ def test_registration_finds_no_providers_on_the_facade(caplog):
         assert registerProviders(m) == ["TeslaBLE"]
     assert "Could not register" not in caplog.text and vp.providers() == []
     assert "api_only" in VehiclePriority.VALID_COMMAND_POLICIES
+
+
+def test_rate_raise_reaches_fleet_on_a_fleet_only_install():
+    # The TWC cannot lift the car's own current limit (#660): a raise to the
+    # wiring max must reach Fleet even though the TWC covers that rate
+    twc = P("Gen2TWC", 0, True, None, amps=(6, 32)); api = mod(setChargeRate=True)
+    m, vp = make({}, twc, P("FleetAPI", 5, False, api, caps={C.SET_AMPS: C.Declaration(C.FLEET_COMMAND)})); m.vehicleRegistry.getOrCreate(VIN, "t")
+    car = Mock(VIN=VIN)
+    assert vp.setChargeRate(32, car) is True and api.setChargeRate.call_args.args == (32, car)
+    assert vp.setChargeRate(10, car) is True and api.setChargeRate.call_count == 2
+
+def test_set_amps_keeps_the_local_amps_rule():
+    twc = P("Gen2TWC", 0, True, None, amps=(6, 32)); api = Mock(); api.setAmps = Mock(return_value=True)
+    m, vp = make({}, twc, P("FleetAPI", 5, False, api, caps={C.SET_AMPS: C.Declaration(C.FLEET_COMMAND)})); m.vehicleRegistry.getOrCreate(VIN, "t")
+    assert vp.setAmps(VIN, 10) is False and api.setAmps.call_count == 0     # the TWC carries 10 A
+    assert vp.setAmps(VIN, 4) is True and api.setAmps.call_args.args == (VIN, 4)
+
+
+def _haMaster(enabled=True):
+    from tests.unit.test_homeassistant_registry import make_ha
+    ha, reg = make_ha(enabled=enabled)
+    m, vp = make()
+    m.vehicleRegistry = reg
+    for p in ha.providers():
+        m.providerOrder.register(p)
+    return m, vp, ha, reg
+
+def test_attempts_match_todays_priorities():
+    # TeslaBLE priority 20 -> 3, TeslaAPI 10 -> 2; HomeAssistant has no
+    # priority (today it is called once, directly) -> 1
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.teslatokens import fleet_token
+    m, vp, ha, reg = _haMaster()
+    ha.car_api_charge = Mock(return_value="error")
+    api, _ = api_with_registry(); api.storeToken(fleet_token()); api.car_api_charge = Mock(return_value="error")
+    for p in api.providers():
+        m.providerOrder.register(p)
+    assert vp.car_api_charge({"charge": True}) is False
+    assert (api.car_api_charge.call_count, ha.car_api_charge.call_count) == (2, 1)
+    assert m.stats["moduleFailures"] == {"FleetAPI": 1, "HomeAssistant": 1}
+
+def test_home_assistant_gets_its_own_vehicle_for_set_charge_rate():
+    m, vp, ha, reg = _haMaster()
+    hv = Mock(has_charge_current_number=True); reg.getOrCreate(VIN, "t").attach("HomeAssistant", hv)
+    ha.setChargeRate = Mock(return_value=True); car = Mock(VIN=VIN)
+    assert vp.setChargeRate(10, car) is True and ha.setChargeRate.call_args.args == (10, hv)
+    other = Mock(VIN="5YJ3E1EA1KF000009")                     # no HA vehicle for it: never the TeslaAPI car
+    assert vp.setChargeRate(10, other) is False and ha.setChargeRate.call_count == 1
+
+def test_disabled_home_assistant_gets_no_broadcast():
+    m, vp, ha, reg = _haMaster(enabled=False)
+    ha.car_api_charge = Mock(return_value="success"); ha.updateChargeAtHome = Mock(return_value=True)
+    assert vp.car_api_charge({"charge": True}) is False and ha.car_api_charge.call_count == 0
+    assert vp.updateChargeAtHome() is False and ha.updateChargeAtHome.call_count == 0
