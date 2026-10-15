@@ -13,7 +13,7 @@ class EVSEInstance(abc.ABC):
     Concrete implementations include:
     - Gen2TWC: a TWC Gen2 slave device connected over RS485
     - VehicleEndpoint: a vehicle whose charge rate a vehicle provider sets
-    - MergedEVSE: a deduplicated proxy combining multiple views of the same vehicle
+    - ChargingPoint: the endpoints serving one car, grouped by vehicle key
     """
 
     # ------------------------------------------------------------------

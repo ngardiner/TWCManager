@@ -52,8 +52,8 @@ class VehicleEndpoints(EVSEController):
         so a stopped car does not hide the others. unknown is True when some
         slave's key is None or anonymous; blind when such a slave reports a
         plugged state (non-00) or draws power, so it might be serving any
-        car. An anonymous car on a Gen3 could be any account car, so it
-        blinds too. A failed scan fails closed.
+        car. An occupied Gen3 that can't name its car (anonymous, or no
+        key at all) could be serving any account car, so it blinds too. A failed scan fails closed.
         """
         blind = False
         unknown = False
@@ -70,12 +70,7 @@ class VehicleEndpoints(EVSEController):
             gen3 = self.master.getModuleByName("Gen3TWCs")
             if gen3 is not None:
                 for unit in gen3.devices():
-                    key = unit.vehicleKey
-                    if (
-                        unit.occupied is True
-                        and isinstance(key, str)
-                        and key.startswith(ANON_PREFIX)
-                    ):
+                    if unit.occupied is True and _unknownKey(unit.vehicleKey):
                         blind = True
         except Exception:
             return True, True
