@@ -155,10 +155,20 @@ class Gen2TWC(EVSEInstance, TWCSlave):
                 return value
         return None
 
+    def minAmpsToOffer(self):
+        # The per-TWC minAmps override replaces minAmpsPerTWC for this TWC,
+        # never below what the TWC can start a car at. The heartbeat zeroes
+        # any offer below this while no car charges.
+        override = self._rangeOverride("minAmps")
+        if override is None:
+            return TWCSlave.minAmpsToOffer(self)
+        return max(override, self.minAmpsTWCSupports)
+
     @property
     def minAmps(self) -> float:
-        override = self._rangeOverride("minAmps")
-        return override if override is not None else self.minAmpsTWCSupports
+        # What the heartbeat will really send, so an idle TWC's minimum
+        # reaches the wire
+        return self.minAmpsToOffer()
 
     @property
     def maxOfferAmps(self) -> float:
