@@ -125,19 +125,19 @@ class HeldLimits:
                     if limit is None:
                         dropped.append(str(key))
                         continue
+                    isVin, vin = isWellFormedVIN(str(key)), str(key).upper()
+                    if isVin and vin not in origin and vin in store:
+                        # A newer release saved this car already
+                        continue
                     if discarded:
                         unheld.append(str(key))
-                    if not isWellFormedVIN(str(key)):
+                    if not isVin:
                         waiting[str(key)] = limit
                         ids[key] = value
                         continue
-                    vin = str(key).upper()
                     if vin in origin:
                         # Keys differing only in case: the later one wins.
                         collided.append((origin[vin], str(key)))
-                    elif vin in store:
-                        # A newer release saved this car already
-                        continue
                     origin[vin] = str(key)
                     store[vin] = _encode(limit)
                 settings[self.KEY] = store
