@@ -12,7 +12,7 @@ class Stub(Provider):
     def declarations(self):
         return {
             C.SET_AMPS: C.Declaration(C.LOCAL),
-            C.WAKE: C.Declaration(C.FLEET_WAKE, C.RateLimit(50, 60)),
+            C.WAKE: C.Declaration(C.FLEET_WAKE),
         }
 
     def ampsRange(self, vehicle):
@@ -38,7 +38,7 @@ def test_provider_defaults_and_declarations():
     p = Stub()
     assert p.declares(C.SET_AMPS) and not p.declares(C.READ_CHARGE)
     assert p.cost(C.WAKE) == C.FLEET_WAKE and p.cost(C.READ_CHARGE) is None
-    assert p.declarations()[C.WAKE].rateLimit == C.RateLimit(50, 60)
+    assert p.declarations()[C.WAKE] == C.Declaration(C.FLEET_WAKE) and not p.declarations()[C.WAKE].passive
     assert p.ready(None, C.SET_AMPS) is False
     assert p.attempts() == 3 and Provider().attempts() == 2
     assert p.limitations(None) == frozenset()

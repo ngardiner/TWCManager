@@ -13,7 +13,7 @@
 # reader's own state is touched from that one thread.
 import logging
 import time
-from typing import Dict, List
+from typing import Dict
 
 from ..Registry.VehicleRegistry import ANON_PREFIX
 from .Capability import READ_WALL_CONNECTOR_VINS
@@ -30,6 +30,8 @@ class WallConnectorVinReader:
     # After this many polls in a row name no car, poll this often instead
     SLOW_AFTER = 10
     SLOW_POLL_SECONDS = 600.0
+    # A connect edge asks at once, but never twice inside this (I7)
+    EDGE_MIN_GAP = 30.0
 
     def __init__(self, master, order, clock=time.time):
         self.master = master
@@ -37,8 +39,6 @@ class WallConnectorVinReader:
         self.clock = clock
         self.lastQuery = float("-inf")
         self._connectEdge = False
-        # Per provider name: clock() of each call inside its rate window
-        self._calls: Dict[str, List[float]] = {}
         # Unit IDs whose no-match INFO this session has logged
         self._unmatchedLogged = set()
         self._noProviderLogged = False
@@ -83,7 +83,9 @@ class WallConnectorVinReader:
     def due(self, units) -> bool:
         if not any(self._waiting(u) for u in units):
             return False
-        return self._connectEdge or self.clock() - self.lastQuery >= self.interval()
+        since = self.clock() - self.lastQuery
+        edge = self._connectEdge and since >= self.EDGE_MIN_GAP
+        return edge or since >= self.interval()
 
     def _stale(self, unit, vin) -> bool:
         # The departed car's VIN, asked too soon after the next car's edge
@@ -92,17 +94,6 @@ class WallConnectorVinReader:
             return False
         edgeAt = self._edgeAt.get(unit.ID)
         return edgeAt is not None and self.clock() - edgeAt < self.POLL_SECONDS
-
-    def _allowed(self, provider) -> bool:
-        limit = provider.declarations()[READ_WALL_CONNECTOR_VINS].rateLimit
-        if limit is None:
-            return True
-        now = self.clock()
-        calls = [
-            t for t in self._calls.get(provider.name, []) if now - t < limit.perSeconds
-        ]
-        self._calls[provider.name] = calls
-        return len(calls) < limit.calls
 
     def query(self, units) -> Dict[str, str]:
         candidates = list(self.order.candidates(None, READ_WALL_CONNECTOR_VINS))
@@ -117,9 +108,6 @@ class WallConnectorVinReader:
             return {}
         self._noProviderLogged = False
         for provider in candidates:
-            if not self._allowed(provider):
-                continue
-            self._calls.setdefault(provider.name, []).append(self.clock())
             vins = provider.wallConnectorVins()
             if vins is not None:
                 return vins

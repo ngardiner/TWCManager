@@ -27,14 +27,11 @@ from .Capability import (
     STOP_CHARGING,
     WAKE,
     Declaration,
-    RateLimit,
 )
 from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
 
-# Tesla's published per-vehicle command limit; declared, not enforced
-FLEET_COMMAND_LIMIT = RateLimit(50, 60)
-# One connect-edge query plus one poll a minute
-WALL_CONNECTOR_VINS = Declaration(CLOUD_FREE, RateLimit(2, 60))
+# The reader paces it: a connect edge, then one poll a minute
+WALL_CONNECTOR_VINS = Declaration(CLOUD_FREE)
 
 # The Tesla command each capability sends, for the read-only line
 TESLA_COMMAND = {
@@ -110,10 +107,10 @@ class FleetAPIProvider(Provider):
         READ_ONLINE: Declaration(CLOUD_FREE),
         READ_CHARGE: Declaration(FLEET_DATA),
         READ_LOCATION: Declaration(FLEET_DATA),
-        SET_CHARGE_LIMIT: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
-        START_CHARGING: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
-        STOP_CHARGING: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
-        SET_AMPS: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
+        SET_CHARGE_LIMIT: Declaration(FLEET_COMMAND),
+        START_CHARGING: Declaration(FLEET_COMMAND),
+        STOP_CHARGING: Declaration(FLEET_COMMAND),
+        SET_AMPS: Declaration(FLEET_COMMAND),
         WAKE: Declaration(FLEET_WAKE),
         READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
     }

@@ -130,7 +130,7 @@ def test_polling_slows_after_ten_unanswered_polls(requests_mock):               
     for _ in range(12): ctl.vinReader.clock.t += 60; vitals(u, True)
     n = len(liveCalls(requests_mock)); assert n == 10
     ctl.vinReader.clock.t += 540; vitals(u, True); assert len(liveCalls(requests_mock)) == n + 1
-    vitals(u, False); vitals(u, True); assert len(liveCalls(requests_mock)) == n + 2   # a new edge resets it
+    ctl.vinReader.clock.t += 30; vitals(u, False); vitals(u, True); assert len(liveCalls(requests_mock)) == n + 2   # a new edge resets it
 
 def test_single_local_single_cloud_matches_without_din(requests_mock):
     api, reg, ctl, u = setup(requests_mock, din="whatever"); u.device_cfg.pop("din", None); u._version = {}
@@ -164,11 +164,13 @@ def onlyFreeCalls(requests_mock):
     return all(re.search(r"/api/1/products$|/energy_sites/\d+/live_status$", r.url) and r.method == "GET"
                for r in requests_mock.request_history)
 
-def test_the_declared_rate_limit_bites_without_time_passing(requests_mock):
-    api, reg, ctl, u = setup(requests_mock); vitals(u, True); n = len(liveCalls(requests_mock))
-    for _ in range(5): ctl.vinReader.query(ctl.devices())
-    assert n == 1 and len(liveCalls(requests_mock)) == 2
-    ctl.vinReader.clock.t += 60; assert ctl.vinReader.query(ctl.devices()) == {DIN: VIN}
+def test_wall_connector_edges_are_spaced_thirty_seconds(requests_mock):     # I7, live_status requests counted
+    api, reg, ctl, u = setup(requests_mock, din="other--din"); u.device_cfg["din"] = DIN   # never named: it keeps waiting
+    vitals(u, True); assert len(liveCalls(requests_mock)) == 1
+    for _ in range(5): vitals(u, False); vitals(u, True)                     # a flapping occupied flag
+    ctl.vinReader.clock.t += 29; vitals(u, True); assert len(liveCalls(requests_mock)) == 1
+    ctl.vinReader.clock.t += 1; vitals(u, True); assert len(liveCalls(requests_mock)) == 2   # the held edge, at 30 s
+    ctl.vinReader.clock.t += 59; vitals(u, True); assert len(liveCalls(requests_mock)) == 2   # then the minute's poll
     assert onlyFreeCalls(requests_mock)
 
 def test_a_vin_arriving_after_the_edge_attaches_the_session(requests_mock):          # carry 4
@@ -194,7 +196,7 @@ def test_disconnect_clears_the_cloud_vin_and_the_next_car_queries_again(requests
     api, reg, ctl, u = setup(requests_mock); reg.getOrCreate(VIN, "TeslaMateVehicle")
     vitals(u, True); assert u.cloudVin == VIN
     vitals(u, False); assert u.cloudVin is None and u.vehicleKey is None
-    vitals(u, True); assert len(liveCalls(requests_mock)) == 2 and u.vehicleKey == "anon:" + u.ID   # I2: the departed VIN waits a poll
+    ctl.vinReader.clock.t += 30; vitals(u, True); assert len(liveCalls(requests_mock)) == 2 and u.vehicleKey == "anon:" + u.ID   # I2: the departed VIN waits a poll
     ctl.vinReader.clock.t += 60; vitals(u, True); assert u.vehicleKey == VIN
 
 def test_owner_refusal_falls_to_fleet_on_the_next_poll(requests_mock):
@@ -213,8 +215,7 @@ def test_fleet_waits_while_the_owner_slot_can_read_energy(requests_mock):
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token())
     owner, fleet = api.providers()
     assert owner.ready(None, C.READ_WALL_CONNECTOR_VINS) and not fleet.ready(None, C.READ_WALL_CONNECTOR_VINS)
-    assert owner.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.Declaration(C.CLOUD_FREE, C.RateLimit(2, 60))
-    assert fleet.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.Declaration(C.CLOUD_FREE, C.RateLimit(2, 60))
+    assert owner.declarations()[C.READ_WALL_CONNECTOR_VINS] == fleet.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.Declaration(C.CLOUD_FREE)
 
 def test_ready_without_a_vehicle_is_only_relaxed_for_wall_connector_vins(requests_mock):   # carry 1
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token())
@@ -319,7 +320,7 @@ def test_a_configured_din_skips_the_version_fetch(requests_mock):
     api, reg, ctl, u = setup(requests_mock)
     vitals(u, True); assert u._version is None and u.din == DIN
 
-def test_a_provider_without_a_rate_limit_is_asked():
+def test_query_asks_the_first_candidate_directly():
     p = Mock(); p.name = "X"; p.declarations.return_value = {C.READ_WALL_CONNECTOR_VINS: C.Declaration(C.CLOUD_FREE)}
     p.wallConnectorVins.return_value = {DIN: VIN}
     order = Mock(); order.candidates.return_value = [p]

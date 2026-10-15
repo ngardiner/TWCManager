@@ -30,7 +30,7 @@ def test_two_providers_with_honest_costs():
         and fleet.cost(C.READ_CHARGE) == C.FLEET_DATA
     )
     assert fleet.cost(C.SET_AMPS) == C.FLEET_COMMAND and fleet.cost(C.WAKE) == C.FLEET_WAKE
-    assert fleet.declarations()[C.SET_AMPS].rateLimit == C.RateLimit(50, 60)
+    assert fleet.declarations()[C.SET_AMPS] == C.Declaration(C.FLEET_COMMAND)   # pacing is the reconciler's MIN_SEND_GAP
     # no tokens yet
     assert fleet.available(C.SET_AMPS) is False and owner.available(C.READ_CHARGE) is True
     assert (api.ownerReadSource.provider, api.fleetReadSource.provider) == (

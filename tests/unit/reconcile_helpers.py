@@ -10,6 +10,7 @@ from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Provider import Provider
 from TWCManager.Vehicle.Reconcile.Outcome import ERROR, Outcome
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 
 # Every command at the local tier; pass tier= to declare them at another cost
 COMMAND_CAPS = {capability: C.Declaration(C.LOCAL) for capability in C.COMMANDS}
@@ -101,10 +102,51 @@ def make_order(settings=None, *providers):
     m.config = {}
     m.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
     m.vehicleRegistry = VehicleRegistry({})
-    # A worker without a reconciler takes its pass-through path; a plain Mock
-    # would answer beforeWrite with a Mock
+    # No reconciler until a test makes one: a plain Mock would take the debug
+    # page's one-shots
     del m.reconciler
     o = ProviderOrder(m)
     for p in providers:
         o.register(p)
     return m, o
+
+
+class InlineQueue(VehicleCommandQueue):
+    # Test-only: runs each attempt at once on the caller's thread, reporting
+    # it as a started queue would. Closed, it takes stops only
+    def start(self):
+        pass
+
+    def put(self, entry, callback=None) -> bool:
+        if self._draining and not self._isHigh(entry):
+            self._lose([(entry, "dropped")])
+            return False
+        with self._cond:
+            self._busy = True
+        self._runOne(entry, callback)
+        return True
+
+    def waitDrained(self, deadline) -> bool:
+        return True
+
+
+def inline(reconciler):
+    # Swaps the reconciler's two queues for InlineQueues with the same wiring
+    reconciler.ble, reconciler.cloud = (
+        InlineQueue(
+            name=q.name,
+            run=q._runEntry,
+            key=q._keyOf,
+            isHigh=q._isHigh,
+            report=q._report,
+            lost=q._lost,
+        )
+        for q in (reconciler.ble, reconciler.cloud)
+    )
+    return reconciler
+
+
+def entries(q):
+    # A queue's pending attempts, stops first
+    with q._cond:
+        return [e for e, _ in list(q._high.values()) + list(q._low.values())]
