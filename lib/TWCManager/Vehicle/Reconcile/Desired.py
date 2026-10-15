@@ -22,6 +22,7 @@ from .Outcome import (
     REFUSED,
     RETRYABLE,
     SETTLED,
+    UNREACHABLE,
     UNSUPPORTED,
     Outcome,
     isNotSent,
@@ -114,6 +115,8 @@ class AttemptRecord:
         # The paid or disruptive requests for the current desire, the last
         # one's stamp and the value believed when it was planned
         self.paidSends = 0
+        # One of them got an answer other than UNREACHABLE
+        self.paidReached = False
         self.paidAt: Optional[float] = None
         self.paidSaw: Any = None
         # That request failed and its one blind retry is unused
@@ -130,6 +133,7 @@ class AttemptRecord:
         self.lastOutcome = None
         self.lastOutcomeAt = 0
         self.paidSends = 0
+        self.paidReached = False
         self.paidAt = None
         self.paidSaw = None
         self.paidRetryDue = False
@@ -373,6 +377,7 @@ class DesiredStore:
                         and not outcome.detail.startswith("wake ")
                     )
                     record.paidSends += 1
+                    record.paidReached |= outcome.kind != UNREACHABLE
                     record.paidAt = now
             if current and outcome.kind in SETTLED:
                 record.settledAt = now
