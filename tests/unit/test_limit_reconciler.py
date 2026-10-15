@@ -118,9 +118,8 @@ def test_pairing_error_does_not_open_the_paid_window():                     # le
     assert f.calls == [] and len(prov(m, "TeslaBLE").calls) == 2 and m.desired.free(VIN).failingSince is None
 
 def test_an_open_pairing_window_holds_a_paid_fallback_already_due():       # ledger L52: the channel answers
-    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE), O.Outcome(O.ERROR, "pairing")), fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI")
-    v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
-    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); assert m.desired.free(VIN).failingSince == 1000.0
+    m, r, v, c = setup(ble(O.Outcome(O.ERROR, "pairing")), fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI")
+    v.observe("chargingState", "Stopped", "TeslaAPI"); m.desired.free(VIN).failure(c())                 # BLE failed a moment ago
     c.t += 30; m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()        # BLE answers inside the pairing window
     assert m.desired.record(VIN, CHARGING).lastOutcome == O.Outcome(O.ERROR, "pairing")
     for _ in range(10): c.t += 60; r.pass_()
@@ -360,3 +359,50 @@ def test_a_satisfied_restore_settles_the_held_limit_and_its_desire():      # M1
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 90, "TeslaBLE")
     m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
     assert r.pass_() == 0 and prov(m, "TeslaBLE").calls == [] and m.heldLimits.get(VIN) == HeldLimit(90, None) and m.desired.get(VIN, CHARGE_LIMIT) is None
+
+# Fix round 2
+
+def test_paid_sends_that_never_reached_the_car_rearm_on_a_reading_after_it_wakes():   # N1 ruling 1, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_(); assert len(cmds(f)) == 2
+    for _ in range(60):                                                       # asleep an hour: only the TWC heartbeat reads
+        v.observe("actualCurrent", 0, "Gen2TWC"); v.observe("pluggedIn", True, "Gen2TWC")
+        for _ in range(6): c.t += 10; r.pass_()
+    assert len(cmds(f)) == 2
+    f.outcomes = [O.Outcome(O.UNREACHABLE, "408")]; v.observe("chargeLimit", 90, "TeslaAPI"); c.t += 1; r.pass_()
+    assert len(cmds(f)) == 3                                                  # a reading of the same value: the car never got it
+    for _ in range(36): c.t += 100; r.pass_()
+    assert len(cmds(f)) == 4                                                  # at most 2 per re-arm
+    f.outcomes = [O.Outcome(O.DONE)]; v.observe("chargeLimit", 90, "TeslaAPI"); c.t += 1; r.pass_()
+    for _ in range(36): c.t += 100; v.observe("chargeLimit", 50, "TeslaAPI"); r.pass_()
+    assert len(cmds(f)) == 5 and v.believed("chargeLimit").value == 50
+
+def test_a_start_wakes_the_car_for_the_limit_first():                      # N1 ruling 2, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI")
+    v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_()
+    c.t += 7200; f.outcomes = [O.Outcome(O.DONE)]; m.desired.set(VIN, CHARGING, True, "heartbeat")
+    for _ in range(30): r.pass_(); c.t += 1
+    assert names(f) == ["setChargeLimit", "setChargeLimit", "wake", "setChargeLimit", "wake", "startCharging"]
+    assert v.lastWrite("chargeLimit").at < v.lastWrite("chargingState").at   # never charges on the old limit
+
+def test_a_start_waits_for_an_unsettled_limit():                           # N1 ruling 2
+    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI")
+    v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()
+    for _ in range(int(PAID_AFTER[CHARGE_LIMIT]) - 1): c.t += 1; r.pass_()
+    assert f.calls == []                                                      # BLE down: no Fleet start at +60 ahead of the limit
+    for _ in range(30): c.t += 1; r.pass_()
+    assert names(f) == ["wake", "setChargeLimit", "wake", "startCharging"]   # the limit carries the start's wake
+
+def test_a_limit_no_provider_can_deliver_never_holds_a_start():
+    m, r, v, c = setup(ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)], caps={C.START_CHARGING: C.Declaration(C.FLEET_COMMAND), C.WAKE: C.Declaration(C.FLEET_WAKE)}))
+    f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")
+    assert r.pass_() == 1 and names(f) == ["wake", "startCharging"]
+
+def test_a_desire_set_during_a_pass_still_counts_its_paid_sends():         # N2, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "500"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(now=c() - 0.01)
+    for _ in range(12 * 36): c.t += 100; r.pass_()
+    assert len(cmds(f)) == 2

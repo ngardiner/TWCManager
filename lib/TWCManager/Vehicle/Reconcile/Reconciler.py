@@ -314,6 +314,17 @@ class VehicleReconciler(threading.Thread):
         )
         # At most two paid sends per desire: one, then one more after a
         # failure or a reading of a new value (I2)
+        # A start goes with the limit first: its wake carries the limit
+        ride = aspect == CHARGE_LIMIT and self._startWanted(vehicle, config)
+        if (
+            rec.paidSends
+            and not rec.paidReached
+            and now - rec.paidAt >= RETRY[aspect]
+            and (newerReading(vehicle, aspect, rec.paidAt) or ride)
+        ):
+            # No paid send reached the car: a reading shows it awake, or a
+            # start will wake it. Two more sends (N1)
+            rec.paidSends = 0
         paidAgain = rec.paidSends == 0 or (
             rec.paidSends < 2
             and now - rec.paidAt >= RETRY[aspect]
@@ -331,10 +342,17 @@ class VehicleReconciler(threading.Thread):
         else:
             return None
         if aspect == CHARGING and d.value is True:
+            dl = self.desired.get(key, CHARGE_LIMIT)
             limit = self.desired.record(key, CHARGE_LIMIT)
             write = vehicle.lastWrite(FIELD_FOR[CHARGE_LIMIT])
-            if limit.inFlight is not None or (
-                write is not None and now - write.at < LIMIT_THEN_START_GAP
+            if (
+                limit.inFlight is not None
+                or (write is not None and now - write.at < LIMIT_THEN_START_GAP)
+                # Tried, unsettled and not spent on a car that answered
+                or dl is not None
+                and limit.lastOutcome is not None
+                and not satisfied(CHARGE_LIMIT, dl.value, known(vehicle, CHARGE_LIMIT))
+                and not (limit.paidSends >= 2 and limit.paidReached)
             ):
                 # A limit always goes first, and settles before a start
                 return None
@@ -348,19 +366,32 @@ class VehicleReconciler(threading.Thread):
             capability,
             d.value,
             p.name,
-            wake=allowWake(aspect, d, k) and (p.local or aspect != AMPS) and not blind,
+            wake=(allowWake(aspect, d, k) or ride and not d.restore)
+            and (p.local or aspect != AMPS)
+            and not blind,
             maxAge=(
                 None
                 if aspect == AMPS or blind
                 else READ_MAX_AGE + (PAID_AFTER[aspect] if p in paid else 0)
             ),
             restore=d.restore,
-            since=now,
+            # A desire set after this pass began is still this attempt's (N2)
+            since=max(now, d.at),
             force=aspect == CHARGE_LIMIT
             and needsLiveRead(d.restore, k.value if k else None, held),
         )
         rec.inFlight = attempt
         return attempt
+
+    def _startWanted(self, vehicle, config) -> bool:
+        start = self.desired.get(vehicle.key, CHARGING)
+        k = known(vehicle, CHARGING)
+        return (
+            start is not None
+            and start.value is True
+            and not satisfied(CHARGING, True, k)
+            and handsOff(vehicle, CHARGING, True, k, config) is None
+        )
 
     def _held(self, vehicle):
         return self.master.heldLimits.get(vehicle.vin) if vehicle.vin else None
