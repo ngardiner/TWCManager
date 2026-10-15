@@ -2335,11 +2335,12 @@ class TeslaAPI:
         )
         return outcome
 
-    def _paidPost(self, vehicle, slot, path, body=None):
+    def _paidPost(self, vehicle, slot, path, body=None, purpose="command"):
         # POSTs <VIN>/<path> with slot's token. Returns (Outcome, None) when
         # the request failed, or (None, response) for an HTTP 200 whose
         # "response" object the caller classifies. An expired token is
         # refreshed and the request sent once more; nothing else is retried.
+        # A 403 retires the slot for purpose ("command" or "wake") alone.
         refreshed = False
         while True:
             # Built per attempt, so the retry after a refresh sends the new token
@@ -2370,7 +2371,10 @@ class TeslaAPI:
                     continue
                 return outcome, None
             if code == 403:
-                slot.reportScopeRefused("command", refused=True)
+                slot.reportScopeRefused(purpose, refused=True)
+                if purpose == "wake":
+                    # Not REFUSED, which would exclude Fleet for commands too
+                    return Outcome(UNREACHABLE, "wake refused"), None
                 return Outcome(REFUSED, "403"), None
             if code == 412:
                 # A token kind Tesla will keep refusing commands (e.g. a
@@ -2493,6 +2497,11 @@ class TeslaAPI:
         if not vehicle.lastVehicleAwakeKnown:
             # No free answer (no read token, an error): never wake blind
             return Outcome(UNREACHABLE, "online check failed")
+        if not slot.usable("wake"):
+            # Tesla refused a wake with this token (403): no wake_up until
+            # the token changes. Checked after the free online check, so an
+            # online car still gets its command
+            return Outcome(UNREACHABLE, "wake refused")
         if vehicle.firstChargeNeededTime == 0:
             vehicle.firstChargeNeededTime = now
             if self.wakeDelayMins:
@@ -2507,7 +2516,9 @@ class TeslaAPI:
 
         # The wake hold is measured from here
         vehicle.lastAPIAccessTime = now
-        outcome, response = self._paidPost(vehicle, slot, "wake_up")
+        outcome, response = self._paidPost(vehicle, slot, "wake_up", purpose="wake")
+        if outcome == Outcome(UNREACHABLE, "wake refused"):
+            return outcome
         state = "error"
         if outcome is None:
             state = response.get("state", "")
@@ -2781,6 +2792,10 @@ class TeslaAPI:
         if self.refuseCommandFor(vehicle, "wake_up"):
             return False
         slot = self.commandSlotFor(vehicle)
+        if slot is self.fleetSlot and not slot.usable("wake"):
+            # Tesla refused a wake with this token (403); an Owner refusal is
+            # noted per car instead
+            return False
         apiResponseDict = None
         vehicle.lastAPIAccessTime = time.time()
         # Anchors the post-wake check window and retry delay.
@@ -2817,6 +2832,9 @@ class TeslaAPI:
                 # We're explicitly being told to back off
                 self.errorCount = max(30, self.errorCount)
                 self.updateCarApiLastErrorTime(vehicle)
+            elif req.status_code == 403:
+                # As _paidPost: no wake_up goes to this token again
+                slot.reportScopeRefused("wake", refused=True)
             return False
         except json.decoder.JSONDecodeError:
             return False

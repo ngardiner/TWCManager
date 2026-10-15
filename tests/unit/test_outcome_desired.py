@@ -141,3 +141,20 @@ def test_a_decision_on_the_adopted_value_takes_it_over_in_place():
     c = Clock(); s = DesiredStore(clock=c); s.adopt(VIN, CHARGE_LIMIT, 80); r = s.record(VIN, CHARGE_LIMIT); r.lastFreeAt = 5.0; c.t += 5
     assert s.set(VIN, CHARGE_LIMIT, 80, "policy", decision=True) is False
     d = s.get(VIN, CHARGE_LIMIT); assert (d.value, d.by, d.at, d.adopted) == (80, "policy", 1000.0, False) and r.lastFreeAt == 5.0
+
+
+# Task 7 carry-forwards
+
+@pytest.mark.parametrize("detail", ["no vehicle", "no provider"])
+def test_a_worker_error_that_made_no_request_counts_against_nothing(detail):
+    s = DesiredStore(); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
+    a = attempt("FleetAPI"); r.inFlight = a
+    assert detail in O.NOT_SENT and s.noteOutcome(VIN, CHARGE_LIMIT, a, O.Outcome(O.ERROR, detail), 100.0, paid=True, freeProvider=False)
+    assert r.paidAt is None and not r.paidRetryDue and r.lastSentAt == 0
+    b = attempt("TeslaBLE"); r.inFlight = b
+    s.noteOutcome(VIN, CHARGE_LIMIT, b, O.Outcome(O.ERROR, detail), 110.0, paid=False, freeProvider=True)
+    assert s.free(VIN).failingSince is None and s.free(VIN).lastAttemptAt == 0 and r.lastFreeAt == 0
+
+def test_a_debug_one_shot_report_changes_nothing():
+    s = DesiredStore(); a = attempt("FleetAPI", aspect=None)
+    assert s.noteOutcome(VIN, None, a, O.Outcome(O.DONE), 100.0, paid=True, freeProvider=False) is False and s.keys() == []

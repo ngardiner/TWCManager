@@ -326,7 +326,10 @@ class DesiredStore:
         freeProvider: bool,
     ) -> bool:
         # The only change to a record after submit. A report for anything
-        # but the attempt in flight is stale and changes nothing
+        # but the attempt in flight is stale and changes nothing; so is a
+        # debug one-shot's (no aspect)
+        if aspect is None:
+            return False
         _checkAspect(aspect)
         with self._lock:
             state = self._states.get(key)
@@ -357,9 +360,14 @@ class DesiredStore:
                 record.settledAt = now
                 if freeProvider:
                     state.free.success(now)
-            elif freeProvider and (
-                (outcome.kind in RETRYABLE and outcome.detail != "pairing")
-                or outcome.kind == REFUSED
+            elif (
+                freeProvider
+                # A failure of the free channel needs a request to it
+                and not isNotSent(outcome)
+                and (
+                    (outcome.kind in RETRYABLE and outcome.detail != "pairing")
+                    or outcome.kind == REFUSED
+                )
             ):
                 state.free.failure(now)
             if outcome.kind in EXCLUDING:

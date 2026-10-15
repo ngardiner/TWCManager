@@ -24,6 +24,9 @@ class P(Provider):
             self._caps,
             self._amps,
         ) = (name, rank, local, module, ready, caps, amps)
+        if name == "TeslaBLE":
+            # The real provider's table; the others keep the locality rule
+            self.SUPPRESSED = {"api_only": C.ALL}
 
     def declarations(self):
         return self._caps
