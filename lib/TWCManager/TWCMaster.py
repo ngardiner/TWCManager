@@ -118,7 +118,9 @@ class TWCMaster:
         # serialise under it and write the file outside it. Lock order:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
         # The serial thread takes it too (recordVehicleVIN), so nothing
-        # under it may do I/O, on any thread.
+        # under it may do I/O, on any thread. TeslaAPI.vehicleListLock ->
+        # settingsLock too (a listing adopts a held limit): never take
+        # vehicleListLock while holding settingsLock.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
         self.heldLimits = HeldLimits(self)
@@ -996,6 +998,17 @@ class TWCMaster:
                     return vinKey
         return key
 
+    def _adoptListedHeldLimits(self):
+        carapi = self.getModuleByName("TeslaAPI")
+        try:
+            cars = list(getattr(carapi, "carApiVehicles", None) or [])
+        except TypeError:
+            cars = []
+        for car in cars:
+            ID, vin = getattr(car, "ID", None), getattr(car, "VIN", None)
+            if ID is not None and vin:
+                self.heldLimits.adoptLegacyId(ID, vin)
+
     def getNormalChargeLimit(self, ID):
         # The legacy tuple: (found, outside, lastApplied), -1 when none held.
         limit = self.heldLimits._get(self._heldLimitKey(ID))
@@ -1182,6 +1195,8 @@ class TWCMaster:
             registryBlob = self.settings.get("vehicleRegistry")
         # Migrates the legacy chargeLimits key; dict work under the lock only
         self.heldLimits.load()
+        # A car TeslaAPI listed before settings loaded adopts its ID entry now.
+        self._adoptListedHeldLimits()
         # load() tolerates a missing or corrupt blob
         self.vehicleRegistry.load(registryBlob)
 

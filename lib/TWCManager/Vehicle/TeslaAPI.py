@@ -2295,11 +2295,13 @@ class CarApiVehicle:
                 "FleetAPI", lambda: carapi.fleetSlot.usable("command"), "listed"
             )
             self._vehicle = vehicle
-            # A held limit migrated under this car's numeric ID moves under
-            # its VIN now that the listing names both.
-            held = getattr(getattr(carapi, "master", None), "heldLimits", None)
-            if held is not None:
-                held.adoptLegacyId(self.ID, self.VIN)
+        # A held limit migrated under this car's numeric ID moves under its
+        # VIN now that the listing names both. On every bind: the entry may
+        # appear after the first (settings loaded after the listing); the
+        # unlocked check is one dict lookup.
+        held = getattr(getattr(self.carapi, "master", None), "heldLimits", None)
+        if held is not None:
+            held.adoptLegacyId(self.ID, self.VIN)
         return vehicle
 
     def _liveVehicle(self):
