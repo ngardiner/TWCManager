@@ -6,7 +6,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.WallConnectorVins import WallConnectorVinReader
 from tests.unit.test_carapivehicle_registry import VIN
-from tests.unit.test_gen3twc_provider import Clock, make as make_gen3, vitals, VIN1, IP1, IP2
+from tests.unit.test_gen3twc_provider import Clock, make as make_gen3, vitals, VIN1, VIN2, IP1, IP2
 from tests.unit.teslatokens import new_api, owner_token, fleet_token
 DIN = "1457768-02-G--TG123"
 PRODUCTS = {"response": [{"energy_site_id": 7, "site_name": "Home"}]}
@@ -37,11 +37,100 @@ def test_known_vin_confirms_at_once_and_polling_stops(requests_mock):
     ctl.vinReader.clock.t += 600; vitals(u, True); vitals(u, True)
     assert len(liveCalls(requests_mock)) == 1
 
-def test_din_mismatch_falls_to_single_candidate(requests_mock):
+def test_din_mismatch_keeps_the_single_candidate_guess_and_keeps_asking(requests_mock):   # I1
     api, reg, ctl, u = setup(requests_mock, din="other--din"); u.device_cfg["din"] = DIN
     car = reg.getOrCreate(VIN, "t"); car.observe("pluggedIn", True, "TeslaMateVehicle")
     vitals(u, True)
-    assert u.cloudVin is None and u.vehicleKey == VIN            # a known, mismatching DIN: G3 did it, not the cloud
+    assert u.cloudVin is None and u.vehicleKey == VIN            # the plug-in guess holds, provisionally
+    assert len(liveCalls(requests_mock)) == 1
+    ctl.vinReader.clock.t += 60; vitals(u, True)
+    assert len(liveCalls(requests_mock)) == 2 and u.vehicleKey == VIN
+
+def guessed(requests_mock, cloudVin, known):
+    # Car VIN2 is the single plug-in candidate; the cloud names cloudVin
+    api, reg, ctl, u = setup(requests_mock, vin=cloudVin)
+    guess = reg.getOrCreate(VIN2, "TeslaMateVehicle"); guess.observe("pluggedIn", True, "TeslaMateVehicle")
+    if known: reg.getOrCreate(cloudVin, "TeslaMateVehicle")
+    return api, reg, ctl, u, guess
+
+def test_a_differing_known_cloud_vin_replaces_the_guess(requests_mock):               # I1
+    api, reg, ctl, u, guess = guessed(requests_mock, VIN, known=True)
+    vitals(u, True)
+    assert u.vehicleKey == VIN and reg.get(VIN).value("twcVin") == u.ID
+    assert guess.value("twcVin") is None and guess.value("pluggedIn") is False
+    ctl.vinReader.clock.t += 600; vitals(u, True)
+    assert len(liveCalls(requests_mock)) == 1                                # named by the cloud: polling stops
+
+def test_a_differing_unknown_cloud_vin_replaces_the_guess_once_confirmed(requests_mock):   # I1
+    api, reg, ctl, u, guess = guessed(requests_mock, VIN, known=False)
+    vitals(u, True)
+    assert u.vehicleKey == VIN2 and reg.get(VIN) is None and guess.value("twcVin") == u.ID   # pending: the guess stands
+    ctl.vinReader.clock.t += 60; vitals(u, True)
+    assert u.vehicleKey == VIN and guess.value("twcVin") is None and guess.value("pluggedIn") is False
+
+def test_an_equal_cloud_vin_confirms_the_guess_and_polling_stops(requests_mock):       # I1
+    api, reg, ctl, u, guess = guessed(requests_mock, VIN2, known=True)
+    vitals(u, True); assert u.vehicleKey == VIN2 and u.cloudVin == VIN2
+    ctl.vinReader.clock.t += 60; vitals(u, True); ctl.vinReader.clock.t += 600; vitals(u, True)
+    assert len(liveCalls(requests_mock)) == 1 and guess.value("pluggedIn") is True
+
+def test_the_departed_cars_vin_is_ignored_on_the_next_cars_edge(requests_mock):        # I2
+    api, reg, ctl, u = setup(requests_mock); reg.getOrCreate(VIN, "t"); reg.getOrCreate(VIN2, "t")
+    requests_mock.get(re.compile(r".*/energy_sites/7/live_status$"), [
+        {"json": live(VIN)}, {"json": live(VIN)}, {"json": live(VIN2)}])
+    vitals(u, True); assert u.vehicleKey == VIN                                  # car A
+    vitals(u, False); ctl.vinReader.clock.t += 90
+    vitals(u, True)                                                          # car B; the cloud still says A
+    assert len(liveCalls(requests_mock)) == 2 and u.vehicleKey == "anon:" + u.ID and u.cloudVin is None
+    ctl.vinReader.clock.t += 60; vitals(u, True)
+    assert u.vehicleKey == VIN2
+
+def test_the_same_car_replugged_is_named_a_poll_later(requests_mock):                  # I2
+    api, reg, ctl, u = setup(requests_mock); reg.getOrCreate(VIN, "t")
+    vitals(u, True); assert u.vehicleKey == VIN
+    vitals(u, False); ctl.vinReader.clock.t += 90
+    vitals(u, True); assert u.vehicleKey == "anon:" + u.ID
+    ctl.vinReader.clock.t += 30; vitals(u, True); assert len(liveCalls(requests_mock)) == 2   # not yet a poll
+    ctl.vinReader.clock.t += 30; vitals(u, True)
+    assert u.vehicleKey == VIN and len(liveCalls(requests_mock)) == 3
+
+def test_owner_412_latches_and_fleet_is_asked_next(requests_mock):                    # I4
+    api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token()); reg.getOrCreate(VIN, "t")
+    requests_mock.get(re.compile(r"https://owner-api.*/live_status$"), status_code=412, json={})
+    vitals(u, True); assert u.vehicleKey == "anon:" + u.ID
+    assert not api.wallConnectorVinsReady(api.ownerSlot) and api.providers()[1].ready(None, C.READ_WALL_CONNECTOR_VINS)
+    ctl.vinReader.clock.t += 60; vitals(u, True); assert u.vehicleKey == VIN
+    vitals(u, False); ctl.vinReader.clock.t += 600; vitals(u, True)
+    hosts = [r.url.split("/")[2] for r in liveCalls(requests_mock)]
+    assert hosts.count("owner-api.teslamotors.com") == 1 and onlyFreeCalls(requests_mock)
+
+def test_owner_404_from_live_status_latches(requests_mock):                           # I4
+    api, reg, ctl, u = setup(requests_mock)
+    requests_mock.get(re.compile(r".*/energy_sites/7/live_status$"), status_code=404, json={})
+    assert api.wallConnectorVins(api.ownerSlot) is None and not api.wallConnectorVinsReady(api.ownerSlot)
+
+def test_fleet_404_does_not_latch_and_only_403_reports_a_scope(requests_mock):       # I4, M3
+    api, reg, ctl, u = setup(requests_mock); api.ownerSlot.clear(); api.storeToken(fleet_token())
+    requests_mock.get(re.compile(r".*/energy_sites/7/live_status$"), status_code=404, json={})
+    with patch.object(api.fleetSlot, "reportScopeRefused") as scope:
+        assert api.wallConnectorVins(api.fleetSlot) is None and api.wallConnectorVinsReady(api.fleetSlot)
+        for code in (401, 410, 412):
+            api.storeToken(fleet_token())
+            requests_mock.get(re.compile(r".*/energy_sites/7/live_status$"), status_code=code, json={})
+            assert api.wallConnectorVins(api.fleetSlot) is None and not api.wallConnectorVinsReady(api.fleetSlot)
+        assert scope.call_count == 0
+        api.storeToken(fleet_token())
+        requests_mock.get(re.compile(r".*/energy_sites/7/live_status$"), status_code=403, json={})
+        api.wallConnectorVins(api.fleetSlot)
+    scope.assert_called_once_with("energy", refused=True)
+
+def test_polling_slows_after_ten_unanswered_polls(requests_mock):                     # M1
+    api, reg, ctl, u = setup(requests_mock, din="other--din"); u.device_cfg["din"] = DIN
+    vitals(u, True)
+    for _ in range(12): ctl.vinReader.clock.t += 60; vitals(u, True)
+    n = len(liveCalls(requests_mock)); assert n == 10
+    ctl.vinReader.clock.t += 540; vitals(u, True); assert len(liveCalls(requests_mock)) == n + 1
+    vitals(u, False); vitals(u, True); assert len(liveCalls(requests_mock)) == n + 2   # a new edge resets it
 
 def test_single_local_single_cloud_matches_without_din(requests_mock):
     api, reg, ctl, u = setup(requests_mock, din="whatever"); u.device_cfg.pop("din", None); u._version = {}
@@ -105,7 +194,8 @@ def test_disconnect_clears_the_cloud_vin_and_the_next_car_queries_again(requests
     api, reg, ctl, u = setup(requests_mock); reg.getOrCreate(VIN, "TeslaMateVehicle")
     vitals(u, True); assert u.cloudVin == VIN
     vitals(u, False); assert u.cloudVin is None and u.vehicleKey is None
-    vitals(u, True); assert len(liveCalls(requests_mock)) == 2 and u.vehicleKey == VIN
+    vitals(u, True); assert len(liveCalls(requests_mock)) == 2 and u.vehicleKey == "anon:" + u.ID   # I2: the departed VIN waits a poll
+    ctl.vinReader.clock.t += 60; vitals(u, True); assert u.vehicleKey == VIN
 
 def test_owner_refusal_falls_to_fleet_on_the_next_poll(requests_mock):
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token()); reg.getOrCreate(VIN, "TeslaMateVehicle")
@@ -234,3 +324,25 @@ def test_a_provider_without_a_rate_limit_is_asked():
     p.wallConnectorVins.return_value = {DIN: VIN}
     order = Mock(); order.candidates.return_value = [p]
     assert WallConnectorVinReader(Mock(), order, clock=Clock()).query([]) == {DIN: VIN}
+
+def versionResp(body):
+    resp = MagicMock(); resp.__enter__.return_value.read.return_value = body; return resp
+
+def test_a_failing_version_fetch_backs_off_for_ten_minutes():                         # I3
+    m, ctl, p = make_gen3(); (u,) = ctl.devices()
+    with patch("TWCManager.EVSEInstance.Gen3TWC.time.monotonic", return_value=5000.0), \
+         patch("urllib.request.urlopen", side_effect=OSError("down")) as get:
+        assert u.refreshVersion() is False and u.refreshVersion() is False
+    assert get.call_count == 1 and u._version is None
+    with patch("TWCManager.EVSEInstance.Gen3TWC.time.monotonic", return_value=5600.0), \
+         patch("urllib.request.urlopen", return_value=versionResp(b'{"part_number": "P", "serial_number": "S"}')) as get:
+        assert u.refreshVersion() is True
+    assert get.call_count == 1 and u.din == "P--S"
+
+def test_a_404_version_is_final():                                                    # I3
+    import urllib.error
+    m, ctl, p = make_gen3(); (u,) = ctl.devices()
+    err = urllib.error.HTTPError("http://10.0.0.1/api/1/version", 404, "Not Found", {}, None)
+    with patch("urllib.request.urlopen", side_effect=err):
+        assert u.refreshVersion() is True
+    assert u._version == {} and u.din is None
