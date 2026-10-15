@@ -313,14 +313,7 @@ class WebIPCControl:
                         + "\n"
                     )
                     webResponseMsg += (
-                        "carApiLastStartOrStopChargeTime="
-                        + str(
-                            time.strftime(
-                                "%m-%d-%y %H:%M:%S",
-                                time.localtime(carapi.getLastStartOrStopChargeTime()),
-                            )
-                        )
-                        + "\ncarApiLastErrorTime="
+                        "carApiLastErrorTime="
                         + str(
                             time.strftime(
                                 "%m-%d-%y %H:%M:%S",

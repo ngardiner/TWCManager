@@ -41,6 +41,22 @@ def presentVehicles(master, capability) -> List:
     ]
 
 
+def broadcastVehicles(master, capability) -> List:
+    # Main's unaddressed car_api_charge: every car on the Tesla API's list at
+    # home (or not yet located), and every VIN BLE knows
+    def reached(v):
+        api = v.attachment("TeslaAPI")
+        home = api is not None and (api.atHome or getattr(api, "lat", 0) == 10000)
+        return home or "TeslaBLE" in v.claims
+
+    order = master.providerOrder
+    return [
+        v
+        for v in master.vehicleRegistry.vehicles()
+        if not v.isAnonymous and reached(v) and order.candidates(v, capability)
+    ]
+
+
 def targetsFor(master, vin: Optional[str], capability=STOP_CHARGING) -> List:
     # A targeted command names its car, present or not
     if vin:

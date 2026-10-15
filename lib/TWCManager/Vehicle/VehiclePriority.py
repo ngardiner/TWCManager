@@ -1,5 +1,5 @@
 # A facade over the provider order. Callers keep calling the legacy module
-# methods (car_api_charge, setChargeRate, ...) with their
+# methods (setChargeRate, ...) with their
 # module-specific arguments; the walk is the order: each provider's legacy
 # module in order position, suppressed providers skipped and, when the call
 # names a vehicle, providers not ready for it skipped. Attempts come from the
@@ -15,8 +15,6 @@ from TWCManager.Vehicle.Providers.Capability import (
     TIER_BILLED,
     READ_CHARGE,
     SET_AMPS,
-    START_CHARGING,
-    STOP_CHARGING,
     WAKE,
 )
 from TWCManager.Vehicle.Providers.Suppressions import Suppressions
@@ -44,20 +42,13 @@ class VehiclePriority:
     # method walks every provider not suppressed for reads.
     COMMAND_METHODS = frozenset(
         [
-            "car_api_charge",
             "setChargeRate",
-            "startCharging",
-            "stopCharging",
             "wakeVehicle",
         ]
     )
 
-    # car_api_charge resolves per task: see capabilityFor
     COMMAND_CAPABILITIES = {
-        "car_api_charge": None,
         "setChargeRate": SET_AMPS,
-        "startCharging": START_CHARGING,
-        "stopCharging": STOP_CHARGING,
         "wakeVehicle": WAKE,
     }
 
@@ -106,23 +97,15 @@ class VehiclePriority:
 
     @staticmethod
     def capabilityFor(name, args, kwargs) -> Optional[str]:
-        if name == "car_api_charge":
-            task = args[0] if args else kwargs.get("task")
-            if isinstance(task, dict) and task.get("charge") is False:
-                return STOP_CHARGING
-            return START_CHARGING
         return VehiclePriority.COMMAND_CAPABILITIES.get(name)
 
     @staticmethod
     def targetVIN(name, args, kwargs) -> Optional[str]:
         # None when the call names no vehicle: a broadcast
-        if name == "car_api_charge":
-            task = args[0] if args else kwargs.get("task")
-            return _vinOf(task.get("vin")) if isinstance(task, dict) else None
         if name == "setChargeRate":
             vehicle = args[1] if len(args) > 1 else kwargs.get("vehicle")
             return _vinOf(vehicle)
-        if name in ("startCharging", "stopCharging", "wakeVehicle"):
+        if name == "wakeVehicle":
             if args:
                 return _vinOf(args[0])
             return _vinOf(kwargs.get("vin", kwargs.get("vehicle")))
@@ -161,11 +144,7 @@ class VehiclePriority:
                 ready = self.order.candidates(
                     vehicle, capability, localRule=name != "setChargeRate"
                 )
-                providers = [
-                    p
-                    for p in self.order.ordered(capability)
-                    if p in ready or self._listUnloaded(p)
-                ]
+                providers = [p for p in self.order.ordered(capability) if p in ready]
             else:
                 providers = self.order.ordered(capability)
         else:
@@ -186,21 +165,6 @@ class VehiclePriority:
             seen.add(id(module))
             walk.append((p, module))
         return walk
-
-    @staticmethod
-    def _listUnloaded(provider) -> bool:
-        # TeslaAPI's providers are ready only for a car on its vehicle list,
-        # but only TeslaAPI's own command methods load that list. Until it
-        # is loaded, a targeted command keeps them (ordered() has already
-        # checked the slot can command), and TeslaAPI loads the list and
-        # finds the car itself, as before the provider order.
-        if provider.name not in ("OwnerAPI", "FleetAPI"):
-            return False
-        try:
-            return provider.module.getVehicleCount() == 0
-        except Exception as e:
-            logger.debug(f"{provider.name} getVehicleCount() raised {type(e).__name__}")
-            return False
 
     @staticmethod
     def _available(provider, capability) -> bool:

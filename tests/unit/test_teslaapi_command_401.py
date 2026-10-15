@@ -62,7 +62,7 @@ def bearer(request):
 def command(api, name):
     v = api.getCarApiVehicles()[0]
     if name == "charge_stop":
-        return api.car_api_charge({"cmd": "charge", "charge": False, "vin": VIN})
+        return api.command(v, "charge_stop")
     if name == "set_charging_amps":
         return api.setChargeRate(16, v)
     if name == "wake_up":

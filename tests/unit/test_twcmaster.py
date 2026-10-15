@@ -753,34 +753,11 @@ class TestVehicleCommandRouting:
         assert isinstance(m.vehicleCommandQueue, VehicleCommandQueue)
         assert m.vehicleCommandQueue._thread is None
 
-    @pytest.mark.parametrize(
-        "task",
-        [
-            {"cmd": "charge", "charge": True},
-            {"cmd": "charge", "charge": False, "vin": "V1"},
-        ],
-    )
-    def test_vehicle_commands_routed(self, master, task):
-        master.queue_background_task(task)
-        master.vehicleCommandQueue.put.assert_called_once_with(task, None)
-        master.backgroundTasksQueue.put.assert_not_called()
-        assert task["cmd"] not in master.backgroundTasksCmds
-
     def test_other_tasks_stay_on_background_queue(self, master):
         task = {"cmd": "saveSettings"}
         master.queue_background_task(task)
         master.backgroundTasksQueue.put.assert_called_once_with(task)
         master.vehicleCommandQueue.put.assert_not_called()
-
-    def test_delayed_charge_routed_when_due(self, master):
-        task = {"cmd": "charge", "charge": True}
-        master.queue_background_task(task, delay=60)
-        master.vehicleCommandQueue.put.assert_not_called()
-        assert len(master.backgroundTasksDelayed) == 1
-
-        master.backgroundTasksDelayed[0] = (datetime.now() - timedelta(seconds=1), task)
-        master.getBackgroundTask()
-        master.vehicleCommandQueue.put.assert_called_once_with(task, None)
 
     def test_queue_vehicle_command_forwards_callback(self, master):
         task = {"cmd": "setChargeRate", "amps": 16, "vehicle": None}
@@ -806,9 +783,11 @@ class TestVehicleCommandRouting:
 
 
 class TestChargeStartStopCancelRules:
-    """startCarsCharging / stopCarsCharging / cancelStopCarsCharging keep the
-    vehicle queue consistent: a stop cancels pending starts for that car, and
-    cancelStopCarsCharging really removes pending stops (#667)."""
+    """startCarsCharging / stopCarsCharging / cancelStopCarsCharging write
+    desired state for the cars they name; cancelStopCarsCharging drops only
+    a stop not yet delivered (#667)."""
+
+    V1, V2 = "5YJ3E1EA1KF000001", "5YJ3E1EA1KF000002"
 
     @pytest.fixture
     def master(self):
@@ -829,50 +808,53 @@ class TestChargeStartStopCancelRules:
         # Policy.clearOverride()/overrideLimit() are called; a Mock is enough.
         m.getModuleByName = Mock(return_value=Mock())
         m.settings["chargeStopMode"] = "1"
-        # The queue is never started, so put() only records entries.
+        for vin in (self.V1, self.V2):
+            m.vehicleRegistry.getOrCreate(vin, "t").observe("twcVin", "8244", "TWC")
         return m
 
-    @staticmethod
-    def pending(master):
-        q = master.vehicleCommandQueue
-        return [task for task, _ in list(q._high.values()) + list(q._low.values())]
+    def wanted(self, master):
+        from TWCManager.Vehicle.Reconcile.Desired import CHARGING
 
-    def test_start_passes_vin_in_stop_mode_1(self, master):
-        master.startCarsCharging("V1")
-        assert self.pending(master) == [{"cmd": "charge", "charge": True, "vin": "V1"}]
+        return {
+            vin: d.value
+            for vin in (self.V1, self.V2)
+            for d in [master.desired.get(vin, CHARGING)]
+            if d is not None
+        }
 
-    def test_stop_cancels_pending_start_for_that_vin_and_vehicleless(self, master):
-        master.startCarsCharging("V1")
-        master.startCarsCharging(None)
-        master.startCarsCharging("V2")
-        master.stopCarsCharging("V1")
-        assert self.pending(master) == [
-            {"cmd": "charge", "charge": False, "vin": "V1"},
-            {"cmd": "charge", "charge": True, "vin": "V2"},
-        ]
+    def test_start_names_its_car_and_clears_the_override_in_mode_1(self, master):
+        master.startCarsCharging(self.V1)
+        assert self.wanted(master) == {self.V1: True}
+        master.getModuleByName("Policy").clearOverride.assert_called_once_with()
+        assert master.vehicleCommandQueue._high == {} and master.vehicleCommandQueue._low == {}
 
-    def test_stop_for_all_cancels_every_pending_start(self, master):
-        master.startCarsCharging("V1")
-        master.startCarsCharging("V2")
-        master.stopCarsCharging(None)
-        assert self.pending(master) == [{"cmd": "charge", "charge": False, "vin": None}]
+    def test_stop_replaces_the_start_for_that_car_only(self, master):
+        master.startCarsCharging(self.V1)
+        master.startCarsCharging(self.V2)
+        master.stopCarsCharging(self.V1)
+        assert self.wanted(master) == {self.V1: False, self.V2: True}
 
-    def test_cancel_stop_for_vin_leaves_other_stops(self, master):
-        master.stopCarsCharging("V1")
-        master.stopCarsCharging("V2")
-        assert master.cancelStopCarsCharging("V1") == 1
-        assert self.pending(master) == [{"cmd": "charge", "charge": False, "vin": "V2"}]
+    def test_cancel_stop_for_a_car_leaves_other_stops(self, master):
+        master.stopCarsCharging(self.V1)
+        master.stopCarsCharging(self.V2)
+        assert master.cancelStopCarsCharging(self.V1) == 1
+        assert self.wanted(master) == {self.V2: False}
 
-    def test_cancel_stop_for_all(self, master):
-        master.stopCarsCharging("V1")
-        master.stopCarsCharging("V2")
-        assert master.cancelStopCarsCharging() == 2
-        assert self.pending(master) == []
+    def test_empty_vin_is_every_present_car_with_a_stop_candidate(self, master):
+        from tests.unit.reconcile_helpers import ScriptedProvider
 
-    def test_empty_vin_is_treated_as_none(self, master):
-        master.startCarsCharging("")
-        assert self.pending(master) == [{"cmd": "charge", "charge": True, "vin": None}]
         master.stopCarsCharging("")
-        assert self.pending(master) == [{"cmd": "charge", "charge": False, "vin": None}]
-        assert master.cancelStopCarsCharging("") == 1
-        assert self.pending(master) == []
+        assert self.wanted(master) == {}  # nothing can stop them
+        master.providerOrder.register(ScriptedProvider("TeslaBLE", 2, True, []))
+        master.stopCarsCharging("")
+        assert self.wanted(master) == {self.V1: False, self.V2: False}
+        assert master.cancelStopCarsCharging("") == 2 and self.wanted(master) == {}
+
+    def test_modes_2_and_3_never_touch_the_bus_here(self, master):
+        master.sendStopCommand = Mock()
+        for mode in ("2", "3"):
+            master.settings["chargeStopMode"] = mode
+            master.stopCarsCharging(self.V1)
+        assert master.settings["respondToSlaves"] == 1
+        master.sendStopCommand.assert_not_called()
+        master.getModuleByName("Policy").overrideLimit.assert_not_called()

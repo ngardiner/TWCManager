@@ -70,26 +70,24 @@ def test_command_policy_properties_delegate():
 
 def test_no_modules_returns_false():  # Review Focus 2
     m, vp = make()
-    assert (
-        vp.startCharging(VIN) is False and vp.car_api_charge({"charge": True}) is False
-    )
+    assert vp.wakeVehicle(VIN) is False and vp.setChargeRate(10) is False
 
 
 def test_walk_is_order_position_with_local_three_attempts_and_ha_last():
-    ble = mod(startCharging=False)
-    api = mod(startCharging=False)
-    ha = mod(startCharging=True)
+    ble = mod(wakeVehicle=False)
+    api = mod(wakeVehicle=False)
+    ha = mod(wakeVehicle=True)
     m, vp = make(
         {},
         P("HomeAssistant", 6, False, ha),
         P("FleetAPI", 5, False, api),
         P("TeslaBLE", 2, True, ble),
     )
-    assert vp.startCharging(VIN) is True
+    assert vp.wakeVehicle(VIN) is True
     assert (
-        ble.startCharging.call_count,
-        api.startCharging.call_count,
-        ha.startCharging.call_count,
+        ble.wakeVehicle.call_count,
+        api.wakeVehicle.call_count,
+        ha.wakeVehicle.call_count,
     ) == (3, 2, 1)
     assert m.stats["moduleFailures"] == {"TeslaBLE": 1, "FleetAPI": 1} and m.stats[
         "moduleSuccess"
@@ -97,60 +95,53 @@ def test_walk_is_order_position_with_local_three_attempts_and_ha_last():
 
 
 def test_ble_only_skips_cloud_commands_but_not_reads():
-    ble = mod(startCharging=False, updateChargeAtHome=False)
-    api = mod(startCharging=True, updateChargeAtHome=True)
+    ble = mod(wakeVehicle=False, updateChargeAtHome=False)
+    api = mod(wakeVehicle=True, updateChargeAtHome=True)
     m, vp = make(
         {"commandPolicy": "ble_only"},
         P("TeslaBLE", 2, True, ble),
         P("FleetAPI", 5, False, api),
     )
-    assert vp.startCharging(VIN) is False and api.startCharging.call_count == 0
+    assert vp.wakeVehicle(VIN) is False and api.wakeVehicle.call_count == 0
     assert vp.updateChargeAtHome() is True and api.updateChargeAtHome.call_count == 1
 
 
 def test_api_only_walks_fleet_without_ble():  # Review Focus 1
-    ble = mod(car_api_charge=True, updateChargeAtHome=True)
-    api = mod(car_api_charge="success", updateChargeAtHome=True)
+    ble = mod(wakeVehicle=True, updateChargeAtHome=True)
+    api = mod(wakeVehicle="success", updateChargeAtHome=True)
     m, vp = make(
         {"commandPolicy": "api_only"},
         P("TeslaBLE", 2, True, ble),
         P("FleetAPI", 5, False, api),
     )
-    assert (
-        vp.car_api_charge({"charge": True}) == "success"
-        and ble.car_api_charge.call_count == 0
-    )
+    assert vp.wakeVehicle(None) == "success" and ble.wakeVehicle.call_count == 0
     assert (
         vp.updateChargeAtHome() is True and ble.updateChargeAtHome.call_count == 0
     )  # reads too: no BLE timeout
 
 
 def test_broadcast_skips_a_provider_that_is_not_available():
-    api = mod(car_api_charge="success")
+    api = mod(wakeVehicle="success")
     f = P("FleetAPI", 5, False, api)
     f.available = lambda cap: False  # Owner-only: no command slot
     m, vp = make({}, f)
     assert (
-        vp.car_api_charge({"charge": True}) is False
-        and api.car_api_charge.call_count == 0
+        vp.wakeVehicle(None) is False
+        and api.wakeVehicle.call_count == 0
         and m.stats["moduleFailures"] == {}
     )
 
 
 def test_targeted_call_skips_providers_not_ready_for_that_car():
-    ble = mod(car_api_charge=True)
-    api = mod(car_api_charge="success")
+    ble = mod(wakeVehicle=True)
+    api = mod(wakeVehicle="success")
     m, vp = make(
         {}, P("TeslaBLE", 2, True, ble, ready=False), P("FleetAPI", 5, False, api)
     )
     m.vehicleRegistry.getOrCreate(VIN, "t")
+    assert vp.wakeVehicle(VIN) == "success" and ble.wakeVehicle.call_count == 0
     assert (
-        vp.car_api_charge({"charge": True, "vin": VIN}) == "success"
-        and ble.car_api_charge.call_count == 0
-    )
-    assert (
-        vp.car_api_charge({"charge": True}) is True
-        and ble.car_api_charge.call_count == 1
+        vp.wakeVehicle(None) is True and ble.wakeVehicle.call_count == 1
     )  # broadcast: readiness unknown
 
 
@@ -171,12 +162,6 @@ def test_set_charge_rate_targets_the_car():
     assert (
         VehiclePriority.targetVIN("setChargeRate", (10, car), {}) == VIN
         and VehiclePriority.targetVIN("wakeVehicle", (VIN.lower(),), {}) == VIN
-    )
-    assert (
-        VehiclePriority.targetVIN(
-            "car_api_charge", ({"charge": False, "vin": VIN},), {}
-        )
-        == VIN
     )
 
 
@@ -238,10 +223,10 @@ def test_same_module_under_two_providers_is_walked_once():
 
 
 def test_exceptions_count_as_failures_and_dunder_probes_do_not_walk():
-    api = Mock(spec=["startCharging"])
-    api.startCharging = Mock(side_effect=RuntimeError("secret"))
+    api = Mock(spec=["wakeVehicle"])
+    api.wakeVehicle = Mock(side_effect=RuntimeError("secret"))
     m, vp = make({}, P("FleetAPI", 5, False, api))
-    assert vp.startCharging(VIN) is False and api.startCharging.call_count == 2
+    assert vp.wakeVehicle(VIN) is False and api.wakeVehicle.call_count == 2
     assert m.stats["moduleFailures"] == {"FleetAPI": 1}
     assert not hasattr(vp, "__deepcopy__") and not hasattr(vp, "_private")
 
@@ -320,14 +305,14 @@ def test_attempts_match_todays_priorities():
     from tests.unit.teslatokens import fleet_token
 
     m, vp, ha, reg = _haMaster()
-    ha.car_api_charge = Mock(return_value="error")
+    ha.setChargeRate = Mock(return_value="error")
     api, _ = api_with_registry()
     api.storeToken(fleet_token())
-    api.car_api_charge = Mock(return_value="error")
+    api.setChargeRate = Mock(return_value="error")
     for p in api.providers():
         m.providerOrder.register(p)
-    assert vp.car_api_charge({"charge": True}) is False
-    assert (api.car_api_charge.call_count, ha.car_api_charge.call_count) == (2, 1)
+    assert vp.setChargeRate(10) is False
+    assert (api.setChargeRate.call_count, ha.setChargeRate.call_count) == (2, 1)
     assert m.stats["moduleFailures"] == {"FleetAPI": 1, "HomeAssistant": 1}
 
 
@@ -349,139 +334,10 @@ def test_home_assistant_gets_its_own_vehicle_for_set_charge_rate():
 
 def test_disabled_home_assistant_gets_no_broadcast():
     m, vp, ha, reg = _haMaster(enabled=False)
-    ha.car_api_charge = Mock(return_value="success")
+    ha.setChargeRate = Mock(return_value=True)
     ha.updateChargeAtHome = Mock(return_value=True)
-    assert (
-        vp.car_api_charge({"charge": True}) is False
-        and ha.car_api_charge.call_count == 0
-    )
+    assert vp.setChargeRate(10) is False and ha.setChargeRate.call_count == 0
     assert vp.updateChargeAtHome() is False and ha.updateChargeAtHome.call_count == 0
-
-
-# Fix round 2
-
-
-def _fleetUnloaded(withBle):
-    # TeslaAPI holds a Fleet token but has not listed its vehicles yet; the
-    # registry vehicle came from the TWC, so it has no TeslaAPI attachment
-    from tests.unit.test_carapivehicle_registry import api_with_registry
-    from tests.unit.teslatokens import fleet_token
-
-    api, reg = api_with_registry()
-    api.storeToken(fleet_token())
-    api.car_api_charge = Mock(return_value="success")
-    m, vp = make()
-    m.vehicleRegistry = reg
-    ble = mod(car_api_charge=False)
-    for p in ([P("TeslaBLE", 2, True, ble)] if withBle else []) + api.providers():
-        m.providerOrder.register(p)
-    reg.getOrCreate(VIN, "TWC")
-    assert api.getVehicleCount() == 0
-    return m, vp, api, ble
-
-
-def test_failed_ble_stop_falls_back_to_fleet_before_the_list_loads():  # C1
-    m, vp, api, ble = _fleetUnloaded(withBle=True)
-    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
-    assert ble.car_api_charge.call_count == 3 and api.car_api_charge.call_count == 1
-
-
-def test_fleet_only_targeted_commands_work_from_boot():  # C1
-    m, vp, api, ble = _fleetUnloaded(withBle=False)
-    api.car_api_charge.return_value = "error"
-    assert (
-        vp.car_api_charge({"charge": False, "vin": VIN}) is False
-        and api.car_api_charge.call_count == 2
-    )
-    assert m.stats["moduleFailures"] == {"FleetAPI": 1}
-
-
-def test_loaded_list_without_the_car_still_skips_fleet():
-    m, vp, api, ble = _fleetUnloaded(withBle=False)
-    api.addVehicle({"id": 2, "vin": "5YJ3E1EA1KF000009", "display_name": "Other"})
-    assert (
-        vp.car_api_charge({"charge": False, "vin": VIN}) is False
-        and api.car_api_charge.call_count == 0
-    )
-
-
-OTHER = "5YJ3E1EA1KF000009"
-
-
-def _haCars(*vins, fleet=True):
-    # HA's real car_api_charge over stand-in HA cars, each
-    # at home, connected and charging; _call_service records the entities
-    m, vp, ha, reg = _haMaster()
-    cars = []
-    for vin in vins:
-        hv = Mock(
-            vin=vin,
-            at_home=True,
-            charging=True,
-            charge_limit=None,
-            has_charge_switch=True,
-            has_charge_limit_number=True,
-            entity_ids={
-                "charge_switch": "switch." + vin,
-                "charge_limit_number": "number." + vin,
-            },
-        )
-        hv.name = vin
-        cars.append(hv)
-        reg.getOrCreate(vin, "t").attach("HomeAssistant", hv)
-    ha.carApiVehicles = cars
-    ha.car_api_available = Mock(return_value=True)
-    ha._is_vehicle_connected = Mock(return_value=True)
-    ha._call_service = Mock(return_value=True)
-    api = None
-    if fleet:
-        api = mod(car_api_charge="error")
-        m.providerOrder.register(
-            P(
-                "FleetAPI",
-                5,
-                False,
-                api,
-                caps={c: C.Declaration(C.FLEET_COMMAND) for c in C.COMMANDS},
-            )
-        )
-    return m, vp, ha, api
-
-
-def _entities(ha):
-    return [c.args[2]["entity_id"] for c in ha._call_service.call_args_list]
-
-
-def test_ha_only_targeted_stop_affects_only_the_target():  # N1
-    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
-    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success" and _entities(
-        ha
-    ) == ["switch." + VIN]
-
-
-def test_fleet_failure_falls_to_home_assistant_for_the_target_only():  # I1
-    m, vp, ha, api = _haCars(VIN, OTHER)
-    assert (
-        vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
-        and api.car_api_charge.call_count == 2
-    )
-    assert _entities(ha) == ["switch." + VIN]
-
-
-def test_broadcast_still_reaches_every_home_assistant_car():
-    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
-    assert vp.car_api_charge({"charge": False}) == "success"
-    assert _entities(ha) == ["switch." + VIN, "switch." + OTHER]
-
-
-def test_unknown_vin_affects_no_home_assistant_car():
-    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
-    unknown = "5YJ3E1EA1KF000077"
-    assert ha.car_api_charge({"charge": False, "vin": unknown}) == "error"
-    assert ha._call_service.call_count == 0
-    assert (
-        ha.car_api_charge({"charge": False, "vin": VIN.lower()}) == "success"
-    )  # not rate limited by the refusal
 
 
 def _enabledFacade(*modules):

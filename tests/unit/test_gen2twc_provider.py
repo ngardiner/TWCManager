@@ -6,6 +6,7 @@ from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 from TWCManager.Vehicle.Reconcile import Outcome as O
+from TWCManager.Vehicle.Reconcile.Desired import CHARGING
 
 VIN = "5YJ3E1EA1KF000001"
 CONFIG = {
@@ -167,7 +168,9 @@ def test_disruptive_stop_declared_very_high_cost_and_off_by_default():
     assert m.settings["respondToSlaves"] == 0
     m.settings["respondToSlaves"] = 1
     m.stopCarsCharging(VIN)
-    assert m.settings["respondToSlaves"] == 0  # same helper
+    # Desired state only: the reconciler delivers it through this provider
+    assert m.desired.get(VIN, CHARGING).value is False
+    assert m.settings["respondToSlaves"] == 1
     m.settings["chargeStopMode"] = "3"
     m.sendStopCommand = Mock()
     # Queued for the serial thread's heartbeat; nothing is written here

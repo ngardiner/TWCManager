@@ -15,12 +15,6 @@
 # own run, key, isHigh, report and lost. Every entry such an instance
 # accepts is reported exactly once, through report or lost. Callbacks never
 # run under _cond.
-#
-# Legacy charge commands: one without a vin applies to every car, so it
-# replaces, and is replaced by, any pending charge command. A car gets at
-# most one charge start/stop attempt per CHARGE_COMMAND_INTERVAL. Callers
-# re-request every loop while they want a change, so a refused command isn't
-# retried back to back.
 import collections
 import threading
 import time
@@ -42,10 +36,8 @@ def _setAmps(module, task):
 
 class VehicleCommandQueue:
     MAX_PENDING = 64
-    CHARGE_COMMAND_INTERVAL = 60
 
     _DISPATCH = {
-        "charge": lambda module, task: module.car_api_charge(task),
         "setChargeRate": lambda module, task: module.setChargeRate(
             task["amps"], task.get("vehicle")
         ),
@@ -68,7 +60,8 @@ class VehicleCommandQueue:
         self._legacy = run is None
         self._runEntry = self._execute if run is None else run
         self._keyOf = key or self._key
-        self._isHigh = isHigh or self._is_high_priority
+        # The legacy instance runs no stops: none is high
+        self._isHigh = isHigh or (lambda entry: False)
         self._report = report
         self._lost = lost
         self._cond = threading.Condition()
@@ -80,8 +73,6 @@ class VehicleCommandQueue:
         # The worker thread is between start() and its exit
         self._live = False
         self._overflowWarned = False
-        # Legacy: per-VIN (None: every car) time of the last charge attempt
-        self._lastChargeTime = {}
 
     @staticmethod
     def _key(task):
@@ -89,36 +80,8 @@ class VehicleCommandQueue:
         if cmd == "setChargeRate":
             vehicle = task.get("vehicle")
             return (cmd, getattr(vehicle, "VIN", vehicle))
-        if cmd == "charge":
-            # TWCSlave passes "" when it hasn't read the car's VIN
-            return (cmd, task.get("vin") or None)
         # None is a distinct target meaning "every vehicle".
         return (cmd, task.get("vin"))
-
-    @staticmethod
-    def _replaces(key, other):
-        # A legacy charge command for every car (vin None) and one for a
-        # single car overlap, so the newer one replaces the older.
-        if key[0] != "charge" or other[0] != "charge":
-            return key == other
-        return key[1] is None or other[1] is None or key[1] == other[1]
-
-    def _chargeHeld(self, key):
-        # Legacy: True while this charge command's car (or any car, for a
-        # vehicle-less command) had a charge attempt within the interval
-        since = time.monotonic() - max(
-            (
-                t
-                for k, t in self._lastChargeTime.items()
-                if self._replaces(key, ("charge", k))
-            ),
-            default=float("-inf"),
-        )
-        return since < self.CHARGE_COMMAND_INTERVAL
-
-    @staticmethod
-    def _is_high_priority(task):
-        return task["cmd"] == "charge" and "charge" in task and not task["charge"]
 
     def start(self):
         with self._cond:
@@ -176,25 +139,15 @@ class VehicleCommandQueue:
                 # a stop a worker can still run is taken
                 losers.append((entry, "dropped"))
                 accepted = False
-            elif (
-                self._legacy
-                and key[0] == "charge"
-                and not self._draining
-                and self._chargeHeld(key)
-            ):
-                logger.debug("Not sending %r; a charge command went recently", entry)
-                losers.append((entry, "dropped"))
-                accepted = False
             else:
                 table, other = (
                     (self._high, self._low) if high else (self._low, self._high)
                 )
-                replaces = self._replaces if self._legacy else (lambda a, b: a == b)
                 for t in (other, table):
-                    for k in [k for k in t if replaces(key, k)]:
-                        losers.append((t[k][0], "replaced"))
-                        if t is other or k != key:
-                            del t[k]
+                    if key in t:
+                        losers.append((t[key][0], "replaced"))
+                        if t is other:
+                            del t[key]
                 if (
                     key not in table
                     and len(self._high) + len(self._low) >= self.MAX_PENDING
@@ -232,15 +185,6 @@ class VehicleCommandQueue:
             logger.debug("%s: cancelled %d pending command(s)", self.name, len(losers))
         self._lose(losers)
         return len(losers)
-
-    def cancel(self, cmd, match):
-        # Legacy: until Task 13. Stops are kept during shutdown, which must
-        # send them.
-        return self.remove(
-            lambda task: task["cmd"] == cmd
-            and match(task)
-            and not (self._draining and self._is_high_priority(task))
-        )
 
     # --- shutdown ---
 
@@ -307,9 +251,7 @@ class VehicleCommandQueue:
                 self._cond.notify_all()
                 return None
             table = self._high if self._high else self._low
-            key, (entry, callback) = table.popitem(last=False)
-            if self._legacy and key[0] == "charge":
-                self._lastChargeTime[key[1]] = time.monotonic()
+            _, (entry, callback) = table.popitem(last=False)
             self._busy = True
             if not self._high and not self._low:
                 # The backlog has cleared: the next overflow warns again

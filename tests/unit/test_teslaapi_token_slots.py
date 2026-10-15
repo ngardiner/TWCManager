@@ -118,7 +118,7 @@ def test_vehicle_list_from_owner_products_when_both_present(no_threads, requests
     products = requests_mock.get(OWNER_API_URL[:-8] + "products", json=LISTING)
     fleetList = requests_mock.get(FLEET_NA_URL, json=LISTING)
 
-    assert api.car_api_available() is True
+    assert api.loadVehicleList() is True
 
     assert products.call_count == 1
     assert fleetList.call_count == 0
@@ -155,7 +155,6 @@ def test_command_refused_without_usable_fleet(no_threads, requests_mock, fleet):
     assert api.readOnly is True
     assert api.setChargeRate(10, vehicle) is False
     assert api.wakeVehicle(vehicle) is False
-    assert api.car_api_charge({"charge": True}) == "error"
 
     assert anyCall.call_count == 0
     assert api.getCarApiLastErrorTime() == 0
@@ -167,7 +166,7 @@ def test_no_usable_slot_makes_no_requests(no_threads, requests_mock):
     vehicle = add_home_vehicle(api)
     anyCall = requests_mock.register_uri(rm.ANY, rm.ANY, json={})
 
-    assert api.car_api_available() is False
+    assert api.slotFor("read") is None
     assert vehicle.is_awake() is False
     assert vehicle.update_vehicle_data() is False
 
@@ -383,13 +382,13 @@ def test_owner_412_pauses_until_the_token_changes(no_threads, requests_mock):
     products = requests_mock.get(OWNER_API_URL[:-8] + "products", status_code=412)
     fleetList = requests_mock.get(FLEET_NA_URL, json=LISTING)
 
-    assert api.car_api_available() is False
+    assert api.loadVehicleList() is False
     assert api.ownerSlot.accessToken == owner
     assert api.ownerSlot.pausedUntil == float("inf")
     assert api.ownerSlot.status()["paused"] is True
     assert products.call_count == 1
 
-    assert api.car_api_available() is True
+    assert api.loadVehicleList() is True
     assert fleetList.call_count == 1
 
     # Latched: an hour later the Fleet slot still reads; a new token ends it
@@ -443,7 +442,7 @@ def test_both_paused_no_requests(no_threads, requests_mock):
     api.fleetSlot.pause()
     anything = requests_mock.register_uri(rm.ANY, re.compile(".*"), json={})
 
-    assert api.car_api_available() is False
+    assert api.loadVehicleList() is False
 
     assert anything.call_count == 0
 
@@ -453,6 +452,6 @@ def test_slot_failure_records_no_api_error(no_threads, requests_mock):
     store_both(api)
     requests_mock.get(OWNER_API_URL[:-8] + "products", status_code=412)
 
-    assert api.car_api_available() is False
+    assert api.loadVehicleList() is False
 
     assert api.getCarApiLastErrorTime() == 0

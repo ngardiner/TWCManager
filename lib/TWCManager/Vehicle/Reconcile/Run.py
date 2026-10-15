@@ -106,6 +106,26 @@ def _call(provider, capability, vin, value):
     return method(vin)
 
 
+def _wake(provider, vin):
+    # The outcome that ends the attempt, or None to send the command
+    woke = checked(provider, WAKE, provider.wake(vin))
+    if woke.kind == REFUSED:
+        return _tagged(woke, "wake ")
+    if woke.kind not in _WAKE_PROCEEDS:
+        if not provider.local:
+            # A billed command to a car that may still be asleep is never
+            # sent: any failed wake ends the attempt
+            return _tagged(woke, "wake ")
+        # Today's BLE behaviour: the command still goes out
+        logger.debug(
+            "%s wake for %s failed (%s); sending anyway",
+            provider.name,
+            vin,
+            woke.kind,
+        )
+    return None
+
+
 def runAttempt(reconciler, attempt) -> Outcome:
     master = reconciler.master
     vin = attempt.key
@@ -122,7 +142,14 @@ def runAttempt(reconciler, attempt) -> Outcome:
     provider = master.providerOrder.provider(attempt.provider)
     if provider is None:
         return Outcome(ERROR, "no provider")
+    # A cloud provider wakes before its read: an asleep car's value stays
+    # unknown, and a billed write never goes blind (C1)
+    wakeFirst = attempt.wake and not provider.local and provider.declares(WAKE)
     try:
+        if wakeFirst:
+            early = _wake(provider, vin)
+            if early is not None:
+                return early
         field = FIELD_FOR[aspect] if aspect is not None else None
         read = field is not None and attempt.maxAge is not None
         if read:
@@ -148,22 +175,10 @@ def runAttempt(reconciler, attempt) -> Outcome:
         value, early = reconciler.beforeWrite(vehicle, attempt, provider, believed)
         if early is not None:
             return _tagged(early, "rules: ")
-        if attempt.wake and provider.declares(WAKE):
-            woke = checked(provider, WAKE, provider.wake(vin))
-            if woke.kind == REFUSED:
-                return _tagged(woke, "wake ")
-            if woke.kind not in _WAKE_PROCEEDS:
-                if not provider.local:
-                    # A billed command to a car that may still be asleep is
-                    # never sent: any failed wake ends the attempt
-                    return _tagged(woke, "wake ")
-                # Today's BLE behaviour: the command still goes out
-                logger.debug(
-                    "%s wake for %s failed (%s); sending anyway",
-                    provider.name,
-                    vin,
-                    woke.kind,
-                )
+        if attempt.wake and not wakeFirst and provider.declares(WAKE):
+            early = _wake(provider, vin)
+            if early is not None:
+                return early
         outcome = checked(
             provider,
             commandMethod(attempt.capability),
