@@ -40,6 +40,7 @@ import datetime
 import yaml
 import threading
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.Vehicle.Providers.Order import registerProviders
 import requests
 from enum import Enum
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -777,6 +778,10 @@ logger.info(
     modules_failed,
 )
 
+# Every loaded vehicle module's providers join the order. A pure-Gen2
+# install has no vehicle modules and registers nothing new.
+registerProviders(master)
+
 # Auto-register TeslaAPIController when TeslaAPI is available.
 # This enables the centralized watt-based power distribution across both
 # Gen2 TWC slaves and Tesla API vehicles (Phase 4, ported from #483).
@@ -823,6 +828,8 @@ if _gen3_cfg.get("enabled", False):
 
 # Load settings from file
 master.loadSettings()
+# A settings-based commandPolicy is known only now
+master.providerOrder.suppressions.noticeOnce()
 
 # Create a background thread to handle tasks that take too long on the main
 # thread.  For a primer on threads in Python, see:
