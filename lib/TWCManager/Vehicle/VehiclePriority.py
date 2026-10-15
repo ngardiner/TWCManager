@@ -195,11 +195,7 @@ class VehiclePriority:
         # The call's arguments for this provider's module, or None to skip
         # it. A module that takes its own vehicle type (HomeAssistant) gets
         # its own vehicle, looked up by VIN, never the TeslaAPI one.
-        if not provider.vehicleAttachment:
-            return args, kwargs
-        if name in ("car_api_charge", "applyChargeLimit"):
-            return self._ownVehicleOnly(provider, name, args, kwargs)
-        if name != "setChargeRate":
+        if name != "setChargeRate" or not provider.vehicleAttachment:
             return args, kwargs
         positional = len(args) > 1
         vehicle = args[1] if positional else kwargs.get("vehicle")
@@ -213,26 +209,6 @@ class VehiclePriority:
         if positional:
             return (args[0], own) + tuple(args[2:]), kwargs
         return args, dict(kwargs, vehicle=own)
-
-    def _ownVehicleOnly(self, provider, name, args, kwargs):
-        # HomeAssistant's legacy car_api_charge and applyChargeLimit ignore
-        # the VIN and act on every HA car. A targeted call reaches HA only
-        # when the target is HA's one car; a broadcast means every car.
-        # Until Phase 3.
-        vin = self.targetVIN(name, args, kwargs)
-        if vin is None:
-            return args, kwargs
-        registered = self.master.vehicleRegistry.get(vin)
-        own = registered.attachment(provider.vehicleAttachment) if registered else None
-        try:
-            count = provider.module.getVehicleCount()
-        except Exception as e:
-            logger.debug(f"{provider.name} getVehicleCount() raised {type(e).__name__}")
-            return None
-        # The attachment is HA's own vehicle, so with one car it is the target
-        if own is None or count != 1:
-            return None
-        return args, kwargs
 
     def _count(self, kind, name):
         counts = self.master.stats.setdefault(kind, {})

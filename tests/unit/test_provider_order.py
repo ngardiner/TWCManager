@@ -132,7 +132,8 @@ def test_debug_command_tries_each_provider_once():
     m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); b = ble(); b._result = False; f = fleet(); f._result = False
     o = order(m, b, f)
     assert o.debugCommand("wakeVehicle", VIN, "{}") is False and b.calls == [("wake", VIN)] and f.calls == [("wake", VIN)]
-    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 3}') is False and b.calls[1:] == [("setAmps", VIN, 3)]   # BLE covers 3 A: Fleet stays off
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 3}') is False and b.calls[1:] == [("setAmps", VIN, 3)]
+    assert f.calls[1:] == [("setAmps", VIN, 3)]        # readiness only (M1): Fleet follows BLE, once
 
 def test_debug_set_charge_rate_reaches_fleet_past_a_covering_twc():         # M1
     # As the facade's setChargeRate: the TWC cannot lift the car's own limit
