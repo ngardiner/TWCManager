@@ -130,14 +130,20 @@ class ProviderOrder:
             counts[name] = counts.get(name, 0) + 1
 
     def dispatch(
-        self, vehicle, capability, call: Callable[[Provider], Any], amps=None
+        self,
+        vehicle,
+        capability,
+        call: Callable[[Provider], Any],
+        amps=None,
+        attempts: Optional[int] = None,
     ) -> Any:
+        # attempts overrides each provider's own count (the debug API: one)
         for p in self.candidates(vehicle, capability, amps):
             if p.module is None:
                 # The TWC providers: a dispatched command runs off the main
                 # loop and must not write a TWC target; the distributor owns it
                 continue
-            for _ in range(p.attempts()):
+            for _ in range(attempts or p.attempts()):
                 try:
                     result = call(p)
                 except Exception as e:
@@ -169,11 +175,16 @@ class ProviderOrder:
                 return False
             return bool(
                 self.dispatch(
-                    vehicle, SET_AMPS, lambda p: p.setAmps(vin, amps), amps=amps
+                    vehicle,
+                    SET_AMPS,
+                    lambda p: p.setAmps(vin, amps),
+                    amps=amps,
+                    attempts=1,
                 )
             )
         if command == "wakeVehicle":
-            return bool(self.dispatch(vehicle, WAKE, lambda p: p.wake(vin)))
+            # User-initiated: a failed wake is never sent twice
+            return bool(self.dispatch(vehicle, WAKE, lambda p: p.wake(vin), attempts=1))
         return False
 
 

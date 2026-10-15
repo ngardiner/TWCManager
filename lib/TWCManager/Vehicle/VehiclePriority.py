@@ -111,6 +111,8 @@ class VehiclePriority:
 
     @staticmethod
     def targetAmps(name, args, kwargs) -> Optional[float]:
+        # The rate a setChargeRate asks for. Provider selection does not use
+        # it: setChargeRate walks every ready provider (see modulesFor)
         if name != "setChargeRate":
             return None
         value = args[0] if args else kwargs.get("charge_rate")
@@ -131,18 +133,27 @@ class VehiclePriority:
             capability = self.capabilityFor(name, args, kwargs)
             vin = self.targetVIN(name, args, kwargs)
             vehicle = self.master.vehicleRegistry.get(vin) if vin else None
-            if vehicle is not None:
-                providers = self.order.candidates(
-                    vehicle, capability, self.targetAmps(name, args, kwargs)
-                )
+            if vehicle is not None and name == "setChargeRate":
+                # Readiness only: the TWC cannot lift the car's own current
+                # limit (#660), so the local-amps rule that keeps Fleet off
+                # a rate the TWC covers applies to setAmps, not here
+                providers = [
+                    p
+                    for p in self.order.ordered(capability)
+                    if self.order._ready(p, vehicle, capability)
+                ]
+            elif vehicle is not None:
+                providers = self.order.candidates(vehicle, capability)
             else:
                 providers = self.order.ordered(capability)
         else:
-            # api_only keeps BLE out of reads too, as orderReadSources does
+            # api_only keeps BLE out of reads too, as orderReadSources does;
+            # a disabled module (HomeAssistant) is not available
             providers = [
                 p
                 for p in self.order.providers()
                 if not self.order.suppressions.suppressed(p, READ_CHARGE)
+                and self._available(p, READ_CHARGE)
             ]
         walk, seen = [], set()
         for p in providers:
@@ -153,6 +164,33 @@ class VehiclePriority:
             seen.add(id(module))
             walk.append((p, module))
         return walk
+
+    @staticmethod
+    def _available(provider, capability) -> bool:
+        try:
+            return bool(provider.available(capability))
+        except Exception as e:
+            logger.debug(f"{provider.name} available() raised {type(e).__name__}")
+            return False
+
+    def _argsFor(self, provider, name, args, kwargs):
+        # The call's arguments for this provider's module, or None to skip
+        # it. A module that takes its own vehicle type (HomeAssistant) gets
+        # its own vehicle, looked up by VIN, never the TeslaAPI one.
+        if name != "setChargeRate" or not provider.vehicleAttachment:
+            return args, kwargs
+        positional = len(args) > 1
+        vehicle = args[1] if positional else kwargs.get("vehicle")
+        if vehicle is None:
+            return args, kwargs
+        vin = self.targetVIN(name, args, kwargs)
+        registered = self.master.vehicleRegistry.get(vin) if vin else None
+        own = registered.attachment(provider.vehicleAttachment) if registered else None
+        if own is None:
+            return None
+        if positional:
+            return (args[0], own) + tuple(args[2:]), kwargs
+        return args, dict(kwargs, vehicle=own)
 
     def _count(self, kind, name):
         counts = self.master.stats.setdefault(kind, {})
@@ -184,6 +222,13 @@ class VehiclePriority:
                         f"VehiclePriority: {module_name} does not have method {name}"
                     )
                     continue
+                call = self._argsFor(provider, name, args, kwargs)
+                if call is None:
+                    logger.debug(
+                        f"VehiclePriority: {module_name} has no vehicle of its own for {name}"
+                    )
+                    continue
+                callArgs, callKwargs = call
 
                 max_attempts = provider.attempts()
                 self._count("moduleDispatch", module_name)
@@ -193,7 +238,7 @@ class VehiclePriority:
 
                 for attempt in range(max_attempts):
                     try:
-                        ret = getattr(module_ref, name)(*args, **kwargs)
+                        ret = getattr(module_ref, name)(*callArgs, **callKwargs)
                     except Exception as e:
                         ret = False
                         logger.debug(
