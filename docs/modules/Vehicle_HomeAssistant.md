@@ -150,7 +150,7 @@ You can generate a long-lived token in Home Assistant under:
 * If the module is enabled but no Tesla vehicles are discovered:
   * It logs a warning and exposes no cars to TWCManager.
 * If Home Assistant is temporarily unreachable:
-  * `car_api_available()` returns `False`, and TWCManager will not attempt charge actions through this backend until connectivity is restored.
+  * Its service calls fail, and TWCManager falls back to its other vehicle providers (or retries later) until connectivity is restored.
 * If a specific entity is missing (e.g. `number.<slug>_charge_current`):
   * That feature (e.g. setting amps) is skipped, but other features (start/stop, limit, SOC) can still work if their entities exist.
 

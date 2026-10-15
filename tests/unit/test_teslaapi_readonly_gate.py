@@ -52,22 +52,9 @@ class TestTeslaAPIRefusesCommands:
         assert no_error_recorded(owner_api)
         assert vehicle.lastAPIAccessTime == before
 
-    def test_start_and_stop_charge(self, owner_api, any_http):
-        assert owner_api.car_api_charge({"charge": True}) == "error"
-        assert owner_api.car_api_charge({"charge": False}) == "error"
-        assert any_http.call_count == 0
-        assert no_error_recorded(owner_api)
-
     def test_wake(self, owner_api, any_http):
         vehicle = owner_api.getCarApiVehicles()[0]
         assert owner_api.wakeVehicle(vehicle) is False
-        assert any_http.call_count == 0
-        assert no_error_recorded(owner_api)
-
-    def test_car_api_available_skips_wake_loop(self, owner_api, any_http):
-        vehicle = owner_api.getCarApiVehicles()[0]
-        vehicle.lastAPIAccessTime = 0  # asleep as far as we know
-        owner_api.car_api_available(charge=True)
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
@@ -99,7 +86,7 @@ class TestRefusalLogging:
         vehicle = owner_api.getCarApiVehicles()[0]
         owner_api.setChargeRate(10, vehicle)
         owner_api.setChargeRate(12, vehicle)
-        owner_api.car_api_charge({"charge": True})
+        owner_api.wakeVehicle(vehicle)
         assert len(self.refusals(caplog)) == 1
 
         # Fleet token: commands allowed. Fleet slot cleared: logs again, once.
@@ -148,7 +135,7 @@ class TestReadsStillRun:
                 "response": [{"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"}],
             },
         )
-        assert api.car_api_available() is True
+        assert api.loadVehicleList() is True
         assert listing.call_count == 1
         assert api.getVehicleCount() == 1
 
@@ -207,7 +194,7 @@ class TestVehiclePrioritySkipsReadOnly:
         assert api.setChargeRate.called
 
     @pytest.mark.parametrize(
-        "method", ["car_api_charge", "wakeVehicle"]
+        "method", ["setChargeRate", "wakeVehicle"]
     )
     def test_every_command_method_skips(self, method, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)

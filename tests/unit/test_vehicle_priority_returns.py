@@ -4,7 +4,6 @@
 # tests drive the real TeslaAPI methods (never a mock that returns
 # "success") so a success read as failure cannot send a second, billed
 # command through Home Assistant.
-import time
 from unittest.mock import Mock
 
 import pytest
@@ -38,60 +37,11 @@ def _fleetThenHa(ha):
 
 
 def test_a_none_return_is_a_failure_and_the_walk_continues():
-    first = mod(car_api_charge=None)
-    second = mod(car_api_charge="success")
+    first = mod(wakeVehicle=None)
+    second = mod(wakeVehicle="success")
     m, vp = make({}, P("FleetAPI", 5, False, first), P("HomeAssistant", 6, False, second))
-    assert vp.car_api_charge({"charge": True}) == "success"
-    assert (first.car_api_charge.call_count, second.car_api_charge.call_count) == (2, 1)
-
-
-def test_throttled_start_is_not_a_failure(no_http):
-    # TWCSlave asks to start every heartbeat while the car draws nothing;
-    # TeslaAPI sends at most once a minute. Its skip must not hand the
-    # start to HA.
-    ha = mod(car_api_charge="success")
-    api, vp = _fleetThenHa(ha)
-    api.carApiLastStartOrStopChargeTime = time.time()
-    assert api.car_api_charge({"charge": True}) not in (None, False, "error")
-    assert vp.car_api_charge({"charge": True}) and ha.car_api_charge.call_count == 0
-    assert no_http.call_count == 0
-
-
-def test_a_failed_fleet_start_still_falls_to_ha(no_http):
-    # A real failure (the API in its error backoff) keeps the sanctioned
-    # fall-through
-    from tests.unit.teslatokens import add_home_vehicle
-
-    ha = mod(car_api_charge="success")
-    api, vp = _fleetThenHa(ha)
-    add_home_vehicle(api)
-    api.updateCarApiLastErrorTime()
-    assert api.car_api_charge({"charge": True}) == "error"
-    assert vp.car_api_charge({"charge": True}) == "success"
-    assert ha.car_api_charge.call_count == 1
-
-
-def _asleep(api):
-    from tests.unit.teslatokens import add_home_vehicle
-
-    car = add_home_vehicle(api)
-    car.lastAPIAccessTime = 0
-    car.is_awake = Mock(return_value=False)
-    return car
-
-
-def test_the_pre_wake_hold_is_not_a_failure(no_http):
-    # A sleeping car just plugged in: Fleet holds off waking it on purpose
-    # (wakeDelayMins). HA must not start it instead, which would wake it
-    # and bill through HA's Tesla integration
-    ha = mod(car_api_charge="success")
-    api, vp = _fleetThenHa(ha)
-    car = _asleep(api)
-    assert api.car_api_charge({"charge": True}) not in (None, False, "error")
-    assert car.firstChargeNeededTime > 0                       # the hold began
-    api.carApiLastStartOrStopChargeTime = 0
-    assert vp.car_api_charge({"charge": True}) and ha.car_api_charge.call_count == 0
-    assert no_http.call_count == 0
+    assert vp.wakeVehicle(None) == "success"
+    assert (first.wakeVehicle.call_count, second.wakeVehicle.call_count) == (2, 1)
 
 
 def test_update_charge_at_home_ends_at_teslaapi_when_it_holds_cars(no_http):
@@ -139,8 +89,8 @@ class Clock:
 
 
 def _backoff(fleet=True):
-    api = mod(car_api_charge="error", wakeVehicle="error")
-    ha = mod(car_api_charge="success", wakeVehicle="success")
+    api = mod(setChargeRate="error", wakeVehicle="error")
+    ha = mod(setChargeRate="success", wakeVehicle="success")
     providers = [P("HomeAssistant", 6, False, ha, caps=HA_CMDS)]
     if fleet:
         providers.append(P("FleetAPI", 5, False, api, caps=FLEET_CMDS))
@@ -153,30 +103,28 @@ def _backoff(fleet=True):
 
 def test_ha_after_a_fleet_failure_is_held_to_fleets_cadence():
     vp, ha, api, clock = _backoff()
-    start = {"charge": True, "vin": VIN}
-    assert vp.car_api_charge(start) == "success"
+    car = Mock(VIN=VIN)
+    assert vp.setChargeRate(10, car) == "success"
     clock.t += 10
-    assert vp.car_api_charge(start) is False                    # Fleet tried, HA held
-    assert (api.car_api_charge.call_count, ha.car_api_charge.call_count) == (4, 1)
+    assert vp.setChargeRate(10, car) is False                   # Fleet tried, HA held
+    assert (api.setChargeRate.call_count, ha.setChargeRate.call_count) == (4, 1)
     clock.t += 51
-    assert vp.car_api_charge(start) == "success" and ha.car_api_charge.call_count == 2
+    assert vp.setChargeRate(10, car) == "success" and ha.setChargeRate.call_count == 2
 
 
 def test_the_hold_is_per_car_and_per_command():
     vp, ha, api, clock = _backoff()
-    assert vp.car_api_charge({"charge": True, "vin": VIN}) == "success"
-    assert vp.car_api_charge({"charge": True, "vin": OTHER}) == "success"
-    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
+    assert vp.setChargeRate(10, Mock(VIN=VIN)) == "success"
+    assert vp.setChargeRate(10, Mock(VIN=OTHER)) == "success"
     assert vp.wakeVehicle(VIN) == "success"
-    assert (ha.car_api_charge.call_count, ha.wakeVehicle.call_count) == (3, 1)
+    assert (ha.setChargeRate.call_count, ha.wakeVehicle.call_count) == (2, 1)
     clock.t += 10
     assert vp.wakeVehicle(VIN) is False and ha.wakeVehicle.call_count == 1
 
 
 def test_ha_only_install_keeps_its_own_cadence():
     vp, ha, api, clock = _backoff(fleet=False)
-    start = {"charge": True, "vin": VIN}
     for _ in range(3):
-        assert vp.car_api_charge(start) == "success"
+        assert vp.setChargeRate(10, Mock(VIN=VIN)) == "success"
         clock.t += 10
-    assert ha.car_api_charge.call_count == 3
+    assert ha.setChargeRate.call_count == 3

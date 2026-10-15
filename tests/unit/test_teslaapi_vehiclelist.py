@@ -57,7 +57,7 @@ def test_no_token_makes_no_call():
 
 
 def test_lists_from_owner_products_when_both_slots_present(no_threads, requests_mock):
-    # Telemetry calls loadVehicleList() directly, not via car_api_available.
+    # Telemetry calls loadVehicleList() directly.
     api = new_api()
     api.ownerSlot.setTokens(owner_token())
     products = requests_mock.get(OWNER_API_URL[:-8] + "products", text=VEHICLES)

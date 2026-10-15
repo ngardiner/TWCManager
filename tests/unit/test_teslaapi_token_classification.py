@@ -121,7 +121,7 @@ class TestUnknownToken:
         # As restored from settings: a token of unknown type in the slot.
         api.fleetSlot.setTokens("not-a-jwt-at-all")
 
-        assert api.car_api_available() is False
+        assert api.slotFor("read") is None and api.slotFor("command") is None
         assert vehicle.is_awake() is False
         assert api.wakeVehicle(vehicle) is False
         assert api.setChargeRate(10, vehicle) is False
@@ -129,32 +129,6 @@ class TestUnknownToken:
         assert any_call.call_count == 0
         assert api.getCarApiLastErrorTime() == 0
         assert vehicle.lastErrorTime == 0
-
-
-class TestNoBaseURLLogLine:
-    """car_api_available stops when no slot is usable. Its log line must
-    tell "no token yet" apart from "token type unknown"."""
-
-    def messages(self, api, caplog, requests_mock):
-        any_call = requests_mock.register_uri(rm.ANY, rm.ANY, json={})
-        caplog.set_level(logging.INFO8)
-        assert api.car_api_available() is False
-        assert any_call.call_count == 0
-        return [r.getMessage() for r in caplog.records]
-
-    def test_no_token_yet(self, caplog, requests_mock):
-        api = new_api()
-        messages = self.messages(api, caplog, requests_mock)
-        assert any("no Tesla API token yet" in m for m in messages)
-        assert not any("token type unknown" in m for m in messages)
-
-    def test_unknown_token(self, caplog, requests_mock):
-        api = new_api()
-        # As restored from settings: a token of unknown type in the slot.
-        api.restoreSlot(api.fleetSlot, "not-a-jwt-at-all", "", None)
-        messages = self.messages(api, caplog, requests_mock)
-        assert any("token type unknown" in m for m in messages)
-        assert not any("no Tesla API token yet" in m for m in messages)
 
 
 class TestOddAud:
