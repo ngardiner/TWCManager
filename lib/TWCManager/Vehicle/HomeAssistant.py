@@ -30,6 +30,13 @@ import requests
 import websockets
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
+from TWCManager.Vehicle.Reconcile.Outcome import (
+    DONE,
+    ERROR,
+    REFUSED,
+    UNREACHABLE,
+    Outcome,
+)
 from TWCManager.Vehicle.Registry.Sources import HomeAssistantReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
@@ -190,6 +197,8 @@ class HomeAssistant:
     stateRefreshInterval = 30  # Minimum seconds between state refreshes per vehicle
     # Set once connectivity is verified; the provider reads through it
     readSource = None
+    # A refused service call (401/403) was logged; cleared by a success
+    _refusalLogged = False
 
     def __init__(self, master):
         self.master = master
@@ -523,29 +532,46 @@ class HomeAssistant:
                 logger.warning("HA: failed reading state %s: %s", entity_id, exc)
                 return None
 
-    def _call_service(self, domain: str, service: str, data: dict) -> bool:
+    def _post_service(self, domain: str, service: str, data: dict) -> Outcome:
+        # The one place a service call is made. Never logs a response body.
         url = f"{self.rest_base}/services/{domain}/{service}"
         with self._rest_lock:
             try:
                 resp = self._session.post(url, json=data, timeout=10)
                 resp.raise_for_status()
-                logger.debug("HA: service call %s.%s succeeded", domain, service)
-                return True
             except requests.exceptions.Timeout:
                 logger.warning("HA: timeout calling %s.%s (10s)", domain, service)
-                return False
+                return Outcome(UNREACHABLE, "timeout")
             except requests.exceptions.HTTPError as e:
+                status = getattr(e.response, "status_code", None)
+                if status is None:
+                    return Outcome(ERROR, type(e).__name__)
+                if status in (401, 403):
+                    if not self._refusalLogged:
+                        self._refusalLogged = True
+                        logger.error(
+                            "Home Assistant refused a service call (HTTP %d); "
+                            "check the long-lived token",
+                            status,
+                        )
+                    return Outcome(REFUSED, str(status))
+                logger.warning("HA: HTTP %s calling %s.%s", status, domain, service)
+                return Outcome(ERROR, str(status))
+            except Exception as exc:
                 logger.warning(
-                    "HA: HTTP %d calling %s.%s: %s",
-                    e.response.status_code,
+                    "HA: failed calling %s.%s: %s",
                     domain,
                     service,
-                    e.response.text[:200],
+                    type(exc).__name__,
                 )
-                return False
-            except Exception as exc:
-                logger.warning("HA: failed calling %s.%s: %s", domain, service, exc)
-                return False
+                return Outcome(ERROR, type(exc).__name__)
+        self._refusalLogged = False
+        logger.debug("HA: service call %s.%s succeeded", domain, service)
+        return Outcome(DONE)
+
+    def _call_service(self, domain: str, service: str, data: dict) -> bool:
+        # The legacy callers' bool
+        return self._post_service(domain, service, data).kind == DONE
 
     def _is_vehicle_connected(self, vehicle: HaVehicle) -> bool:
         """

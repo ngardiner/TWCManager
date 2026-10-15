@@ -1,9 +1,9 @@
 # The outcome vocabulary every vehicle command reports in.
 #
 # Provider return contract: every Provider command method (setChargeLimit,
-# startCharging, stopCharging, setAmps, wake, probe) returns an Outcome,
+# startCharging, stopCharging, setAmps, wake) returns an Outcome,
 # never None, True, "success" or a dict. A raised exception is converted by
-# the lane to Outcome(ERROR, <exception type name>). An Outcome's detail is
+# the worker to Outcome(ERROR, <exception type name>). An Outcome's detail is
 # a short reason or status code ("401", "timeout", "complete"), never a
 # response body or a token.
 from typing import NamedTuple
@@ -34,6 +34,19 @@ EXCLUDING = frozenset({UNSUPPORTED, REFUSED})
 # a provider, and counts against nothing
 LANE_DETAILS = frozenset({"cancelled", "dropped", "replaced"})
 
+# An outcome with one of these details, or one starting RULES, made no
+# request: it is neither a paid call nor a sent command
+NOT_SENT = LANE_DETAILS | {
+    "backoff",
+    "wake held",
+    "wake refused",
+    "no command token",
+    "not listed",
+    "online check failed",
+    "read",
+}
+RULES = "rules: "
+
 
 class Outcome(NamedTuple):
     kind: str
@@ -42,3 +55,7 @@ class Outcome(NamedTuple):
 
 def isOutcome(x) -> bool:
     return isinstance(x, Outcome) and x.kind in KINDS
+
+
+def isNotSent(outcome) -> bool:
+    return outcome.detail in NOT_SENT or outcome.detail.startswith(RULES)

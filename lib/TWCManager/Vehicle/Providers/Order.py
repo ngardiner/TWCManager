@@ -4,8 +4,10 @@
 # works on a snapshot.
 import json
 import logging
+import time
 from typing import Any, Callable, List, Optional
 
+from ..Reconcile.Outcome import SETTLED, isOutcome
 from ..Registry.ReadSource import ReadSource
 from .Capability import READ_CHARGE, READS, SET_AMPS, TIER_BILLED, WAKE
 from .Provider import Provider
@@ -155,16 +157,22 @@ class ProviderOrder:
                         "%s %s raised %s", p.name, capability, type(e).__name__
                     )
                     continue
-                if result and result != "error":
+                if _succeeded(result):
                     self._count("moduleSuccess", p.name)
                     return result
             self._count("moduleFailures", p.name)
         return False
 
     def debugCommand(self, command: str, vin: str, parameters: str) -> bool:
+        """The debug page's /api/sendTeslaAPICommand: one one-shot attempt on
+        a worker, through the first provider able to carry it. One provider per
+        command, no fall-through and no retry: a user-initiated command is
+        never sent twice. Returns True when an attempt was submitted; the
+        worker logs its outcome at INFO."""
         vehicle = self.master.vehicleRegistry.get(vin)
         if vehicle is None:
             return False
+        amps = None
         if command == "setChargeRate":
             try:
                 params = json.loads(parameters)
@@ -177,19 +185,51 @@ class ProviderOrder:
                 amps = max(1, int(float(params.get("charge_rate", 0))))
             except (TypeError, ValueError, OverflowError):
                 return False
-            return bool(
-                self.dispatch(
-                    vehicle,
-                    SET_AMPS,
-                    lambda p: p.setAmps(vin, amps),
-                    attempts=1,
-                    localRule=False,
-                )
-            )
-        if command == "wakeVehicle":
-            # User-initiated: a failed wake is never sent twice
-            return bool(self.dispatch(vehicle, WAKE, lambda p: p.wake(vin), attempts=1))
-        return False
+            capability = SET_AMPS
+        elif command == "wakeVehicle":
+            capability = WAKE
+        else:
+            return False
+        workers = getattr(self.master, "workers", None)
+        if workers is None:
+            logger.debug("Debug %s for %s: no workers", command, vin)
+            return False
+        # Readiness only for a rate (localRule False): the TWC cannot lift
+        # the car's own current limit (#660). A TWC provider (no module) is
+        # never written from the HTTP thread; the distributor owns its target
+        provider = next(
+            (
+                p
+                for p in self.candidates(vehicle, capability, amps, localRule=False)
+                if p.module is not None
+            ),
+            None,
+        )
+        if provider is None:
+            return False
+        # Lazy: Reconcile imports this package's Capability
+        from ..Reconcile.Desired import Attempt
+
+        attempt = Attempt(
+            key=vin,
+            aspect=None,
+            capability=capability,
+            value=amps,
+            provider=provider.name,
+            wake=False,
+            maxAge=None,
+            restore=False,
+            since=time.time(),
+        )
+        return bool(workers.submit(attempt))
+
+
+def _succeeded(result) -> bool:
+    # An Outcome is always truthy: read its kind. A legacy return keeps
+    # today's truthiness rule until the facade goes
+    if isOutcome(result):
+        return result.kind in SETTLED
+    return bool(result) and result != "error"
 
 
 def registerProviders(master) -> List[str]:

@@ -275,6 +275,11 @@ def test_ble_read_does_not_move_wake_window(api, clock, requests_mock):
     assert _gets(requests_mock) == gets
 
     # The retry is still 30 minutes after the wake, not after the BLE read.
+    # Asked every minute, so the charge need does not lapse in between.
+    while clock.now + 60 - woke <= 30 * 60:
+        clock.advance(60)
+        api.car_api_available(charge=True)
+    assert _wakes(requests_mock) == 1
     clock.now = woke + 30 * 60 + 1
     api.car_api_available(charge=True)
     assert _wakes(requests_mock) == 2

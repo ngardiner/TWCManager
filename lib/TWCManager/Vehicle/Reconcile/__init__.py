@@ -9,14 +9,12 @@ from .Desired import (
     CHARGE_LIMIT,
     CHARGING,
     FIELD_FOR,
-    SLOW_ASPECTS,
     Attempt,
     AttemptRecord,
-    ChannelHealth,
     ControlState,
     Desired,
     DesiredStore,
-    SessionBounds,
+    FreeChannel,
 )
 
 __all__ = [
@@ -27,12 +25,10 @@ __all__ = [
     "CHARGE_LIMIT",
     "CHARGING",
     "FIELD_FOR",
-    "SLOW_ASPECTS",
     "Attempt",
     "AttemptRecord",
-    "ChannelHealth",
     "ControlState",
     "Desired",
     "DesiredStore",
-    "SessionBounds",
+    "FreeChannel",
 ]

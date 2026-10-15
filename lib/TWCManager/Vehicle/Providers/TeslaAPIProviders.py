@@ -4,7 +4,10 @@
 # each vehicle_data, command and wake, so it reads only when the Owner slot
 # cannot (slotFor("read")). Neither does I/O to answer ready or available.
 # Both read the energy site's Wall Connector VINs for free, Owner first.
+import time
 from typing import Dict, Optional, Tuple
+
+from ..Reconcile.Outcome import SATISFIED, SETTLED, UNSUPPORTED, Outcome
 
 from .Capability import (
     CLOUD_FREE,
@@ -44,6 +47,7 @@ TESLA_COMMAND = {
 
 
 class OwnerAPIProvider(Provider):
+    # Declares no commands: the inherited command methods answer UNSUPPORTED
     name = "OwnerAPI"
     rank = 4
     local = False
@@ -149,17 +153,51 @@ class FleetAPIProvider(Provider):
             return None
         return (1, vehicleMaxAmps(vehicle, self.carapi.master.config["config"]))
 
-    def setAmps(self, vin: str, amps: int) -> bool:
-        car = self.carapi.getVehicleByVIN(vin)
-        if not car:
-            return False
-        return bool(self.carapi.setChargeRate(int(amps), vehicle=car))
+    # Command methods: one billed request each (set_charging_amps below 5 A
+    # excepted, as TeslaPy #42), classified by TeslaAPI.command. No pre-wake:
+    # the lane wakes first when the attempt says so.
 
-    def wake(self, vin: str) -> bool:
-        car = self.carapi.getVehicleByVIN(vin)
-        if not car:
-            return False
-        return bool(self.carapi.wakeVehicle(car))
+    # The clock passed to the wake hold; a test may replace it
+    clock = time.time
+
+    def _car(self, vin: str):
+        # The account's CarApiVehicle for vin, or None
+        return self.carapi.getVehicleByVIN(vin) or None
+
+    def _command(self, vin: str, name: str, body: Optional[dict] = None) -> Outcome:
+        car = self._car(vin)
+        if car is None:
+            return Outcome(UNSUPPORTED, "not listed")
+        return self.carapi.command(car, name, body)
+
+    def setChargeLimit(self, vin: str, limit: int) -> Outcome:
+        return self._command(vin, "set_charge_limit", {"percent": int(limit)})
+
+    def startCharging(self, vin: str) -> Outcome:
+        outcome = self._command(vin, "charge_start")
+        if outcome == Outcome(SATISFIED, "disconnected"):
+            # Nothing to start: not a start
+            return Outcome(UNSUPPORTED, "disconnected")
+        return outcome
+
+    def stopCharging(self, vin: str) -> Outcome:
+        return self._command(vin, "charge_stop")
+
+    def setAmps(self, vin: str, amps: int) -> Outcome:
+        # Vehicle amps are never 0: 0 would stop the car charging
+        body = {"charging_amps": max(1, int(amps))}
+        outcome = self._command(vin, "set_charging_amps", body)
+        if body["charging_amps"] < 5 and outcome.kind in SETTLED:
+            # A rate below 5 A takes a second identical request (TeslaPy #42)
+            time.sleep(5)
+            outcome = self._command(vin, "set_charging_amps", body)
+        return outcome
+
+    def wake(self, vin: str) -> Outcome:
+        car = self._car(vin)
+        if car is None:
+            return Outcome(UNSUPPORTED, "not listed")
+        return self.carapi.wakeOutcome(car, now=self.clock())
 
     def wallConnectorVins(self) -> Optional[Dict[str, str]]:
         return self.carapi.wallConnectorVins(self.carapi.fleetSlot)

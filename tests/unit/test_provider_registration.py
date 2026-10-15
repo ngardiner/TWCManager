@@ -8,6 +8,7 @@ import pytest
 
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers import Capability as C
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
 from TWCManager.Vehicle.Providers.Order import ProviderOrder, registerProviders
 from TWCManager.Vehicle.Providers.TelemetryProvider import TelemetryProvider
@@ -39,8 +40,8 @@ def test_home_assistant_provider_follows_entities():
     assert p.ready(v, C.SET_AMPS) is False
     hv = Mock(has_charge_switch=True, has_charge_current_number=False, has_charge_limit_number=True); v.attach("HomeAssistant", hv)
     assert p.ready(v, C.START_CHARGING) and p.ready(v, C.SET_CHARGE_LIMIT) and not p.ready(v, C.SET_AMPS) and not p.declares(C.WAKE)
-    ha.setChargeRate = Mock(return_value=True); hv.has_charge_current_number = True
-    assert p.setAmps(VIN, 8) is True; ha.setChargeRate.assert_called_once_with(8, vehicle=hv)
+    ha._post_service = Mock(return_value=O.Outcome(O.DONE)); hv.has_charge_current_number = True; hv.entity_ids = {"charge_current_number": "number.a"}
+    assert p.setAmps(VIN, 8) == O.Outcome(O.DONE); ha._post_service.assert_called_once_with("number", "set_value", {"entity_id": "number.a", "value": 8.0})
 
 def test_passive_providers_never_enter_the_walk():
     m = Mock(); m.settings = {}; m.config = {}; m.stats = {"moduleSuccess": {}, "moduleFailures": {}}; m.vehicleRegistry = VehicleRegistry({})
