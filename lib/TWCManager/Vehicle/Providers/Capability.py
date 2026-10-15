@@ -57,11 +57,6 @@ HA_BILLED = Cost(TIER_BILLED, None)
 DISRUPTIVE = Cost(TIER_DISRUPTIVE, 0.0)
 
 
-class RateLimit(NamedTuple):
-    calls: int
-    perSeconds: float
-
-
 # A limitation a provider may declare per vehicle: a stop through this
 # provider also affects other endpoints (Gen3 units on one bus).
 NO_INDIVIDUAL_STOP = "noIndividualStop"
@@ -69,6 +64,5 @@ NO_INDIVIDUAL_STOP = "noIndividualStop"
 
 class Declaration(NamedTuple):
     cost: Cost
-    rateLimit: Optional[RateLimit] = None
     # The provider reports this on its own and cannot be asked (telemetry)
     passive: bool = False

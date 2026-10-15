@@ -113,20 +113,19 @@ def test_expected_order_on_a_full_install(key):
 def test_tables_match_the_declarations_they_replace():
     D = C.Declaration; byName = {p.name: p for p in providers_of_every_kind()}
     for p in byName.values(): assert p.declarations() is type(p).DECLARATIONS
-    assert FleetAPIProvider.DECLARATIONS[C.SET_AMPS] == D(C.FLEET_COMMAND, C.RateLimit(50, 60))
-    assert HomeAssistantProvider.DECLARATIONS[C.STOP_CHARGING].rateLimit == C.RateLimit(1, 10)
+    assert FleetAPIProvider.DECLARATIONS[C.SET_AMPS] == D(C.FLEET_COMMAND)
+    assert HomeAssistantProvider.DECLARATIONS[C.STOP_CHARGING] == D(C.HA_BILLED)
     passive = lambda caps, cost: {c: D(cost, passive=True) for c in caps}
     assert byName["Gen2TWC"].declarations() == dict(passive((C.READ_PLUG, C.READ_VIN, C.READ_AMPS), C.LOCAL), **{C.SET_AMPS: D(C.LOCAL), C.START_CHARGING: D(C.LOCAL), C.STOP_CHARGING: D(C.DISRUPTIVE)})
     assert byName["Gen3TWC"].declarations() == dict(passive((C.READ_PLUG, C.READ_AMPS), C.LOCAL), **{c: D(C.LOCAL) for c in (C.SET_AMPS, C.START_CHARGING, C.STOP_CHARGING)})
     assert byName["TeslaBLE"].declarations() == {c: D(C.LOCAL) for c in (C.READ_CHARGE, C.READ_LOCATION, C.READ_PLUG, C.READ_ONLINE, C.SET_CHARGE_LIMIT, C.START_CHARGING, C.STOP_CHARGING, C.SET_AMPS, C.WAKE)}
-    wcv = D(C.CLOUD_FREE, C.RateLimit(2, 60))
+    wcv = D(C.CLOUD_FREE)
     assert byName["OwnerAPI"].declarations() == dict({c: D(C.CLOUD_FREE) for c in (C.READ_LIST, C.READ_ONLINE, C.READ_CHARGE, C.READ_LOCATION)}, **{C.READ_WALL_CONNECTOR_VINS: wcv})
-    lim = C.RateLimit(50, 60)
     assert byName["FleetAPI"].declarations() == {C.READ_LIST: D(C.CLOUD_FREE), C.READ_ONLINE: D(C.CLOUD_FREE), C.READ_CHARGE: D(C.FLEET_DATA), C.READ_LOCATION: D(C.FLEET_DATA),
-        C.SET_CHARGE_LIMIT: D(C.FLEET_COMMAND, lim), C.START_CHARGING: D(C.FLEET_COMMAND, lim), C.STOP_CHARGING: D(C.FLEET_COMMAND, lim), C.SET_AMPS: D(C.FLEET_COMMAND, lim),
+        C.SET_CHARGE_LIMIT: D(C.FLEET_COMMAND), C.START_CHARGING: D(C.FLEET_COMMAND), C.STOP_CHARGING: D(C.FLEET_COMMAND), C.SET_AMPS: D(C.FLEET_COMMAND),
         C.WAKE: D(C.FLEET_WAKE), C.READ_WALL_CONNECTOR_VINS: wcv}
     assert byName["HomeAssistant"].declarations() == {C.READ_CHARGE: D(C.HA_BILLED), C.READ_LOCATION: D(C.HA_BILLED), C.SET_CHARGE_LIMIT: D(C.HA_BILLED), C.SET_AMPS: D(C.HA_BILLED),
-        C.START_CHARGING: D(C.HA_BILLED, C.RateLimit(1, 10)), C.STOP_CHARGING: D(C.HA_BILLED, C.RateLimit(1, 10))}
+        C.START_CHARGING: D(C.HA_BILLED), C.STOP_CHARGING: D(C.HA_BILLED)}
     assert byName["TeslaMateVehicle"].declarations() == passive((C.READ_CHARGE, C.READ_LOCATION, C.READ_PLUG, C.READ_ONLINE), C.CLOUD_FREE)
 
 def test_a_provider_without_a_table_is_suppressed_by_locality():          # pre-flight M5

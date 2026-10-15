@@ -1,22 +1,20 @@
 import time
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from TWCManager.Vehicle.Reconcile import Run
-from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
+from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
-from TWCManager.Vehicle.Reconcile.Reconciler import PAID_AFTER, PROBE_AFTER, RETRY, VehicleReconciler
-from TWCManager.Vehicle.Reconcile.Run import Workers
-from tests.unit.reconcile_helpers import Clock, ScriptedProvider
+from TWCManager.Vehicle.Reconcile.Reconciler import MIN_SEND_GAP, PAID_AFTER, PROBE_AFTER, RETRY, VehicleReconciler
+from tests.unit.reconcile_helpers import Clock, ScriptedProvider, inline
 from tests.unit.test_gen2twc_provider import VIN, make as make_master
-from tests.unit.test_workers import Src
+from tests.unit.test_reconciler_queues import Src
 
 def setup(*providers, clock=True):
     m, s = make_master(); c = Clock(1000.0) if clock else time.time
     m.config = dict(m.config, config=dict(m.config["config"]))          # never the shared CONFIG
     if clock: m.vehicleRegistry._clock = c
     for p in providers: m.providerOrder.register(p)
-    m.desired = DesiredStore(clock=c); m.workers = Workers(m, inline=True); m.heldLimits.load()
-    m.reconciler = r = VehicleReconciler(m, clock=c); v = m.vehicleRegistry.getOrCreate(VIN, "t"); return m, r, v, c
+    m.desired = DesiredStore(clock=c); m.heldLimits.load()
+    m.reconciler = r = inline(VehicleReconciler(m, clock=c)); v = m.vehicleRegistry.getOrCreate(VIN, "t"); return m, r, v, c
 
 def ble(*outs): return ScriptedProvider("TeslaBLE", 2, True, list(outs))
 def fleet(*outs): return ScriptedProvider("FleetAPI", 5, False, list(outs), tier=C.FLEET_COMMAND)
@@ -105,7 +103,8 @@ def test_stale_free_failure_gets_the_real_command_over_ble_before_paid():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); b, f = prov(m, "TeslaBLE"), prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
     m.desired.free(VIN).failure(c() - PROBE_AFTER - 300)                     # failing long enough, but untried for > PROBE_AFTER (pre-flight M1)
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); assert cmds(b) == ["setChargeLimit"] and f.calls == []
-    r.pass_(); assert len(cmds(f)) == 1                                      # the fresh failure lets paid go at once
+    r.pass_(); assert f.calls == []                                           # never two sends inside the gap
+    c.t += MIN_SEND_GAP[CHARGE_LIMIT]; r.pass_(); assert len(cmds(f)) == 1    # the fresh failure lets paid go at once
 
 def test_a_recent_free_failure_goes_paid_without_a_new_ble_try():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); b, f = prov(m, "TeslaBLE"), prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
@@ -229,7 +228,7 @@ def test_refused_excludes_the_provider_and_unsupported_falls_through():
     m, r, v, c = setup(ble(O.Outcome(O.UNSUPPORTED, "no claim")), fleet(O.Outcome(O.DONE))); v.observe("chargeLimit", 90, "TeslaAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
     assert m.desired.record(VIN, CHARGE_LIMIT).excluded == {"TeslaBLE": O.UNSUPPORTED} and m.desired.free(VIN).failingSince is None
-    r.pass_(); assert len(prov(m, "FleetAPI").calls) == 1                    # no free candidate left: paid at once
+    c.t += MIN_SEND_GAP[CHARGE_LIMIT]; r.pass_(); assert len(prov(m, "FleetAPI").calls) == 1   # no free candidate left: paid after the gap
 
 def test_restore_with_telemetry_showing_a_limit_not_ours_forces_a_live_read():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 80, "TeslaMateVehicle")
@@ -260,14 +259,6 @@ def test_a_satisfied_outcome_without_a_stamp_is_not_resent_until_new_evidence():
     for _ in range(10): c.t += 600; v.observe("chargingState", "Charging", "TeslaAPI"); r.pass_()
     assert names(f) == ["stopCharging"] * 2                                                           # and never a third (I2)
 
-def test_rate_limited_provider_is_skipped_at_plan_time(monkeypatch):        # ledger Task 5 M6
-    mono = Clock(); monkeypatch.setattr(Run, "_monotonic", mono)
-    f = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)], caps={C.SET_CHARGE_LIMIT: C.Declaration(C.FLEET_COMMAND, C.RateLimit(1, 60))})
-    m, r, v, c = setup(f); v.observe("chargeLimit", 90, "TeslaAPI"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); assert r.pass_() == 1
-    seen = []; allows = m.workers.allows; m.workers.allows = lambda *a: (seen.append(a[0].name), allows(*a))[1]
-    m.desired.set(VIN, CHARGE_LIMIT, 60, "policy", decision=True); assert r.pass_() == 0 and len(f.calls) == 1 and seen == ["FleetAPI"]
-    mono.t += 61; assert r.pass_() == 1 and len(f.calls) == 2
-
 def test_a_late_report_for_a_replaced_attempt_does_not_clear_a_newer_one():   # ledger L16
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); v.observe("chargeLimit", 90, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
     newer = r.plan(v, CHARGE_LIMIT, c()); old = newer._replace(value=40)
@@ -287,8 +278,8 @@ def test_pass_is_bounded_and_survives_a_raising_provider():
 def test_a_submit_that_raises_or_is_refused_never_leaves_the_aspect_in_flight():   # pre-flight L10
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); v.observe("chargeLimit", 90, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
     def boom(attempt): raise RuntimeError("x")
-    m.workers.submit = boom; assert r.pass_() == 0 and m.desired.record(VIN, CHARGE_LIMIT).inFlight is None
-    m.workers.submit = lambda attempt: False; assert r.pass_() == 0 and m.desired.record(VIN, CHARGE_LIMIT).inFlight is None
+    r.submit = boom; assert r.pass_() == 0 and m.desired.record(VIN, CHARGE_LIMIT).inFlight is None
+    r.submit = lambda attempt: False; assert r.pass_() == 0 and m.desired.record(VIN, CHARGE_LIMIT).inFlight is None
 
 def test_the_thread_runs_a_pass_on_a_change_and_exits_on_stop():
     m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); v.observe("chargeLimit", 90, "TeslaBLE"); b = prov(m, "TeslaBLE")
@@ -305,7 +296,8 @@ def test_a_stop_set_while_a_start_is_in_flight_is_sent_on_the_next_pass():   # C
     def midFlight(vin): c.t += 1; m.desired.set(VIN, CHARGING, False, "distributor"); c.t += 2; return start(vin)
     f.startCharging = midFlight; m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()
     rec = m.desired.record(VIN, CHARGING); assert rec.settledAt is None and rec.paidAt is None and rec.inFlight is None
-    assert r.pass_() == 1 and names(f) == ["wake", "startCharging", "stopCharging"]
+    assert r.pass_() == 0 and names(f) == ["wake", "startCharging"]          # the late start still spaces the stop (I5)
+    c.t += MIN_SEND_GAP[CHARGING]; assert r.pass_() == 1 and names(f) == ["wake", "startCharging", "stopCharging"]
     for _ in range(10): c.t += 600; r.pass_()
     assert len(cmds(f)) == 2
 
@@ -316,6 +308,7 @@ def test_a_limit_changed_while_in_flight_sends_the_new_value():             # C1
         if limit == 50: m.desired.set(VIN, CHARGE_LIMIT, 60, "policy", decision=True)
         return send(vin, limit)
     f.setChargeLimit = midFlight; m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
+    c.t += MIN_SEND_GAP[CHARGE_LIMIT]
     assert not m.desired.settled(VIN, CHARGE_LIMIT) and r.pass_() == 1 and [x[2] for x in f.calls if x[0] != "wake"] == [50, 60]
     assert m.desired.settled(VIN, CHARGE_LIMIT) and m.heldLimits.get(VIN) == HeldLimit(90, 60)
 
@@ -373,9 +366,11 @@ def test_paid_sends_that_never_reached_the_car_rearm_on_a_reading_after_it_wakes
     assert len(cmds(f)) == 3                                                  # a reading of the same value: the car never got it
     for _ in range(36): c.t += 100; r.pass_()
     assert len(cmds(f)) == 4                                                  # at most 2 per re-arm
-    f.outcomes = [O.Outcome(O.DONE)]; v.observe("chargeLimit", 90, "TeslaAPI"); c.t += 1; r.pass_()
-    for _ in range(36): c.t += 100; v.observe("chargeLimit", 50, "TeslaAPI"); r.pass_()
-    assert len(cmds(f)) == 5 and v.believed("chargeLimit").value == 50
+    f.outcomes = [O.Outcome(O.DONE)]
+    for _ in range(36): c.t += 100; v.observe("chargeLimit", 90, "TeslaAPI"); r.pass_()
+    assert len(cmds(f)) == 4                                                  # one re-arm per desire (I2)
+    m.desired.set(VIN, CHARGE_LIMIT, 55, "policy", decision=True); r.pass_()
+    assert len(cmds(f)) == 5 and v.believed("chargeLimit").value == 55        # a new value is a new desire
 
 def test_a_start_wakes_the_car_for_the_limit_first():                      # N1 ruling 2, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI")
@@ -406,3 +401,109 @@ def test_a_desire_set_during_a_pass_still_counts_its_paid_sends():         # N2,
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(now=c() - 0.01)
     for _ in range(12 * 36): c.t += 100; r.pass_()
     assert len(cmds(f)) == 2
+
+
+# Task 10: one minimum send gap; only a reading that reached the car re-arms (c2); a refused limit is spent (c4)
+
+def ha(*outs, caps=(C.SET_CHARGE_LIMIT, C.START_CHARGING, C.STOP_CHARGING)):
+    # Billed, never wakes
+    return ScriptedProvider("HomeAssistant", 6, False, list(outs), caps={cap: C.Declaration(C.HA_BILLED) for cap in caps})
+
+def calls_named(p, name): return [x for x in p.calls if x[0] == name]
+
+def test_min_send_gap_spaces_a_start_stop_flip_on_any_provider():          # replaces HA's 10 s gate
+    for provider in (ha(O.Outcome(O.DONE)), ble(O.Outcome(O.DONE))):
+        m, r, v, c = setup(provider); p = prov(m, provider.name); v.observe("chargingState", "Stopped", "TeslaAPI")
+        m.desired.set(VIN, CHARGING, True, "heartbeat"); assert r.pass_() == 1; m.desired.set(VIN, CHARGING, False, "heartbeat")
+        c.t += 9; assert r.pass_() == 0; c.t += 1; assert r.pass_() == 1
+        assert cmds(p) == ["startCharging", "stopCharging"]
+
+def test_min_send_gap_holds_when_the_flip_lands_while_the_start_is_in_flight():   # I5
+    m, r, v, c = setup(ha(O.Outcome(O.DONE))); h = prov(m, "HomeAssistant"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    start = h.startCharging
+    def midFlight(vin): m.desired.set(VIN, CHARGING, False, "distributor"); return start(vin)
+    h.startCharging = midFlight; m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()
+    assert m.desired.record(VIN, CHARGING).lastSentAt == c()                  # the replaced desire's send still stamps
+    c.t += 9; assert r.pass_() == 0 and cmds(h) == ["startCharging"]
+    c.t += 1; assert r.pass_() == 1 and cmds(h) == ["startCharging", "stopCharging"]
+
+def test_amps_gap_is_fifteen_seconds():                                      # I6
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); b = prov(m, "TeslaBLE")
+    m.desired.set(VIN, AMPS, 10, "distributor"); assert r.pass_() == 1
+    m.desired.set(VIN, AMPS, 12, "distributor"); c.t += 14; assert r.pass_() == 0
+    c.t += 1; assert r.pass_() == 1 and [x[2] for x in b.calls if x[0] == "setAmps"] == [10, 12]
+
+def test_ha_republishing_the_limit_every_minute_does_not_rearm_paid_sends():   # c2, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    for _ in range(60): c.t += 60; v.observe("chargeLimit", 90, "HomeAssistant"); r.pass_()
+    assert len(cmds(f)) <= 2                                                 # 1 h of republishing: at most one send + one retry
+    v.observe("chargeLimit", 90, "TeslaAPI"); c.t += RETRY[CHARGE_LIMIT]; r.pass_(); assert len(cmds(f)) == 3   # a live read re-arms
+    assert f.calls == calls_named(f, "setChargeLimit")                       # a lower: never a wake
+
+def test_a_live_read_followed_by_an_ha_republish_still_rearms():            # I3, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_(); assert len(cmds(f)) == 2
+    c.t += 600; v.observe("chargeLimit", 90, "TeslaAPI"); c.t += 5; v.observe("chargeLimit", 90, "HomeAssistant")
+    r.pass_(); assert len(cmds(f)) == 3
+
+def test_a_changed_value_from_a_republishing_source_rearms():              # c2: a new value means the car answered
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_()
+    c.t += 600; v.observe("chargeLimit", 80, "TeslaMateVehicle"); r.pass_()
+    assert m.desired.get(VIN, CHARGE_LIMIT).value == 50 and len(cmds(f)) == 3
+
+def test_streaming_telemetry_with_fleet_408_is_bounded_per_desire():        # I2, user decision U2, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    for _ in range(120): c.t += 30; v.observe("chargeLimit", 90, "FleetTelemetryMQTT"); r.pass_()
+    assert len(cmds(f)) <= 4 and len(calls_named(f, "wake")) <= 1            # at most $0.004 per desire, not per RETRY
+
+def test_streaming_telemetry_with_fleet_408_on_a_start_is_bounded_per_desire():   # I2 for start: wakes counted too
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m.desired.set(VIN, CHARGING, True, "heartbeat")
+    for _ in range(120): c.t += 30; v.observe("chargingState", "Stopped", "FleetTelemetryMQTT"); r.pass_()
+    assert len(f.calls) <= 4                                                 # each failed wake is the attempt's one paid call
+
+def test_lowered_limit_reaches_a_car_that_wakes_to_charge_on_teslamate():  # I4, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"), O.Outcome(O.UNREACHABLE, "408"), O.Outcome(O.DONE))); f = prov(m, "FleetAPI")
+    v.observe("chargeLimit", 90, "TeslaAPI"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_()
+    assert len(cmds(f)) == 2
+    c.t += 3600; v.observe("chargingState", "Charging", "TeslaMateVehicle"); r.pass_()
+    assert len(cmds(f)) == 3 and calls_named(f, "wake") == []
+    for _ in range(10): c.t += 600; v.observe("chargingState", "Charging", "TeslaMateVehicle"); r.pass_()
+    assert len(cmds(f)) == 3                                                 # once per desire
+
+def test_a_charging_reading_rearms_a_never_reached_limit_once_per_desire():   # I4 with Fleet still failing, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI")
+    v.observe("chargeLimit", 90, "TeslaAPI"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_()
+    for _ in range(20): c.t += 600; v.observe("chargingState", "Charging", "TeslaMateVehicle"); r.pass_()
+    assert len(cmds(f)) == 4 and calls_named(f, "wake") == []
+
+def test_a_refused_limit_does_not_block_the_start_forever():                # c4, paid counted
+    m, r, v, c = setup(ha(O.Outcome(O.REFUSED, "403"), O.Outcome(O.DONE))); h = prov(m, "HomeAssistant")
+    v.observe("chargeLimit", 60, "HomeAssistant"); v.observe("chargingState", "Stopped", "HomeAssistant")
+    m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")
+    for _ in range(5): c.t += 61; r.pass_()
+    assert cmds(h).count("setChargeLimit") == 1 and cmds(h).count("startCharging") == 1
+
+def test_a_refused_limit_with_a_declared_but_unready_ble_still_blocks_the_start():   # M11
+    down = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.DONE)], readyFor=lambda vehicle, cap: False)
+    m, r, v, c = setup(down, ha(O.Outcome(O.REFUSED, "403"), O.Outcome(O.DONE))); h = prov(m, "HomeAssistant")
+    v.observe("chargeLimit", 60, "HomeAssistant"); v.observe("chargingState", "Stopped", "HomeAssistant")
+    m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")
+    for _ in range(5): c.t += 61; r.pass_()
+    assert cmds(h) == ["setChargeLimit"] and down.calls == []                 # BLE may deliver the limit once its radio is back
+
+def test_a_limit_held_unsent_by_a_refusal_does_not_block_the_start():     # c4, NOT_SENT refusals
+    for detail in ("wake refused", "no command token"):
+        f = fleet(O.Outcome(O.UNREACHABLE if detail == "wake refused" else O.REFUSED, detail))
+        m, r, v, c = setup(f); f = prov(m, "FleetAPI"); limit = m.desired.record(VIN, CHARGE_LIMIT)
+        m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); limit.lastOutcome = O.Outcome(O.UNREACHABLE, detail)
+        assert r._limitSpent(limit)
+    limit.lastOutcome = O.Outcome(O.UNREACHABLE, "wake held"); assert not r._limitSpent(limit)
+
+def test_an_unreached_limit_whose_one_rearm_is_spent_no_longer_blocks_the_start():   # c4 with the I2 cap
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); limit = m.desired.record(VIN, CHARGE_LIMIT)
+    limit.paidSends, limit.paidReached, limit.rearmed = 2, False, False; assert not r._limitSpent(limit)   # it can still ride the start's wake
+    limit.rearmed = True; assert r._limitSpent(limit)

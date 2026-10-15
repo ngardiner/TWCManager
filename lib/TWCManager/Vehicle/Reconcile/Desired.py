@@ -3,8 +3,8 @@
 # the reconciler converges the car on it. Only the charge limit is adopted
 # from the car; charging and amps are stateless. Every stamp is the
 # registry's clock domain (time.time). The store's lock is a leaf: it is
-# never held while calling a provider, the registry, settings, a worker or a
-# change callback.
+# never held while calling a provider, the registry, settings, a queue or
+# changed.
 import logging
 import threading
 import time
@@ -121,6 +121,8 @@ class AttemptRecord:
         self.paidSaw: Any = None
         # That request failed and its one blind retry is unused
         self.paidRetryDue: bool = False
+        # The desire's one re-arm of its paid sends is used
+        self.rearmed = False
         self.settledAt: Optional[float] = None
         self.pendingSave: Any = None
 
@@ -137,6 +139,7 @@ class AttemptRecord:
         self.paidAt = None
         self.paidSaw = None
         self.paidRetryDue = False
+        self.rearmed = False
         self.settledAt = None
 
     def exclude(self, provider: str, kind: str) -> None:
@@ -204,13 +207,14 @@ def _desiredSummary(desired: Desired) -> dict:
 class DesiredStore:
     # Keys are registry keys (a VIN or an anon:... key), so the per-key maps
     # are bounded by the registry; per-key maps are bounded by ASPECTS and
-    # the registered provider names. Never call Workers.submit or cancel
-    # while holding the lock (Run.py's header).
+    # the registered provider names. Never submit or cancel while holding
+    # the lock (Reconciler.py's header).
     def __init__(self, clock=time.time):
         self._clock = clock
         self._lock = threading.Lock()
         self._states: Dict[str, ControlState] = {}
-        self._callbacks: List[Callable[[str, str], None]] = []
+        # Called with (key, aspect), outside the lock, on every change
+        self.changed: Optional[Callable[[str, str], None]] = None
 
     # --- internals (callers hold the lock) ---
 
@@ -235,17 +239,13 @@ class DesiredStore:
             return False
         return record.settledAt >= desired.at
 
-    def _notify(self, key, aspects) -> None:
+    def _notify(self, key, aspect) -> None:
         # Outside the lock
-        callbacks = list(self._callbacks)
-        for aspect in aspects:
-            for callback in callbacks:
-                try:
-                    callback(key, aspect)
-                except Exception as e:
-                    logger.debug(
-                        "Desired-state change callback raised %s", type(e).__name__
-                    )
+        try:
+            if self.changed is not None:
+                self.changed(key, aspect)
+        except Exception as e:
+            logger.debug("Desired-state change callback raised %s", type(e).__name__)
 
     # --- writes ---
 
@@ -286,7 +286,7 @@ class DesiredStore:
                 by,
             )
         if changed:
-            self._notify(key, (aspect,))
+            self._notify(key, aspect)
         return changed
 
     def clear(self, key, aspect) -> bool:
@@ -295,7 +295,7 @@ class DesiredStore:
             state = self._states.get(key)
             removed = state is not None and state.desired.pop(aspect, None) is not None
         if removed:
-            self._notify(key, (aspect,))
+            self._notify(key, aspect)
         return removed
 
     def clearIf(self, key, aspect, value) -> bool:
@@ -309,7 +309,7 @@ class DesiredStore:
             if removed:
                 del state.desired[aspect]
         if removed:
-            self._notify(key, (aspect,))
+            self._notify(key, aspect)
         return removed
 
     def adopt(self, key, aspect, value) -> None:
@@ -325,7 +325,7 @@ class DesiredStore:
                 value, "user", self._clock(), adopted=True
             )
         logger.debug("Adopted %s %s=%r", key, aspect, value)
-        self._notify(key, (aspect,))
+        self._notify(key, aspect)
 
     def noteOutcome(
         self,
@@ -335,7 +335,6 @@ class DesiredStore:
         outcome,
         now,
         paid: bool,
-        freeProvider: bool,
     ) -> bool:
         # The only change to a record after submit. A report for anything
         # but the attempt in flight is stale and changes nothing; so is a
@@ -364,11 +363,15 @@ class DesiredStore:
                 record.lastOutcome = outcome
                 record.lastOutcomeAt = now
                 record.lastProvider = attempt.provider
-            if current and not isNotSent(outcome):
+            sent = not isNotSent(outcome)
+            if sent:
+                # Even for a replaced desire: a start still in flight when
+                # the desire flips spaces the stop (I5)
                 record.lastSentAt = now
-                if freeProvider:
+            if current and sent:
+                if not paid:
                     record.lastFreeAt = now
-                if paid:
+                else:
                     # One blind retry, after the desire's first paid request
                     # failed; never after a failed wake
                     record.paidRetryDue = (
@@ -381,14 +384,14 @@ class DesiredStore:
                     record.paidAt = now
             if current and outcome.kind in SETTLED:
                 record.settledAt = now
-            if not freeProvider:
+            if paid:
                 pass
             elif outcome.kind in SETTLED or outcome.detail == "pairing":
                 # Inside the pairing window the car answers, refusing the key
                 # until the card is tapped: the channel works, and the paid
                 # fallback waits
                 state.free.success(now)
-            elif not isNotSent(outcome) and (
+            elif sent and (
                 # A failure of the free channel needs a request to it
                 outcome.kind in RETRYABLE
                 or outcome.kind == REFUSED
@@ -404,11 +407,6 @@ class DesiredStore:
         with self._lock:
             return self._states.pop(key, None) is not None
 
-    def followRegistry(self, registry) -> None:
-        # Forget a key whenever the registry drops it (forget, expiry, an
-        # anonymous plug session ending or merging into a VIN)
-        registry.onRemove(self.forget)
-
     def decision(self, key) -> None:
         # A new decision: the next set applies over adopted values
         with self._lock:
@@ -418,10 +416,6 @@ class DesiredStore:
             for aspect, desired in list(state.desired.items()):
                 if desired.adopted:
                     state.desired[aspect] = desired._replace(adopted=False)
-
-    def onChange(self, callback) -> None:
-        with self._lock:
-            self._callbacks = self._callbacks + [callback]
 
     # --- reads ---
 
