@@ -165,7 +165,7 @@ class ProviderOrder:
             try:
                 # Vehicle amps are never 0, and 0 would drop every candidate
                 amps = max(1, int(float(params.get("charge_rate", 0))))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return False
             return bool(
                 self.dispatch(
