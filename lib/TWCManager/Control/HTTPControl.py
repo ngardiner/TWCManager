@@ -38,19 +38,14 @@ def ageText(seconds):
 
 
 def heldLimitText(master, vehicle):
-    # BLE keys chargeLimits by VIN; the Fleet API path keys them by numeric ID.
-    found, outside, applied = (False, None, None)
-    if vehicle.vin:
-        found, outside, applied = master.getNormalChargeLimit(vehicle.vin)
-    if not found:
-        car = vehicle.attachment("TeslaAPI")
-        if car is not None and getattr(car, "ID", None) is not None:
-            found, outside, applied = master.getNormalChargeLimit(car.ID)
-    if not found:
+    # Held limits are keyed by VIN; TeslaAPI's listing adopts a legacy
+    # numeric-ID entry under the VIN.
+    limit = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
+    if limit is None:
         return "\u2014"
-    if applied in (-1, 0, None):
-        return "%s%% (restored)" % outside
-    return "%s%% (holding %s%%)" % (outside, applied)
+    if limit.held is None:
+        return "%s%% (restored)" % limit.outside
+    return "%s%% (holding %s%%)" % (limit.outside, limit.held)
 
 
 def vehicleLocalMgmt(master, op, vin):

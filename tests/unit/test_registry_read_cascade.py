@@ -172,3 +172,53 @@ def test_result_lacking_requested_field_continues_to_next_source():
     v = Vehicle(VIN, VIN, Reg(a, b), clock=c)
     assert v.read("chargeLimit", maxAge=0).value == 9
     assert v.latest("batteryLevel").value == 55 and len(b.calls) == 1
+
+
+def test_read_with_sources_skips_other_sources():
+    c = Clock()
+    first = Src("A", 0, {"chargeLimit": 1})
+    second = Src("B", 1, {"chargeLimit": 2})
+    v = Vehicle(VIN, VIN, Reg(first, second), clock=c)
+    assert v.read("chargeLimit", 0, sources=[second]).value == 2
+    assert first.calls == [] and second.calls == [("chargeLimit", False)]
+
+
+def test_read_with_sources_keeps_registry_order():
+    c = Clock()
+    first = Src("A", 0, None)
+    second = Src("B", 1, {"chargeLimit": 2})
+    v = Vehicle(VIN, VIN, Reg(first, second), clock=c)
+    v.read("chargeLimit", 0, sources=[second, first])
+    assert first.calls == [("chargeLimit", False)] and len(second.calls) == 1
+
+
+class LiveReg(Reg):
+    def __init__(self, *sources):
+        super().__init__(*sources)
+        self.liveness = {}
+
+    def registerLiveness(self, source, liveAt):
+        self.liveness[source] = liveAt
+
+    def sourceLiveAt(self, source, vehicle):
+        fn = self.liveness.get(source)
+        return NOT_TRACKED if fn is None else fn(vehicle)
+
+
+def test_force_reads_past_a_live_feed():
+    c = Clock()
+    src = Src("TeslaMateVehicle", 1, {"chargeLimit": 75})
+    reg = LiveReg(src)
+    reg.registerLiveness("TeslaMateVehicle", lambda vehicle: c())
+    v = Vehicle(VIN, VIN, reg, clock=c)
+    v.observe("chargeLimit", 80, "TeslaMateVehicle")
+    c.t = 5000.0
+    assert v.read("chargeLimit", 300).value == 80 and src.calls == []
+    assert v.read("chargeLimit", 300, force=True).value == 75
+    assert src.calls == [("chargeLimit", False)]
+
+
+def test_force_still_never_fetches_without_max_age():
+    src = Src("BLE", 0, {"chargeLimit": 1})
+    v = Vehicle(VIN, VIN, Reg(src))
+    assert v.read("chargeLimit", None, force=True) is None and src.calls == []
