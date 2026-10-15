@@ -53,7 +53,8 @@ class VehicleEndpoints(EVSEController):
         slave's key is None or anonymous; blind when such a slave reports a
         plugged state (non-00) or draws power, so it might be serving any
         car. An occupied Gen3 that can't name its car (anonymous, or no
-        key at all) could be serving any account car, so it blinds too. A failed scan fails closed.
+        key at all) could be serving any account car, so it blinds too. A
+        failed scan fails closed.
         """
         blind = False
         unknown = False
