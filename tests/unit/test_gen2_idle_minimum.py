@@ -166,3 +166,25 @@ def test_start_request_follows_the_range_override():
     s.lastAmpsOffered = 7
     s.send_master_heartbeat()
     assert m.startCarsCharging.call_count == 1
+
+
+def test_idle_minimum_respects_the_controller_budget():
+    # The wiring budget (80 A here) leaves 12 A for the controller, less than
+    # the idle TWC's minimum: it gets no reservation, and the targets never
+    # sum past the controller budget
+    m, iface = real(minAmps=12, feed=200)
+    m.config["config"]["wiringMaxAmpsAllTWCs"] = 33
+    busy = m.newSlave(b"\x82\x45", 80)
+    busy.protocolVersion = 1
+    busy.currentVIN = VIN
+    busy.reportedState, busy.reportedAmpsMax, busy.reportedAmpsActual = 0x01, 32, 20
+    v = m.vehicleRegistry.getOrCreate(VIN, "TeslaAPI")
+    v.attach(
+        "TeslaAPI",
+        SimpleNamespace(VIN=VIN, atHome=True, syncSource="TeslaAPI", pluggedIn=None),
+    )
+    v.observe("chargingState", "Charging", "TeslaAPI")
+    idle = idleSlave(m)
+    m.distributeEVSEPower()
+    assert idle._evseTargetAmps == 0
+    assert busy._evseTargetAmps + idle._evseTargetAmps <= 33

@@ -556,17 +556,17 @@ class TWCMaster:
         remaining_watts = available_watts
         offers = []
 
-        if wants_power:
-            # Per-controller remaining power budgets and point counts
-            controller_budgets: dict = {}
-            controller_counts: dict = {}
-            for mod in controllers:
-                name = mod["name"]
-                controller_budgets[name] = mod["ref"].maxPower
-                controller_counts[name] = sum(
-                    1 for p in wants_power if name in p.controllers
-                )
+        # Per-controller remaining power budgets and point counts
+        controller_budgets: dict = {}
+        controller_counts: dict = {}
+        for mod in controllers:
+            name = mod["name"]
+            controller_budgets[name] = mod["ref"].maxPower
+            controller_counts[name] = sum(
+                1 for p in wants_power if name in p.controllers
+            )
 
+        if wants_power:
             # Fair-share distribution — sort ascending by maxPower so the most
             # constrained points are served first, reducing wasted capacity.
             pending = sorted(wants_power, key=lambda p: p.maxPower)
@@ -612,9 +612,16 @@ class TWCMaster:
                 continue
             offer = 0
             if any(getattr(e, "idleMinimum", False) is True for e in point.endpoints):
-                if remaining_watts >= point.minPower:
+                if remaining_watts >= point.minPower and all(
+                    controller_budgets[c] >= point.minPower
+                    for c in point.controllers
+                    if c in controller_budgets
+                ):
                     offer = point.minPower
                     remaining_watts -= offer
+                    for c in point.controllers:
+                        if c in controller_budgets:
+                            controller_budgets[c] -= offer
             point.setTargetPower(offer)
             offers.append((point.ID, offer))
 
