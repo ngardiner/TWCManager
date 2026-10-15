@@ -1170,7 +1170,18 @@ class TeslaAPI:
             return apiResponseDict["response"]["string"].split(": ")[-1]
         return ""
 
-    def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
+    def applyChargeLimit(
+        self,
+        limit,
+        checkArrival=False,
+        checkDeparture=False,
+        vin=None,
+        remoteOnly=False,
+    ):
+        # vin: act on that car only. remoteOnly asks for a cloud path, which
+        # this is. A targeted call is neither held by nor counted in the
+        # once-a-minute limit Policy's broadcasts keep.
+        target = str(vin).upper() if vin else None
         if self.refuseCommandIfReadOnly("set_charge_limit"):
             return "error"
         if limit != -1 and (limit < 50 or limit > 100):
@@ -1186,7 +1197,8 @@ class TeslaAPI:
 
         now = time.time()
         if (
-            not checkArrival
+            target is None
+            and not checkArrival
             and not checkDeparture
             and now - self.carApiLastChargeLimitApplyTime < 60
         ):
@@ -1206,8 +1218,17 @@ class TeslaAPI:
         #
         # We do NOT opportunistically check for arrivals, because that would be a
         # continuous API poll.
+        vehicles = [
+            v
+            for v in self.carApiVehicles
+            if target is None or str(v.VIN).upper() == target
+        ]
+        if target is not None and not vehicles:
+            logger.log(logging.INFO8, "applyChargeLimit: no such vehicle")
+            return "error"
+
         needToWake = False
-        for vehicle in self.carApiVehicles:
+        for vehicle in vehicles:
             if self.refuseCommandFor(vehicle, "set_charge_limit"):
                 continue
             wasAtHome, outside, lastApplied = self.master.getNormalChargeLimit(
@@ -1229,14 +1250,14 @@ class TeslaAPI:
                 vehicle.stopTryingToApplyLimit = False
                 vehicle.stopAskingToStartCharging = False
 
-        if needToWake and self.car_api_available(applyLimit=True) is False:
+        if needToWake and self.car_api_available(applyLimit=True, vin=target) is False:
             logger.log(
                 logging.INFO8,
                 "applyChargeLimit return because car_api_available() == False",
             )
             return self._unavailableResult()
 
-        if self.lastChargeLimitApplied != limit:
+        if target is None and self.lastChargeLimitApplied != limit:
             if limit != -1:
                 logger.log(
                     logging.INFO2,
@@ -1251,11 +1272,12 @@ class TeslaAPI:
                 )
             self.lastChargeLimitApplied = limit
 
-        self.carApiLastChargeLimitApplyTime = now
+        if target is None:
+            self.carApiLastChargeLimitApplyTime = now
 
         needSleep = False
         refused = False
-        for vehicle in self.carApiVehicles:
+        for vehicle in vehicles:
             if self.refuseCommandFor(vehicle, "set_charge_limit"):
                 refused = True
                 continue

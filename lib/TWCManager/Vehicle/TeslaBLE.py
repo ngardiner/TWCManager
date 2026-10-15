@@ -761,15 +761,27 @@ class TeslaBLE:
             logger.error(f"setChargeRate exception: {e}")
             return False
 
-    def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
+    def applyChargeLimit(
+        self,
+        limit,
+        checkArrival=False,
+        checkDeparture=False,
+        vin=None,
+        remoteOnly=False,
+    ):
         """
         Apply charge limit to vehicle(s) via BLE.
         Args:
             limit: Charge limit percentage (50-100), or -1 to restore to pre-TWCManager default
             checkArrival: Ignored (BLE doesn't poll state)
             checkDeparture: Ignored (BLE doesn't poll state)
+            vin: Apply to that vehicle only
+            remoteOnly: The caller wants a cloud path; BLE declines
         Returns True on success, False on failure.
         """
+        if remoteOnly:
+            logger.debug("BLE: charge limit asked for a remote path only")
+            return False
         try:
             if limit != -1 and (limit < 50 or limit > 100):
                 logger.error(
@@ -786,6 +798,8 @@ class TeslaBLE:
             )
 
             targets = self._allVehicleTargets()
+            if vin:
+                targets = [t for t in targets if t.upper() == str(vin).upper()]
             if not targets:
                 logger.warning("No vehicle has a usable BLE key")
                 return False
