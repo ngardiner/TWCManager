@@ -415,8 +415,26 @@ class TeslaAPI:
             for car in listed:
                 self.addVehicle(car)
             self.resetCarApiLastErrorTime()
-            self.resolveHeldLimits(slot, listed)
-            return True
+        # Outside the lock: its other slot's GET never holds it
+        self.resolveHeldLimits(slot, listed)
+        return True
+
+    def listPending(self) -> bool:
+        # The vehicle list is not loaded, or held limits wait on it
+        held = getattr(self.master, "heldLimits", None)
+        return self.getVehicleCount() < 1 or (
+            isinstance(held, HeldLimits) and held.waiting()
+        )
+
+    def loadList(self):
+        # The vehicle list (a free call) loads here, and held limits waiting
+        # on it resolve: the cloud providers serve only listed cars (C1)
+        if self.getVehicleCount() > 0:
+            self.resolveHeldLimits()
+        elif not self.getCarApiRetryRemaining():
+            self.refreshTokenIfNeeded()
+            if self.slotFor("read") is not None:
+                self.loadVehicleList()
 
     def resolveHeldLimits(self, listedSlot=None, listed=None):
         # Held limits older releases keyed by vehicle ID move under the VIN
@@ -2253,15 +2271,8 @@ class TeslaAPI:
 
     def updateChargeAtHome(self):
         # True when this module holds cars to refresh, so VehiclePriority's
-        # walk ends here; False lets another module refresh its own cars.
-        # The vehicle list (a free call) loads here first: the cloud
-        # providers serve only listed cars (C1)
-        if self.getVehicleCount() > 0:
-            self.resolveHeldLimits()
-        elif not self.getCarApiRetryRemaining():
-            self.refreshTokenIfNeeded()
-            if self.slotFor("read") is not None:
-                self.loadVehicleList()
+        # walk ends here; False lets another module refresh its own cars
+        self.loadList()
         for car in self.carApiVehicles:
             if car.atHome:
                 car.update_charge()

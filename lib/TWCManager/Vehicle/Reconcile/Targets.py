@@ -80,7 +80,15 @@ def onArrival(master) -> None:
 
 
 def onDeparture(master) -> None:
+    # Background thread only. A car off its point that the Tesla API knows
+    # is located first (a paid vehicle_data that never wakes; only for cars
+    # we hold a limit on): an unplug alone is not a departure
     for vin in master.heldLimits.holding():
         vehicle = master.vehicleRegistry.get(vin)
-        if vehicle is not None and not _present(vehicle):
+        if vehicle is None:
+            continue
+        api = vehicle.attachment("TeslaAPI")
+        if api is not None and not vehicle.value("twcVin"):
+            api.update_location(0)
+        if not _present(vehicle):
             _restore(master, vehicle, decision=True)
