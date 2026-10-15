@@ -11,6 +11,7 @@ CMDS = {c: C.Declaration(C.LOCAL) for c in (C.SET_AMPS, C.START_CHARGING, C.STOP
 class P(Provider):
     def __init__(self, name, rank, local, module, ready=True, caps=CMDS, amps=(1, 32)):
         self.name, self.rank, self.local, self.module, self._ready, self._caps, self._amps = name, rank, local, module, ready, caps, amps
+        if name == "TeslaBLE": self.SUPPRESSED = {"api_only": C.ALL}      # the real provider's table; the others keep the locality rule
     def declarations(self): return self._caps
     def ready(self, vehicle, cap): return self._ready
     def ampsRange(self, vehicle): return self._amps
