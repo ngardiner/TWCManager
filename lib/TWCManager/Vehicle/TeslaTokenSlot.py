@@ -162,7 +162,7 @@ class TeslaTokenSlot:
         if self.kind != "fleet":
             return
         if refused and purpose in RETIRED_ON_REFUSAL:
-            self.refusedPurposes.add(purpose)
+            self.refuse(purpose)
         scope = self.missingScope(purpose)
         if scope is None and refused:
             scope = SCOPES[purpose][0]
@@ -176,6 +176,11 @@ class TeslaTokenSlot:
             + SCOPE_LABELS[purpose]
             + "; log in to the Fleet API again and grant it."
         )
+
+    def refuse(self, purpose):
+        # This token is not used for the purpose again until it changes
+        # (setTokens, clear or restore)
+        self.refusedPurposes.add(purpose)
 
     def pause(self, now=None, latch=False):
         # Not used for reads for PAUSE_SECONDS; latch=True holds the pause

@@ -550,6 +550,7 @@ class TeslaAPI:
                 # then hold wakeDelayMins before sending wake_up.  During the
                 # hold window no Fleet API calls are made, giving the car a
                 # chance to self-start via the TWC offer.
+                self._askChargeNeed(vehicle, now)
                 if vehicle.firstChargeNeededTime == 0:
                     if vehicle.ready():
                         continue
@@ -1484,7 +1485,7 @@ class TeslaAPI:
             self._energySitesEmpty[slot.kind] = time.time()
         return vins if answered else None
 
-    def getCarApiRetryRemaining(self, vehicle=None):
+    def getCarApiRetryRemaining(self, vehicle=None, now=None):
         # Calculate the amount of time remaining until the API can be queried
         # again. This is the api backoff time minus the difference between now
         # and the last error time
@@ -1499,7 +1500,7 @@ class TeslaAPI:
             return 0
         else:
             backoff = self.getCarApiErrorRetryMins(vehicle) * 60
-            lasterrortime = time.time() - lastError
+            lasterrortime = (time.time() if now is None else now) - lastError
             if lasterrortime >= backoff:
                 return 0
             else:
@@ -2020,13 +2021,14 @@ class TeslaAPI:
         slot = self.slotFor("command")
         if slot is None:
             return Outcome(REFUSED, "no command token")
-        if self.getCarApiRetryRemaining(vehicle):
+        if self.getCarApiRetryRemaining(vehicle, now=self.now()):
             return Outcome(UNREACHABLE, "backoff")
         outcome, response = self._paidPost(vehicle, slot, "command/" + name, body)
         if outcome is None:
             reason = response.get("reason") or ""
-            if not isinstance(reason, str):
-                reason = type(reason).__name__
+            if not isinstance(reason, str) or not re.fullmatch(r"[a-z_]{1,40}", reason):
+                # Only a short reason code is carried or logged
+                reason = "not accepted" if reason else ""
             if response.get("result") is True:
                 outcome = Outcome(DONE)
             elif reason in self.COMMAND_SATISFIED_REASONS:
@@ -2082,14 +2084,19 @@ class TeslaAPI:
                         continue
                     if result == "unreachable":
                         return Outcome(UNREACHABLE, "token refresh"), None
-                    return Outcome(REFUSED, "401"), None
+                # Refused, or expired with no way to refresh it: retired, so
+                # no later round pays for another 401
                 self.commandRefused(slot, 401)
                 return Outcome(REFUSED, "401"), None
             if code == 403:
                 slot.reportScopeRefused("command", refused=True)
                 return Outcome(REFUSED, "403"), None
             if code == 412:
-                slot.pause(latch=True)
+                # A token kind Tesla will keep refusing commands (e.g. a
+                # registration it lacks): no paid command or wake is sent
+                # with it again until it changes. Its reads are untouched; a
+                # read 412 latches those (slotRequestFailed).
+                self.commandRefused(slot, 412)
                 return Outcome(REFUSED, "412"), None
             if code == 408:
                 return Outcome(UNREACHABLE, "408"), None
@@ -2109,14 +2116,22 @@ class TeslaAPI:
             return None, response
 
     def commandRefused(self, slot, code):
-        # Retires a slot Tesla refused a command or wake with
+        # Retires a slot Tesla refused a command or wake with: a 401 clears
+        # it; a 412 retires its command purpose until the token changes.
+        # Logged once: afterwards slotFor("command") never picks the slot.
+        label = slot.kind.capitalize()
         if code == 401:
             logger.error(
-                "Tesla %s API token was rejected (HTTP 401); removing it."
-                % slot.kind.capitalize()
+                "Tesla %s API token was rejected (HTTP 401); removing it." % label
             )
             slot.clear()
             self.master.queue_background_task({"cmd": "saveSettings"})
+        elif code == 412:
+            logger.error(
+                "Tesla %s API refused a command (HTTP 412); not sending commands "
+                "with this token until it is replaced." % label
+            )
+            slot.refuse("command")
 
     def wakeDue(self, vehicle, now=None) -> bool:
         # Whether the hold schedule lets a wake_up go to vehicle now: not
@@ -2124,10 +2139,11 @@ class TeslaAPI:
         # charge need was first seen (the car may start on the TWC's offer),
         # and not within delayNextWakeAttempt of the last wake_up.
         now = self.now() if now is None else now
-        if self.getCarApiRetryRemaining(vehicle):
+        if self.getCarApiRetryRemaining(vehicle, now=now):
             return False
         if (
             vehicle.firstChargeNeededTime
+            and not self._chargeNeedEnded(vehicle, now)
             and now - vehicle.firstChargeNeededTime < self.wakeDelayMins * 60
         ):
             return False
@@ -2146,6 +2162,10 @@ class TeslaAPI:
         slot = self.slotFor("command")
         if slot is None:
             return Outcome(REFUSED, "no command token")
+        if self.getCarApiRetryRemaining(vehicle, now=now):
+            # Told to back off: not even the free check
+            return Outcome(UNREACHABLE, "backoff")
+        self._askChargeNeed(vehicle, now)
         # The command slot's account, unless it cannot read; the Owner API
         # answers the same free check
         checkSlot = slot if slot.usable("read") else self.slotFor("read")
@@ -2214,6 +2234,22 @@ class TeslaAPI:
                 )
             )
         return outcome
+
+    # A charge need (the wakeDelayMins grace, firstChargeNeededTime) has
+    # ended when nothing asked for a wake for this long. Ending it can only
+    # delay a wake, never bring one forward. The explicit end (desired
+    # charging off, a departure) belongs to the reconciler; this is the
+    # backstop for every path, legacy included, that never says so.
+    CHARGE_NEED_IDLE_SECONDS = 600
+
+    def _chargeNeedEnded(self, vehicle, now):
+        return now - vehicle.lastChargeNeededTime > self.CHARGE_NEED_IDLE_SECONDS
+
+    def _askChargeNeed(self, vehicle, now):
+        # A wake is asked for: a need that ended starts again with its grace
+        if vehicle.firstChargeNeededTime and self._chargeNeedEnded(vehicle, now):
+            vehicle.firstChargeNeededTime = 0
+        vehicle.lastChargeNeededTime = now
 
     @staticmethod
     def _wakeSettled(vehicle):
@@ -2484,6 +2520,10 @@ class CarApiVehicle:
     # Whether lastVehicleAwakeState came from an answer (a sync source or
     # vehicles/{vin}), not a failed check
     lastVehicleAwakeKnown = False
+    # Whether the cached vehicles/{vin} check (lastVehicleAwakeTime) answered
+    lastVehicleAwakeChecked = False
+    # When a wake was last asked for (TeslaAPI's charge-need lifetime)
+    lastChargeNeededTime = 0
     stopAskingToStartCharging = False
     stopTryingToApplyLimit = False
     statusDeferral = 0
@@ -2647,12 +2687,14 @@ class CarApiVehicle:
         now = self.carapi.now() if now is None else now
         # Don't check more often than every 2 minutes
         if now - self.lastVehicleAwakeTime < 120:
+            self.lastVehicleAwakeKnown = self.lastVehicleAwakeChecked
             return self.lastVehicleAwakeState
         result, response = self.get_car_api(
             str(self.VIN), checkReady=False, provesOnline=False, slot=slot
         )
         awakeState = bool(result) and response.get("state", "") == "online"
         self.lastVehicleAwakeState = awakeState
+        self.lastVehicleAwakeChecked = bool(result)
         self.lastVehicleAwakeKnown = bool(result)
         self.lastVehicleAwakeTime = now
         return awakeState
