@@ -35,7 +35,7 @@ Examples of the configuration of these protocols:
 
 ## Per-TWC amps range
 
-By default every slave TWC is offered between minAmpsPerTWC (never less than the TWC itself supports) and its wiring maximum. An idle TWC is offered that minimum so it can see a car plug in. To set a different range for one TWC, add `controller.Gen2TWCs` to config.json:
+By default every slave TWC is offered between minAmpsPerTWC (never less than the TWC itself supports) and its wiring maximum. An idle TWC is offered its hardware minimum (Gen2: an offer of 0, which the TWC treats as its minimum) so it can see a car plug in; that offer is not counted against the budget. A charging TWC whose share would fall below its minimum is stopped (offered 0). To set a different range for one TWC, add `controller.Gen2TWCs` to config.json:
 
 ```json
 "controller.Gen2TWCs": {

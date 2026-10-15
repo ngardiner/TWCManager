@@ -34,7 +34,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - The power distributor never has the Fleet API set a car's amps where a TWC or BLE can (Charge Rate Control modes 2 and 3 still may). A BLE-paired car on a mobile connector gets its rate over BLE only, with no Fleet fallback. Home Assistant can now set a car's amps; it is treated as billed and tried only after the Fleet API
     * (@MikeBishop) - Settings page labels say "vehicle command (BLE or API)" and "local"/"cloud" where they said "Tesla API"; the stored values are unchanged
 * Bugfixes
-    * (@MikeBishop) - An idle Gen2 TWC is offered minAmpsPerTWC instead of 0 A when TWCManager shares power with Tesla API cars, so a TWC that honours 0 A still sees a car plug in
+    * (@MikeBishop) - An idle TWC is offered its hardware minimum (Gen2: an offer of 0, which the TWC treats as its minimum) when TWCManager shares power with Tesla API cars, so it still sees a car plug in; the idle offer is not counted against the budget
     * (@MikeBishop) - A targeted start, stop or charge limit sent through Home Assistant now affects only the named car; a command for every car still reaches every Home Assistant car
     * (@MikeBishop) - Queue vehicle commands per VIN and really cancel pending stop-charging commands when charging resumes (closes #667)
     * Fix: Add missing module-level time import in HASS, EmonCMS, Growatt, IotaWatt, SmartMe and TCP modules, which crashed EMS polling and caused charge current oscillation (closes #644)

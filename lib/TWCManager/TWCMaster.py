@@ -556,17 +556,17 @@ class TWCMaster:
         remaining_watts = available_watts
         offers = []
 
-        # Per-controller remaining power budgets and point counts
-        controller_budgets: dict = {}
-        controller_counts: dict = {}
-        for mod in controllers:
-            name = mod["name"]
-            controller_budgets[name] = mod["ref"].maxPower
-            controller_counts[name] = sum(
-                1 for p in wants_power if name in p.controllers
-            )
-
         if wants_power:
+            # Per-controller remaining power budgets and point counts
+            controller_budgets: dict = {}
+            controller_counts: dict = {}
+            for mod in controllers:
+                name = mod["name"]
+                controller_budgets[name] = mod["ref"].maxPower
+                controller_counts[name] = sum(
+                    1 for p in wants_power if name in p.controllers
+                )
+
             # Fair-share distribution — sort ascending by maxPower so the most
             # constrained points are served first, reducing wasted capacity.
             pending = sorted(wants_power, key=lambda p: p.maxPower)
@@ -604,26 +604,16 @@ class TWCMaster:
                         )
                 pending.remove(point)
 
-        # Points that don't want power: an idle Gen2 TWC keeps its minimum
-        # while the budget allows (it must offer it to see a car plug in);
-        # every other idle point (a Gen3 unit, a car) gets 0
+        # Points that don't want power get a target of 0. For an idle Gen2 TWC
+        # that 0 goes out as its hardware minimum (the TWC treats an offer of 0
+        # as its minimum), which it needs to see a car plug in. The minimum is
+        # deliberately never counted against or gated on any budget: the
+        # configured limits are already derated, and the next cycle rebalances.
         for point in points:
             if point in wants_power or point.isReadOnly:
                 continue
-            offer = 0
-            if any(getattr(e, "idleMinimum", False) is True for e in point.endpoints):
-                if remaining_watts >= point.minPower and all(
-                    controller_budgets[c] >= point.minPower
-                    for c in point.controllers
-                    if c in controller_budgets
-                ):
-                    offer = point.minPower
-                    remaining_watts -= offer
-                    for c in point.controllers:
-                        if c in controller_budgets:
-                            controller_budgets[c] -= offer
-            point.setTargetPower(offer)
-            offers.append((point.ID, offer))
+            point.setTargetPower(0)
+            offers.append((point.ID, 0))
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
