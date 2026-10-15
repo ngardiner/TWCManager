@@ -191,6 +191,15 @@ class Gen3TWCs(EVSEController):
             if ip and ip not in self._evse_cache:
                 self._evse_cache[ip] = Gen3TWC(device_cfg, self, master)
 
+        # Names a Gen3's car from the energy site's live_status (free)
+        from TWCManager.Vehicle.Providers.WallConnectorVins import (
+            WallConnectorVinReader,
+        )
+
+        self.vinReader = WallConnectorVinReader(
+            master, getattr(master, "providerOrder", None)
+        )
+
         # Each unit's own target in watts, and what was last published.
         # Guards the solve and the publish so two threads never publish out
         # of order; taken before _lock, never inside it.
@@ -269,9 +278,16 @@ class Gen3TWCs(EVSEController):
             self.republish()
 
     def noteVitals(self, unit, rising: bool) -> None:
-        """Called by a unit after each successful vitals fetch: closes the
-        loop on the measured draw at the vitals cadence."""
+        """Called by a unit after each successful vitals fetch (background
+        thread, no lock held): closes the loop on the measured draw at the
+        vitals cadence, then asks the energy site which car is connected
+        while a session is anonymous."""
         self.republish()
+        if unit._version is None:
+            unit.refreshVersion()
+        if rising:
+            self.vinReader.noteConnect()
+        self.vinReader.apply(self.devices())
 
     def _supply(self):
         """(phases, voltage) of the first device, as the published value
