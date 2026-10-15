@@ -1,5 +1,5 @@
 # A facade over the provider order. Callers keep calling the legacy module
-# methods (car_api_charge, setChargeRate, applyChargeLimit, ...) with their
+# methods (car_api_charge, setChargeRate, ...) with their
 # module-specific arguments; the walk is the order: each provider's legacy
 # module in order position, suppressed providers skipped and, when the call
 # names a vehicle, providers not ready for it skipped. Attempts come from the
@@ -15,7 +15,6 @@ from TWCManager.Vehicle.Providers.Capability import (
     TIER_BILLED,
     READ_CHARGE,
     SET_AMPS,
-    SET_CHARGE_LIMIT,
     START_CHARGING,
     STOP_CHARGING,
     WAKE,
@@ -49,7 +48,6 @@ class VehiclePriority:
             "setChargeRate",
             "startCharging",
             "stopCharging",
-            "applyChargeLimit",
             "wakeVehicle",
         ]
     )
@@ -60,7 +58,6 @@ class VehiclePriority:
         "setChargeRate": SET_AMPS,
         "startCharging": START_CHARGING,
         "stopCharging": STOP_CHARGING,
-        "applyChargeLimit": SET_CHARGE_LIMIT,
         "wakeVehicle": WAKE,
     }
 
@@ -122,8 +119,6 @@ class VehiclePriority:
         if name == "car_api_charge":
             task = args[0] if args else kwargs.get("task")
             return _vinOf(task.get("vin")) if isinstance(task, dict) else None
-        if name == "applyChargeLimit":
-            return _vinOf(kwargs.get("vin"))
         if name == "setChargeRate":
             vehicle = args[1] if len(args) > 1 else kwargs.get("vehicle")
             return _vinOf(vehicle)

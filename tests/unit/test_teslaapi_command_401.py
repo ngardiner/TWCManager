@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from TWCManager.Vehicle.Reconcile.Outcome import DONE, SATISFIED, Outcome
 from tests.unit.teslatokens import FLEET_REFRESH_URL, fleet_token, new_api
 
 OPAQUE_REFRESH = "NA_0123456789abcdef0123456789abcdef"
@@ -67,10 +68,17 @@ def command(api, name):
     if name == "wake_up":
         return api.wakeVehicle(v)
     if name == "set_charge_limit":
-        return v.apply_charge_limit(80)
+        return api.command(v, "set_charge_limit", {"percent": 80})
 
 
 COMMANDS = ["charge_stop", "set_charging_amps", "wake_up", "set_charge_limit"]
+
+
+def failed(result):
+    # The legacy paths answer False or "error"; the provider path an Outcome
+    if isinstance(result, Outcome):
+        return result.kind not in (DONE, SATISFIED)
+    return result in (False, "error")
 
 
 def url(name):
@@ -88,7 +96,7 @@ def test_expired_token_is_refreshed_and_command_retried(api, requests_mock, name
     assert refresh.call_count == 1
     assert cmd.call_count == 2
     assert bearer(cmd.request_history[1]) == new
-    assert result not in (False, "error")
+    assert not failed(result)
 
 
 @pytest.mark.parametrize("name", COMMANDS)
@@ -98,7 +106,7 @@ def test_dead_token_is_cleared(api, requests_mock, name):
 
     result = command(api, name)
 
-    assert result in (False, "error")
+    assert failed(result)
     assert cmd.call_count == 1
     assert api.fleetSlot.empty()
     assert {"cmd": "saveSettings"} in api.master.tasks
@@ -114,7 +122,7 @@ def test_expired_after_refresh_is_not_retried_again(api, requests_mock, name):
 
     result = command(api, name)
 
-    assert result in (False, "error")
+    assert failed(result)
     assert refresh.call_count == 1
 
 

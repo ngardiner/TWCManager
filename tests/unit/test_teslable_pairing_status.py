@@ -922,7 +922,6 @@ def all_vehicle_ble(statuses):
         if status:
             rec["ble"] = {"status": status, "since": 1.0}
         master.settings["Vehicles"][vin] = rec
-    master.getNormalChargeLimit = Mock(return_value=(False, None, None))
     ble._scheduleBlocksStart = Mock(return_value=False)
     ble.wakeVehicle = Mock(return_value=True)
     ble.sendCommand = Mock(return_value="ok")
@@ -947,9 +946,6 @@ def test_all_vehicle_commands_skip_a_refused_key():  # I2
     ble, master = all_vehicle_ble({VIN: "refused", VIN2: "paired", VIN3: None})
     assert ble.setChargeRate(16) is True
     assert commanded(ble) == {VIN2, VIN3}
-    ble, master = all_vehicle_ble({VIN: "refused", VIN2: "paired", VIN3: None})
-    assert ble.applyChargeLimit(80) is True
-    assert commanded(ble) == {VIN2, VIN3}
 
 
 def test_all_vehicle_commands_skip_a_vin_without_a_key():  # I2
@@ -970,7 +966,6 @@ def test_no_usable_key_fails_the_all_vehicle_command():  # I2
     ble, master = all_vehicle_ble({VIN: "refused"})
     assert ble.car_api_charge({"cmd": "charge", "charge": True}) is False
     assert ble.setChargeRate(16) is False
-    assert ble.applyChargeLimit(80) is False
     assert commanded(ble) == set()
 
 

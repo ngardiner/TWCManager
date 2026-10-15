@@ -109,16 +109,16 @@ def test_ble_only_skips_cloud_commands_but_not_reads():
 
 
 def test_api_only_walks_fleet_without_ble():  # Review Focus 1
-    ble = mod(applyChargeLimit=True, updateChargeAtHome=True)
-    api = mod(applyChargeLimit="success", updateChargeAtHome=True)
+    ble = mod(car_api_charge=True, updateChargeAtHome=True)
+    api = mod(car_api_charge="success", updateChargeAtHome=True)
     m, vp = make(
         {"commandPolicy": "api_only"},
         P("TeslaBLE", 2, True, ble),
         P("FleetAPI", 5, False, api),
     )
     assert (
-        vp.applyChargeLimit(limit=80) == "success"
-        and ble.applyChargeLimit.call_count == 0
+        vp.car_api_charge({"charge": True}) == "success"
+        and ble.car_api_charge.call_count == 0
     )
     assert (
         vp.updateChargeAtHome() is True and ble.updateChargeAtHome.call_count == 0
@@ -126,30 +126,31 @@ def test_api_only_walks_fleet_without_ble():  # Review Focus 1
 
 
 def test_broadcast_skips_a_provider_that_is_not_available():
-    api = mod(applyChargeLimit="success")
+    api = mod(car_api_charge="success")
     f = P("FleetAPI", 5, False, api)
     f.available = lambda cap: False  # Owner-only: no command slot
     m, vp = make({}, f)
     assert (
-        vp.applyChargeLimit(limit=80) is False
-        and api.applyChargeLimit.call_count == 0
+        vp.car_api_charge({"charge": True}) is False
+        and api.car_api_charge.call_count == 0
         and m.stats["moduleFailures"] == {}
     )
 
 
 def test_targeted_call_skips_providers_not_ready_for_that_car():
-    ble = mod(applyChargeLimit=True)
-    api = mod(applyChargeLimit="success")
+    ble = mod(car_api_charge=True)
+    api = mod(car_api_charge="success")
     m, vp = make(
         {}, P("TeslaBLE", 2, True, ble, ready=False), P("FleetAPI", 5, False, api)
     )
     m.vehicleRegistry.getOrCreate(VIN, "t")
     assert (
-        vp.applyChargeLimit(limit=80, vin=VIN) == "success"
-        and ble.applyChargeLimit.call_count == 0
+        vp.car_api_charge({"charge": True, "vin": VIN}) == "success"
+        and ble.car_api_charge.call_count == 0
     )
     assert (
-        vp.applyChargeLimit(limit=80) is True and ble.applyChargeLimit.call_count == 1
+        vp.car_api_charge({"charge": True}) is True
+        and ble.car_api_charge.call_count == 1
     )  # broadcast: readiness unknown
 
 
@@ -369,10 +370,9 @@ def _fleetUnloaded(withBle):
     api, reg = api_with_registry()
     api.storeToken(fleet_token())
     api.car_api_charge = Mock(return_value="success")
-    api.applyChargeLimit = Mock(return_value="success")
     m, vp = make()
     m.vehicleRegistry = reg
-    ble = mod(car_api_charge=False, applyChargeLimit=False)
+    ble = mod(car_api_charge=False)
     for p in ([P("TeslaBLE", 2, True, ble)] if withBle else []) + api.providers():
         m.providerOrder.register(p)
     reg.getOrCreate(VIN, "TWC")
@@ -384,10 +384,6 @@ def test_failed_ble_stop_falls_back_to_fleet_before_the_list_loads():  # C1
     m, vp, api, ble = _fleetUnloaded(withBle=True)
     assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
     assert ble.car_api_charge.call_count == 3 and api.car_api_charge.call_count == 1
-    assert (
-        vp.applyChargeLimit(limit=80, vin=VIN) == "success"
-        and api.applyChargeLimit.call_count == 1
-    )
 
 
 def test_fleet_only_targeted_commands_work_from_boot():  # C1
@@ -413,7 +409,7 @@ OTHER = "5YJ3E1EA1KF000009"
 
 
 def _haCars(*vins, fleet=True):
-    # HA's real car_api_charge/applyChargeLimit over stand-in HA cars, each
+    # HA's real car_api_charge over stand-in HA cars, each
     # at home, connected and charging; _call_service records the entities
     m, vp, ha, reg = _haMaster()
     cars = []
@@ -439,7 +435,7 @@ def _haCars(*vins, fleet=True):
     ha._call_service = Mock(return_value=True)
     api = None
     if fleet:
-        api = mod(car_api_charge="error", applyChargeLimit="error")
+        api = mod(car_api_charge="error")
         m.providerOrder.register(
             P(
                 "FleetAPI",
@@ -469,27 +465,19 @@ def test_fleet_failure_falls_to_home_assistant_for_the_target_only():  # I1
         vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
         and api.car_api_charge.call_count == 2
     )
-    assert vp.applyChargeLimit(limit=80, vin=VIN) == "success"
-    assert _entities(ha) == ["switch." + VIN, "number." + VIN]
+    assert _entities(ha) == ["switch." + VIN]
 
 
 def test_broadcast_still_reaches_every_home_assistant_car():
     m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
     assert vp.car_api_charge({"charge": False}) == "success"
-    assert vp.applyChargeLimit(limit=80) == "success"
-    assert _entities(ha) == [
-        "switch." + VIN,
-        "switch." + OTHER,
-        "number." + VIN,
-        "number." + OTHER,
-    ]
+    assert _entities(ha) == ["switch." + VIN, "switch." + OTHER]
 
 
 def test_unknown_vin_affects_no_home_assistant_car():
     m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
     unknown = "5YJ3E1EA1KF000077"
     assert ha.car_api_charge({"charge": False, "vin": unknown}) == "error"
-    assert ha.applyChargeLimit(80, vin=unknown) == "error"
     assert ha._call_service.call_count == 0
     assert (
         ha.car_api_charge({"charge": False, "vin": VIN.lower()}) == "success"

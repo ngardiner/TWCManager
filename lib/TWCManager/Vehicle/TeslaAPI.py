@@ -17,6 +17,7 @@ from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
     FleetAPIProvider,
     OwnerAPIProvider,
 )
+from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile.Outcome import (
     DONE,
     ERROR,
@@ -148,8 +149,6 @@ class TeslaAPI:
     # Only compared against, when restoring saved settings.
     LEGACY_SYNCED_EXPIRY = 99999 * 99999 * 99999
     carApiLastStartOrStopChargeTime = 0
-    carApiLastChargeLimitApplyTime = 0
-    lastChargeLimitApplied = 0
     lastChargeCheck = 0
     chargeUpdateInterval = 1800
     carApiVehicles = []
@@ -488,45 +487,10 @@ class TeslaAPI:
             slot = self.slotFor("read")
             if slot is None:
                 return False
-
-            req = None
-            apiResponseDict = {}
-            url = self.vehicleListURL(slot)
-            headers = {
-                "accept": "application/json",
-                "Authorization": "Bearer " + slot.accessToken,
-            }
-            try:
-                req = requests.get(
-                    url, headers=headers, verify=slot.verifyCert, timeout=30
-                )
-                logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
-                if req.status_code in (401, 403, 410, 412):
-                    # Clears or pauses this slot only; no retry here, and no
-                    # API error backoff, so the next poll can use the other
-                    # slot at once.
-                    self.slotRequestFailed(slot, req)
-                    return False
-                apiResponseDict = json.loads(req.text)
-            except requests.exceptions.RequestException:
-                logger.info("Failed to make API call " + url)
-                if req:
-                    logger.log(logging.INFO6, "Response: " + req.text)
-            except json.decoder.JSONDecodeError:
-                logger.info("Could not parse JSON result from " + url)
-                if req:
-                    logger.log(logging.INFO6, "Response: " + req.text)
-
-            try:
-                logger.debug("Car API vehicle list" + str(apiResponseDict) + "\n")
-
-                for i in range(0, apiResponseDict["count"]):
-                    self.addVehicle(apiResponseDict["response"][i])
-                self.resetCarApiLastErrorTime()
-            except (KeyError, TypeError):
-                # This catches cases like trying to access
-                # apiResponseDict['response'] when 'response' doesn't exist in
-                # apiResponseDict.
+            listed = self._vehicleList(slot)
+            if listed is None:
+                return False
+            if listed is False:
                 logger.log(
                     logging.INFO2,
                     "ERROR: Can't get list of vehicles via Tesla car API.  Will try again in "
@@ -535,9 +499,81 @@ class TeslaAPI:
                 )
                 self.updateCarApiLastErrorTime()
                 return False
-            return True
+            for car in listed:
+                self.addVehicle(car)
+            self.resetCarApiLastErrorTime()
+        # Outside the lock: its other slot's GET never holds it
+        self.resolveHeldLimits(slot, listed)
+        return True
 
-    def car_api_available(self, charge=None, applyLimit=None, vin=None):
+    def listPending(self) -> bool:
+        # The vehicle list is not loaded, or held limits wait on it
+        held = getattr(self.master, "heldLimits", None)
+        return self.getVehicleCount() < 1 or (
+            isinstance(held, HeldLimits) and held.waiting()
+        )
+
+    def loadList(self):
+        # The vehicle list (a free call) loads here, and held limits waiting
+        # on it resolve: the cloud providers serve only listed cars (C1)
+        if self.getVehicleCount() > 0:
+            self.resolveHeldLimits()
+        elif not self.getCarApiRetryRemaining():
+            self.refreshTokenIfNeeded()
+            if self.slotFor("read") is not None:
+                self.loadVehicleList()
+
+    def resolveHeldLimits(self, listedSlot=None, listed=None):
+        # Held limits older releases keyed by vehicle ID move under the VIN
+        # (free calls, only while any wait). Owner and Fleet may be different
+        # accounts: every usable slot's list counts, and a list that failed
+        # defers it to the next check (I9)
+        held = getattr(self.master, "heldLimits", None)
+        if not isinstance(held, HeldLimits) or not held.waiting():
+            return
+        lists = [
+            listed if slot is listedSlot else self._vehicleList(slot)
+            for slot in (self.ownerSlot, self.fleetSlot)
+            if slot is listedSlot or slot.usable("read")
+        ]
+        if lists and all(isinstance(cars, list) for cars in lists):
+            held.resolveLegacyIds(
+                {car.get("id"): car.get("vin") for cars in lists for car in cars}
+            )
+
+    def _vehicleList(self, slot):
+        # One free GET of the slot's vehicle list: the listed cars; None when
+        # the slot refused (it is cleared or paused, with no API error
+        # backoff, so the next poll can use the other slot at once); False on
+        # any other failure.
+        req = None
+        url = self.vehicleListURL(slot)
+        headers = {
+            "accept": "application/json",
+            "Authorization": "Bearer " + slot.accessToken,
+        }
+        try:
+            req = requests.get(url, headers=headers, verify=slot.verifyCert, timeout=30)
+            logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
+            if req.status_code in (401, 403, 410, 412):
+                self.slotRequestFailed(slot, req)
+                return None
+            apiResponseDict = json.loads(req.text)
+            logger.debug("Car API vehicle list" + str(apiResponseDict) + "\n")
+            cars = apiResponseDict["response"][: apiResponseDict["count"]]
+            return [car for car in cars if isinstance(car, dict)]
+        except requests.exceptions.RequestException:
+            logger.info("Failed to make API call " + url)
+        except json.decoder.JSONDecodeError:
+            logger.info("Could not parse JSON result from " + url)
+        except (KeyError, TypeError):
+            # No 'response' or 'count' in the answer
+            return False
+        if req:
+            logger.log(logging.INFO6, "Response: " + req.text)
+        return False
+
+    def car_api_available(self, charge=None, vin=None):
         now = time.time()
         needSleep = False
         apiResponseDict = {}
@@ -591,7 +627,7 @@ class TeslaAPI:
         if self.getVehicleCount() < 1 and not self.loadVehicleList():
             return False
 
-        if self.getVehicleCount() > 0 and (charge or applyLimit) and not self.readOnly:
+        if self.getVehicleCount() > 0 and charge and not self.readOnly:
             # Wake cars if needed
             for vehicle in self.getCarApiVehicles():
                 if vin and vehicle.VIN != vin:
@@ -613,15 +649,6 @@ class TeslaAPI:
                         + vehicle.name
                         + ", because vehicle.stopAskingToStartCharging "
                         + " == True - it has already been requested.",
-                    )
-                    continue
-
-                if applyLimit is True and vehicle.stopTryingToApplyLimit:
-                    logger.log(
-                        logging.DEBUG2,
-                        "Don't wake "
-                        + vehicle.name
-                        + " to set the charge limit - it has already been set",
                     )
                     continue
 
@@ -1061,9 +1088,6 @@ class TeslaAPI:
             # wait 5 seconds in case of hardware differences between cars.
             time.sleep(5)
 
-            if charge:
-                self.applyChargeLimit(self.lastChargeLimitApplied, checkArrival=True)
-
             slot = self.commandSlotFor(vehicle)
             if slot is None:
                 # Read-only since the check above: Tesla refused the
@@ -1256,212 +1280,6 @@ class TeslaAPI:
         elif "string" in apiResponseDict["response"]:
             return apiResponseDict["response"]["string"].split(": ")[-1]
         return ""
-
-    def applyChargeLimit(
-        self,
-        limit,
-        checkArrival=False,
-        checkDeparture=False,
-        vin=None,
-        remoteOnly=False,
-    ):
-        # vin: act on that car only. remoteOnly asks for a cloud path, which
-        # this is. A targeted call is neither held by nor counted in the
-        # once-a-minute limit Policy's broadcasts keep.
-        target = str(vin).upper() if vin else None
-        if self.refuseCommandIfReadOnly("set_charge_limit"):
-            return "error"
-        if limit != -1 and (limit < 50 or limit > 100):
-            logger.log(logging.INFO8, "applyChargeLimit skipped")
-            return "error"
-
-        if not self.car_api_available():
-            logger.log(
-                logging.INFO8,
-                "applyChargeLimit return because car_api_available() == False",
-            )
-            return "error"
-
-        now = time.time()
-        if (
-            target is None
-            and not checkArrival
-            and not checkDeparture
-            and now - self.carApiLastChargeLimitApplyTime < 60
-        ):
-            # Don't change limits more often than once a minute. A skip, not
-            # a failure: "error" would hand the limit to the next provider
-            logger.log(
-                logging.DEBUG2,
-                "applyChargeLimit return because under 60 sec since last carApiLastChargeLimitApplyTime",
-            )
-            return "skipped"
-
-        # We need to try to apply limits if:
-        #   - We think the car is at home and the limit has changed
-        #   - We think the car is at home and we've been asked to check for departures
-        #   - We think the car is at home and we notice it gone
-        #   - We think the car is away from home and we've been asked to check for arrivals
-        #
-        # We do NOT opportunistically check for arrivals, because that would be a
-        # continuous API poll.
-        vehicles = [
-            v
-            for v in self.carApiVehicles
-            if target is None or str(v.VIN).upper() == target
-        ]
-        if target is not None and not vehicles:
-            logger.log(logging.INFO8, "applyChargeLimit: no such vehicle")
-            return "error"
-
-        needToWake = False
-        for vehicle in vehicles:
-            if self.refuseCommandFor(vehicle, "set_charge_limit"):
-                continue
-            wasAtHome, outside, lastApplied = self.master.getNormalChargeLimit(
-                vehicle.ID
-            )
-            # Don't wake cars to tell them about reduced limits;
-            # only wake if they might be able to charge further now
-            if wasAtHome and (limit > (lastApplied if lastApplied != -1 else outside)):
-                needToWake = True
-                vehicle.stopAskingToStartCharging = False
-            if (
-                wasAtHome
-                and (
-                    limit != lastApplied
-                    or checkDeparture
-                    or (vehicle.update_location() and not vehicle.atHome)
-                )
-            ) or (not wasAtHome and checkArrival):
-                vehicle.stopTryingToApplyLimit = False
-                vehicle.stopAskingToStartCharging = False
-
-        if needToWake and self.car_api_available(applyLimit=True, vin=target) is False:
-            logger.log(
-                logging.INFO8,
-                "applyChargeLimit return because car_api_available() == False",
-            )
-            return self._unavailableResult()
-
-        if target is None and self.lastChargeLimitApplied != limit:
-            if limit != -1:
-                logger.log(
-                    logging.INFO2,
-                    "Attempting to apply limit of "
-                    + str(limit)
-                    + "% to all vehicles at home",
-                )
-            else:
-                logger.log(
-                    logging.INFO2,
-                    "Attempting to restore charge limits for all vehicles at home",
-                )
-            self.lastChargeLimitApplied = limit
-
-        if target is None:
-            self.carApiLastChargeLimitApplyTime = now
-
-        needSleep = False
-        refused = False
-        for vehicle in vehicles:
-            if self.refuseCommandFor(vehicle, "set_charge_limit"):
-                refused = True
-                continue
-            if vehicle.stopTryingToApplyLimit or not vehicle.ready():
-                continue
-
-            wasAtHome, outside, lastApplied = self.master.getNormalChargeLimit(
-                vehicle.ID
-            )
-            forgetVehicle = False
-            if not vehicle.update_charge() or not vehicle.update_location():
-                # We failed to read the "normal" limit or locate the car; don't
-                # risk changing the charge limit yet.
-                continue
-
-            if not wasAtHome and not vehicle.atHome:
-                # If the vehicle was away and is still away, nothing to do.
-                continue
-
-            if not wasAtHome and vehicle.atHome:
-                logger.log(logging.INFO2, vehicle.name + " has arrived")
-                vehicle.stopAskingToStartCharging = False
-                outside = vehicle.chargeLimit
-            elif wasAtHome and not vehicle.atHome:
-                logger.log(logging.INFO2, vehicle.name + " has departed")
-                # Don't ask a departed vehicle to start charging; it's not here
-                vehicle.stopAskingToStartCharging = True
-                forgetVehicle = True
-
-            if limit == -1 or not vehicle.atHome:
-                # We're removing any applied limit, provided it hasn't been manually changed
-                #
-                # If lastApplied == -1, the manual-change path is always selected.
-                if (
-                    wasAtHome
-                    and vehicle.chargeLimit == lastApplied
-                    and vehicle.chargeLimit != outside
-                ):
-                    if vehicle.apply_charge_limit(outside):
-                        logger.log(
-                            logging.INFO2,
-                            "Restoring "
-                            + vehicle.name
-                            + " to charge limit "
-                            + str(outside)
-                            + "%",
-                        )
-                        vehicle.stopTryingToApplyLimit = True
-                else:
-                    # If the charge limit has been manually changed, user action overrides the
-                    # saved charge limit.  Leave it alone.
-                    vehicle.stopTryingToApplyLimit = True
-                    outside = vehicle.chargeLimit
-
-                if vehicle.stopTryingToApplyLimit:
-                    if forgetVehicle:
-                        self.master.removeNormalChargeLimit(vehicle.ID)
-                    else:
-                        self.master.saveNormalChargeLimit(vehicle.ID, outside, -1)
-            else:
-                if vehicle.chargeLimit != limit:
-                    if vehicle.apply_charge_limit(limit):
-                        logger.log(
-                            logging.INFO2,
-                            "Set "
-                            + vehicle.name
-                            + " to charge limit of "
-                            + str(limit)
-                            + "%",
-                        )
-                        vehicle.stopTryingToApplyLimit = True
-                else:
-                    vehicle.stopTryingToApplyLimit = True
-
-                if vehicle.stopTryingToApplyLimit:
-                    self.master.saveNormalChargeLimit(vehicle.ID, outside, limit)
-
-            if vehicle.atHome and vehicle.stopTryingToApplyLimit:
-                needSleep = True
-            if self.readOnlyFor(vehicle):
-                # Tesla refused the Owner API limit sent just now
-                refused = True
-
-        if needSleep:
-            # If you start charging too quickly after setting the charge limit,
-            # the vehicle sometimes refuses the start command because it's
-            # "fully charged" under the old limit, but then continues to say
-            # charging was stopped once the new limit is in place.
-            time.sleep(5)
-
-        if checkArrival:
-            self.updateChargeAtHome()
-
-        # VehiclePriority reads None as failure and would try the next
-        # provider (Home Assistant: a second, billed command). A car this
-        # module may not command is a failure, so the next provider gets it.
-        return "error" if refused else "success"
 
     def _unavailableResult(self):
         # car_api_available() is False on a failure (no usable token, no
@@ -2305,9 +2123,12 @@ class TeslaAPI:
     # in between). Nothing here retries a billed request.
 
     def command(self, vehicle, name: str, body: Optional[dict] = None) -> Outcome:
-        # One Fleet API command (name, e.g. "set_charge_limit") to vehicle
-        slot = self.slotFor("command")
+        # One Tesla API command (name, e.g. "set_charge_limit") to vehicle,
+        # through the slot that may command this car (commandSlotFor)
+        slot = self.commandSlotFor(vehicle)
         if slot is None:
+            # Says once why this car is read-only
+            self.refuseCommandFor(vehicle, name)
             return Outcome(REFUSED, "no command token")
         if self.getCarApiRetryRemaining(vehicle, now=self.now()):
             return Outcome(UNREACHABLE, "backoff")
@@ -2361,6 +2182,10 @@ class TeslaAPI:
             except requests.exceptions.RequestException as e:
                 return Outcome(ERROR, type(e).__name__), None
             code = req.status_code
+            if slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
+                # Tesla refused the Owner API for this car (logged, latched):
+                # no error backoff, so the next provider sends at once
+                return Outcome(REFUSED, "owner refused"), None
             if code == 401:
                 # Under the slot's lock, so no other thread refreshes, pastes
                 # or clears the token between this check and what follows
@@ -2481,8 +2306,9 @@ class TeslaAPI:
         # online check (vehicles/{vin}, cached 120 s) says it is not online
         # and wakeDue allows it. One wake_up at most.
         now = self.now() if now is None else now
-        slot = self.slotFor("command")
+        slot = self.commandSlotFor(vehicle)
         if slot is None:
+            self.refuseCommandFor(vehicle, "wake_up")
             return Outcome(REFUSED, "no command token")
         if self.getCarApiRetryRemaining(vehicle, now=now):
             # Told to back off: not even the free check
@@ -2497,10 +2323,11 @@ class TeslaAPI:
         if not vehicle.lastVehicleAwakeKnown:
             # No free answer (no read token, an error): never wake blind
             return Outcome(UNREACHABLE, "online check failed")
-        if not slot.usable("wake"):
+        if slot is self.fleetSlot and not slot.usable("wake"):
             # Tesla refused a wake with this token (403): no wake_up until
             # the token changes. Checked after the free online check, so an
-            # online car still gets its command
+            # online car still gets its command. An Owner refusal is noted
+            # per car instead
             return Outcome(UNREACHABLE, "wake refused")
         if vehicle.firstChargeNeededTime == 0:
             vehicle.firstChargeNeededTime = now
@@ -2730,6 +2557,7 @@ class TeslaAPI:
     def updateChargeAtHome(self):
         # True when this module holds cars to refresh, so VehiclePriority's
         # walk ends here; False lets another module refresh its own cars
+        self.loadList()
         for car in self.carApiVehicles:
             if car.atHome:
                 car.update_charge()
@@ -2870,7 +2698,6 @@ class CarApiVehicle:
     lastAPIAccessTime = 0
     lastWakeSentTime = 0
     delayNextWakeAttempt = 0
-    lastLimitAttemptTime = 0
 
     errorCount = 0
     lastErrorTime = 0
@@ -2885,7 +2712,6 @@ class CarApiVehicle:
     # When a wake was last asked for (TeslaAPI's charge-need lifetime)
     lastChargeNeededTime = 0
     stopAskingToStartCharging = False
-    stopTryingToApplyLimit = False
     statusDeferral = 0
     # command_signing from Tesla's vehicle list: Owner API commands go only
     # to cars where it is "off". ownerCommandsRefused is set when Tesla
@@ -2962,13 +2788,6 @@ class CarApiVehicle:
                 "FleetAPI", lambda: carapi.fleetSlot.usable("command"), "listed"
             )
             self._vehicle = vehicle
-        # A held limit migrated under this car's numeric ID moves under its
-        # VIN now that the listing names both. On every bind: the entry may
-        # appear after the first (settings loaded after the listing); the
-        # unlocked check is one dict lookup.
-        held = getattr(getattr(self.carapi, "master", None), "heldLimits", None)
-        if held is not None:
-            held.adoptLegacyId(self.ID, self.VIN)
         return vehicle
 
     def _liveVehicle(self):
@@ -3346,87 +3165,3 @@ class CarApiVehicle:
         self._actualCurrent = value
         if changed:
             self.lastCurrentChangeTime = time.time()
-
-    def apply_charge_limit(self, limit):
-        if self.carapi.refuseCommandFor(self, "set_charge_limit"):
-            return False
-
-        if self.stopTryingToApplyLimit:
-            return True
-
-        now = time.time()
-
-        if (
-            now - self.lastLimitAttemptTime <= 300
-            or self.carapi.getCarApiRetryRemaining(self)
-        ):
-            return False
-
-        if self.ready() is False:
-            return False
-
-        self.lastLimitAttemptTime = now
-
-        slot = self.carapi.commandSlotFor(self)
-        url = slot.baseURL + "/"
-        url = url + str(self.VIN) + "/command/set_charge_limit"
-
-        headers = {
-            "accept": "application/json",
-            "Authorization": "Bearer " + slot.accessToken,
-        }
-        body = {"percent": limit}
-
-        refreshed = False
-        for _ in range(0, 3):
-            req = None
-            try:
-                req = requests.post(
-                    url, headers=headers, json=body, verify=slot.verifyCert
-                )
-                logger.log(logging.INFO8, "Car API cmd set_charge_limit " + str(req))
-
-                apiResponseDict = json.loads(req.text)
-            except requests.exceptions.RequestException:
-                pass
-            except json.decoder.JSONDecodeError:
-                pass
-
-            if slot is self.carapi.ownerSlot and self.carapi.noteOwnerCommandRefused(
-                self, req
-            ):
-                return False
-            if getattr(req, "status_code", None) == 401:
-                sent = headers["Authorization"].split(" ", 1)[-1]
-                if not refreshed and self.carapi.slotCommandFailed(slot, req, sent):
-                    refreshed = True
-                    headers["Authorization"] = "Bearer " + slot.accessToken
-                    continue
-                return False
-
-            result = False
-            reason = ""
-            try:
-                result = apiResponseDict["response"]["result"]
-                reason = self.carapi.findReason(apiResponseDict)
-            except (KeyError, TypeError):
-                # This catches unexpected cases like trying to access
-                # apiResponseDict['response'] when 'response' doesn't exist
-                # in apiResponseDict.
-                result = False
-
-            if result is True or reason == "already_set":
-                registryVehicle = self._liveVehicle()
-                if registryVehicle is not None:
-                    registryVehicle.noteWrite("chargeLimit", limit, "TeslaAPI")
-                self.stopTryingToApplyLimit = True
-                self.lastAPIAccessTime = now
-                self.carapi.resetCarApiLastErrorTime(self)
-                return True
-            elif reason == "could_not_wake_buses":
-                time.sleep(5)
-                continue
-            else:
-                self.carapi.updateCarApiLastErrorTime(self)
-
-        return False

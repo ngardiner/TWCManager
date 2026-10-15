@@ -65,14 +65,6 @@ class TestTeslaAPIRefusesCommands:
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
-    def test_apply_charge_limit(self, owner_api, any_http):
-        assert owner_api.applyChargeLimit(80) == "error"
-        assert owner_api.applyChargeLimit(80, checkArrival=True) == "error"
-        vehicle = owner_api.getCarApiVehicles()[0]
-        assert vehicle.apply_charge_limit(80) is False
-        assert any_http.call_count == 0
-        assert no_error_recorded(owner_api)
-
     def test_wake(self, owner_api, any_http):
         vehicle = owner_api.getCarApiVehicles()[0]
         assert owner_api.wakeVehicle(vehicle) is False
@@ -83,7 +75,6 @@ class TestTeslaAPIRefusesCommands:
         vehicle = owner_api.getCarApiVehicles()[0]
         vehicle.lastAPIAccessTime = 0  # asleep as far as we know
         owner_api.car_api_available(charge=True)
-        owner_api.car_api_available(applyLimit=True)
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
@@ -226,9 +217,7 @@ class TestVehiclePrioritySkipsReadOnly:
         assert priority.setChargeRate(10) is True
         assert api.setChargeRate.called
 
-    @pytest.mark.parametrize(
-        "method", ["car_api_charge", "applyChargeLimit", "wakeVehicle"]
-    )
+    @pytest.mark.parametrize("method", ["car_api_charge", "wakeVehicle"])
     def test_every_command_method_skips(self, method, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
         setattr(ble, method, Mock(return_value=False))
@@ -253,13 +242,9 @@ COMMANDS = {
         "/command/set_charging_amps",
         lambda api, vehicle: api.setChargeRate(10, vehicle),
     ),
-    "apply_charge_limit": (
+    "set_charge_limit": (
         "/command/set_charge_limit",
-        lambda api, vehicle: vehicle.apply_charge_limit(80),
-    ),
-    "applyChargeLimit": (
-        "/command/set_charge_limit",
-        lambda api, vehicle: api.applyChargeLimit(80),
+        lambda api, vehicle: owner_provider(api).setChargeLimit(vehicle.VIN, 80),
     ),
     "charge_start": (
         "/command/charge_start",
@@ -273,14 +258,30 @@ COMMANDS = {
 }
 
 
+def owner_provider(api):
+    """The OwnerAPI provider: charge limits go through the reconciler's
+    provider command methods, which send through commandSlotFor."""
+    return api.providers()[0]
+
+
+class Refusal:
+    """Matches an Outcome whose kind is one of the given kinds."""
+
+    def __init__(self, *kinds):
+        self.kinds = kinds
+
+    def __eq__(self, other):
+        return getattr(other, "kind", None) in self.kinds
+
+
+REFUSED_OUTCOME = Refusal("refused")
+
 # What each command path returns when Tesla refuses it (and latches the
-# car), then when it is refused locally afterwards. applyChargeLimit returns
-# None after any send it makes; once every car is read-only it refuses at the
-# top with "error". VehiclePriority treats all of these as failure.
+# car), then when it is refused locally afterwards. VehiclePriority and the
+# reconciler treat all of these as failure.
 REFUSED_RETURNS = {
     "set_charging_amps": (False, False),
-    "apply_charge_limit": (False, False),
-    "applyChargeLimit": ("error", "error"),
+    "set_charge_limit": (REFUSED_OUTCOME, REFUSED_OUTCOME),
     "charge_start": ("error", "error"),
     "charge_stop": ("error", "error"),
     "wake_up": (False, False),
@@ -448,7 +449,7 @@ class TestRefusedVehicles:
 
         assert api.readOnly is True
         assert api.readOnlyFor(vehicle) is True
-        assert send(api, vehicle) in (False, "error")
+        assert send(api, vehicle) in (False, "error", REFUSED_OUTCOME)
 
         assert any_http.call_count == 0
         assert no_error_recorded(api)
@@ -542,10 +543,6 @@ PRIORITY_CALLS = {
     "setChargeRate": (
         "/command/set_charging_amps",
         lambda priority, vehicle: priority.setChargeRate(10, vehicle),
-    ),
-    "applyChargeLimit": (
-        "/command/set_charge_limit",
-        lambda priority, vehicle: priority.applyChargeLimit(80),
     ),
     "car_api_charge": (
         "/command/charge_stop",
@@ -703,8 +700,8 @@ class TestOwnerCommandRefusedByTesla:
     # What each path returns for those answers, as before the latch.
     FLEET_RETURNS = {
         "set_charging_amps": lambda body: body,
-        "apply_charge_limit": lambda body: False,
-        "applyChargeLimit": lambda body: "success",
+        # A Fleet refusal is REFUSED (403, 412) or ERROR (410)
+        "set_charge_limit": lambda body: Refusal("refused", "error"),
         "charge_start": lambda body: "error",
         "charge_stop": lambda body: "error",
         "wake_up": lambda body: False,
@@ -724,7 +721,12 @@ class TestOwnerCommandRefusedByTesla:
 
         assert cmd.call_count >= 1
         assert vehicle.ownerCommandsRefused is False
-        assert api.commandSlotFor(vehicle) is api.fleetSlot
+        # The reconciler path retires a Fleet token Tesla refused (403, 412);
+        # the Owner token then carries this car's commands
+        if api.fleetSlot.usable("command"):
+            assert api.commandSlotFor(vehicle) is api.fleetSlot
+        else:
+            assert api.commandSlotFor(vehicle) is api.ownerSlot
         assert api.readOnlyFor(vehicle) is False
 
 
@@ -900,9 +902,7 @@ class TestVehiclePriorityLogsWhy:
     """When every listed car is read-only, VehiclePriority skips TeslaAPI
     without calling it; the skip still logs the per-car reason once."""
 
-    @pytest.mark.parametrize(
-        "method", ["setChargeRate", "car_api_charge", "applyChargeLimit"]
-    )
+    @pytest.mark.parametrize("method", ["setChargeRate", "car_api_charge"])
     def test_one_line_naming_the_car(self, owner_car, any_http, caplog, method):
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car("required")
@@ -914,7 +914,6 @@ class TestVehiclePriorityLogsWhy:
             "car_api_charge": lambda priority: priority.car_api_charge(
                 {"charge": True}
             ),
-            "applyChargeLimit": lambda priority: priority.applyChargeLimit(80),
         }
 
         for _ in range(5):

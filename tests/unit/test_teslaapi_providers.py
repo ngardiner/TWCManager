@@ -89,7 +89,7 @@ def test_fleet_commands_resolve_the_car_by_vin():
     api.wakeOutcome.assert_called_once_with(car, now=1000.0)
     assert fleet.setAmps("5YJ3E1EA1KF000009", 10) == O.Outcome(O.UNSUPPORTED, "not listed")
     assert fleet.wake("5YJ3E1EA1KF000009") == O.Outcome(O.UNSUPPORTED, "not listed")
-    assert owner.setAmps(VIN, 10).kind == O.UNSUPPORTED    # Owner declares no commands
+    assert owner.setAmps(VIN, 10) == O.Outcome(O.DONE)    # the Owner provider shares the command path
 
 
 def test_read_source_passes_its_slot_to_the_car():

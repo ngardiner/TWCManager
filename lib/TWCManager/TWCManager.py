@@ -41,6 +41,7 @@ import yaml
 import threading
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
+from TWCManager.Vehicle.Reconcile.Targets import onArrival, onDeparture
 import requests
 from enum import Enum
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -309,6 +310,12 @@ def get_vehicle_module():
     return None
 
 
+def shutdownTimeouts(now, shutdownDeadline):
+    # The deadline both vehicle drains share: at most 60 s, and at least 20 s
+    # before the shutdown deadline is left for saveSettings (held limits)
+    return min(shutdownDeadline - 20, now + 60)
+
+
 def background_tasks_thread(master):
     while True:
         try:
@@ -320,26 +327,18 @@ def background_tasks_thread(master):
 
             if "cmd" in task:
                 if task["cmd"] == "checkArrival":
-                    # Use the policy-tracked limit, not TeslaAPI's own
-                    # lastChargeLimitApplied: that attribute is only updated
-                    # when TeslaAPI itself applies a limit, so it stays 0
-                    # (and this would wrongly restore/-1) whenever TeslaBLE
-                    # is the module actually managing charge limits.
-                    limit = (
-                        master.lastChargeLimitApplied
-                        if master.lastChargeLimitApplied != 0
-                        else -1
-                    )
-                    vehicleModule.applyChargeLimit(limit=limit, checkArrival=True)
+                    onArrival(master)
+                    # A free vehicle list load; refreshes cars at home, as
+                    # an arrival always has
+                    vehicleModule.updateChargeAtHome()
                 elif task["cmd"] == "checkCharge":
                     vehicleModule.updateChargeAtHome()
+                elif task["cmd"] == "loadVehicleList":
+                    carapi = master.getModuleByName("TeslaAPI")
+                    if carapi:
+                        carapi.loadList()
                 elif task["cmd"] == "checkDeparture":
-                    limit = (
-                        master.lastChargeLimitApplied
-                        if master.lastChargeLimitApplied != 0
-                        else -1
-                    )
-                    vehicleModule.applyChargeLimit(limit=limit, checkDeparture=True)
+                    onDeparture(master)
                 elif task["cmd"] == "checkGreenEnergy":
                     check_green_energy()
                 elif task["cmd"] == "checkVINEntitlement":
@@ -843,6 +842,10 @@ backgroundTasksThread.start()
 # their own worker so slow BLE retries never block this thread or the
 # background thread.
 master.vehicleCommandQueue.start()
+master.reconciler.start()
+# The Tesla API vehicle list loads here (a free call), so the cloud
+# providers can carry commands before any arrival
+master.queue_background_task({"cmd": "checkCharge"})
 
 # Charging policy is evaluated on its own thread so module I/O done by
 # policy conditions never stalls serial servicing. The first evaluation
@@ -1034,6 +1037,10 @@ while True:
             carapi = master.getModuleByName("TeslaAPI")
             if carapi:
                 carapi.refreshTokenIfNeeded()
+                if carapi.listPending():
+                    # A list load that failed (at boot, say) or held limits
+                    # still waiting on it retry here: free calls only
+                    master.queue_background_task({"cmd": "loadVehicleList"})
 
         ########################################################################
         # See if there's an incoming message on the input interface.
@@ -2052,7 +2059,12 @@ master.queue_background_task({"cmd": "saveSettings"})
 
 # Let pending stop-charging commands reach the car; other pending vehicle
 # commands are dropped rather than holding up shutdown.
-master.vehicleCommandQueue.drain_high_priority(timeout=60)
+master.reconciler.stop()
+vehicleDeadline = shutdownTimeouts(time.time(), shutdownDeadline)
+master.reconciler.drain(max(0, vehicleDeadline - time.time()))
+master.vehicleCommandQueue.drain_high_priority(
+    timeout=max(0, vehicleDeadline - time.time())
+)
 
 # Wait for the background tasks thread to finish its queued tasks, but only
 # until the shutdown deadline: a task blocked on the BLE lock must not hold
