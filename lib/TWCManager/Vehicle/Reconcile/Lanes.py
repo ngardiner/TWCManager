@@ -36,11 +36,16 @@ from .Outcome import (
     REFUSED,
     SATISFIED,
     UNREACHABLE,
+    UNSUPPORTED,
     Outcome,
     isOutcome,
 )
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
+
+# The rate-limit window's clock, the one use of monotonic time here (an alias
+# a test can patch without touching the time module)
+_monotonic = time.monotonic
 
 LANE_PROVIDERS = {
     "local": frozenset({"Gen2TWC", "Gen3TWC"}),
@@ -61,6 +66,8 @@ _VALUE_COMMANDS = frozenset({SET_CHARGE_LIMIT, SET_AMPS})
 # A provider's SATISFIED is stamped for these only: a SATISFIED start/stop
 # leaves the state the read gave
 _STAMP_SATISFIED = frozenset({CHARGE_LIMIT, AMPS})
+# The wake outcomes after which a non-local provider's command goes out
+_WAKE_PROCEEDS = frozenset({DONE, SATISFIED, UNSUPPORTED})
 
 _RECONCILER = __name__.rsplit(".", 1)[0] + ".Reconciler"
 
@@ -166,28 +173,23 @@ def runAttempt(master, lane, attempt) -> Outcome:
             woke = lane._checked(provider, WAKE, provider.wake(vin))
             if woke.kind == REFUSED:
                 return woke
-            if woke.kind == UNREACHABLE:
+            if woke.kind not in _WAKE_PROCEEDS:
                 if not provider.local:
+                    # A billed command to a car that may still be asleep is
+                    # never sent: any failed wake ends the attempt
                     return woke
                 # Today's BLE behaviour: the command still goes out
                 logger.debug(
-                    "%s wake for %s unreachable; sending anyway", provider.name, vin
+                    "%s wake for %s failed (%s); sending anyway",
+                    provider.name,
+                    vin,
+                    woke.kind,
                 )
         outcome = lane._checked(
             provider,
             commandMethod(attempt.capability),
             _call(provider, attempt.capability, vin, value),
         )
-        if aspect is not None and (
-            outcome.kind == DONE
-            or (outcome.kind == SATISFIED and aspect in _STAMP_SATISFIED)
-        ):
-            cost = provider.cost(attempt.capability)
-            if cost is None or cost.tier != TIER_DISRUPTIVE:
-                vehicle.noteWrite(field, writtenValue(aspect, value), provider.name)
-        if hooks is not None:
-            hooks.afterWrite(vehicle, attempt, outcome)
-        return outcome
     except Exception as e:
         logger.debug(
             "%s %s for %s raised %s",
@@ -197,6 +199,36 @@ def runAttempt(master, lane, attempt) -> Outcome:
             type(e).__name__,
         )
         return Outcome(ERROR, type(e).__name__)
+    # The command has run: whatever fails from here on, its outcome stands. A
+    # paid command that took effect must never come back as a retryable ERROR
+    try:
+        if aspect is not None and (
+            outcome.kind == DONE
+            or (outcome.kind == SATISFIED and aspect in _STAMP_SATISFIED)
+        ):
+            cost = provider.cost(attempt.capability)
+            if cost is None or cost.tier != TIER_DISRUPTIVE:
+                vehicle.noteWrite(field, writtenValue(aspect, value), provider.name)
+    except Exception as e:
+        logger.warning(
+            "Lane %s: stamping %s for %s raised %s",
+            lane.name,
+            attempt.capability,
+            vin,
+            type(e).__name__,
+        )
+    if hooks is not None:
+        try:
+            hooks.afterWrite(vehicle, attempt, outcome)
+        except Exception as e:
+            logger.warning(
+                "Lane %s: afterWrite for %s %s raised %s",
+                lane.name,
+                attempt.capability,
+                vin,
+                type(e).__name__,
+            )
+    return outcome
 
 
 class Lane:
@@ -301,7 +333,15 @@ class Lane:
             if closed:
                 self._deliver(attempt, Outcome(ERROR, "dropped"))
                 return False
-            self._runOne(attempt)
+            # Inline callers may overlap; busy shows the latest one running
+            with self._cond:
+                self._running = attempt
+            try:
+                self._runOne(attempt)
+            finally:
+                with self._cond:
+                    if self._running is attempt:
+                        self._running = None
             return True
         key = entryKey(attempt)
         losers = []
@@ -402,7 +442,7 @@ class Lane:
         limit = self._rateLimit(provider, capability)
         if limit is None:
             return True
-        now = time.monotonic()
+        now = _monotonic()
         with self._cond:
             window = self._windows.get((provider.name, capability, vin))
             if window is None:
@@ -415,7 +455,7 @@ class Lane:
         limit = self._rateLimit(provider, capability)
         if limit is None or limit.calls < 1:
             return
-        now = time.monotonic()
+        now = _monotonic()
         with self._cond:
             # Forget windows that no longer constrain anything, so the map
             # stays bounded by the cars recently commanded
@@ -500,9 +540,13 @@ class Lane:
             thread = self._thread
         if thread is None:
             # Never started: the pending stops run here, one by one, while
-            # time remains (bounded by MAX_PENDING entries)
+            # time remains (bounded by MAX_PENDING entries). Concurrent
+            # drainers share one runner: while another runs, this one waits
             while time.time() < deadline:
                 with self._cond:
+                    if self._running is not None:
+                        self._cond.wait(timeout=min(deadline - time.time(), self.WAIT))
+                        continue
                     if not self._pending:
                         break
                     attempt = self._pending.pop(0)[1]
@@ -512,6 +556,7 @@ class Lane:
                 finally:
                     with self._cond:
                         self._running = None
+                        self._cond.notify_all()
         else:
             with self._cond:
                 while self._pending or self._running is not None:
@@ -536,7 +581,7 @@ class Lane:
             )
         self._deliverAll(losers)
         if finished and thread is not None:
-            thread.join(max(0.0, min(self.WAIT, deadline - time.time())))
+            thread.join(min(self.WAIT, max(0.1, deadline - time.time())))
         return finished
 
     def drain(self, timeout) -> bool:

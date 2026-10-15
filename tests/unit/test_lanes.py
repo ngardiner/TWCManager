@@ -53,7 +53,7 @@ def test_disruptive_stop_and_satisfied_start_are_not_stamped():
 
 def test_rate_limit_per_provider_capability_and_vin(monkeypatch):
     import TWCManager.Vehicle.Reconcile.Lanes as L
-    mono = Clock(); monkeypatch.setattr(L.time, "monotonic", mono)
+    mono = Clock(); monkeypatch.setattr(L, "_monotonic", mono)
     p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); p.declarations = lambda: {C.SET_AMPS: C.Declaration(C.FLEET_COMMAND, C.RateLimit(2, 60))}
     m, _ = setup(p)
     for _ in range(2): assert m.lanes.allows(p, C.SET_AMPS, VIN); m.lanes.submit(attempt(C.SET_AMPS, 10, "FleetAPI", AMPS))
@@ -122,9 +122,10 @@ def test_started_lane_runs_on_its_own_thread_and_drain_joins_it():
         assert m.lanes.submit(a) is True and done.wait(5)
         assert reports[0][0] is a and reports[0][1].kind == O.DONE and seen == [lane._thread.name] != [threading.current_thread().name]
         w = m.vehicleRegistry.get(VIN).lastWrite("chargeLimit"); assert abs(w.at - time.time()) < 5
+        drained = m.lanes.drain(5)
     finally:
-        assert m.lanes.drain(5) is True
-        joined(lane); joined(m.lanes.laneFor("TeslaBLE"))
+        m.lanes.drain(5); joined(lane); joined(m.lanes.laneFor("TeslaBLE"))
+    assert drained is True
 
 def test_drain_is_not_held_past_its_timeout_by_a_hung_attempt():   # Review Focus 5
     release = threading.Event(); started = threading.Event()
@@ -142,7 +143,7 @@ def test_drain_is_not_held_past_its_timeout_by_a_hung_attempt():   # Review Focu
     assert reports[-1][0] is stop and reports[-1][1].kind == O.DONE and len(reports) == 3     # each entry reported once
 
 def test_drain_on_a_started_lane_lets_its_thread_run_the_pending_stop():
-    gate = threading.Event(); calls = []
+    gate = threading.Event(); calls = []; timer = threading.Timer(0, lambda: None)
     p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)])
     def first(vin, limit): gate.wait(5); calls.append(threading.current_thread().name); return O.Outcome(O.DONE)
     def stop(vin): calls.append(threading.current_thread().name); return O.Outcome(O.DONE)
@@ -150,10 +151,10 @@ def test_drain_on_a_started_lane_lets_its_thread_run_the_pending_stop():
     try:
         lane.submit(attempt(provider="FleetAPI")); assert wait_for(lambda: lane.busy)
         lane.submit(attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING))
-        threading.Timer(0.2, gate.set).start()
+        timer = threading.Timer(0.2, gate.set); timer.start()
         assert m.lanes.drain(5) is True and calls == [lane._thread.name] * 2 and [r[1].kind for r in reports] == [O.DONE, O.DONE]
     finally:
-        gate.set(); joined(lane)
+        gate.set(); joined(lane); timer.join(5)
 
 def test_replaced_and_dropped_report_the_losing_attempt_object():
     p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, _ = setup(p, inline=False)
@@ -246,3 +247,58 @@ def test_drain_delivers_a_cloud_stop_and_drops_a_ble_limit():       # Review Foc
     m.lanes.submit(attempt(provider="TeslaBLE")); m.lanes.submit(attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING))
     assert m.lanes.drain(5) is True and b.calls == [] and f.calls == [("stopCharging", VIN, None)]
     assert sorted(reports) == [("FleetAPI", O.DONE, ""), ("TeslaBLE", O.ERROR, "dropped")] and m.lanes.pending() == 0
+
+
+# Fix round 1
+
+def test_a_raising_after_write_keeps_the_sent_command_done():          # I1: a sent paid command never comes back retryable
+    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, reports = setup(p)
+    def boom(*a): raise RuntimeError("secret-token")
+    m.vehicleRegistry.get(VIN).noteWrite = boom
+    assert m.lanes.submit(attempt(provider="FleetAPI")) is True and reports == [("FleetAPI", O.DONE, "")]
+    assert p.calls == [("setChargeLimit", VIN, 80)]                                       # sent once, nothing resent
+    p.cost = boom; m.lanes.submit(attempt(provider="FleetAPI")); assert reports[-1] == ("FleetAPI", O.DONE, "")
+
+def test_a_raising_after_write_hook_keeps_the_sent_command_done(monkeypatch):   # I1, the Task 6 hook path
+    import TWCManager.Vehicle.Reconcile.Lanes as L
+    class Hooks:
+        def beforeWrite(self, vehicle, attempt, provider, believed): return attempt.value, None
+        def afterWrite(self, vehicle, attempt, outcome): raise ValueError("secret-token")
+    monkeypatch.setattr(L, "_reconcilerParts", lambda: (Hooks, L._satisfied, frozenset()))
+    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, reports = setup(p); m.reconciler = Hooks()
+    m.lanes.submit(attempt(provider="FleetAPI")); assert reports == [("FleetAPI", O.DONE, "")] and len(p.calls) == 1
+    assert m.vehicleRegistry.get(VIN).lastWrite("chargeLimit").value == 80
+
+def test_a_failed_billed_wake_never_sends_the_billed_command():        # I2
+    for wakeResult in (O.Outcome(O.ERROR, "500"), True):
+        f = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); f.wake = lambda vin, r=wakeResult: (f.calls.append(("wake", vin, None)), r)[1]
+        m, reports = setup(f)
+        m.lanes.submit(attempt(provider="FleetAPI", wake=True)); assert [c[0] for c in f.calls] == ["wake"] and kinds(reports) == [O.ERROR]
+    for ok in (O.DONE, O.SATISFIED, O.UNSUPPORTED):
+        f = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(ok), O.Outcome(O.DONE)]); m, reports = setup(f)
+        m.lanes.submit(attempt(provider="FleetAPI", wake=True)); assert [c[0] for c in f.calls] == ["wake", "setChargeLimit"]
+    b = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.ERROR, "timeout"), O.Outcome(O.DONE)]); m, reports = setup(b)
+    m.lanes.submit(attempt(wake=True)); assert [c[0] for c in b.calls] == ["wake", "setChargeLimit"] and kinds(reports) == [O.DONE]   # local: still sent
+
+def test_concurrent_drains_of_a_never_started_lane_share_one_runner():   # M1
+    gate = threading.Event(); started = threading.Event(); state = {"in": 0, "max": 0}; lock = threading.Lock()
+    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)])
+    def stop(vin):
+        with lock: state["in"] += 1; state["max"] = max(state["max"], state["in"])
+        started.set(); gate.wait(5)
+        with lock: state["in"] -= 1
+        return O.Outcome(O.DONE)
+    p.stopCharging = stop; m, reports = setup(p, inline=False); lane = m.lanes.laneFor("FleetAPI")
+    for i in range(3):
+        k = "5YJ3E1EA1KF%06d" % (i + 10); m.vehicleRegistry.getOrCreate(k, "t"); lane.submit(attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING)._replace(key=k))
+    res = []; ts = [threading.Thread(target=lambda: res.append(lane.drain(5))) for _ in range(3)]
+    ts[0].start(); assert started.wait(5)
+    for t in ts[1:]: t.start()
+    time.sleep(0.1); gate.set()
+    for t in ts: t.join(10); assert not t.is_alive()
+    assert res == [True] * 3 and state["max"] == 1 and kinds(reports) == [O.DONE] * 3 and lane.pending() == 0
+
+def test_an_inline_lane_is_busy_while_it_runs():                        # M3
+    p = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.DONE)]); m, reports = setup(p); lane = m.lanes.laneFor("TeslaBLE"); seen = []
+    p.setChargeLimit = lambda vin, limit: (seen.append((lane.busy, lane.summary()["running"]["key"])), O.Outcome(O.DONE))[1]
+    m.lanes.submit(attempt()); assert seen == [(True, VIN)] and lane.busy is False
