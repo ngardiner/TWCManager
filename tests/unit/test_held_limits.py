@@ -133,11 +133,15 @@ def test_realistic_settings_file_migrates(tmp_path, caplog):
         "id:1492931338": {"outside": 85, "held": None},
         "id:1492931339": {"outside": 70, "held": None},
         VIN3: {"outside": 80, "held": None},
+        # held out of range: the user's normal limit is kept, nothing held
+        "id:999": {"outside": 80, "held": None},
     }
     assert "chargeLimits" not in m.settings
     m.heldLimits._save.assert_called_once_with()
     warned = [r for r in caplog.records if r.levelno == logging.WARNING]
+    # three dropped (bad outside values), one held value discarded
     assert len(warned) == 4 and all("chargeLimits" in r.getMessage() for r in warned)
+    assert sum("Dropped" in r.getMessage() for r in warned) == 3
     assert m.heldLimits.vins() == sorted([VIN, VIN2, VIN3])
     assert m.heldLimits.holding() == [VIN2]
     # the store survives a JSON round trip unchanged
@@ -306,3 +310,37 @@ def test_store_never_keeps_the_sentinel():
     m, s = make()
     m.heldLimits.set(VIN, 80, -1)
     assert m.settings["heldLimits"][VIN] == {"outside": 80, "held": None}
+
+
+def test_out_of_range_held_keeps_the_outside_limit(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {VIN: [80, 30], VIN2: [80, 101]}
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.load()
+    assert m.heldLimits.get(VIN) == HeldLimit(80, None)
+    assert m.heldLimits.get(VIN2) == HeldLimit(80, None)
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warned) == 2 and not any("Dropped" in w for w in warned)
+
+
+def test_invalid_outside_is_dropped(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {VIN: ["80", 50], VIN2: [None, 50], VIN3: 80}
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.load()
+    assert m.heldLimits.get(VIN) is None and m.heldLimits.get(VIN2) is None
+    assert m.heldLimits.get(VIN3) == HeldLimit(80, None)
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warned) == 2 and all("Dropped" in w for w in warned)
+
+
+def test_case_collision_warns_naming_both_keys(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {VIN.lower(): [70, None], VIN: [80, 50]}
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.load()
+    # the later key wins, and the warning says which one
+    assert m.heldLimits.get(VIN) == HeldLimit(80, 50)
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warned) == 1
+    assert VIN.lower() in warned[0] and VIN in warned[0].replace(VIN.lower(), "")

@@ -44,21 +44,23 @@ def storeKey(ident: Any) -> str:
     return LEGACY_PREFIX + text
 
 
-def _legacyEntry(value: Any) -> Optional[HeldLimit]:
+def _legacyEntry(value: Any) -> Tuple[Optional[HeldLimit], bool]:
     # chargeLimits values: an int (outside only), or an [outside, applied]
-    # pair where applied -1, None or 0 means nothing is held.
+    # pair where applied -1, None or 0 means nothing is held. Returns the
+    # entry (None when the outside value is unusable) and whether an applied
+    # value was discarded: the user's normal limit is never lost over it.
     if _isInt(value):
-        return HeldLimit(value, None)
+        return HeldLimit(value, None), False
     if not isinstance(value, (list, tuple)) or len(value) != 2:
-        return None
+        return None, False
     outside, applied = value
     if not _isInt(outside):
-        return None
+        return None, False
     if applied is None or (_isInt(applied) and applied in (-1, 0)):
-        return HeldLimit(outside, None)
+        return HeldLimit(outside, None), False
     if _isInt(applied) and MIN_LIMIT <= applied <= MAX_LIMIT:
-        return HeldLimit(outside, applied)
-    return None
+        return HeldLimit(outside, applied), False
+    return HeldLimit(outside, None), True
 
 
 def _storedEntry(value: Any) -> Optional[HeldLimit]:
@@ -93,18 +95,28 @@ class HeldLimits:
         from the unchanged file. When the store already exists the legacy
         key is left alone: nothing is deleted without being migrated."""
         dropped: List[str] = []
+        unheld: List[str] = []
+        collided: List[Tuple[str, str]] = []
         migrated = False
         with self.master.settingsLock:
             settings = self.master.settings
             legacy = settings.get(self.LEGACY_KEY)
             if self.KEY not in settings and isinstance(legacy, dict):
                 store: Dict[str, Dict[str, Any]] = {}
+                origin: Dict[str, str] = {}
                 for key, value in legacy.items():
-                    limit = _legacyEntry(value)
+                    limit, discarded = _legacyEntry(value)
                     if limit is None:
                         dropped.append(str(key))
                         continue
-                    store[storeKey(key)] = _encode(limit)
+                    if discarded:
+                        unheld.append(str(key))
+                    newKey = storeKey(key)
+                    if newKey in origin:
+                        # Keys differing only in case: the later one wins.
+                        collided.append((origin[newKey], str(key)))
+                    origin[newKey] = str(key)
+                    store[newKey] = _encode(limit)
                 settings[self.KEY] = store
                 del settings[self.LEGACY_KEY]
                 migrated = True
@@ -112,6 +124,20 @@ class HeldLimits:
         for key in dropped:
             logger.warning(
                 "Dropped a malformed chargeLimits entry for %s while migrating", key
+            )
+        for key in unheld:
+            logger.warning(
+                "Kept the normal limit but not the out-of-range held limit of the "
+                "chargeLimits entry for %s while migrating",
+                key,
+            )
+        for lost, kept in collided:
+            logger.warning(
+                "chargeLimits entries %s and %s name the same car; kept %s while "
+                "migrating",
+                lost,
+                kept,
+                kept,
             )
         if migrated:
             logger.info("Migrated chargeLimits to heldLimits")
