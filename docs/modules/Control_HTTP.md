@@ -70,12 +70,18 @@ The following API endpoints exist:
 | [cancelChargeNow](control_HTTP_API/cancelChargeNow.md) | POST | Cancels active chargeNow configuration        |
 | [chargeNow](control_HTTP_API/chargeNow.md)             | POST  | Instructs charger to start charging at specified rate |
 | [deleteConsumptionOffset](control_HTTP_API/deleteConsumptionOffset.md) | POST | Delete a Consumption Offset value |
+| [getCheapestWindow](control_HTTP_API/getCheapestWindow.md) | GET | Finds the cheapest contiguous charging window from price forecasts |
 | getConfig                | GET    | Provides the current configuration                |
 | [getConsumptionOffsets](control_HTTP_API/getConsumptionOffsets.md) | GET | List configured offsets               |
+| [getPricing](control_HTTP_API/getPricing.md) | GET | Provides current electricity import/export prices |
+| [getPricingDetails](control_HTTP_API/getPricingDetails.md) | GET | Provides detailed status for one or all pricing modules |
+| [getPricingForecast](control_HTTP_API/getPricingForecast.md) | GET | Provides a price forecast from forecasting-capable pricing modules |
+| [getPricingModules](control_HTTP_API/getPricingModules.md) | GET | Lists configured pricing modules, capabilities and current prices |
 | getPolicy                | GET  | Provides the policy configuration                 |
 | getSlaveTWCs             | GET  | Provides a list of connected Slave TWCs and their state |
 | getStatus                | GET  | Provides the current status (Charge Rate, Policy) |
 | getUUID                  | GET  | Provides a unique ID for this particular master, based on the physical MAC address |
+| [refreshPricing](control_HTTP_API/refreshPricing.md) | POST | Forces an immediate refresh of pricing data |
 | [saveSettings](control_HTTP_API/saveSettings.md)         | POST | Saves settings to settings file |
 | [sendStartCommand](control_HTTP_API/sendStartCommand.md) | POST | Sends the Start command to all Slave TWCs    |
 | [setSetting](control_HTTP_API/setSetting.md)             | POST | Set settings directly via API |

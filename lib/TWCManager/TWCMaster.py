@@ -35,7 +35,9 @@ class TWCMaster:
     consumptionValues = {}
     consumptionAmpsValues = {}
     debugOutputToFile = False
+    exportPricingValues = {}
     generationValues = {}
+    importPricingValues = {}
     lastChargeLimitApplied = 0
     lastkWhMessage = time.time()
     lastkWhPoll = 0
@@ -102,6 +104,8 @@ class TWCMaster:
         self.modules = {}
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
+        self.exportPricingValues = {}
+        self.importPricingValues = {}
         self.stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
         self.vehicleCommandQueue = VehicleCommandQueue(
             self._resolveVehicleCommandModule
@@ -582,6 +586,206 @@ class TWCMaster:
 
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]
+
+    def getPricing(self):
+        for module in self.getModulesByType("Pricing"):
+            self.exportPricingValues[module["name"]] = module["ref"].getExportPrice()
+            self.importPricingValues[module["name"]] = module["ref"].getImportPrice()
+
+        # Publish current pricing information to Status modules (eg MQTT)
+        unit = self.getPricingCurrency() + "/kWh"
+        for module in self.getModulesByType("Status"):
+            module["ref"].setStatus(
+                b"all", "import_price", "importPrice", self.getImportPrice(), unit
+            )
+            module["ref"].setStatus(
+                b"all", "export_price", "exportPrice", self.getExportPrice(), unit
+            )
+
+    def getExportPrice(self):
+        price = None
+        multiPrice = ""
+
+        # The policy for how we should deal with multiple export
+        # prices (multiple concurrent modules) is defined in the config
+        # file in config->pricing->policy->multiPrice
+        try:
+            multiPrice = self.config["config"]["pricing"]["policy"]["multiPrice"]
+        except KeyError:
+            multiPrice = "first"
+
+        # Iterate through values and apply multiPrice policy
+        for key in self.exportPricingValues:
+            if multiPrice == "add":
+                if price is None:
+                    price = 0
+                price += float(self.exportPricingValues[key])
+            elif multiPrice == "first":
+                # The first non-zero price wins. Zero is treated as unset so a
+                # failed fetch from one module doesn't mask another module's
+                # value. Negative prices (eg wholesale feed-in tariffs) are
+                # valid and must be preserved.
+                if price is None and float(self.exportPricingValues[key]) != 0:
+                    price = float(self.exportPricingValues[key])
+
+        if price is None:
+            price = 0
+
+        return float(price)
+
+    def getImportPrice(self):
+        price = None
+        multiPrice = ""
+
+        # The policy for how we should deal with multiple import
+        # prices (multiple concurrent modules) is defined in the config
+        # file in config->pricing->policy->multiPrice
+        try:
+            multiPrice = self.config["config"]["pricing"]["policy"]["multiPrice"]
+        except KeyError:
+            multiPrice = "first"
+
+        # Iterate through values and apply multiPrice policy
+        for key in self.importPricingValues:
+            if multiPrice == "add":
+                if price is None:
+                    price = 0
+                price += float(self.importPricingValues[key])
+            elif multiPrice == "first":
+                # See getExportPrice - zero is treated as unset; negative
+                # prices are valid and must be preserved.
+                if price is None and float(self.importPricingValues[key]) != 0:
+                    price = float(self.importPricingValues[key])
+
+        if price is None:
+            price = 0
+
+        return float(price)
+
+    def getPricingCurrency(self):
+        """
+        Return the currency symbol reported by the first pricing module which
+        provides one, or an empty string if none do. Only meaningful when all
+        active modules report the same currency.
+        """
+        for module in self.getModulesByType("Pricing"):
+            currency = getattr(module["ref"], "currency", "")
+            if currency:
+                return currency
+        return ""
+
+    def getPriceForecast(self, hoursAhead=24):
+        """
+        Get price forecast from the first pricing module that supports forecasting.
+        Returns list of forecast entries or empty list if unavailable.
+        """
+        for module in self.getModulesByType("Pricing"):
+            if module["ref"].getCapabilities("Forecasting"):
+                return module["ref"].getPriceForecast(hoursAhead)
+        return []
+
+    def getCheapestWindow(self, numHours, startHour=None, endHour=None):
+        """
+        Find the cheapest charging window across all pricing modules.
+        Returns the best result from all modules that support forecasting.
+        """
+        best_result = None
+        best_price = float("inf")
+
+        for module in self.getModulesByType("Pricing"):
+            if module["ref"].getCapabilities("Forecasting"):
+                result = module["ref"].getCheapestWindow(numHours, startHour, endHour)
+                if result and result["avgPrice"] < best_price:
+                    best_price = result["avgPrice"]
+                    best_result = result
+
+        return best_result
+
+    def getPricingModules(self):
+        """
+        Get list of all pricing modules with their status and capabilities.
+        Returns a list of dicts with module details.
+
+        Values are served from each module's cached state so this can be
+        called from request handlers without triggering upstream API fetches.
+        """
+        modules = []
+        for module in self.getModulesByType("Pricing"):
+            ref = module["ref"]
+            mod_info = {
+                "name": module["name"],
+                "enabled": getattr(ref, "status", False),
+                "capabilities": getattr(ref, "capabilities", {}),
+                "currency": getattr(ref, "currency", ""),
+                "importPrice": float(getattr(ref, "importPrice", 0) or 0),
+                "exportPrice": float(getattr(ref, "exportPrice", 0) or 0),
+            }
+            modules.append(mod_info)
+        return modules
+
+    def getPricingModuleDetails(self, module_name):
+        """
+        Get detailed information for a specific pricing module.
+        Returns dict with module details or None if not found.
+
+        Prices are served from the module's cached state so this can be
+        called from request handlers without triggering upstream API fetches.
+        """
+        for module in self.getModulesByType("Pricing"):
+            if module["name"] == module_name:
+                ref = module["ref"]
+                details = {
+                    "name": module["name"],
+                    "enabled": getattr(ref, "status", False),
+                    "capabilities": getattr(ref, "capabilities", {}),
+                    "currency": getattr(ref, "currency", ""),
+                    "importPrice": float(getattr(ref, "importPrice", 0) or 0),
+                    "exportPrice": float(getattr(ref, "exportPrice", 0) or 0),
+                }
+                if details["enabled"]:
+                    if details["capabilities"].get("SpikeDetection"):
+                        try:
+                            details["spikeStatus"] = ref.getSpikeStatus()
+                        except Exception:
+                            details["spikeStatus"] = "none"
+                    if details["capabilities"].get("Renewables"):
+                        try:
+                            details["renewables"] = ref.getRenewables()
+                        except Exception:
+                            details["renewables"] = 0
+                    if details["capabilities"].get("Forecasting"):
+                        details["hasForecast"] = True
+                    try:
+                        details["priceDescriptor"] = ref.getPriceDescriptor()
+                    except Exception:
+                        details["priceDescriptor"] = "neutral"
+                return details
+        return None
+
+    def refreshPricing(self):
+        """
+        Force refresh of pricing data from all pricing modules.
+        """
+        self.getPricing()
+        return True
+
+    def refreshPricingForecasts(self):
+        """
+        Refresh cached price forecasts from all pricing modules which support
+        forecasting. Intended to be run as a background task so that API and
+        UI requests can be served from cache without blocking on upstream
+        APIs.
+        """
+        for module in self.getModulesByType("Pricing"):
+            ref = module["ref"]
+            if ref.getCapabilities("Forecasting") and hasattr(ref, "updateForecast"):
+                try:
+                    ref.updateForecast(48)
+                except Exception as e:
+                    self.debugLog(
+                        4, "Master", f"Error refreshing forecast from {module['name']}"
+                    )
+                    self.debugLog(10, "Master", str(e))
 
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)

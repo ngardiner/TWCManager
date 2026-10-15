@@ -211,6 +211,17 @@ The values in a policy definition are:
       at home
     - `minBatteryLevelAtHome`:  The lowest battery level (0-100) of any Tesla
       currently believed to be at home; `10000` if unknown / no cars are home.
+- Pricing functions, available when a Pricing module (see `docs/modules/Pricing_*.md`) is configured:
+  - `getImportPrice()`:  The current electricity import price reported by the
+    active pricing module(s), in currency per kWh. Negative values are possible
+    with wholesale providers.
+  - `getExportPrice()`:  The current electricity export (feed-in) price.
+  - `getCheapestWindow(N[, start][, end])`:  The average import price across the
+    cheapest N-hour contiguous window found in the provider's price forecast.
+    Optional `start` and `end` hours (local time, 0-23) restrict the search
+    window; an `end` smaller than `start` crosses midnight. When no forecast is
+    available or no suitable window exists, evaluates to `999`, so price-based
+    rules fail safe rather than matching spuriously.
 - Sub-lists
 
 (Note that TWCManager does not know which vehicle is connected to which TWC, so
