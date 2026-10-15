@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.unit.teslatokens import FakeMaster, new_api
+from tests.unit.teslatokens import FakeMaster, new_api, owner_token
 from TWCManager.EVSEController.TeslaAPIController import TeslaAPIController
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Telemetry import TelmetryBase
@@ -185,6 +185,8 @@ def teslamate(monkeypatch):
     api.carApiVehicles = []
     master.modules["TeslaAPI"] = api
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    # The Owner API token TeslaMate syncs: the cloud read source can read.
+    api.storeToken(owner_token(), "", "synced")
     car = api.getCarApiVehicles()[0]
     # A cloud call returns nothing usable; tests assert it is never made.
     car.get_car_api = Mock(return_value=(False, None))
@@ -228,14 +230,14 @@ def test_feed_outage_then_recovery_pays_one_cloud_read(teslamate):  # C1
     feed(tm, state="online", latitude="37.0", longitude="-122.0")
     calls = []
 
-    def vehicleData():
+    def vehicleData(slot=None):
         calls.append(1)
         car.lat = 37.00000001  # the API's digits differ from TeslaMate's
         car.lon = -122.0
         return True
 
     car.update_vehicle_data = vehicleData
-    car.is_awake = lambda: True
+    car.is_awake = lambda slot=None: True
     tm.mqttDisconnect(None, None, None, 7)  # broker blip
     assert car.update_location(0) is True and len(calls) == 1
     tm.mqttConnect(Mock(), None, None, 0)  # back; parked car publishes nothing
