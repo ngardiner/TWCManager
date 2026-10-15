@@ -24,6 +24,7 @@ class Gen3TWCProvider(Provider):
     name = "Gen3TWC"
     rank = 1
     local = True
+    worker = "local"
     module = None
     sharedControl = True
 

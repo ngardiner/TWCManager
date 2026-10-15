@@ -38,8 +38,15 @@ class ScriptedProvider(Provider):
         tier=None,
         module=object(),
         readyFor=None,
+        worker=None,
     ):
         self.name, self.rank, self.local = name, rank, local
+        # As the real providers: the TWCs run inline, BLE on its own worker
+        self.worker = worker or {
+            "Gen2TWC": "local",
+            "Gen3TWC": "local",
+            "TeslaBLE": "ble",
+        }.get(name, "cloud")
         if tier is not None:
             caps = {
                 capability: declaration._replace(cost=tier)
@@ -86,9 +93,6 @@ class ScriptedProvider(Provider):
     def wake(self, vin):
         return self._next("wake", vin, None)
 
-    def probe(self, vin):
-        return self._next("probe", vin, None)
-
 
 def make_order(settings=None, *providers):
     # As test_provider_order's master() and order()
@@ -97,7 +101,7 @@ def make_order(settings=None, *providers):
     m.config = {}
     m.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
     m.vehicleRegistry = VehicleRegistry({})
-    # A lane without a reconciler takes its pass-through path; a plain Mock
+    # A worker without a reconciler takes its pass-through path; a plain Mock
     # would answer beforeWrite with a Mock
     del m.reconciler
     o = ProviderOrder(m)
