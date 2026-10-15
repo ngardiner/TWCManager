@@ -131,3 +131,51 @@ def test_an_unplugged_occupant_is_not_a_candidate_for_the_next_car():
     vitals(u, False); assert car.value("pluggedIn") is False
     vitals(u, True)                                                            # another car, before TeslaMate's unplug
     assert u.vehicleKey == "anon:" + u.ID and car.value("twcVin") is None
+
+
+# Fix round 1
+
+def makeDevices(devices, voltage=240):
+    m = Mock(); m.vehicleRegistry = VehicleRegistry({}, clock=Clock())
+    m.config = {"config": {"defaultVoltage": voltage}, "controller.Gen3TWCs": {"enabled": True, "devices": devices}}
+    with patch.object(Gen3TWCs, "_start_server"):
+        ctl = Gen3TWCs(m)
+    ctl.setHouseWatts = Mock(); return m, ctl, Gen3TWCProvider(ctl, m)
+
+def test_three_phase_unit_matches_today_for_a_target_and_a_stop():                  # C1
+    m, ctl, p = makeDevices([{"ip": IP1, "fuseAmps": 16, "phases": 3}], voltage=230); (u,) = ctl.devices()
+    fuseWatts = 16 * 230 * 3
+    u.setTargetPower(6900)                                                     # 10 A per phase
+    assert ctl.headroom() == 10
+    ctl.setHouseWatts.assert_called_with(watts=fuseWatts - 6900, phases=3, voltage=230)
+    u.setTargetPower(0); ctl.setHouseWatts.assert_called_with(watts=fuseWatts, phases=3, voltage=230)
+
+def test_one_ramping_car_keeps_its_target_headroom():                               # C2
+    m, ctl, p = make(); (u,) = ctl.devices(); vitals(u, True)
+    u.setTargetPower(4800); vitals(u, True, amps=5.0)                          # ramping under a 20 A target
+    assert ctl.headroom() == 20 and ctl.setHouseWatts.call_args.kwargs["watts"] == 11520 - 4800
+
+def test_two_ramping_cars_share_the_mean():                                          # C2
+    m, ctl, p = make((IP1, IP2)); a, b = ctl.devices(); vitals(a, True); vitals(b, True)
+    a.setTargetPower(4800); b.setTargetPower(2400)
+    vitals(a, True, amps=5.0); vitals(b, True, amps=4.0)
+    assert ctl.headroom() == 15 and ctl.setHouseWatts.call_args.kwargs["watts"] == (48 - 15) * 240
+
+def test_units_with_different_fuses_match_the_net():                                 # M4
+    m, ctl, p = makeDevices([{"ip": IP1, "fuseAmps": 48, "phases": 1}, {"ip": IP2, "fuseAmps": 32, "phases": 1}])
+    a, b = ctl.devices(); a.setTargetPower(7200); b.setTargetPower(7200)      # 30 A each
+    load = ctl.setHouseWatts.call_args.kwargs["watts"] / 240
+    assert (48 - load) + (32 - load) == 60 and 32 - load >= Gen3TWCs.MIN_AMPS
+
+def test_refresh_skips_fresh_units():                                                # M1
+    m, ctl, p = make((IP1, IP2)); a, b = ctl.devices(); vitals(a, True)
+    with patch.object(type(a), "refreshVitals", autospec=True, return_value=True) as r:
+        ctl.refreshVitals()
+    assert [c.args[0] for c in r.call_args_list] == [b]
+
+def test_a_failed_registry_update_retries_the_plug_edge():                           # M8
+    m, ctl, p = make(); (u,) = ctl.devices(); reg = m.vehicleRegistry
+    with patch.object(reg, "beginPlugSession", side_effect=RuntimeError("boom")):
+        vitals(u, True)
+    assert reg.get("anon:" + u.ID) is None
+    vitals(u, True); assert u.vehicleKey == "anon:" + u.ID

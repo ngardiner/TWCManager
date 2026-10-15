@@ -342,14 +342,22 @@ class Gen3TWCs(EVSEController):
                 return round(maxFuse, 2)
             wanted = sum(a for _, _, a in active)
 
-            def served(load):
-                return sum(min(d, max(0.0, f - load)) for f, d, _ in active)
+            def served(load, demands):
+                return sum(
+                    min(d, max(0.0, f - load)) for (f, _, _), d in zip(active, demands)
+                )
 
+            demands = [d for _, d, _ in active]
+            if served(0.0, demands) < wanted:
+                # Measured draws below the targets even at the full fuse are
+                # cars still ramping, not a binding cap: solve as if every
+                # unit were unconstrained, so one unit gets its own target
+                demands = [float("inf")] * len(active)
             lo, hi = 0.0, maxFuse
-            if served(lo) >= wanted:
+            if served(lo, demands) >= wanted:
                 for _ in range(20):
                     mid = (lo + hi) / 2
-                    if served(mid) >= wanted:
+                    if served(mid, demands) >= wanted:
                         lo = mid
                     else:
                         hi = mid
@@ -375,7 +383,10 @@ class Gen3TWCs(EVSEController):
             self._publishedTargets = targets
             logger.debug("Gen3TWCs: targets %s -> house load %.2f A", targets, load)
             # _lock is taken inside, after _targetLock: the order is fixed
-            self.setHouseWatts(watts=load * voltage, phases=phases, voltage=voltage)
+            # load is amps per phase; setHouseWatts spreads watts over phases
+            self.setHouseWatts(
+                watts=load * voltage * phases, phases=phases, voltage=voltage
+            )
 
     def _make_action(self):
         """Return the async action callback for pymodbus SimDevice.
@@ -484,9 +495,10 @@ class Gen3TWCs(EVSEController):
         return [d for d in devices if d.isReachable]
 
     def refreshVitals(self) -> None:
-        """Fetch every unit's vitals.  Background thread only."""
+        """Fetch every stale unit's vitals.  Background thread only."""
         for device in self.devices():
-            device.refreshVitals()
+            if device.vitalsStale():
+                device.refreshVitals()
 
     @property
     def maxPower(self) -> float:

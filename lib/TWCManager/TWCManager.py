@@ -812,8 +812,11 @@ if _gen3_cfg.get("enabled", False):
                 "type": "EVSEController",
             }
         )
-        master.providerOrder.register(Gen3TWCProvider(gen3, master))
         logger.info("Registered Gen3TWCs EVSEController")
+        try:
+            master.providerOrder.register(Gen3TWCProvider(gen3, master))
+        except Exception as _e:
+            logger.warning("Could not register the Gen3TWC provider: %s", _e)
     except Exception as _e:
         logger.warning("Could not register Gen3TWCs: %s", _e)
 
