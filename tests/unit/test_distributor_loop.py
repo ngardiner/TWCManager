@@ -25,7 +25,7 @@ def _master(evses, amps):
         {"name": "Gen2TWCs", "ref": ctrl},
         {"name": "VehicleEndpoints", "ref": ctrl},
     ]
-    m.getDedupedEVSEs = lambda: evses
+    m.chargingPoints = lambda: evses
     m.getMaxAmpsToDivideAmongSlaves = lambda: amps
     return m
 

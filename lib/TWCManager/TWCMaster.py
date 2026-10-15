@@ -506,48 +506,31 @@ class TWCMaster:
             evses.extend(module["ref"].allEVSEs)
         return evses
 
-    def getDedupedEVSEs(self) -> list:
-        """Return EVSEInstances deduplicated by VIN.
+    def chargingPoints(self) -> list:
+        """Every endpoint grouped into charging points by the car it serves."""
+        from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
 
-        When the same vehicle appears in multiple controllers (e.g. plugged into
-        a Gen2 TWC *and* accessible via the Tesla API), a MergedEVSE proxy is
-        returned in place of the individual instances so the power distribution
-        loop allocates power to the vehicle exactly once.
-        """
-        from TWCManager.EVSEInstance.MergedEVSE import MergedEVSE
-
-        all_evses = self.getAllEVSEs()
-        by_vin: dict = {}
-        no_vin: list = []
-
-        for evse in all_evses:
-            vin = evse.currentVIN
-            if vin:
-                by_vin.setdefault(vin, []).append(evse)
-            else:
-                no_vin.append(evse)
-
-        result = []
-        for evses in by_vin.values():
-            if len(evses) == 1:
-                result.append(evses[0])
-            else:
-                result.append(MergedEVSE(self, *evses))
-        result.extend(no_vin)
-        return result
+        return groupEndpoints(self, self.getAllEVSEs())
 
     def distributeEVSEPower(self) -> None:
-        """Centralized watt-based power distribution across all EVSE types.
+        """Centralized watt-based power distribution across charging points.
 
         Replaces the per-slave fair-share amps calculation in send_master_heartbeat
-        with a controller-agnostic algorithm that treats Gen2 TWC devices and
-        Tesla API vehicles uniformly.  After this method runs:
-        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it.
-        - VehicleEndpoint.setTargetPower() has been called (→ a queued setAmps).
+        with a controller-agnostic algorithm that allocates per charging point:
+        a TWC and the car it serves are one point, budgeted once.  After this
+        method runs:
+        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it
+          (and applies chargeRateControl for the car on it).
+        - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
+        - A car on no TWC has had VehicleEndpoint.setTargetPower() called
+          (→ a queued setAmps).
 
-        Only runs when at least one EVSEController is registered (i.e. the new
-        infrastructure is active).  Falls back gracefully to the existing per-slave
-        heartbeat distribution when no controllers other than Gen2TWCs are registered.
+        An idle Gen2 TWC (a point not wanting power) is offered its minimum
+        while the budget allows, so it can see a car plug in.
+
+        Only runs when an EVSEController other than Gen2TWCs is registered;
+        pure Gen2 deployments keep the existing per-slave heartbeat
+        distribution.
 
         Ported from ngardiner/TWCManager#483 (MikeBishop).
         """
@@ -562,71 +545,84 @@ class TWCMaster:
         if not non_gen2:
             return
 
-        evses = self.getDedupedEVSEs()
-        wants_power = [e for e in evses if e.wantsToCharge and not e.isReadOnly]
-
-        if not wants_power:
-            for evse in evses:
-                if not evse.isReadOnly:
-                    evse.setTargetPower(0)
-            return
+        points = self.chargingPoints()
+        wants_power = [p for p in points if p.wantsToCharge and not p.isReadOnly]
 
         # Total watts available from EMS/policy
         cfg = self.config["config"]
         voltage = cfg.get("defaultVoltage", 240)
         phases = cfg.get("numberOfPhases", 1)
         available_watts = self.getMaxAmpsToDivideAmongSlaves() * voltage * phases
-
-        # Per-controller remaining power budgets and EVSE counts
-        controller_budgets: dict = {}
-        controller_counts: dict = {}
-        for mod in controllers:
-            name = mod["name"]
-            controller_budgets[name] = mod["ref"].maxPower
-            controller_counts[name] = sum(
-                1 for e in wants_power if name in e.controllers
-            )
-
-        # Fair-share distribution — sort ascending by maxPower so the most
-        # constrained EVSEs are served first, reducing wasted capacity.
         remaining_watts = available_watts
-        pending = sorted(wants_power, key=lambda e: e.maxPower)
+        offers = []
 
-        # Iterate a copy: pending.remove() below would otherwise make the loop
-        # skip every other EVSE, leaving it with no setTargetPower() at all.
-        for evse in list(pending):
-            fair_share = remaining_watts / len(pending)
+        if wants_power:
+            # Per-controller remaining power budgets and point counts
+            controller_budgets: dict = {}
+            controller_counts: dict = {}
+            for mod in controllers:
+                name = mod["name"]
+                controller_budgets[name] = mod["ref"].maxPower
+                controller_counts[name] = sum(
+                    1 for p in wants_power if name in p.controllers
+                )
 
-            # Constrain by EVSE capacity
-            offer = min(fair_share, evse.maxPower)
+            # Fair-share distribution — sort ascending by maxPower so the most
+            # constrained points are served first, reducing wasted capacity.
+            pending = sorted(wants_power, key=lambda p: p.maxPower)
 
-            # Constrain by controller budgets
-            for ctrl_name in evse.controllers:
-                count = controller_counts.get(ctrl_name, 0)
-                if count > 0 and ctrl_name in controller_budgets:
-                    offer = min(offer, controller_budgets[ctrl_name] / count)
+            # Iterate a copy: pending.remove() below would otherwise make the
+            # loop skip every other point, leaving it with no target at all.
+            for point in list(pending):
+                fair_share = remaining_watts / len(pending)
 
-            # Enforce minimum: offer nothing rather than an unusably small amount
-            if 0 < offer < evse.minPower:
-                offer = 0
+                # Constrain by point capacity
+                offer = min(fair_share, point.maxPower)
 
-            evse.setTargetPower(offer)
+                # Constrain by controller budgets
+                for ctrl_name in point.controllers:
+                    count = controller_counts.get(ctrl_name, 0)
+                    if count > 0 and ctrl_name in controller_budgets:
+                        offer = min(offer, controller_budgets[ctrl_name] / count)
 
-            # Update accounting
-            remaining_watts -= offer
-            for ctrl_name in evse.controllers:
-                if ctrl_name in controller_budgets:
-                    controller_budgets[ctrl_name] -= offer
-                if ctrl_name in controller_counts:
-                    controller_counts[ctrl_name] = max(
-                        0, controller_counts[ctrl_name] - 1
-                    )
-            pending.remove(evse)
+                # Enforce minimum: offer nothing rather than an unusably small
+                # amount
+                if 0 < offer < point.minPower:
+                    offer = 0
 
-        # Zero out EVSEs that don't want power
-        for evse in evses:
-            if evse not in wants_power and not evse.isReadOnly:
-                evse.setTargetPower(0)
+                point.setTargetPower(offer)
+                offers.append((point.ID, offer))
+
+                # Update accounting
+                remaining_watts -= offer
+                for ctrl_name in point.controllers:
+                    if ctrl_name in controller_budgets:
+                        controller_budgets[ctrl_name] -= offer
+                    if ctrl_name in controller_counts:
+                        controller_counts[ctrl_name] = max(
+                            0, controller_counts[ctrl_name] - 1
+                        )
+                pending.remove(point)
+
+        # Points that don't want power: an idle Gen2 TWC keeps its minimum
+        # while the budget allows (it must offer it to see a car plug in);
+        # every other idle point (a Gen3 unit, a car) gets 0
+        for point in points:
+            if point in wants_power or point.isReadOnly:
+                continue
+            offer = 0
+            if any(getattr(e, "idleMinimum", False) is True for e in point.endpoints):
+                if remaining_watts >= point.minPower:
+                    offer = point.minPower
+                    remaining_watts -= offer
+            point.setTargetPower(offer)
+            offers.append((point.ID, offer))
+
+        logger.debug(
+            "distributeEVSEPower: %d W over %s",
+            available_watts,
+            ", ".join("%s=%d W" % (pid, watts) for pid, watts in offers) or "no points",
+        )
 
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]
