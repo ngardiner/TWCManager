@@ -39,9 +39,11 @@ def test_master_registers_gen2_provider_and_read_order():
 
 
 def test_ranges_follow_the_device_and_wiring():
-    m, s = make()
+    m, s = make(withMinAmpsPerTWC(5))
     s.minAmpsTWCSupports = 5
     assert (s.minAmps, s.maxOfferAmps) == (5, 32)
+    s.minAmpsTWCSupports = 6  # never below what the TWC supports
+    assert s.minAmps == 6
     s.maxAmps = 24
     assert s.maxOfferAmps == 24
     m2, s2 = make(
@@ -72,7 +74,7 @@ def test_vehicle_key_keeps_last_vin_while_plugged_state():  # ledger I5
 
 
 def test_provider_readiness_and_range_per_vehicle():
-    m, s = make()
+    m, s = make(withMinAmpsPerTWC(5))
     p = m.providerOrder.provider("Gen2TWC")
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
     assert p.ready(v, C.SET_AMPS) is False and p.ampsRange(v) is None
@@ -104,7 +106,8 @@ def test_mode_3_floor_is_where_the_twc_carries_the_rate(minAmpsPerTWC, supports)
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
     s.currentVIN = VIN
     s.minAmpsTWCSupports = supports
-    assert p.ampsRange(v) == (supports, 32)  # mode 1 keeps the plain range
+    # Mode 1 keeps the plain range: the floor the heartbeat offers
+    assert p.ampsRange(v) == (max(minAmpsPerTWC, supports), 32)
     m.settings["chargeRateControl"] = "3"
     assert p.ampsRange(v) == (6, 32)
     assert p.covers(v, 6) and not p.covers(v, 5)
