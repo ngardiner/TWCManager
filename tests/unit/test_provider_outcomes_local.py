@@ -22,7 +22,7 @@ def test_ble_key_refusal_is_refused_and_the_claim_follows_the_pairing_window():
     ble.sendCommand = refuse
     assert p.startCharging(VIN).kind == O.REFUSED and "TeslaBLE" not in reg.get(VIN).claims and p.ready(reg.get(VIN), C.START_CHARGING) is False
     ble._claimUnproven(v); ble._setBleStatus(VIN, "pairing", pairingSent=__import__("time").time())
-    assert p.startCharging(VIN).kind == O.REFUSED and "TeslaBLE" in reg.get(VIN).claims                   # inside the window: not a refusal of the key
+    assert p.startCharging(VIN) == O.Outcome(O.ERROR, "pairing") and "TeslaBLE" in reg.get(VIN).claims    # inside the window: not a refusal of the key; retryable
 
 def test_ble_probe_is_one_non_waking_body_controller_query_that_proves_nothing():
     ble, reg, master = make(); (p,) = ble.providers(); v = reg.getOrCreate(VIN, "t"); ble._claimUnproven(v)
@@ -39,6 +39,8 @@ def test_ble_schedule_block_is_satisfied_without_a_command():
 def test_gen2_stop_and_start_outcomes_and_the_billed_stop_suppression():
     m, s = make_gen2(); m.desired = DesiredStore(); p = m.providerOrder.provider("Gen2TWC"); v = m.vehicleRegistry.getOrCreate(VIN, "t"); s.currentVIN = VIN.lower()
     assert p.stopCharging(VIN.lower()) == O.Outcome(O.UNSUPPORTED, "mode 1") and p.ready(v, C.START_CHARGING) is False
+    m.settings["chargeStopMode"] = "2"; p.summary(v); assert p.ready(v, C.START_CHARGING) is False and m.desired.keys() == []   # a read never creates desired state
+    m.settings["chargeStopMode"] = "1"
     m.settings["chargeStopMode"] = "2"
     assert p.stopCharging(VIN).kind == O.DONE and m.settings["respondToSlaves"] == 0 and p.ready(v, C.START_CHARGING) is False   # no Gen2 stop recorded yet
     m.desired.state(VIN).lastStopProvider = "Gen2TWC"
@@ -60,3 +62,67 @@ def test_dispatch_reads_outcomes_until_the_facade_goes():
     a = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.UNREACHABLE)]); b = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)], tier=C.FLEET_COMMAND)
     m.providerOrder.register(a); m.providerOrder.register(b)
     assert m.providerOrder.dispatch(v, C.SET_AMPS, lambda p: p.setAmps(VIN, 10), amps=10, localRule=False).kind == O.DONE and len(a.calls) == 3 and len(b.calls) == 1
+
+
+# --- Fix round 1 ---
+import logging
+from TWCManager.Vehicle import TeslaBLE as bleModule
+
+REFUSAL = b"Error: vehicle rejected request: your public key has not been paired with the vehicle"
+
+
+class _Records(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.DEBUG); self.records = []
+    def emit(self, record):
+        self.records.append(record)
+
+
+def _wire(ble, stderr, rc):
+    ble._run_command_with_timeout = Mock(return_value=(b"", stderr, rc)); ble.maxRetries = 0
+
+
+def test_a_failing_command_or_probe_logs_no_raw_output_at_info_or_above():
+    ble, reg, master = make(); (p,) = ble.providers(); _wire(ble, b"SECRET-MARKER connection failed", 1)
+    h = _Records(); bleModule.logger.addHandler(h); level = bleModule.logger.level; bleModule.logger.setLevel(logging.DEBUG)
+    try:
+        assert p.stopCharging(VIN) == O.Outcome(O.UNREACHABLE, "no reply") and p.probe(VIN) == O.Outcome(O.UNREACHABLE, "no reply")
+    finally:
+        bleModule.logger.removeHandler(h); bleModule.logger.setLevel(level)
+    loud = [r.getMessage() for r in h.records if r.levelno >= logging.INFO]
+    assert loud and not any("SECRET-MARKER" in msg for msg in loud)
+    assert any("connection" in msg and "charging-stop" in msg for msg in loud)                         # command, code and category only
+    assert any("SECRET-MARKER" in r.getMessage() for r in h.records if r.levelno == logging.DEBUG)
+
+
+def test_key_refusal_inside_the_pairing_window_is_a_retryable_error_and_keeps_the_claim():
+    import time
+    ble, reg, master = make(); (p,) = ble.providers(); v = reg.getOrCreate(VIN, "t"); ble._claimUnproven(v)
+    ble._setBleStatus(VIN, "pairing", pairingSent=time.time()); _wire(ble, REFUSAL, 1)
+    assert p.setChargeLimit(VIN, 80) == O.Outcome(O.ERROR, "pairing") and "TeslaBLE" in reg.get(VIN).claims
+    assert p.probe(VIN) == O.Outcome(O.ERROR, "pairing")
+
+
+def test_key_refusal_outside_the_pairing_window_is_refused_and_drops_the_claim():
+    ble, reg, master = make(); (p,) = ble.providers(); ble._setBleStatus(VIN, "paired"); _wire(ble, REFUSAL, 1)
+    assert p.setChargeLimit(VIN, 80) == O.Outcome(O.REFUSED, "key") and "TeslaBLE" not in reg.get(VIN).claims
+    assert p.probe(VIN) == O.Outcome(O.REFUSED, "key")
+
+
+def test_an_answered_probe_closes_an_open_circuit_breaker():
+    ble, reg, master = make(); (p,) = ble.providers(); v = reg.getOrCreate(VIN, "t"); ble._claimUnproven(v)
+    for _ in range(ble.circuit_breaker.failure_threshold):
+        ble.circuit_breaker.record_failure(VIN)
+    _wire(ble, b"ok", 0); assert ble.circuit_breaker.is_open(VIN)
+    assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply") and ble._run_command_with_timeout.call_count == 0
+    assert p.probe(VIN).kind == O.DONE and not ble.circuit_breaker.is_open(VIN)
+    assert p.setAmps(VIN, 10).kind == O.DONE and ble._run_command_with_timeout.call_count == 2
+    _wire(ble, b"", None); ble._run_command_with_timeout = Mock(return_value=(None, None, None))
+    for _ in range(ble.circuit_breaker.failure_threshold + 1):
+        p.probe(VIN)
+    assert not ble.circuit_breaker.is_open(VIN)                                                           # a failed probe records no failure
+
+
+def test_bare_twcslave_has_no_stop_requested():
+    from TWCManager.TWCSlave import TWCSlave
+    assert TWCSlave.stopRequested is False
