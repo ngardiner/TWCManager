@@ -29,19 +29,18 @@ class TeslaMateVehicle:                                   # the provider takes i
 
 def test_telemetry_provider_is_passive_free_and_ready_while_live():
     live["at"] = 100.0; p = TelemetryProvider(TeslaMateVehicle())
-    assert (p.name, p.rank, p.readSource, p.module) == ("TeslaMateVehicle", 3, None, None)
+    assert (p.name, p.rank, p.module) == ("TeslaMateVehicle", 3, None)
     assert p.declarations()[C.READ_PLUG] == C.Declaration(C.CLOUD_FREE, passive=True) and p.ready(None, C.READ_PLUG)
     live["at"] = None; assert p.ready(None, C.READ_PLUG) is False
 
 def test_home_assistant_provider_follows_entities():
     ha, reg = make_ha(); (p,) = ha.providers(); v = reg.getOrCreate(VIN, "t")
-    assert (p.name, p.rank, p.cost(C.SET_AMPS), p.readSource.provider) == ("HomeAssistant", 6, C.HA_BILLED, "HomeAssistant")
+    assert (p.name, p.rank, p.cost(C.SET_AMPS), ha.readSource.provider) == ("HomeAssistant", 6, C.HA_BILLED, "HomeAssistant")
     assert p.ready(v, C.SET_AMPS) is False
     hv = Mock(has_charge_switch=True, has_charge_current_number=False, has_charge_limit_number=True); v.attach("HomeAssistant", hv)
     assert p.ready(v, C.START_CHARGING) and p.ready(v, C.SET_CHARGE_LIMIT) and not p.ready(v, C.SET_AMPS) and not p.declares(C.WAKE)
     ha.setChargeRate = Mock(return_value=True); hv.has_charge_current_number = True
     assert p.setAmps(VIN, 8) is True; ha.setChargeRate.assert_called_once_with(8, vehicle=hv)
-    ha.readSource = rebuilt = Mock(); assert p.readSource is rebuilt   # read through, never a stale snapshot
 
 def test_passive_providers_never_enter_the_walk():
     m = Mock(); m.settings = {}; m.config = {}; m.stats = {"moduleSuccess": {}, "moduleFailures": {}}; m.vehicleRegistry = VehicleRegistry({})

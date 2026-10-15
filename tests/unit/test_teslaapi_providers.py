@@ -32,7 +32,7 @@ def test_two_providers_with_honest_costs():
     assert fleet.declarations()[C.SET_AMPS].rateLimit == C.RateLimit(50, 60)
     # no tokens yet
     assert fleet.available(C.SET_AMPS) is False and owner.available(C.READ_CHARGE) is True
-    assert (owner.readSource.provider, fleet.readSource.provider) == (
+    assert (api.ownerReadSource.provider, api.fleetReadSource.provider) == (
         "OwnerAPI",
         "FleetAPI",
     )
@@ -47,14 +47,14 @@ def test_fleet_reads_only_when_owner_cannot():
     api.storeToken(fleet_token())
     assert (
         fleet.ready(v, C.READ_CHARGE)
-        and fleet.readSource.canRead(v)
+        and api.fleetReadSource.canRead(v)
         and not owner.ready(v, C.READ_CHARGE)
     )
     api.storeToken(owner_token())
     assert (
         owner.ready(v, C.READ_CHARGE)
         and not fleet.ready(v, C.READ_CHARGE)
-        and not fleet.readSource.canRead(v)
+        and not api.fleetReadSource.canRead(v)
     )
     assert fleet.ready(v, C.SET_AMPS) and fleet.ready(v, C.WAKE) and fleet.available(C.WAKE)
 
