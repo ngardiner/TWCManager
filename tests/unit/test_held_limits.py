@@ -10,6 +10,7 @@ from TWCManager.TWCMaster import TWCMaster
 
 VIN2 = "5YJ3E1EA1KF000002"
 VIN3 = "5YJ3E1EA1KF000003"
+VIN4 = "5YJ3E1EA1KF000004"
 
 
 def test_legacy_charge_limits_migrate():  # Review Focus 3
@@ -23,29 +24,23 @@ def test_legacy_charge_limits_migrate():  # Review Focus 3
     m.heldLimits.load()
     assert m.heldLimits.get(VIN) == HeldLimit(80, None)
     assert m.heldLimits.get(VIN2) == HeldLimit(90, 50)
-    assert "chargeLimits" not in m.settings
     assert m.settings["heldLimits"][VIN2] == {"outside": 90, "held": 50}
-    assert m.settings["heldLimits"]["id:12345"] == {"outside": 85, "held": None}
-    # the interim wrapper still answers by ID
-    assert m.getNormalChargeLimit(12345) == (True, 85, -1)
-    m.heldLimits.adoptLegacyId(12345, VIN3)
+    # a numeric ID waits, on disk where it was, for a vehicle list
+    assert m.settings["chargeLimits"] == {"12345": 85} and m.heldLimits.waiting()
+    m.heldLimits.resolveLegacyIds({12345: VIN3})
     assert m.heldLimits.get(VIN3) == HeldLimit(85, None)
-    assert "id:12345" not in m.settings["heldLimits"]
+    assert "chargeLimits" not in m.settings and not m.heldLimits.waiting()
     assert m.heldLimits.holding() == [VIN2]
 
-
-def test_set_remove_and_wrappers_keep_working():
+def test_set_and_remove():
     m, s = make()
     m.heldLimits.load()
-    m.heldLimits.set(VIN, 80, 50)
-    assert m.getNormalChargeLimit(VIN) == (True, 80, 50)
+    m.heldLimits.set(VIN.lower(), 80, 50)
+    assert m.heldLimits.get(VIN) == HeldLimit(80, 50)
     m.heldLimits.set(VIN, 80, None)
-    # wrapper keeps the old tuple until Task 10
-    assert m.getNormalChargeLimit(VIN) == (True, 80, -1)
+    assert m.heldLimits.get(VIN) == HeldLimit(80, None)
     m.heldLimits.remove(VIN)
     assert m.heldLimits.get(VIN) is None
-    assert m.getNormalChargeLimit(VIN) == (False, None, None)
-
 
 def test_believed_prefers_a_newer_read_over_our_write():
     m, s = make()
@@ -129,14 +124,16 @@ def test_realistic_settings_file_migrates(tmp_path, caplog):
     assert held == {
         VIN: {"outside": 80, "held": None},
         VIN2: {"outside": 90, "held": 50},
-        "id:1492931337": {"outside": 75, "held": 60},
-        "id:1492931338": {"outside": 85, "held": None},
-        "id:1492931339": {"outside": 70, "held": None},
         VIN3: {"outside": 80, "held": None},
-        # held out of range: the user's normal limit is kept, nothing held
-        "id:999": {"outside": 80, "held": None},
     }
-    assert "chargeLimits" not in m.settings
+    # the numeric IDs wait for a vehicle list; the malformed ones are gone
+    assert m.settings["chargeLimits"] == {
+        "1492931337": [75, 60],
+        "1492931338": [85, 0],
+        "1492931339": 70,
+        # held out of range: kept, and the held value is discarded on resolving
+        "999": [80, 30],
+    }
     m.heldLimits._save.assert_called_once_with()
     warned = [r for r in caplog.records if r.levelno == logging.WARNING]
     # three dropped (bad outside values), one held value discarded
@@ -183,26 +180,26 @@ def test_saved_file_carries_the_store_and_restarts_clean(tmp_path):
     m.loadSettings()
     m.saveSettings()
     onDisk = json.loads((tmp_path / "settings.json").read_text())
-    assert "chargeLimits" not in onDisk
     assert onDisk["heldLimits"] == m.settings["heldLimits"]
+    assert sorted(onDisk["chargeLimits"]) == ["1492931337", "1492931338", "1492931339", "999"]
     m2 = fileMaster(tmp_path, onDisk)
     m2.loadSettings()
     assert m2.heldLimits.get(VIN2) == HeldLimit(90, 50)
-    assert m2.getNormalChargeLimit(1492931337) == (True, 75, 60)
     m2.heldLimits._save.assert_not_called()
+    m2.heldLimits.resolveLegacyIds({1492931337: VIN4})
+    assert m2.heldLimits.get(VIN4) == HeldLimit(75, 60)
 
 
-def test_existing_store_wins_and_legacy_key_is_left_alone(tmp_path):
+def test_an_existing_store_keeps_its_own_cars(tmp_path):
     blob = legacySettings()
     blob["heldLimits"] = {VIN: {"outside": 66, "held": None}}
     m = fileMaster(tmp_path, blob)
     m.loadSettings()
+    # its own car is not overwritten; the others migrate as usual
     assert m.heldLimits.get(VIN) == HeldLimit(66, None)
-    assert m.heldLimits.get(VIN2) is None
-    # left for a later sweep, never deleted without migrating
-    assert m.settings["chargeLimits"] == blob["chargeLimits"]
-    m.heldLimits._save.assert_not_called()
-
+    assert m.heldLimits.get(VIN2) == HeldLimit(90, 50)
+    assert "1492931337" in m.settings["chargeLimits"]
+    m.heldLimits._save.assert_called_once_with()
 
 def test_no_legacy_key_no_save(tmp_path):
     m = fileMaster(tmp_path, {"chargeStopMode": "1"})
@@ -230,43 +227,14 @@ def test_migration_swaps_under_the_lock():
 # Keys and the interim wrappers
 
 
-def test_wrappers_resolve_a_numeric_id_through_teslaapi():
-    m, s = make()
-    car = SimpleNamespace(ID=12345, VIN=VIN3)
-    api = SimpleNamespace(carApiVehicles=[car])
-    m.getModuleByName = Mock(side_effect=lambda n: api if n == "TeslaAPI" else None)
-    m.settings["chargeLimits"] = {"12345": [85, 60]}
-    m.heldLimits.load()
-    # an unadopted id: entry is found and moved under the VIN
-    assert m.getNormalChargeLimit(12345) == (True, 85, 60)
-    assert m.heldLimits.get(VIN3) == HeldLimit(85, 60)
-    assert "id:12345" not in m.settings["heldLimits"]
-    m.saveNormalChargeLimit(12345, 85, -1)
-    assert m.heldLimits.get(VIN3) == HeldLimit(85, None)
-    m.removeNormalChargeLimit(12345)
-    assert m.heldLimits.get(VIN3) is None
-
-
-def test_wrapper_never_stores_the_sentinel():
-    m, s = make()
-    m.saveNormalChargeLimit(VIN.lower(), 80, -1)
-    assert m.settings["heldLimits"] == {VIN: {"outside": 80, "held": None}}
-    m.saveNormalChargeLimit(4242, 80, 0)
-    assert m.settings["heldLimits"]["id:4242"] == {"outside": 80, "held": None}
-    assert m.getNormalChargeLimit(4242) == (True, 80, -1)
-    assert m.heldLimits.vins() == [VIN]
-
-
-def test_adopt_keeps_an_existing_vin_entry():
+def test_resolving_keeps_an_existing_vin_entry():
     m, s = make()
     m.heldLimits.set(VIN, 70, 55)
-    m.saveNormalChargeLimit(777, 90, None)
-    m.queue_background_task = Mock()
-    m.heldLimits.adoptLegacyId(777, VIN)
+    m.settings["chargeLimits"] = {"777": [90, None]}
+    m.heldLimits.load()
+    m.heldLimits.resolveLegacyIds({777: VIN})
     assert m.heldLimits.get(VIN) == HeldLimit(70, 55)
-    assert "id:777" in m.settings["heldLimits"]
-    m.queue_background_task.assert_not_called()
-
+    assert "chargeLimits" not in m.settings
 
 def test_store_works_before_load_and_on_a_bare_master():
     ns = SimpleNamespace(
@@ -278,24 +246,6 @@ def test_store_works_before_load_and_on_a_bare_master():
     h.set(VIN, 80, 50)
     assert ns.settings["heldLimits"][VIN] == {"outside": 80, "held": 50}
     ns.queue_background_task.assert_called_with({"cmd": "saveSettings"})
-
-
-def test_teslaapi_listing_adopts_the_legacy_id_once():
-    from tests.unit.test_carapivehicle_registry import api_with_registry
-
-    api, reg = api_with_registry()
-    master = api.master
-    master.heldLimits = HeldLimits(master)
-    master.settings["chargeLimits"] = {"1492931337": [75, 60]}
-    master.heldLimits.load()
-    master.tasks.clear()
-    api.addVehicle({"id": 1492931337, "vin": VIN, "display_name": "C"})
-    assert master.heldLimits.get(VIN) == HeldLimit(75, 60)
-    assert master.settings["heldLimits"] == {VIN: {"outside": 75, "held": 60}}
-    assert master.tasks == [{"cmd": "saveSettings"}]
-    # a rebind finds nothing left to adopt and saves nothing
-    api.getCarApiVehicles()[0].vehicle
-    assert master.tasks == [{"cmd": "saveSettings"}]
 
 
 def test_teslaapi_listing_without_a_store_is_harmless():
@@ -352,15 +302,12 @@ def test_case_collision_warns_naming_both_keys(caplog):
 def test_integral_floats_round_trip_as_ints():
     # Home Assistant observes chargeLimit/batteryLevel as floats.
     m, s = make()
-    m.saveNormalChargeLimit(1, 80.0, 60)
-    assert m.getNormalChargeLimit(1) == (True, 80, 60)
-    assert m.settings["heldLimits"]["id:1"] == {"outside": 80, "held": 60}
+    m.heldLimits.set(VIN3, 80.0, 60)
+    assert m.settings["heldLimits"][VIN3] == {"outside": 80, "held": 60}
     # limitOverride's minBatteryLevelAtHome - 1 from a float batteryLevel
     m.heldLimits.set(VIN, 80, 66.0)
     assert m.heldLimits.get(VIN) == HeldLimit(80, 66)
     assert type(m.settings["heldLimits"][VIN]["held"]) is int
-    m.saveNormalChargeLimit(VIN, 80.0, 66.0)
-    assert m.getNormalChargeLimit(VIN) == (True, 80, 66)
     m.settings["heldLimits"][VIN2] = {"outside": 80.0, "held": None}
     assert m.heldLimits.get(VIN2) == HeldLimit(80, None)
 
@@ -394,8 +341,8 @@ def test_set_rounds_finite_numbers():
     m.heldLimits.set(VIN, 80.4, 65.3)
     assert m.heldLimits.get(VIN) == HeldLimit(80, 65)
     assert m.settings["heldLimits"][VIN] == {"outside": 80, "held": 65}
-    m.saveNormalChargeLimit(VIN2, 79.6, 65.3)
-    assert m.getNormalChargeLimit(VIN2) == (True, 80, 65)
+    m.heldLimits.set(VIN2, 79.6, 65.3)
+    assert m.heldLimits.get(VIN2) == HeldLimit(80, 65)
 
 
 def test_set_refuses_what_is_not_a_finite_number(caplog):
@@ -418,34 +365,26 @@ def test_set_refuses_what_is_not_a_finite_number(caplog):
     assert len(caplog.records) == 8
 
 
-def test_listing_before_load_is_adopted(tmp_path):
+def test_listing_before_load_is_resolved_on_the_next_check(tmp_path, requests_mock):
     # TeslaMate token sync and retained telemetry can list cars before
-    # loadSettings runs.
+    # loadSettings runs: the next checkCharge resolves (free calls only)
+    from tests.unit.teslatokens import FLEET_NA_URL, fleet_token
     from tests.unit.test_carapivehicle_registry import api_with_registry
 
     m = fileMaster(tmp_path, {"chargeLimits": {"1492931337": [75, 60]}})
     api, reg = api_with_registry()
+    api.storeToken(fleet_token())
     api.master.heldLimits = m.heldLimits
-    api.addVehicle({"id": 1492931337, "vin": VIN3, "display_name": "X"})
+    listing = '{"count": 1, "response": [{"id": 1492931337, "vin": "%s", "display_name": null}]}' % VIN3
+    requests_mock.get(FLEET_NA_URL, text=listing)
+    assert api.loadVehicleList() is True and m.heldLimits.get(VIN3) is None
     m.getModuleByName = Mock(side_effect=lambda n: api if n == "TeslaAPI" else None)
     m.loadSettings()
-    assert m.heldLimits.get(VIN3) == HeldLimit(75, 60)
-    assert "id:1492931337" not in m.settings["heldLimits"]
+    assert api.updateChargeAtHome() is True
+    assert m.heldLimits.get(VIN3) == HeldLimit(75, 60) and "chargeLimits" not in m.settings
+    assert [q.method for q in requests_mock.request_history] == ["GET", "GET"]
 
-
-def test_rebind_adopts_an_entry_that_appeared_later():
-    from tests.unit.test_carapivehicle_registry import api_with_registry
-
-    api, reg = api_with_registry()
-    master = api.master
-    master.heldLimits = HeldLimits(master)
-    api.addVehicle({"id": 7, "vin": VIN, "display_name": "C"})
-    master.settings["heldLimits"] = {"id:7": {"outside": 80, "held": None}}
-    api.getCarApiVehicles()[0].vehicle  # same registry vehicle
-    assert master.heldLimits.get(VIN) == HeldLimit(80, None)
-
-
-def test_both_keys_present_warns_once(tmp_path, caplog):
+def test_both_keys_present_the_store_wins(tmp_path, caplog):
     blob = {
         "heldLimits": {VIN: {"outside": 66, "held": None}},
         "chargeLimits": {VIN: [95, 55]},
@@ -453,10 +392,9 @@ def test_both_keys_present_warns_once(tmp_path, caplog):
     m = fileMaster(tmp_path, blob)
     with caplog.at_level(logging.WARNING):
         m.loadSettings()
-    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert sum("chargeLimits" in w for w in warned) == 1
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
     assert m.heldLimits.get(VIN) == HeldLimit(66, None)
-
+    assert "chargeLimits" not in m.settings
 
 def test_set_refuses_a_non_vin_and_maps_zero_to_none(caplog):
     m, s = make()
@@ -465,33 +403,3 @@ def test_set_refuses_a_non_vin_and_maps_zero_to_none(caplog):
     assert "heldLimits" not in m.settings and caplog.records
     m.heldLimits.set(VIN, 80, 0)
     assert m.heldLimits.get(VIN) == HeldLimit(80, None)
-
-
-def test_bind_skips_the_lock_when_the_vin_already_has_an_entry():
-    # BLE stored by VIN, Fleet by ID: after migration both exist, so
-    # adoption is blocked; a rebind must not take settingsLock each time.
-    from tests.unit.test_carapivehicle_registry import api_with_registry
-
-    api, reg = api_with_registry()
-    m = api.master
-    m.heldLimits = HeldLimits(m)
-    m.settings["chargeLimits"] = {VIN: [80, 50], "7": [80, 50]}
-    m.heldLimits.load()
-    api.addVehicle({"id": 7, "vin": VIN, "display_name": "C"})
-    count = {"n": 0}
-    real = m.settingsLock
-
-    class Counting:
-        def __enter__(self):
-            count["n"] += 1
-            return real.__enter__()
-
-        def __exit__(self, *a):
-            return real.__exit__(*a)
-
-    m.settingsLock = Counting()
-    car = api.getCarApiVehicles()[0]
-    for _ in range(100):
-        car.vehicle
-    assert count["n"] == 0
-    assert "id:7" in m.settings["heldLimits"] and VIN in m.settings["heldLimits"]

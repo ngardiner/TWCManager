@@ -361,10 +361,9 @@ class TelmetryBase:
             return False
         vehicle = self.registry.findByName(vehicle_name)
         if vehicle is None and loadList:
-            # The API vehicle list is otherwise only loaded when a command
-            # needs the API, which may never happen when BLE handles
-            # everything. Callers on latency-sensitive threads pass
-            # loadList=False.
+            # The API vehicle list may not be loaded yet (checkCharge loads
+            # it at startup and on each arrival). Callers on
+            # latency-sensitive threads pass loadList=False.
             carapi = self.master.getModuleByName("TeslaAPI")
             if carapi and not carapi.getCarApiRetryRemaining():
                 carapi.loadVehicleList()

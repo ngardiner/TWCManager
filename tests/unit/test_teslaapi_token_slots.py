@@ -156,8 +156,6 @@ def test_command_refused_without_usable_fleet(no_threads, requests_mock, fleet):
     assert api.setChargeRate(10, vehicle) is False
     assert api.wakeVehicle(vehicle) is False
     assert api.car_api_charge({"charge": True}) == "error"
-    assert api.applyChargeLimit(80) == "error"
-    assert vehicle.apply_charge_limit(80) is False
 
     assert anyCall.call_count == 0
     assert api.getCarApiLastErrorTime() == 0

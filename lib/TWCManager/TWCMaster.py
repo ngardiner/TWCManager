@@ -20,14 +20,17 @@ from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 from TWCManager.Vehicle.Registry import VehicleRegistry
 from TWCManager.Vehicle.Providers import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
-from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits, storeKey
+from TWCManager.Vehicle.Reconcile.Desired import DesiredStore
+from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
+from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
+from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
 # Background task commands that are vehicle commands. They run on the
 # VehicleCommandQueue worker so slow BLE retries don't stall other
 # background work.
-VEHICLE_COMMANDS = frozenset(["charge", "applyChargeLimit"])
+VEHICLE_COMMANDS = frozenset(["charge"])
 
 
 class TWCMaster:
@@ -44,7 +47,6 @@ class TWCMaster:
     consumptionAmpsValues = {}
     debugOutputToFile = False
     generationValues = {}
-    lastChargeLimitApplied = 0
     lastkWhMessage = time.time()
     lastkWhPoll = 0
     lastTeslaTokenRefreshCheck = 0
@@ -119,7 +121,7 @@ class TWCMaster:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
         # The serial thread takes it too (recordVehicleVIN), so nothing
         # under it may do I/O, on any thread. TeslaAPI.vehicleListLock ->
-        # settingsLock too (a listing adopts a held limit): never take
+        # settingsLock too (a listing resolves legacy held limits): never take
         # vehicleListLock while holding settingsLock.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
@@ -127,6 +129,13 @@ class TWCMaster:
         self.providerOrder = ProviderOrder(self)
         self.providerOrder.register(Gen2TWCProvider(self))
         self.vehicleRegistry.useReadOrder(self.providerOrder.orderReadSources)
+        # Desired vehicle state, and the reconciler that converges cars on
+        # it; all on the registry's time.time clock
+        self.desired = DesiredStore()
+        self.vehicleRegistry.removed = self.desired.forget
+        self.reconciler = VehicleReconciler(self)
+        # The policy's charge limit; None while it sets none
+        self.policyLimit = None
         # Start of the forgetting interval: the first expiry pass runs an
         # hour after startup, once providers have reclaimed their cars, so a
         # persisted car Fleet still lists is not expired and re-created.
@@ -976,46 +985,6 @@ class TWCMaster:
         amps = max(min(newOffer, availableA / self.getRealPowerFactor(availableA)), 0)
         return round(amps, 2)
 
-    def _heldLimitKey(self, ID):
-        # Interim (until Task 10): callers pass a VIN (BLE) or the Tesla API's
-        # numeric vehicle ID. An ID TeslaAPI has listed resolves to its VIN,
-        # adopting any legacy "id:" entry first; otherwise the "id:" entry.
-        key = storeKey(ID)
-        if not key.startswith("id:"):
-            return key
-        carapi = self.getModuleByName("TeslaAPI")
-        try:
-            # No TeslaAPI lock is taken: settingsLock may be held by callers.
-            cars = list(getattr(carapi, "carApiVehicles", None) or [])
-        except TypeError:
-            cars = []
-        for car in cars:
-            vin = getattr(car, "VIN", None)
-            if str(getattr(car, "ID", None)) == str(ID) and vin:
-                self.heldLimits.adoptLegacyId(ID, vin)
-                vinKey = storeKey(vin)
-                if not vinKey.startswith("id:"):
-                    return vinKey
-        return key
-
-    def _adoptListedHeldLimits(self):
-        carapi = self.getModuleByName("TeslaAPI")
-        try:
-            cars = list(getattr(carapi, "carApiVehicles", None) or [])
-        except TypeError:
-            cars = []
-        for car in cars:
-            ID, vin = getattr(car, "ID", None), getattr(car, "VIN", None)
-            if ID is not None and vin:
-                self.heldLimits.adoptLegacyId(ID, vin)
-
-    def getNormalChargeLimit(self, ID):
-        # The legacy tuple: (found, outside, lastApplied), -1 when none held.
-        limit = self.heldLimits._get(self._heldLimitKey(ID))
-        if limit is None:
-            return (False, None, None)
-        return (True, limit.outside, -1 if limit.held is None else limit.held)
-
     def getSlaveByID(self, twcid):
         return self.slaveTWCs[twcid]
 
@@ -1195,8 +1164,6 @@ class TWCMaster:
             registryBlob = self.settings.get("vehicleRegistry")
         # Migrates the legacy chargeLimits key; dict work under the lock only
         self.heldLimits.load()
-        # A car TeslaAPI listed before settings loaded adopts its ID entry now.
-        self._adoptListedHeldLimits()
         # load() tolerates a missing or corrupt blob
         self.vehicleRegistry.load(registryBlob)
 
@@ -1623,9 +1590,6 @@ class TWCMaster:
         else:
             logger.warning("Tried to released module %s that was not loaded", module)
 
-    def removeNormalChargeLimit(self, ID):
-        self.heldLimits._remove(self._heldLimitKey(ID))
-
     def resetChargeNowAmps(self):
         # Sets chargeNowAmps back to zero, so we follow the green energy
         # tracking again
@@ -1664,11 +1628,6 @@ class TWCMaster:
         except Exception as e:
             logger.warning("Vehicle registry pending check failed: %s", e)
             return False
-
-    def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
-        # The -1/0/None sentinel is stored as held None.
-        held = None if lastApplied in (-1, 0, None) else lastApplied
-        self.heldLimits._set(self._heldLimitKey(ID), outsideLimit, held)
 
     def expireVehicles(self):
         # Forget unclaimed, unasserted vehicles unseen past the forget window
@@ -1895,6 +1854,11 @@ class TWCMaster:
                     + slaveTWC.TWCID
                     + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
                 )
+
+    def setPolicyLimit(self, limit, transition):
+        # transition: a policy change, a decision that ends an adopted value
+        self.policyLimit = limit
+        applyPolicyLimit(self, limit, decision=transition)
 
     def setAllowedFlex(self, amps):
         self.allowed_flex = amps if amps >= 0 else 0
