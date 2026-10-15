@@ -15,7 +15,7 @@ from ..Providers.Capability import (
     START_CHARGING,
     STOP_CHARGING,
 )
-from .Outcome import Outcome
+from .Outcome import REFUSED, Outcome
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
@@ -57,10 +57,18 @@ def _checkAspect(aspect) -> None:
         raise ValueError("unknown aspect %r" % (aspect,))
 
 
+_RECONCILER = __name__.rsplit(".", 1)[0] + ".Reconciler"
+
+
 def _chargingLike(value) -> bool:
+    # Lazy: Reconciler imports this module. Only a missing Reconciler module
+    # falls back; any other import failure is a real error and propagates.
+    # Never called under the store's lock (a first import reads files)
     try:
         from .Reconciler import satisfied
-    except ImportError:
+    except ModuleNotFoundError as e:
+        if e.name != _RECONCILER:
+            raise
         return value is True or value in CHARGING_LIKE
     return bool(satisfied(CHARGING, True, value))
 
@@ -125,6 +133,9 @@ class AttemptRecord:
         # Failures per provider this round
         self.tried: Dict[str, int] = {}
         self.excluded: Set[str] = set()
+        # The excluded providers that REFUSED (retired their slot or claim);
+        # the rest were UNSUPPORTED, which may depend on the value
+        self.refused: Set[str] = set()
         # Billed or disruptive providers tried this round
         self.paid: Set[str] = set()
         # 0 until the first exhaustion
@@ -140,6 +151,9 @@ class AttemptRecord:
         # A new value gets a prompt free attempt; a paid provider's tries and
         # the backoff persist until success or a session event
         self.tried = {k: v for k, v in self.tried.items() if k in self.paid}
+        # UNSUPPORTED can depend on the value (amps outside a range); a
+        # refusal does not
+        self.excluded = self.excluded & self.refused
         self.notBefore = 0
         if not self.paid:
             self.backoff = 0
@@ -149,6 +163,14 @@ class AttemptRecord:
         # paid stays, so a backed-off round still knows it was paid
         self.tried = {}
         self.excluded = set()
+        self.refused = set()
+
+    def exclude(self, provider: str, kind: str) -> None:
+        # Skip the provider for the rest of the round (an EXCLUDING outcome).
+        # An exclusion added to excluded directly counts as UNSUPPORTED
+        self.excluded.add(provider)
+        if kind == REFUSED:
+            self.refused.add(provider)
 
     def summary(self) -> dict:
         last = self.lastOutcome
@@ -161,6 +183,7 @@ class AttemptRecord:
             "lastProvider": self.lastProvider,
             "tried": dict(self.tried),
             "excluded": sorted(self.excluded),
+            "refused": sorted(self.refused),
             "paid": sorted(self.paid),
             "backoff": self.backoff,
             "backoffUntil": self.backoffUntil,
@@ -388,19 +411,25 @@ class DesiredStore:
         # is the user's doing (Task 8: a stopped read is adopted only while
         # the point is offering and has been since before the read).
         _checkAspect(aspect)
-        changed = True
+        # Classified before the lock: the rule may import Reconciler
+        chargingLike = aspect == CHARGING and _chargingLike(value)
+        stoppedLike = aspect == CHARGING and _stoppedLike(value)
+        changed = value is not None
         with self._lock:
             state = self._state(key)
-            if aspect in SLOW_ASPECTS:
+            if not changed:
+                # An unread value is never the user's
+                pass
+            elif aspect in SLOW_ASPECTS:
                 state.desired[aspect] = Desired(
                     value, "user", self._clock(), adopted=True
                 )
             elif aspect == CHARGING:
-                if _chargingLike(value):
+                if chargingLike:
                     state.bounds.wantsCharge = True
                     state.bounds.userStopped = False
                     state.desired.pop(aspect, None)
-                elif _stoppedLike(value):
+                elif stoppedLike:
                     state.bounds.userStopped = True
                     state.bounds.wantsCharge = False
                     state.desired.pop(aspect, None)
@@ -414,6 +443,16 @@ class DesiredStore:
             self._notify(key, (aspect,))
         else:
             logger.debug("Not adopting %s %s=%r", key, aspect, value)
+
+    def forget(self, key) -> bool:
+        # The registry dropped the vehicle: every trace goes, no callback
+        with self._lock:
+            return self._states.pop(key, None) is not None
+
+    def followRegistry(self, registry) -> None:
+        # Forget a key whenever the registry drops it (forget, expiry, an
+        # anonymous plug session ending or merging into a VIN)
+        registry.onRemove(self.forget)
 
     def decision(self, key) -> None:
         # A new decision: the next set applies over adopted values

@@ -87,3 +87,60 @@ def test_scripted_provider_and_order_helpers():
 def test_end_session_resets_health_and_records_in_place():
     s = DesiredStore(); h = s.health(VIN, "TeslaBLE"); r = s.record(VIN, AMPS); h.failure(10.0); r.backoff = 600
     s.endSession(VIN); assert s.health(VIN, "TeslaBLE") is h and not h.failing and s.record(VIN, AMPS) is r and r.backoff == 0
+
+def test_forget_drops_every_trace_of_a_key():
+    s = DesiredStore(); seen = []; s.onChange(lambda key, aspect: seen.append(key))
+    s.set(VIN, AMPS, 16, "distributor"); s.health(VIN, "TeslaBLE").failure(1.0); s.noteOffering(VIN, True); seen.clear()
+    assert s.forget(VIN) is True and s.keys() == [] and seen == [] and s.forget(VIN) is False and s.get(VIN, AMPS) is None
+
+def test_registry_removals_forget_desired_state():
+    from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+    c = Clock(); reg = VehicleRegistry({}, clock=c); s = DesiredStore(clock=c); s.followRegistry(reg)
+    for _ in range(50):                                                           # anon sessions churn
+        v = reg.beginPlugSession("A1"); s.set(v.key, AMPS, 16, "distributor"); s.record(v.key, AMPS); reg.endPlugSession("A1")
+    assert s.keys() == []
+    v = reg.beginPlugSession("B2"); s.set(v.key, CHARGING, False, "distributor")
+    for _ in range(VehicleRegistry.CONFIRM_ATTEMPTS): reg.observeTwcVin("B2", VIN)   # the anon vehicle merges into the VIN
+    assert v.key not in s.keys()
+    s.set(VIN, CHARGE_LIMIT, 80, "policy"); reg.forget(VIN); assert s.keys() == []
+    reg.getOrCreate(VIN, "t"); s.set(VIN, CHARGE_LIMIT, 80, "policy"); c.t += reg.forgetAfter + 1; reg.expire()
+    assert s.keys() == []
+
+def test_a_new_desire_drops_unsupported_exclusions_and_keeps_refused():
+    s = DesiredStore(); s.set(VIN, AMPS, 16, "distributor"); r = s.record(VIN, AMPS)
+    r.exclude("Gen2TWC", O.UNSUPPORTED); r.exclude("FleetAPI", O.REFUSED)
+    assert r.excluded == {"Gen2TWC", "FleetAPI"}
+    s.set(VIN, AMPS, 4, "distributor"); assert r.excluded == {"FleetAPI"}
+    r.newRound(); assert r.excluded == set() and r.refused == set()
+
+def test_a_by_only_change_is_a_no_op():
+    s = DesiredStore(); seen = []; s.onChange(lambda key, aspect: seen.append(aspect)); s.set(VIN, CHARGING, False, "distributor")
+    r = s.record(VIN, CHARGING); r.tried["TeslaBLE"] = 1; at = s.get(VIN, CHARGING).at; seen.clear()
+    assert s.set(VIN, CHARGING, False, "heartbeat") is False and s.get(VIN, CHARGING) == (False, "distributor", at) + (False,) * 4
+    assert r.tried == {"TeslaBLE": 1} and seen == []
+
+def test_a_decision_on_the_adopted_value_takes_it_over_in_place():
+    c = Clock(); s = DesiredStore(clock=c); s.adopt(VIN, CHARGE_LIMIT, 80); r = s.record(VIN, CHARGE_LIMIT); r.tried["TeslaBLE"] = 1; c.t += 5
+    assert s.set(VIN, CHARGE_LIMIT, 80, "policy", decision=True) is False
+    d = s.get(VIN, CHARGE_LIMIT); assert (d.value, d.by, d.at, d.adopted) == (80, "policy", 1000.0, False) and r.tried == {"TeslaBLE": 1}
+
+def test_adopt_ignores_charging_values_that_are_not_a_user_action():
+    s = DesiredStore(); s.set(VIN, CHARGING, False, "distributor")
+    for value in ("Disconnected", "NoPower", None): s.adopt(VIN, CHARGING, value)
+    b = s.bounds(VIN); assert not b.wantsCharge and not b.userStopped and s.get(VIN, CHARGING).value is False
+    s.set(VIN, AMPS, 16, "distributor"); s.adopt(VIN, AMPS, None); assert b.maxAmps is None and s.get(VIN, AMPS).value == 16
+
+def test_new_round_keeps_paid_and_offering_restamps_on_each_start():
+    s = DesiredStore(); r = s.record(VIN, CHARGING); r.paid.add("FleetAPI"); r.tried["FleetAPI"] = 2; r.newRound()
+    assert r.paid == {"FleetAPI"} and r.tried == {}
+    c = Clock(); s = DesiredStore(clock=c); s.noteOffering(VIN, True); c.t += 10; s.noteOffering(VIN, True)
+    assert s.state(VIN).offeringSince == 1000.0
+    s.noteOffering(VIN, False); c.t += 10; s.noteOffering(VIN, True); assert s.state(VIN).offeringSince == 1020.0
+
+def test_a_broken_reconciler_module_is_not_masked(monkeypatch):
+    import sys, types
+    import pytest
+    broken = types.ModuleType("TWCManager.Vehicle.Reconcile.Reconciler")          # exists, but has no satisfied
+    monkeypatch.setitem(sys.modules, "TWCManager.Vehicle.Reconcile.Reconciler", broken)
+    with pytest.raises(ImportError):
+        DesiredStore().adopt(VIN, CHARGING, "Charging")
