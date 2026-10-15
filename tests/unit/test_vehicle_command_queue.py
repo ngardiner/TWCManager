@@ -40,8 +40,8 @@ class RecordingModule:
     def car_api_charge(self, task):
         return self._record("charge", task.get("charge"), task.get("vin"))
 
-    def applyChargeLimit(self, limit, vin=None, remoteOnly=False):
-        return self._record("applyChargeLimit", limit, vin, remoteOnly)
+    def setAmps(self, vin, amps):
+        return self._record("setAmps", amps, vin)
 
     def setChargeRate(self, amps, vehicle=None):
         return self._record("setChargeRate", amps, getattr(vehicle, "VIN", vehicle))
@@ -80,10 +80,10 @@ class TestDispatch:
         wait_idle(q)
         assert module.calls == [("charge", True, "V1")]
 
-    def test_apply_charge_limit(self, q, module):
-        q.put({"cmd": "applyChargeLimit", "limit": 80})
+    def test_set_amps(self, q, module):
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80})
         wait_idle(q)
-        assert module.calls == [("applyChargeLimit", 80, None, False)]
+        assert module.calls == [("setAmps", 80, None)]
 
     def test_set_charge_rate(self, q, module):
         q.put({"cmd": "setChargeRate", "amps": 16, "vehicle": Vehicle("V1")})
@@ -96,7 +96,7 @@ class TestDispatch:
         assert module.calls == [("setChargeRate", 16, None)]
 
     def test_put_does_not_block_while_worker_busy(self, q, module):
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         start = time.monotonic()
         q.put({"cmd": "setChargeRate", "amps": 16, "vehicle": None})
         assert time.monotonic() - start < 0.1
@@ -106,31 +106,31 @@ class TestDispatch:
 
 class TestCoalescing:
     def test_set_charge_rate_latest_wins_per_vehicle(self, q, module):
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "setChargeRate", "amps": 10, "vehicle": Vehicle("V1")})
         q.put({"cmd": "setChargeRate", "amps": 8, "vehicle": Vehicle("V2")})
         q.put({"cmd": "setChargeRate", "amps": 12, "vehicle": Vehicle("V1")})
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("setChargeRate", 12, "V1"),
             ("setChargeRate", 8, "V2"),
         ]
 
-    def test_apply_charge_limit_latest_wins(self, q, module):
+    def test_set_amps_latest_wins(self, q, module):
         block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
-        q.put({"cmd": "applyChargeLimit", "limit": 70})
-        q.put({"cmd": "applyChargeLimit", "limit": 90})
+        q.put({"cmd": "setAmps", "vin": None, "amps": 70})
+        q.put({"cmd": "setAmps", "vin": None, "amps": 90})
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
             ("setChargeRate", 6, None),
-            ("applyChargeLimit", 90, None, False),
+            ("setAmps", 90, None),
         ]
 
     def test_replaced_callback_not_called(self, q, module):
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         first, second = [], []
         q.put({"cmd": "setChargeRate", "amps": 10, "vehicle": None}, first.append)
         q.put({"cmd": "setChargeRate", "amps": 12, "vehicle": None}, second.append)
@@ -144,7 +144,7 @@ class TestPriority:
     def test_stop_runs_before_earlier_commands(self, q, module):
         block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
         q.put({"cmd": "setChargeRate", "amps": 16, "vehicle": Vehicle("V1")})
-        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": False, "vin": "V1"})
         module.gate.set()
         wait_idle(q)
@@ -152,18 +152,18 @@ class TestPriority:
             ("setChargeRate", 6, None),
             ("charge", False, "V1"),
             ("setChargeRate", 16, "V1"),
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
         ]
 
     def test_start_is_not_high_priority(self, q, module):
         block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
-        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": True})
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
             ("setChargeRate", 6, None),
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("charge", True, None),
         ]
 
@@ -171,20 +171,20 @@ class TestPriority:
 class TestCallbacksAndErrors:
     def test_callback_receives_result(self, q, module):
         results = []
-        q.put({"cmd": "applyChargeLimit", "limit": 80}, results.append)
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80}, results.append)
         wait_idle(q)
         module.result = False
-        q.put({"cmd": "applyChargeLimit", "limit": 70}, results.append)
+        q.put({"cmd": "setAmps", "vin": None, "amps": 70}, results.append)
         wait_idle(q)
         assert results == [True, False]
 
     def test_dispatch_exception_gives_false_and_worker_survives(self, q, module):
-        def boom(limit, vin=None):
+        def boom(vin, amps):
             raise RuntimeError("adapter on fire")
 
-        module.applyChargeLimit = boom
+        module.setAmps = boom
         results = []
-        q.put({"cmd": "applyChargeLimit", "limit": 80}, results.append)
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80}, results.append)
         wait_idle(q)
         q.put({"cmd": "setChargeRate", "amps": 16, "vehicle": None})
         wait_idle(q)
@@ -195,12 +195,12 @@ class TestCallbacksAndErrors:
         def bad_callback(result):
             raise RuntimeError("callback bug")
 
-        q.put({"cmd": "applyChargeLimit", "limit": 80}, bad_callback)
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80}, bad_callback)
         wait_idle(q)
         q.put({"cmd": "setChargeRate", "amps": 16, "vehicle": None})
         wait_idle(q)
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("setChargeRate", 16, None),
         ]
 
@@ -209,13 +209,13 @@ class TestCallbacksAndErrors:
         q = VehicleCommandQueue(lambda: available[0] if available else None)
         q.start()
         results = []
-        q.put({"cmd": "applyChargeLimit", "limit": 80}, results.append)
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80}, results.append)
         wait_idle(q)
         available.append(module)
-        q.put({"cmd": "applyChargeLimit", "limit": 70}, results.append)
+        q.put({"cmd": "setAmps", "vin": None, "amps": 70}, results.append)
         wait_idle(q)
         assert results == [False, True]
-        assert module.calls == [("applyChargeLimit", 70, None, False)]
+        assert module.calls == [("setAmps", 70, None)]
 
     def test_unknown_command_gives_false(self, q, module):
         results = []
@@ -230,12 +230,12 @@ class TestCallbacksAndErrors:
     def test_base_exception_in_dispatch_clears_busy(self, q, module):
         raised = threading.Event()
 
-        def exit_now(limit, vin=None):
+        def exit_now(vin, amps):
             raised.set()
             raise SystemExit("module called sys.exit")
 
-        module.applyChargeLimit = exit_now
-        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        module.setAmps = exit_now
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80})
         assert raised.wait(WAIT)
         start = time.monotonic()
         assert q.drain_high_priority(timeout=WAIT) is True
@@ -253,7 +253,7 @@ class TestCallbacksAndErrors:
 class TestDrain:
     def test_drain_runs_stops_and_drops_the_rest(self, q, module):
         block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
-        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": False, "vin": "V1"})
 
         outcome = []
@@ -318,7 +318,7 @@ def stop_for(vin=None):
 
 class TestKeying:
     def test_charge_keyed_per_vin(self, q, module):
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": True, "vin": "V1"})
         q.put({"cmd": "charge", "charge": True, "vin": "V2"})
         q.put({"cmd": "charge", "charge": False, "vin": "V1"})
@@ -326,21 +326,21 @@ class TestKeying:
         wait_idle(q)
         # V1's start was replaced by V1's stop (same key); V2's start survives.
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("charge", False, "V1"),
             ("charge", True, "V2"),
         ]
 
     def test_charge_commands_for_different_cars_both_run(self, unlimited, module):
         q = unlimited
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": False, "vin": "V1"})
         q.put({"cmd": "charge", "charge": False, "vin": "V2"})
         q.put({"cmd": "charge", "charge": True, "vin": "V3"})
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("charge", False, "V1"),
             ("charge", False, "V2"),
             ("charge", True, "V3"),
@@ -348,20 +348,20 @@ class TestKeying:
 
     def test_vehicleless_start_replaces_every_pending_stop(self, unlimited, module):
         q = unlimited
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": False, "vin": "V1"})
         q.put({"cmd": "charge", "charge": False, "vin": "V2"})
         q.put({"cmd": "charge", "charge": True})
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("charge", True, None),
         ]
 
     def test_stop_for_one_car_replaces_a_vehicleless_start(self, unlimited, module):
         q = unlimited
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": True})
         q.put({"cmd": "charge", "charge": True, "vin": "V2"})
         q.put({"cmd": "charge", "charge": False, "vin": "V1"})
@@ -369,53 +369,22 @@ class TestKeying:
         wait_idle(q)
         # The start for every car overlapped V1's stop; V2's own start did not.
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("charge", False, "V1"),
             ("charge", True, "V2"),
         ]
 
     def test_empty_vin_means_every_car(self, unlimited, module):
         q = unlimited
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": True, "vin": "V1"})
         q.put({"cmd": "charge", "charge": False, "vin": ""})
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("charge", False, ""),
         ]
-
-    def test_apply_charge_limit_per_vin_does_not_merge_with_policy_wide(
-        self, q, module
-    ):
-        block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
-        q.put({"cmd": "applyChargeLimit", "limit": 70})
-        q.put({"cmd": "applyChargeLimit", "limit": 90, "vin": "V1"})
-        q.put({"cmd": "applyChargeLimit", "limit": 80})
-        module.gate.set()
-        wait_idle(q)
-        assert module.calls == [
-            ("setChargeRate", 6, None),
-            ("applyChargeLimit", 80, None, False),
-            ("applyChargeLimit", 90, "V1", False),
-        ]
-
-    def test_apply_charge_limit_passes_vin_and_remote_only(self, q, module):
-        q.put({"cmd": "applyChargeLimit", "limit": -1, "vin": "V1", "remoteOnly": True})
-        wait_idle(q)
-        assert module.calls == [("applyChargeLimit", -1, "V1", True)]
-
-    def test_apply_charge_limit_without_vin_omits_vin_kwarg(self, q, module):
-        calls = []
-
-        def legacy(limit):
-            calls.append(limit)
-
-        module.applyChargeLimit = legacy
-        q.put({"cmd": "applyChargeLimit", "limit": 80})
-        wait_idle(q)
-        assert calls == [80]
 
 
 class TestCancel:
@@ -438,61 +407,61 @@ class TestCancel:
         assert module.calls == [("charge", False, "V1")]
 
     def test_cancel_matches_command_name(self, q, module):
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "setChargeRate", "amps": 10, "vehicle": None})
         assert q.cancel("charge", lambda task: True) == 0
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("setChargeRate", 10, None),
         ]
 
     def test_cancels_pending_stop_for_the_car(self, unlimited, module):
         q = unlimited
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": False, "vin": "V1"})
         q.put({"cmd": "charge", "charge": False, "vin": "V2"})
         assert q.cancel("charge", stop_for("V1")) == 1
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
             ("charge", False, "V2"),
         ]
 
     def test_cancels_a_stop_for_every_car(self, unlimited, module):
         q = unlimited
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": False, "vin": None})
         assert q.cancel("charge", stop_for("V1")) == 1
         module.gate.set()
         wait_idle(q)
-        assert module.calls == [("applyChargeLimit", 80, None, False)]
+        assert module.calls == [("setAmps", 80, None)]
 
     @pytest.mark.parametrize("vin", [None, ""])
     def test_without_vin_cancels_every_stop(self, unlimited, module, vin):
         q = unlimited
-        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        block_worker(q, module, {"cmd": "setAmps", "vin": None, "amps": 80})
         q.put({"cmd": "charge", "charge": False, "vin": "V1"})
         q.put({"cmd": "charge", "charge": False, "vin": "V2"})
         assert q.cancel("charge", stop_for(vin)) == 2
         module.gate.set()
         wait_idle(q)
-        assert module.calls == [("applyChargeLimit", 80, None, False)]
+        assert module.calls == [("setAmps", 80, None)]
 
     def test_leaves_starts_and_other_commands(self, unlimited, module):
         q = unlimited
         block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
         q.put({"cmd": "charge", "charge": True, "vin": "V1"})
-        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "setAmps", "vin": None, "amps": 80})
         assert q.cancel("charge", stop_for("V1")) == 0
         module.gate.set()
         wait_idle(q)
         assert module.calls == [
             ("setChargeRate", 6, None),
             ("charge", True, "V1"),
-            ("applyChargeLimit", 80, None, False),
+            ("setAmps", 80, None),
         ]
 
     def test_stops_are_not_cancelled_during_shutdown(self, unlimited, module):

@@ -31,17 +31,6 @@ from TWCManager.Logging.LoggerFactory import LoggerFactory
 logger = LoggerFactory.get_logger("VehicleCommandQueue", "Vehicle")
 
 
-def _applyChargeLimitKwargs(task):
-    kwargs = {"limit": task["limit"]}
-    # Pass vin and remoteOnly only when set, so a plain apply is unchanged for
-    # any module that still has the old signature.
-    if task.get("vin") is not None:
-        kwargs["vin"] = task["vin"]
-    if task.get("remoteOnly"):
-        kwargs["remoteOnly"] = True
-    return kwargs
-
-
 def _setAmps(module, task):
     setAmps = getattr(module, "setAmps", None)
     if setAmps is None:
@@ -57,9 +46,6 @@ class VehicleCommandQueue:
 
     _DISPATCH = {
         "charge": lambda module, task: module.car_api_charge(task),
-        "applyChargeLimit": lambda module, task: module.applyChargeLimit(
-            **_applyChargeLimitKwargs(task)
-        ),
         "setChargeRate": lambda module, task: module.setChargeRate(
             task["amps"], task.get("vehicle")
         ),

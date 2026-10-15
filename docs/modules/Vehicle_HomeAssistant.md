@@ -111,7 +111,7 @@ To control charging, the module calls **Home Assistant services**:
   → `POST /api/services/number/set_value` with
     `{"entity_id": "number.<slug>_charge_current", "value": <amps>}`
 
-TWCManager's existing logic (like `applyChargeLimit`, `car_api_charge`, `setChargeRate`) is wired to call these Home Assistant services instead of the direct Tesla API.
+TWCManager sets the charge limit, starts and stops charging, and sets the charge rate by calling these Home Assistant services instead of the direct Tesla API.
 
 ## TWCManager Configuration
 

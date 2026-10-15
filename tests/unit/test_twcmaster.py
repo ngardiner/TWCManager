@@ -758,7 +758,6 @@ class TestVehicleCommandRouting:
         [
             {"cmd": "charge", "charge": True},
             {"cmd": "charge", "charge": False, "vin": "V1"},
-            {"cmd": "applyChargeLimit", "limit": 80},
         ],
     )
     def test_vehicle_commands_routed(self, master, task):

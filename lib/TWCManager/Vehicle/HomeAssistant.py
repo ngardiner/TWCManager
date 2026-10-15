@@ -190,7 +190,6 @@ class HomeAssistant:
     """Home Assistant-backed vehicle module for TWCManager."""
 
     carApiLastStartOrStopChargeTime = 0
-    lastChargeLimitApplied = -1
     minChargeLevel = -1
     lastStateRefreshTime = 0
     connectionFailures = 0  # bumped by _get_state on a connection error
@@ -675,72 +674,6 @@ class HomeAssistant:
 
         if vehicles_processed == 0 and result == "success":
             logger.info("No vehicles processed for charge %s command", action)
-
-        return result
-
-    def applyChargeLimit(self, limit: int, *args, **kwargs):
-        # Validate limit
-        try:
-            limit = int(limit)
-        except (ValueError, TypeError):
-            logger.warning("Invalid charge limit value: %s", limit)
-            return "error"
-
-        if limit != -1 and not (50 <= limit <= 100):
-            logger.warning("Charge limit %d%% out of valid range [50, 100]", limit)
-            return "error"
-
-        if not self.car_api_available():
-            logger.debug("Home Assistant API not available for charge limit")
-            return "error"
-
-        vehicles = self._vehiclesFor(kwargs.get("vin"))
-        if vehicles is None:
-            logger.debug("Charge limit for a vehicle Home Assistant does not hold")
-            return "error"
-
-        result = "success"
-        vehicles_processed = 0
-
-        for v in vehicles:
-            v.refresh_from_home_assistant(self)
-            if not v.at_home:
-                logger.debug("%s not at home; skipping charge limit", v.name)
-                continue
-
-            ent = v.entity_ids.get("charge_limit_number")
-            if not ent:
-                logger.debug("%s: charge_limit_number entity not available", v.name)
-                continue
-
-            if not self._is_vehicle_connected(v):
-                logger.debug("%s not connected; skipping charge limit.", v.name)
-                continue
-
-            if limit == -1:
-                logger.info("Leaving existing limit unchanged for %s", v.name)
-                continue
-
-            # Compare existing limit
-            if v.charge_limit is not None and int(v.charge_limit) == int(limit):
-                logger.info("Skipping %s: charge limit already %s%%", v.name, limit)
-                continue
-
-            logger.info("Setting charge limit of %s to %s%%", v.name, limit)
-
-            ok = self._call_service(
-                "number", "set_value", {"entity_id": ent, "value": limit}
-            )
-            if not ok:
-                result = "error"
-            else:
-                vehicles_processed += 1
-                registryVehicle = self.registry.get(str(v.vin).upper())
-                if registryVehicle is not None:
-                    registryVehicle.noteWrite("chargeLimit", limit, "HomeAssistant")
-
-        if vehicles_processed == 0 and result == "success":
-            logger.info("No vehicles processed for charge limit %d%% command", limit)
 
         return result
 

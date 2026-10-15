@@ -38,38 +38,11 @@ def _fleetThenHa(ha):
 
 
 def test_a_none_return_is_a_failure_and_the_walk_continues():
-    first = mod(applyChargeLimit=None)
-    second = mod(applyChargeLimit="success")
+    first = mod(car_api_charge=None)
+    second = mod(car_api_charge="success")
     m, vp = make({}, P("FleetAPI", 5, False, first), P("HomeAssistant", 6, False, second))
-    assert vp.applyChargeLimit(limit=80) == "success"
-    assert (first.applyChargeLimit.call_count, second.applyChargeLimit.call_count) == (2, 1)
-
-
-def test_teslaapi_apply_charge_limit_returns_success(no_http):
-    api, _ = _fleetThenHa(mod())
-    api.car_api_available = Mock(return_value=True)
-    assert api.applyChargeLimit(80, checkArrival=True) == "success"
-    assert api.applyChargeLimit(-1, checkDeparture=True) == "success"
-    assert no_http.call_count == 0
-
-
-def test_ha_is_not_reached_after_a_fleet_apply_charge_limit(no_http):     # C1
-    ha = mod(applyChargeLimit="success")
-    api, vp = _fleetThenHa(ha)
-    api.car_api_available = Mock(return_value=True)
-    assert vp.applyChargeLimit(limit=80, checkArrival=True) == "success"
-    assert ha.applyChargeLimit.call_count == 0
-
-
-def test_throttled_apply_charge_limit_is_not_a_failure(no_http):
-    # Policy re-queues the limit every evaluation; TeslaAPI applies it at
-    # most once a minute. Its skip must not hand the limit to HA.
-    ha = mod(applyChargeLimit="success")
-    api, vp = _fleetThenHa(ha)
-    api.car_api_available = Mock(return_value=True)
-    api.carApiLastChargeLimitApplyTime = time.time()
-    assert api.applyChargeLimit(80) not in (None, False, "error")
-    assert vp.applyChargeLimit(limit=80) and ha.applyChargeLimit.call_count == 0
+    assert vp.car_api_charge({"charge": True}) == "success"
+    assert (first.car_api_charge.call_count, second.car_api_charge.call_count) == (2, 1)
 
 
 def test_throttled_start_is_not_a_failure(no_http):
@@ -111,15 +84,13 @@ def test_the_pre_wake_hold_is_not_a_failure(no_http):
     # A sleeping car just plugged in: Fleet holds off waking it on purpose
     # (wakeDelayMins). HA must not start it instead, which would wake it
     # and bill through HA's Tesla integration
-    ha = mod(car_api_charge="success", applyChargeLimit="success")
+    ha = mod(car_api_charge="success")
     api, vp = _fleetThenHa(ha)
     car = _asleep(api)
     assert api.car_api_charge({"charge": True}) not in (None, False, "error")
     assert car.firstChargeNeededTime > 0                       # the hold began
     api.carApiLastStartOrStopChargeTime = 0
     assert vp.car_api_charge({"charge": True}) and ha.car_api_charge.call_count == 0
-    api.master.getNormalChargeLimit = Mock(return_value=(True, 70, 70))
-    assert vp.applyChargeLimit(limit=80) and ha.applyChargeLimit.call_count == 0
     assert no_http.call_count == 0
 
 
@@ -168,8 +139,8 @@ class Clock:
 
 
 def _backoff(fleet=True):
-    api = mod(car_api_charge="error", applyChargeLimit="error")
-    ha = mod(car_api_charge="success", applyChargeLimit="success")
+    api = mod(car_api_charge="error", wakeVehicle="error")
+    ha = mod(car_api_charge="success", wakeVehicle="success")
     providers = [P("HomeAssistant", 6, False, ha, caps=HA_CMDS)]
     if fleet:
         providers.append(P("FleetAPI", 5, False, api, caps=FLEET_CMDS))
@@ -196,10 +167,10 @@ def test_the_hold_is_per_car_and_per_command():
     assert vp.car_api_charge({"charge": True, "vin": VIN}) == "success"
     assert vp.car_api_charge({"charge": True, "vin": OTHER}) == "success"
     assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
-    assert vp.applyChargeLimit(limit=80, vin=VIN) == "success"
-    assert (ha.car_api_charge.call_count, ha.applyChargeLimit.call_count) == (3, 1)
+    assert vp.wakeVehicle(VIN) == "success"
+    assert (ha.car_api_charge.call_count, ha.wakeVehicle.call_count) == (3, 1)
     clock.t += 10
-    assert vp.applyChargeLimit(limit=80, vin=VIN) is False and ha.applyChargeLimit.call_count == 1
+    assert vp.wakeVehicle(VIN) is False and ha.wakeVehicle.call_count == 1
 
 
 def test_ha_only_install_keeps_its_own_cadence():

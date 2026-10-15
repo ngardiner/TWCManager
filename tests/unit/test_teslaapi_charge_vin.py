@@ -26,7 +26,6 @@ def api(monkeypatch, requests_mock):
         v.chargeLimit = 90
         v.update_charge = Mock(return_value=True)
         v.update_location = Mock(return_value=True)
-    a.applyChargeLimit = Mock()
     requests_mock.register_uri(
         "POST",
         re.compile(r".*/command/charge_(start|stop)"),
