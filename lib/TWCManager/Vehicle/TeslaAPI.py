@@ -787,12 +787,13 @@ class TeslaAPI:
                 vehicle.delayNextWakeAttempt = 0
 
         if now - self.getLastStartOrStopChargeTime() < 60:
-            # Don't start or stop more often than once a minute
+            # Don't start or stop more often than once a minute. A skip, not
+            # a failure: "error" would hand the command to the next provider
             logger.log(
                 logging.DEBUG2,
                 "car_api_charge return because not long enough since last carApiLastStartOrStopChargeTime",
             )
-            return "error"
+            return "skipped"
 
         if self.car_api_available(charge=charge, vin=vin) is False:
             logger.log(
@@ -1119,12 +1120,13 @@ class TeslaAPI:
             and not checkDeparture
             and now - self.carApiLastChargeLimitApplyTime < 60
         ):
-            # Don't change limits more often than once a minute
+            # Don't change limits more often than once a minute. A skip, not
+            # a failure: "error" would hand the limit to the next provider
             logger.log(
                 logging.DEBUG2,
                 "applyChargeLimit return because under 60 sec since last carApiLastChargeLimitApplyTime",
             )
-            return "error"
+            return "skipped"
 
         # We need to try to apply limits if:
         #   - We think the car is at home and the limit has changed
@@ -1267,6 +1269,10 @@ class TeslaAPI:
 
         if checkArrival:
             self.updateChargeAtHome()
+
+        # VehiclePriority reads None as failure and would try the next
+        # provider (Home Assistant: a second, billed command)
+        return "success"
 
     def getCarApiErrorRetryMins(self, vehicle=None):
         errorCount = self.errorCount
@@ -2092,10 +2098,13 @@ class TeslaAPI:
         return True
 
     def updateChargeAtHome(self):
+        # True when this module holds cars to refresh, so VehiclePriority's
+        # walk ends here; False lets another module refresh its own cars
         for car in self.carApiVehicles:
             if car.atHome:
                 car.update_charge()
         self.lastChargeCheck = time.time()
+        return bool(self.carApiVehicles)
 
     def vehicleScheduledChargingPending(self, vin=None):
         # True if the named (or any at-home) vehicle reports it is waiting on
