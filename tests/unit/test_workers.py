@@ -7,6 +7,7 @@ from TWCManager.Vehicle.Providers.Provider import Provider
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile import Run
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
+from TWCManager.Vehicle.Reconcile.Reconciler import satisfied
 from TWCManager.Vehicle.Reconcile.Run import Workers, entryKey, runAttempt
 from TWCManager.Vehicle.Registry.ReadSource import ReadSource
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
@@ -80,7 +81,7 @@ def test_rate_slot_is_used_only_when_a_command_is_sent(monkeypatch):      # ledg
     class Hooks:
         def beforeWrite(self, vehicle, attempt, provider, believed): return None, O.Outcome(O.SATISFIED, "held")
         def afterWrite(self, vehicle, attempt, outcome): pass
-    monkeypatch.setattr(Run, "_reconcilerParts", lambda: (Hooks, Run._satisfied, frozenset())); m.reconciler = Hooks()
+    monkeypatch.setattr(Run, "_reconcilerParts", lambda: (Hooks, satisfied, frozenset())); m.reconciler = Hooks()
     for _ in range(3): m.workers.submit(attempt(provider="FleetAPI", value=70))             # rules-settled: no slot
     assert reports[-1] == ("FleetAPI", O.SATISFIED, "rules: held") and m.workers.allows(p, C.SET_CHARGE_LIMIT, VIN, CHARGE_LIMIT) and p.calls == []
     m.reconciler = None
@@ -301,7 +302,7 @@ def test_a_raising_after_write_hook_keeps_the_sent_command_done(monkeypatch):   
     class Hooks:
         def beforeWrite(self, vehicle, attempt, provider, believed): return attempt.value, None
         def afterWrite(self, vehicle, attempt, outcome): raise ValueError("secret-token")
-    monkeypatch.setattr(Run, "_reconcilerParts", lambda: (Hooks, Run._satisfied, frozenset()))
+    monkeypatch.setattr(Run, "_reconcilerParts", lambda: (Hooks, satisfied, frozenset()))
     p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, reports = setup(p); m.reconciler = Hooks()
     m.workers.submit(attempt(provider="FleetAPI")); assert reports == [("FleetAPI", O.DONE, "")] and len(p.calls) == 1
     assert m.vehicleRegistry.get(VIN).lastWrite("chargeLimit").value == 80

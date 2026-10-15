@@ -60,7 +60,6 @@ _STAMP_SATISFIED = frozenset({CHARGE_LIMIT, AMPS})
 # The wake outcomes after which a non-local provider's command goes out
 _WAKE_PROCEEDS = frozenset({DONE, SATISFIED, UNSUPPORTED})
 
-_RECONCILER = __name__.rsplit(".", 1)[0] + ".Reconciler"
 
 # One-shot entry keys: a fresh number per one-shot, so none replaces another
 _sequence = itertools.count(1)
@@ -81,23 +80,10 @@ def isStop(attempt) -> bool:
     return attempt.capability == STOP_CHARGING
 
 
-# Placeholders until the Reconciler provides the real rules
-def _satisfied(aspect, desired, believed) -> bool:
-    return believed is not None and believed.value == desired
-
-
-_VEHICLE_SOURCES_EXCLUDED = frozenset()
-
-
 def _reconcilerParts():
-    # Lazy: Reconciler imports this module. Only a missing Reconciler module
-    # falls back; any other import failure is a real error and propagates
-    try:
-        from .Reconciler import VEHICLE_SOURCES_EXCLUDED, VehicleReconciler, satisfied
-    except ModuleNotFoundError as e:
-        if e.name != _RECONCILER:
-            raise
-        return None, _satisfied, _VEHICLE_SOURCES_EXCLUDED
+    # Lazy: Reconciler imports this module
+    from .Reconciler import VEHICLE_SOURCES_EXCLUDED, VehicleReconciler, satisfied
+
     return VehicleReconciler, satisfied, VEHICLE_SOURCES_EXCLUDED
 
 
