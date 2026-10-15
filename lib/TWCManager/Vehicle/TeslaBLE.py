@@ -17,6 +17,14 @@ import threading
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
+from TWCManager.Vehicle.Reconcile.Outcome import (
+    DONE,
+    ERROR,
+    REFUSED,
+    SATISFIED,
+    UNREACHABLE,
+    Outcome,
+)
 from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource
 from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
@@ -389,22 +397,27 @@ class TeslaBLE:
 
     def _is_already_satisfied(self, output):
         """Return True if output indicates the car is already in the desired charge state."""
+        return self._satisfiedReason(output) is not None
+
+    def _satisfiedReason(self, output):
+        """The car's reason word when output says it is already in the
+        desired state, else None."""
         if not output:
-            return False
+            return None
         if isinstance(output, bytes):
             output = output.decode("utf-8", errors="ignore")
         output_lower = output.lower()
-        return any(
-            ("car could not execute command: " + reason) in output_lower
-            for reason in (
-                "complete",
-                "is_charging",
-                "charging",
-                "requested",
-                "disconnected",
-                "already_set",
-            )
-        )
+        for reason in (
+            "complete",
+            "is_charging",
+            "charging",
+            "requested",
+            "disconnected",
+            "already_set",
+        ):
+            if ("car could not execute command: " + reason) in output_lower:
+                return reason
+        return None
 
     def parseCommandOutput(self, output):
         """
@@ -440,6 +453,20 @@ class TeslaBLE:
             logger.debug("BLE command success: already in desired state")
             return True
 
+        error_type = self._errorCategory(output)
+        logger.debug(
+            f"BLE command failed - Error type: {error_type}, Output: {output[:100]}..."
+        )
+        return False
+
+    def _errorCategory(self, output):
+        """The failure category for command output parseCommandOutput
+        rejects; "unknown" when nothing matches."""
+        if not output:
+            return "unknown"
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="ignore")
+        output_lower = output.lower()
         # Categorize errors for detailed logging
         error_indicators = {
             "timeout": ["timeout", "timed out", "no response"],
@@ -452,20 +479,51 @@ class TeslaBLE:
             ],
             "command_failed": ["command failed", "error executing", "operation failed"],
         }
-
-        error_type = "unknown"
         for category, indicators in error_indicators.items():
             for indicator in indicators:
                 if indicator in output_lower:
-                    error_type = category
-                    break
-            if error_type != "unknown":
-                break
+                    return category
+        return "unknown"
 
-        logger.debug(
-            f"BLE command failed - Error type: {error_type}, Output: {output[:100]}..."
+    def commandOutcome(self, vin, command, args=None):
+        """One command through sendCommand (with its retries and circuit
+        breaker), classified. Never touches the claim: a key refusal has
+        already been recorded through _setBleStatus, which keeps the claim
+        inside the pairing window and drops it outside."""
+        vin = str(vin).upper()
+        self._keyRefusal.refused = False
+        if args is None:
+            output = self.sendCommand(vin, command)
+        else:
+            output = self.sendCommand(vin, command, args)
+        return self._classify(vin, output)
+
+    def probe(self, vin):
+        """One non-waking reachability check: tesla-control's VCSEC
+        body-controller-state query, answered while infotainment sleeps and
+        without an authenticated session. One shot (no retry backoff),
+        bounded by commandTimeout under _bleLock; an answer is not key
+        proof."""
+        vin = str(vin).upper()
+        self._keyRefusal.refused = False
+        output = self._sendCommand_internal(
+            vin, "body-controller-state", noteProof=False
         )
-        return False
+        return self._classify(vin, output)
+
+    def _classify(self, vin, output):
+        if getattr(self._keyRefusal, "refused", False):
+            return Outcome(REFUSED, "key")
+        if self._storedStatus(vin)["status"] == "refused":
+            return Outcome(REFUSED, "key")
+        if output is None:
+            return Outcome(UNREACHABLE, "no reply")
+        reason = self._satisfiedReason(output)
+        if reason is not None:
+            return Outcome(SATISFIED, reason)
+        if self.parseCommandOutput(output):
+            return Outcome(DONE)
+        return Outcome(ERROR, self._errorCategory(output))
 
     @_serialized
     def peerWithVehicle(self, vin):
@@ -559,10 +617,11 @@ class TeslaBLE:
         return self._execute_with_retry(self._sendCommand_internal, vin, command, args)
 
     @_serialized
-    def _sendCommand_internal(self, vin, command, args=None):
+    def _sendCommand_internal(self, vin, command, args=None, noteProof=True):
         """
         Internal sendCommand implementation (called by retry wrapper).
-        Returns command output string or None on failure.
+        Returns command output string or None on failure. noteProof False:
+        an answer does not count as proof of the key (probe).
         """
         self._keyRefusal.refused = False
         try:
@@ -638,7 +697,8 @@ class TeslaBLE:
                         f"BLE command '{command}' already satisfied: {output[:200]}"
                     )
                     # The car executed and answered a signed command.
-                    self._safeNote(self._noteBleProof, vin)
+                    if noteProof:
+                        self._safeNote(self._noteBleProof, vin)
                     return output
 
                 logger.warning(
@@ -655,7 +715,8 @@ class TeslaBLE:
                 if len(output) > 200
                 else output
             )
-            self._safeNote(self._noteBleProof, vin)
+            if noteProof:
+                self._safeNote(self._noteBleProof, vin)
             return output or "ok"
 
         except Exception as e:

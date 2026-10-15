@@ -16,6 +16,7 @@ from .Capability import (
     WAKE,
     Declaration,
 )
+from ..Reconcile.Outcome import SATISFIED, Outcome
 from .Provider import Provider, vehicleMaxAmps
 
 CAPABILITIES = (
@@ -59,8 +60,28 @@ class TeslaBLEProvider(Provider):
         configConfig = (getattr(self.master, "config", None) or {}).get("config")
         return (1, vehicleMaxAmps(vehicle, configConfig or {}))
 
-    def setAmps(self, vin: str, amps: int) -> bool:
-        return bool(self.ble.setChargeRate(int(amps), vin))
+    # Command methods: one tesla-control command each, classified by
+    # TeslaBLE.commandOutcome. No pre-wake: the lane wakes first when the
+    # attempt says so.
 
-    def wake(self, vin: str) -> bool:
-        return bool(self.ble.wakeVehicle(vin))
+    def probe(self, vin: str) -> Outcome:
+        return self.ble.probe(vin)
+
+    def setChargeLimit(self, vin: str, limit: int) -> Outcome:
+        return self.ble.commandOutcome(vin, "charging-set-limit", int(limit))
+
+    def startCharging(self, vin: str) -> Outcome:
+        if self.ble._scheduleBlocksStart(vin):
+            # The car's own schedule holds the start; as today, treated as
+            # done rather than asked again
+            return Outcome(SATISFIED, "scheduled")
+        return self.ble.commandOutcome(vin, "charging-start")
+
+    def stopCharging(self, vin: str) -> Outcome:
+        return self.ble.commandOutcome(vin, "charging-stop")
+
+    def setAmps(self, vin: str, amps: int) -> Outcome:
+        return self.ble.commandOutcome(vin, "charging-set-amps", int(amps))
+
+    def wake(self, vin: str) -> Outcome:
+        return self.ble.commandOutcome(vin, "wake")

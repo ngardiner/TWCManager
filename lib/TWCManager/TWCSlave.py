@@ -371,6 +371,11 @@ class TWCSlave:
         # Heartbeat includes 7 bytes (Protocol 1) or 9 bytes (Protocol 2) of data
         # that we store in masterHeartbeatData.
 
+        if getattr(self, "stopRequested", False):
+            # The only place a stop reaches RS-485: on the serial thread
+            self.stopRequested = False
+            self.master.sendStopCommand(self.TWCID)
+
         if self.master.settings.get("respondToSlaves", 1) == 0:
             if (
                 self.master.settings.get("respondToSlavesExpiry", time.time())

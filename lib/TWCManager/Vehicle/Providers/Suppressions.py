@@ -4,7 +4,7 @@
 import logging
 from typing import Dict, FrozenSet
 
-from .Capability import ALL, COMMANDS
+from .Capability import ALL, COMMANDS, STOP_CHARGING
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Providers")
 
@@ -87,6 +87,9 @@ class Suppressions:
     def suppressed(self, provider, capability) -> bool:
         if capability in self.explicit().get(provider.name, frozenset()):
             return True
+        if capability == STOP_CHARGING and not provider.local and self._localStops():
+            # A user who chose a disruptive local stop pays nothing for stops
+            return True
         policy = self.commandPolicy
         if policy == "ble_only":
             return not provider.local and capability in COMMANDS
@@ -94,6 +97,13 @@ class Suppressions:
             # Today api_only blocks BLE commands and the BLE read source alike
             return provider.name == "TeslaBLE"
         return False
+
+    def _localStops(self) -> bool:
+        settings = getattr(self.master, "settings", None) or {}
+        try:
+            return int(settings.get("chargeStopMode", 1)) in (2, 3)
+        except (TypeError, ValueError):
+            return False
 
     def noticeOnce(self) -> None:
         if self.commandPolicy != "api_only" or self._noticed:
