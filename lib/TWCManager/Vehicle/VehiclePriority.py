@@ -263,8 +263,9 @@ class VehiclePriority:
                             f"VehiclePriority: {module_name}.{name}() raised {type(e).__name__} on attempt {attempt + 1}"
                         )
                         continue
-                    # TeslaAPI returns "success"/"error" strings; treat
-                    # "error" as failure so the fallback works.
+                    # Any truthy return but "error" ends the walk (TeslaAPI
+                    # returns "success", "skipped" or "error"); None, False
+                    # and "error" try the next provider
                     if ret and ret != "error":
                         logger.debug(
                             f"VehiclePriority: {module_name}.{name}() succeeded on attempt {attempt + 1}"
