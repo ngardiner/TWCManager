@@ -88,8 +88,8 @@ def test_off_thread_master_writers_take_the_lock(tmp_path):
     m = make(tmp_path)
     m.queue_background_task = Mock()
     m.settingsLock = CountingLock()
-    m.saveNormalChargeLimit("V", 90, 80)
-    m.removeNormalChargeLimit("V")
+    m.heldLimits.set("5YJ3E1EA1KF000001", 90, 80)
+    m.heldLimits.remove("5YJ3E1EA1KF000001")
     m.setChargeNowAmps(10)
     m.setHomeLat(1.0)
     assert m.settingsLock.enters == 4

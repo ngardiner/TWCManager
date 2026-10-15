@@ -339,8 +339,8 @@ class VehicleReconciler(threading.Thread):
                 # A lift is a one-shot desire
                 self.desired.clearIf(key, AMPS, d.value)
             elif d.restore and held is not None and held.held is not None:
-                # Already back at the outside limit: nothing is held (M1)
-                self._save(vehicle, k.value, None)
+                # Already back at the outside limit: nothing is held (c6)
+                self.master.heldLimits.remove(vehicle.vin)
                 self.desired.clear(key, aspect)
             return None
         if d.restore and (held is None or held.held is None):

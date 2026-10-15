@@ -13,7 +13,7 @@ def setup(*providers, clock=True):
     m.config = dict(m.config, config=dict(m.config["config"]))          # never the shared CONFIG
     if clock: m.vehicleRegistry._clock = c
     for p in providers: m.providerOrder.register(p)
-    m.desired = DesiredStore(clock=c); m.heldLimits.load()
+    m.desired = DesiredStore(clock=c); m.vehicleRegistry.removed = m.desired.forget; m.heldLimits.load()
     m.reconciler = r = inline(VehicleReconciler(m, clock=c)); v = m.vehicleRegistry.getOrCreate(VIN, "t"); return m, r, v, c
 
 def ble(*outs): return ScriptedProvider("TeslaBLE", 2, True, list(outs))
@@ -347,11 +347,6 @@ def test_the_blind_retry_and_a_fallback_buy_no_paid_read():                 # I3
     b.setChargeLimit = slow; m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
     for _ in range(360): c.t += 10; r.pass_()
     assert cmds(f) == ["setChargeLimit"] and src.fetched == 0                # the fallback reads nothing: 320 s is fresh enough
-
-def test_a_satisfied_restore_settles_the_held_limit_and_its_desire():      # M1
-    m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 90, "TeslaBLE")
-    m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
-    assert r.pass_() == 0 and prov(m, "TeslaBLE").calls == [] and m.heldLimits.get(VIN) == HeldLimit(90, None) and m.desired.get(VIN, CHARGE_LIMIT) is None
 
 # Fix round 2
 

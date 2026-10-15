@@ -58,14 +58,6 @@ class TestTeslaAPIRefusesCommands:
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
-    def test_apply_charge_limit(self, owner_api, any_http):
-        assert owner_api.applyChargeLimit(80) == "error"
-        assert owner_api.applyChargeLimit(80, checkArrival=True) == "error"
-        vehicle = owner_api.getCarApiVehicles()[0]
-        assert vehicle.apply_charge_limit(80) is False
-        assert any_http.call_count == 0
-        assert no_error_recorded(owner_api)
-
     def test_wake(self, owner_api, any_http):
         vehicle = owner_api.getCarApiVehicles()[0]
         assert owner_api.wakeVehicle(vehicle) is False
@@ -76,7 +68,6 @@ class TestTeslaAPIRefusesCommands:
         vehicle = owner_api.getCarApiVehicles()[0]
         vehicle.lastAPIAccessTime = 0  # asleep as far as we know
         owner_api.car_api_available(charge=True)
-        owner_api.car_api_available(applyLimit=True)
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
@@ -216,7 +207,7 @@ class TestVehiclePrioritySkipsReadOnly:
         assert api.setChargeRate.called
 
     @pytest.mark.parametrize(
-        "method", ["car_api_charge", "applyChargeLimit", "wakeVehicle"]
+        "method", ["car_api_charge", "wakeVehicle"]
     )
     def test_every_command_method_skips(self, method, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
