@@ -29,6 +29,7 @@ from typing import Dict, List, Optional
 import requests
 import websockets
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
 from TWCManager.Vehicle.Registry.Sources import HomeAssistantReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
@@ -187,6 +188,8 @@ class HomeAssistant:
     lastStateRefreshTime = 0
     connectionFailures = 0  # bumped by _get_state on a connection error
     stateRefreshInterval = 30  # Minimum seconds between state refreshes per vehicle
+    # Set once connectivity is verified; the provider reads through it
+    readSource = None
 
     def __init__(self, master):
         self.master = master
@@ -261,7 +264,8 @@ class HomeAssistant:
             self._enabled = False
             return
 
-        self.registry.registerReadSource(HomeAssistantReadSource(self))
+        self.readSource = HomeAssistantReadSource(self)
+        self.registry.registerReadSource(self.readSource)
 
         try:
             self._discover_vehicles()
@@ -278,6 +282,9 @@ class HomeAssistant:
 
     def enabled(self) -> bool:
         return self._enabled
+
+    def providers(self):
+        return [HomeAssistantProvider(self)]
 
     # ----------------------------------------------------------------------
     # Discovery via WebSocket API

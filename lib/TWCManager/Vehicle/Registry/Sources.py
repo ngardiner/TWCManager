@@ -124,6 +124,7 @@ class HomeAssistantReadSource(ReadSource):
     # After the cloud API (1): HA mirrors the cloud, so it reads last.
     order = 2
     fields = HA_FIELDS
+    provider = "HomeAssistant"
 
     def __init__(self, ha):
         self.ha = ha
