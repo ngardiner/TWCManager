@@ -344,3 +344,102 @@ def test_case_collision_warns_naming_both_keys(caplog):
     warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warned) == 1
     assert VIN.lower() in warned[0] and VIN in warned[0].replace(VIN.lower(), "")
+
+
+# Fix round 1
+
+
+def test_integral_floats_round_trip_as_ints():
+    # Home Assistant observes chargeLimit/batteryLevel as floats.
+    m, s = make()
+    m.saveNormalChargeLimit(1, 80.0, 60)
+    assert m.getNormalChargeLimit(1) == (True, 80, 60)
+    assert m.settings["heldLimits"]["id:1"] == {"outside": 80, "held": 60}
+    # limitOverride's minBatteryLevelAtHome - 1 from a float batteryLevel
+    m.heldLimits.set(VIN, 80, 66.0)
+    assert m.heldLimits.get(VIN) == HeldLimit(80, 66)
+    assert type(m.settings["heldLimits"][VIN]["held"]) is int
+    m.saveNormalChargeLimit(VIN, 80.0, 66.0)
+    assert m.getNormalChargeLimit(VIN) == (True, 80, 66)
+    m.settings["heldLimits"][VIN2] = {"outside": 80.0, "held": None}
+    assert m.heldLimits.get(VIN2) == HeldLimit(80, None)
+
+
+def test_integral_floats_migrate():
+    m, s = make()
+    m.settings["chargeLimits"] = {VIN: [80.0, 50], VIN2: [80, 50.0], VIN3: 70.0}
+    m.heldLimits.load()
+    assert m.settings["heldLimits"] == {
+        VIN: {"outside": 80, "held": 50},
+        VIN2: {"outside": 80, "held": 50},
+        VIN3: {"outside": 70, "held": None},
+    }
+
+
+def test_non_integral_floats_are_invalid(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {VIN: [80.5, 50], VIN2: [80, 50.5]}
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.load()
+    # an invalid outside drops the entry; an invalid held keeps the outside
+    assert m.heldLimits.get(VIN) is None
+    assert m.heldLimits.get(VIN2) == HeldLimit(80, None)
+    m.settings["heldLimits"][VIN3] = {"outside": 80.5, "held": None}
+    assert m.heldLimits.get(VIN3) is None
+    # set refuses a non-integral value and leaves the store unchanged
+    m.heldLimits.set(VIN2, 70, None)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.set(VIN2, 80.5, None)
+        m.heldLimits.set(VIN2, 80, 50.5)
+    assert m.heldLimits.get(VIN2) == HeldLimit(70, None)
+    assert len(caplog.records) == 2
+
+
+def test_listing_before_load_is_adopted(tmp_path):
+    # TeslaMate token sync and retained telemetry can list cars before
+    # loadSettings runs.
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+
+    m = fileMaster(tmp_path, {"chargeLimits": {"1492931337": [75, 60]}})
+    api, reg = api_with_registry()
+    api.master.heldLimits = m.heldLimits
+    api.addVehicle({"id": 1492931337, "vin": VIN3, "display_name": "X"})
+    m.getModuleByName = Mock(side_effect=lambda n: api if n == "TeslaAPI" else None)
+    m.loadSettings()
+    assert m.heldLimits.get(VIN3) == HeldLimit(75, 60)
+    assert "id:1492931337" not in m.settings["heldLimits"]
+
+
+def test_rebind_adopts_an_entry_that_appeared_later():
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+
+    api, reg = api_with_registry()
+    master = api.master
+    master.heldLimits = HeldLimits(master)
+    api.addVehicle({"id": 7, "vin": VIN, "display_name": "C"})
+    master.settings["heldLimits"] = {"id:7": {"outside": 80, "held": None}}
+    api.getCarApiVehicles()[0].vehicle  # same registry vehicle
+    assert master.heldLimits.get(VIN) == HeldLimit(80, None)
+
+
+def test_both_keys_present_warns_once(tmp_path, caplog):
+    blob = {
+        "heldLimits": {VIN: {"outside": 66, "held": None}},
+        "chargeLimits": {VIN: [95, 55]},
+    }
+    m = fileMaster(tmp_path, blob)
+    with caplog.at_level(logging.WARNING):
+        m.loadSettings()
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert sum("chargeLimits" in w for w in warned) == 1
+    assert m.heldLimits.get(VIN) == HeldLimit(66, None)
+
+
+def test_set_refuses_a_non_vin_and_maps_zero_to_none(caplog):
+    m, s = make()
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.set("anon:8244", 80, 50)
+    assert "heldLimits" not in m.settings and caplog.records
+    m.heldLimits.set(VIN, 80, 0)
+    assert m.heldLimits.get(VIN) == HeldLimit(80, None)

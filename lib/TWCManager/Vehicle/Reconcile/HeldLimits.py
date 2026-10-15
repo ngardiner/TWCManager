@@ -31,7 +31,10 @@ class HeldLimit(NamedTuple):
 
 
 def _isInt(x: Any) -> bool:
-    return isinstance(x, int) and not isinstance(x, bool)
+    # An integral number: Home Assistant reports limits as floats (80.0).
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return False
+    return isinstance(x, int) or x.is_integer()
 
 
 def storeKey(ident: Any) -> str:
@@ -50,16 +53,17 @@ def _legacyEntry(value: Any) -> Tuple[Optional[HeldLimit], bool]:
     # entry (None when the outside value is unusable) and whether an applied
     # value was discarded: the user's normal limit is never lost over it.
     if _isInt(value):
-        return HeldLimit(value, None), False
+        return HeldLimit(int(value), None), False
     if not isinstance(value, (list, tuple)) or len(value) != 2:
         return None, False
     outside, applied = value
     if not _isInt(outside):
         return None, False
+    outside = int(outside)
     if applied is None or (_isInt(applied) and applied in (-1, 0)):
         return HeldLimit(outside, None), False
     if _isInt(applied) and MIN_LIMIT <= applied <= MAX_LIMIT:
-        return HeldLimit(outside, applied), False
+        return HeldLimit(outside, int(applied)), False
     return HeldLimit(outside, None), True
 
 
@@ -69,7 +73,7 @@ def _storedEntry(value: Any) -> Optional[HeldLimit]:
     held = value.get("held")
     if held is not None and not _isInt(held):
         return None
-    return HeldLimit(value["outside"], held)
+    return HeldLimit(int(value["outside"]), None if held is None else int(held))
 
 
 def _encode(limit: HeldLimit) -> Dict[str, Any]:
@@ -98,9 +102,11 @@ class HeldLimits:
         unheld: List[str] = []
         collided: List[Tuple[str, str]] = []
         migrated = False
+        ignored = False
         with self.master.settingsLock:
             settings = self.master.settings
             legacy = settings.get(self.LEGACY_KEY)
+            ignored = self.KEY in settings and legacy is not None
             if self.KEY not in settings and isinstance(legacy, dict):
                 store: Dict[str, Dict[str, Any]] = {}
                 origin: Dict[str, str] = {}
@@ -121,6 +127,12 @@ class HeldLimits:
                 del settings[self.LEGACY_KEY]
                 migrated = True
         # Logged outside the lock.
+        if ignored:
+            # An older release ran in between and wrote chargeLimits again.
+            logger.warning(
+                "Ignoring chargeLimits written by an older release: the held "
+                "limits saved before the downgrade are used"
+            )
         for key in dropped:
             logger.warning(
                 "Dropped a malformed chargeLimits entry for %s while migrating", key
@@ -151,14 +163,18 @@ class HeldLimits:
         return _storedEntry(store.get(key))
 
     def _set(self, key: str, outside: int, held: Optional[int]) -> None:
-        if held == -1:
-            # The legacy "holds none" sentinel is never stored.
+        if held is not None and _isInt(held) and held in (-1, 0):
+            # The legacy "holds none" sentinels are never stored.
             held = None
+        if not _isInt(outside) or (held is not None and not _isInt(held)):
+            logger.warning("Refused a non-integral held limit for %s", key)
+            return
+        limit = HeldLimit(int(outside), None if held is None else int(held))
         with self.master.settingsLock:
             store = self.master.settings.get(self.KEY)
             if not isinstance(store, dict):
                 store = self.master.settings[self.KEY] = {}
-            store[key] = _encode(HeldLimit(outside, held))
+            store[key] = _encode(limit)
         self._save()
 
     def _remove(self, key: str) -> None:
@@ -172,6 +188,10 @@ class HeldLimits:
         return self._get(str(vin).upper())
 
     def set(self, vin: str, outside: int, held: Optional[int]) -> None:
+        if not isWellFormedVIN(str(vin)):
+            # vins() would hide it forever.
+            logger.warning("Refused a held limit for %s: not a VIN", vin)
+            return
         self._set(str(vin).upper(), outside, held)
 
     def remove(self, vin: str) -> None:
