@@ -45,6 +45,7 @@ class VehicleRegistry:
         self._lock = threading.RLock()
         self._vehicles: Dict[str, Vehicle] = {}
         self._sources: List[ReadSource] = []
+        self._readOrder: Optional[Callable[[List[ReadSource]], List[ReadSource]]] = None
         self._liveness: Dict[str, Callable[[Optional[Vehicle]], Optional[float]]] = {}
         # Per point: {"candidate": vin, "attempts": int, "rejected": bool}.
         self._pending: Dict[str, dict] = {}
@@ -248,9 +249,21 @@ class VehicleRegistry:
             if source not in self._sources:
                 self._sources.append(source)
 
+    def useReadOrder(
+        self, fn: Optional[Callable[[List[ReadSource]], List[ReadSource]]]
+    ) -> None:
+        # fn orders the registration-ordered sources; None restores the
+        # (order, index) sort
+        with self._lock:
+            self._readOrder = fn
+
     def readSources(self) -> List[ReadSource]:
         with self._lock:
-            indexed = list(enumerate(self._sources))
+            registered = list(self._sources)
+            fn = self._readOrder
+        if fn is not None:
+            return fn(registered)
+        indexed = list(enumerate(registered))
         return [
             s
             for _, s in sorted(indexed, key=lambda p: (getattr(p[1], "order", 0), p[0]))
