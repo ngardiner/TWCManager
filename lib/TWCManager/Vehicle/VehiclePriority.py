@@ -17,6 +17,7 @@ from TWCManager.Vehicle.Providers.Capability import (
     STOP_CHARGING,
     WAKE,
 )
+from TWCManager.Vehicle.Providers.Suppressions import Suppressions
 
 logger = LoggerFactory.get_logger("VehiclePriority", "Vehicle")
 
@@ -34,6 +35,7 @@ def _vinOf(value) -> Optional[str]:
 
 class VehiclePriority:
     master = None
+    VALID_COMMAND_POLICIES = Suppressions.VALID_COMMAND_POLICIES
 
     # State-changing (command) methods. They walk the order for their
     # capability, so commandPolicy and providerSuppressions apply; any other
@@ -64,10 +66,6 @@ class VehiclePriority:
         self.order = master.providerOrder
 
     @property
-    def VALID_COMMAND_POLICIES(self):
-        return self.order.suppressions.VALID_COMMAND_POLICIES
-
-    @property
     def commandPolicy(self):
         return self.order.suppressions.commandPolicy
 
@@ -79,6 +77,11 @@ class VehiclePriority:
     def updateSettings(self):
         # Need to catch this one to avoid an exception
         return True
+
+    def providers(self):
+        # registerProviders asks every Vehicle module; the facade has none of
+        # its own, and must not walk the order for this
+        return []
 
     @staticmethod
     def capabilityFor(name, args, kwargs) -> Optional[str]:

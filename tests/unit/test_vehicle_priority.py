@@ -108,3 +108,16 @@ def test_exceptions_count_as_failures_and_dunder_probes_do_not_walk():
     assert vp.startCharging(VIN) is False and api.startCharging.call_count == 2
     assert m.stats["moduleFailures"] == {"FleetAPI": 1}
     assert not hasattr(vp, "__deepcopy__") and not hasattr(vp, "_private")
+
+def test_registration_finds_no_providers_on_the_facade(caplog):
+    # registerProviders walks every Vehicle module, VehiclePriority (loaded
+    # first) included; the facade must not walk the order for "providers"
+    import logging
+    from TWCManager.Vehicle.Providers.Order import registerProviders
+    ble = Mock(); ble.providers = lambda: [P("TeslaBLE", 2, True, Mock())]
+    m, vp = make()
+    m.getModulesByType = Mock(return_value=[{"name": "VehiclePriority", "ref": vp}, {"name": "TeslaBLE", "ref": ble}])
+    with caplog.at_level(logging.WARNING):
+        assert registerProviders(m) == ["TeslaBLE"]
+    assert "Could not register" not in caplog.text and vp.providers() == []
+    assert "api_only" in VehiclePriority.VALID_COMMAND_POLICIES
