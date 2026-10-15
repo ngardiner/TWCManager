@@ -25,6 +25,8 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: Classify Owner API tokens as read-only and refuse vehicle commands on them instead of sending them to the Fleet API (#680)
     * (@MikeBishop) - Fix: Refresh Owner API tokens with client_id ownerapi at auth.tesla.com, as 1.3.3 does (#688)
     * (@MikeBishop) - Fix: A rejected pasted refresh token keeps the previous tokens, and a 401 on refresh clears the token type (#688)
+    * (@MikeBishop) - Fix: Check for a car coming online after a Fleet API wake_up instead of waking it again 30 minutes later (#700)
+    * (@MikeBishop) - Fix: Stale TeslaMate asleep state no longer stops the free vehicle state check (#700)
     * Fix: Correct invalid logging level in update_vehicle_data error handler which crashed when logging a failed API response
     * Fix: Remove stopAskingToStartCharging heartbeat reset that caused charge_start API commands to fire every 60 seconds while already charging (re-opens #575, closes #651)
     * Fix: Remove redundant car_api_available() call at applyChargeLimit entry - rate limit check now runs first, halving Fleet API calls on every policy tick
