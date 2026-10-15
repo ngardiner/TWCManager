@@ -3,7 +3,6 @@ import logging
 import re
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Vehicle.Reconcile.Desired import CHARGING
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
 
@@ -601,7 +600,7 @@ class TWCSlave:
             ):
                 # Too little on offer and the car is not drawing: a start not
                 # yet sent is moot, and never wakes the car
-                self.master.desired.clearIf(key, CHARGING, True)
+                self.master.withdrawStartCharging(key)
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
             bytearray(b"\xfb\xe0")

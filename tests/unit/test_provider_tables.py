@@ -76,6 +76,8 @@ def legacySuppressed(self, provider, capability):
     except (TypeError, ValueError): localStops = False
     if capability == C.STOP_CHARGING and not provider.local and localStops:
         return True
+    if capability == C.START_CHARGING and not provider.local and str(settings.get("chargeStopMode")) == "2":
+        return True                                                         # Task 12a I2: no cloud start in mode 2, as on main
     policy = self.commandPolicy
     if policy == "ble_only": return not provider.local and capability in C.COMMANDS
     if policy == "api_only": return provider.name == "TeslaBLE"

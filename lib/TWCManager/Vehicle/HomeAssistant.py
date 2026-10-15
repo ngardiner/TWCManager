@@ -189,7 +189,6 @@ class HaVehicle:
 class HomeAssistant:
     """Home Assistant-backed vehicle module for TWCManager."""
 
-    minChargeLevel = -1
     lastStateRefreshTime = 0
     connectionFailures = 0  # bumped by _get_state on a connection error
     stateRefreshInterval = 30  # Minimum seconds between state refreshes per vehicle
