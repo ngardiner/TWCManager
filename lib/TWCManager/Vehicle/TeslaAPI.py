@@ -224,32 +224,6 @@ class TeslaAPI:
                 return
             self.carApiVehicles.append(car)
 
-    def apiDebugInterface(self, command, vin, parameters):
-        # Provides an interface from the Web UI to allow commands to be run interactively
-
-        vehicle = self.getVehicleByVIN(vin)
-        if not vehicle:
-            return False
-
-        # Get parameters
-        params = {}
-        try:
-            params = json.loads(parameters)
-        except json.decoder.JSONDecodeError:
-            pass
-
-        # Execute specified command
-        if command == "setChargeRate":
-            charge_rate = params.get("charge_rate", 0)
-            self.setChargeRate(charge_rate, vehicle)
-            return True
-        elif command == "wakeVehicle":
-            self.wakeVehicle(vehicle)
-            return True
-
-        # If we make it here, we did not execute a command
-        return False
-
     def refreshTokenTypeKnown(self, token):
         # True when the refresh token's type can be told from the token
         # itself: only an Owner API refresh token (a JWT) is recognisable.

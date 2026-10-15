@@ -30,6 +30,15 @@ def _applyChargeLimitKwargs(task):
     return kwargs
 
 
+def _setAmps(module, task):
+    setAmps = getattr(module, "setAmps", None)
+    if setAmps is None:
+        # VehiclePriority is not loaded; the fallback module has no setAmps
+        logger.debug("No setAmps on the vehicle command module; dropping it")
+        return False
+    return setAmps(task["vin"], task["amps"])
+
+
 class VehicleCommandQueue:
     _DISPATCH = {
         "charge": lambda module, task: module.car_api_charge(task),
@@ -39,6 +48,7 @@ class VehicleCommandQueue:
         "setChargeRate": lambda module, task: module.setChargeRate(
             task["amps"], task.get("vehicle")
         ),
+        "setAmps": lambda module, task: _setAmps(module, task),
     }
 
     def __init__(self, resolve_module):

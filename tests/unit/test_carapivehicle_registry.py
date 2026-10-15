@@ -130,12 +130,22 @@ def test_update_vehicle_data_observes_only_present_keys():  # P15
 
 
 def test_debug_interface_resolves_by_vin():
+    from TWCManager.Vehicle.Providers.Order import ProviderOrder
+
     api, reg = api_with_registry()
+    api.storeToken(fleet_token())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    api.wakeVehicle = Mock()
-    assert api.apiDebugInterface("wakeVehicle", VIN, "{}") is True
+    api.wakeVehicle = Mock(return_value=True)
+    master = api.master
+    master.providerOrder = ProviderOrder(master)
+    for p in api.providers():
+        master.providerOrder.register(p)
+    assert master.providerOrder.debugCommand("wakeVehicle", VIN, "{}") is True
     api.wakeVehicle.assert_called_once_with(api.getCarApiVehicles()[0])
-    assert api.apiDebugInterface("wakeVehicle", "5YJ3E1EA1KF000009", "{}") is False
+    assert (
+        master.providerOrder.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}")
+        is False
+    )
 
 
 def test_stale_telemetry_falls_back_to_api_check():
