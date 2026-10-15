@@ -286,7 +286,7 @@ class Gen3TWCs(EVSEController):
         if unit._version is None and not unit.device_cfg.get("din"):
             unit.refreshVersion()
         if rising:
-            self.vinReader.noteConnect()
+            self.vinReader.noteConnect(unit)
         self.vinReader.apply(self.devices())
 
     def _supply(self):

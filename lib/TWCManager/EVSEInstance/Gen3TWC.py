@@ -52,6 +52,8 @@ logger = logging.getLogger(__name__.rpartition(".")[2])
 _VITALS_CACHE_TTL = 10.0
 # How many seconds a successful vitals response is cached
 _VITALS_SUCCESS_TTL = 5.0
+# How many seconds a failed /api/1/version fetch waits before a retry
+_VERSION_RETRY_SECONDS = 600.0
 
 
 class Gen3TWC(EVSEInstance):
@@ -96,6 +98,8 @@ class Gen3TWC(EVSEInstance):
         self.cloudVin: Optional[str] = None
         # The /api/1/version answer; {} once fetched without a part number
         self._version: Optional[dict] = None
+        # time.monotonic() before which a failed version fetch is not retried
+        self._versionRetryAt: float = 0.0
 
     # ------------------------------------------------------------------
     # Vitals: the cache, and the background-thread fetch
@@ -161,19 +165,33 @@ class Gen3TWC(EVSEInstance):
         return None
 
     def refreshVersion(self) -> bool:
-        """Fetch ``/api/1/version`` once.  Background thread only; a failure
-        leaves ``_version`` None, so the next vitals retry it."""
-        try:
-            import urllib.request
-            import json
+        """Fetch ``/api/1/version`` once.  Background thread only.  A
+        failure leaves ``_version`` None and is retried after
+        _VERSION_RETRY_SECONDS; a 404 is final (``{}``: no DIN)."""
+        now = time.monotonic()
+        if now < self._versionRetryAt:
+            return False
+        import urllib.error
+        import urllib.request
+        import json
 
+        try:
             url = f"http://{self._ip}/api/1/version"
             with urllib.request.urlopen(url, timeout=3) as resp:
                 data = json.loads(resp.read().decode())
             if not isinstance(data, dict):
                 raise ValueError("version is not an object")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                # Firmware without the endpoint: never ask again
+                self._version = {}
+                return True
+            logger.debug("Gen3TWC %s version fetch failed: %s", self._ip, exc)
+            self._versionRetryAt = now + _VERSION_RETRY_SECONDS
+            return False
         except Exception as exc:
             logger.debug("Gen3TWC %s version fetch failed: %s", self._ip, exc)
+            self._versionRetryAt = now + _VERSION_RETRY_SECONDS
             return False
         part, serial = data.get("part_number"), data.get("serial_number")
         if isinstance(part, str) and part and isinstance(serial, str) and serial:
@@ -202,6 +220,10 @@ class Gen3TWC(EVSEInstance):
             # this unit's own pluggedIn=True would otherwise keep it a fresh
             # correlation candidate for the next car
             vehicle = registry.vehicleAt(self.pointId)
+            reader = getattr(self.controller, "vinReader", None)
+            if reader is not None:
+                # live_status may still name this car when the next connects
+                reader.noteDisconnect(self, None if vehicle is None else vehicle.key)
             if vehicle is not None:
                 vehicle.observe("pluggedIn", False, "Gen3TWC")
             registry.endPlugSession(self.pointId)
@@ -215,15 +237,36 @@ class Gen3TWC(EVSEInstance):
     def _correlate(self) -> Optional[str]:
         """Name the car that just connected, or leave the session anonymous.
 
-        The cloud VIN wins; otherwise exactly one known car whose plug-in
-        was observed within CORRELATE_WINDOW, that is on no other point and
-        is not known to be away, is this one.
+        The cloud VIN wins, and replaces a plug-in guess once the registry
+        confirms it; otherwise exactly one known car whose plug-in was
+        observed within CORRELATE_WINDOW, that is on no other point and is
+        not known to be away, is this one (provisionally: the cloud may
+        still correct it).
         """
         registry = self._registry()
         if registry is None:
             return None
         if self.cloudVin:
-            registry.observeTwcVin(self.pointId, self.cloudVin)
+            current = registry.vehicleAt(self.pointId)
+            guessKey = None if current is None or current.isAnonymous else current.key
+            status = registry.observeTwcVin(self.pointId, self.cloudVin)
+            if (
+                status == "confirmed"
+                and guessKey is not None
+                and guessKey != self.cloudVin.upper()
+            ):
+                # The guess was wrong: it is no longer at this point, nor
+                # plugged in as far as this unit knows
+                guess = registry.get(guessKey)
+                if guess is not None:
+                    guess.observe("twcVin", None, "TWC", seen=False)
+                    guess.observe("pluggedIn", False, "Gen3TWC")
+                logger.info(
+                    "Gen3TWC %s: the energy site names %s here, not %s",
+                    self._ip,
+                    self.cloudVin.upper(),
+                    guessKey,
+                )
             return self.cloudVin
         now = registry.now()
         candidates = []

@@ -129,13 +129,18 @@ The vitals report that *a* car is connected, not which one.  When a car
 connects, TWCManager starts an anonymous session for that unit, which it
 can control like any other car.  It then tries to name the car:
 
-- If exactly one known car reported being plugged in within the last
-  two minutes, is not already on another TWC, and is not known to be
-  away from home, that car is taken to be the one at this unit.
-- Otherwise, Tesla's cloud may say which car is connected.  TWCManager
-  asks once when the car connects, then once a minute until the car is
-  named or unplugged.  A car TWCManager has not seen before is named
-  once the cloud reports the same VIN twice.
+- Tesla's cloud says which car is connected.  TWCManager asks once when
+  the car connects, then once a minute until the cloud names the car or
+  it is unplugged (every 10 minutes after 10 tries that name no car).  A
+  car TWCManager has not seen before is named once the cloud reports the
+  same VIN twice.  The car that just left this unit is not accepted until
+  a minute after the next car connects, in case the cloud has not yet
+  noticed it left.
+- Until then, if exactly one known car reported being plugged in within
+  the last two minutes, is not already on another TWC, and is not known
+  to be away from home, that car is taken to be the one at this unit.
+  This is a guess: if the cloud later names a different car, that car
+  replaces it.
 - If neither names the car, the session stays anonymous until the car
   is unplugged.
 
@@ -151,8 +156,8 @@ needs:
 - The unit's DIN.  TWCManager reads it from the unit
   (`http://<ip>/api/1/version`, as `<part_number>--<serial_number>`).  If
   the log shows `no DIN match` for your unit, set its `din` key to the
-  DIN Tesla reports for the unit.  With only one Gen3 and one Wall Connector on
-  the account, no DIN is needed.
+  DIN Tesla reports for the unit.  With only one Gen3 and one Wall
+  Connector on the account, no DIN is needed.
 
 The cloud lookup has not yet been tested on real hardware.
 
@@ -209,7 +214,8 @@ same fair-share algorithm.
   connected](#which-car-is-connected).  The plug-in rule can mistake one
   car for another: a car known only through TeslaMate has no "away from home"
   check, and a car plugging into a Gen2 TWC at the same moment is a
-  candidate until the Gen2 reads its VIN.
+  candidate until the Gen2 reads its VIN.  The cloud lookup corrects
+  such a guess when it names the car.
 - **Indirect control** - The Gen3's own hardware limits (6 A minimum,
   circuit maximum) override TWCManager's target if it falls outside that
   range.

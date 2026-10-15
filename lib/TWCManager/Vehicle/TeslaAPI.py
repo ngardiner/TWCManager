@@ -1342,12 +1342,25 @@ class TeslaAPI:
             body = None
         return req.status_code, body
 
-    def _refuseWallConnectors(self, slot):
-        slot.reportScopeRefused("energy", refused=True)
+    # Answers that latch the Wall Connector read off for a slot until its
+    # token changes, as the vehicle reads treat 403/410/412
+    ENERGY_REFUSALS = (401, 403, 410, 412)
+
+    def _energyRefused(self, slot, status, liveStatus=False):
+        # A 404 from live_status on the Owner API is taken as the Owner API
+        # not serving it (unverified), so the Fleet slot is asked instead
+        return status in self.ENERGY_REFUSALS or (
+            liveStatus and status == 404 and slot.kind == "owner"
+        )
+
+    def _refuseWallConnectors(self, slot, status):
+        if status == 403:
+            # Only a 403 says the scope is missing; a 401 is authentication
+            slot.reportScopeRefused("energy", refused=True)
         self._wallConnectorsRefused[slot.kind] = slot.changes
         logger.info(
-            "Wall Connector VINs: %s token refused energy data; not asking "
-            "again until the token changes" % slot.kind
+            "Wall Connector VINs: %s token refused energy data (HTTP %d); not "
+            "asking again until the token changes" % (slot.kind, status)
         )
 
     def _fetchEnergySites(self, slot) -> Optional[List[dict]]:
@@ -1366,8 +1379,8 @@ class TeslaAPI:
         except requests.exceptions.RequestException as e:
             logger.debug("Energy sites: %s", type(e).__name__)
             return None
-        if status in (401, 403):
-            self._refuseWallConnectors(slot)
+        if self._energyRefused(slot, status):
+            self._refuseWallConnectors(slot, status)
             return None
         if status != 200:
             return None
@@ -1429,8 +1442,8 @@ class TeslaAPI:
             except requests.exceptions.RequestException as e:
                 logger.debug("Wall Connector VINs: %s", type(e).__name__)
                 continue
-            if status in (401, 403):
-                self._refuseWallConnectors(slot)
+            if self._energyRefused(slot, status, liveStatus=True):
+                self._refuseWallConnectors(slot, status)
                 return None
             if status != 200:
                 continue
