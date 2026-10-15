@@ -323,6 +323,12 @@ def test_a_failed_wake_is_tagged():                                         # pr
     f.outcomes = [O.Outcome(O.REFUSED, "wake held")]; m.workers.submit(attempt(provider="FleetAPI", wake=True))
     assert reports[-1][1:] == (O.REFUSED, "wake held") and [c[0] for c in f.calls] == ["wake", "wake"]   # already tagged: not doubled
 
+def test_a_wake_that_sent_no_request_keeps_its_not_sent_detail():      # Task 9 carry (a)
+    for out in (O.Outcome(O.UNREACHABLE, "backoff"), O.Outcome(O.REFUSED, "no command token"), O.Outcome(O.UNREACHABLE, "online check failed")):
+        f = ScriptedProvider("FleetAPI", 5, False, [out, O.Outcome(O.DONE)]); m, reports = setup(f)
+        m.workers.submit(attempt(provider="FleetAPI", wake=True))
+        assert reports[-1][1:] == (out.kind, out.detail) and O.isNotSent(O.Outcome(*reports[-1][1:])) and [c[0] for c in f.calls] == ["wake"]
+
 def test_an_inline_lane_is_busy_while_it_runs():                        # M3
     p = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.DONE)]); m, reports = setup(p); q = m.workers.ble; seen = []
     p.setChargeLimit = lambda vin, limit: (seen.append((q.busy, q.summary()["running"]["key"])), O.Outcome(O.DONE))[1]
