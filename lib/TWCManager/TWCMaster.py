@@ -18,6 +18,8 @@ import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 from TWCManager.Vehicle.Registry import VehicleRegistry
+from TWCManager.Vehicle.Providers import ProviderOrder
+from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -118,6 +120,9 @@ class TWCMaster:
         # under it may do I/O, on any thread.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
+        self.providerOrder = ProviderOrder(self)
+        self.providerOrder.register(Gen2TWCProvider(self))
+        self.vehicleRegistry.useReadOrder(self.providerOrder.orderReadSources)
         # Start of the forgetting interval: the first expiry pass runs an
         # hour after startup, once providers have reclaimed their cars, so a
         # persisted car Fleet still lists is not expired and re-created.
@@ -2085,10 +2090,15 @@ class TWCMaster:
             elif datetime.now() > self.stopTimeout:
                 self.getModuleByName("Policy").overrideLimit()
         if stopMode == 2:
-            self.settings["respondToSlaves"] = 0
-            self.settings["respondToSlavesExpiry"] = time.time() + 60
+            self.stopRespondingToSlaves()
         if stopMode == 3:
             self.sendStopCommand()
+
+    def stopRespondingToSlaves(self):
+        # Every slave stops charging once we go quiet; resumes after a minute
+        with self.settingsLock:
+            self.settings["respondToSlaves"] = 0
+            self.settings["respondToSlavesExpiry"] = time.time() + 60
 
     def time_now(self):
         return datetime.now().strftime(
