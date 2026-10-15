@@ -155,7 +155,9 @@ def test_update_vehicle_data_records_the_cars_own_ac_maximum():
 
 def test_debug_interface_resolves_by_vin():
     from TWCManager.Vehicle.Providers.Order import ProviderOrder
-    from TWCManager.Vehicle.Reconcile.Run import Workers
+    from TWCManager.Vehicle.Reconcile.Desired import DesiredStore
+    from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
+    from tests.unit.reconcile_helpers import inline
 
     api, reg = api_with_registry()
     api.storeToken(fleet_token())
@@ -165,7 +167,8 @@ def test_debug_interface_resolves_by_vin():
     master.providerOrder = ProviderOrder(master)
     for p in api.providers():
         master.providerOrder.register(p)
-    master.workers = Workers(master, inline=True)
+    master.desired = DesiredStore()
+    master.reconciler = inline(VehicleReconciler(master))
     # True: a one-shot attempt was submitted (inline here, so it has run)
     assert master.providerOrder.debugCommand("wakeVehicle", VIN, "{}") is True
     api.wakeOutcome.assert_called_once_with(api.getCarApiVehicles()[0], now=ANY)

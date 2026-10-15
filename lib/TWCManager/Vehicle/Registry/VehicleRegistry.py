@@ -49,8 +49,9 @@ class VehicleRegistry:
         self._liveness: Dict[str, Callable[[Optional[Vehicle]], Optional[float]]] = {}
         # Per point: {"candidate": vin, "attempts": int, "rejected": bool}.
         self._pending: Dict[str, dict] = {}
-        # Called with a key, outside the lock, whenever a vehicle leaves
-        self._onRemove: List[Callable[[str], None]] = []
+        # Called with a key, outside the lock, whenever a vehicle leaves:
+        # state kept elsewhere per key (desired state) follows the removals
+        self.removed: Optional[Callable[[str], None]] = None
 
     @classmethod
     def forMaster(cls, master) -> "VehicleRegistry":
@@ -121,22 +122,14 @@ class VehicleRegistry:
         v.userAsserted = True
         return v
 
-    def onRemove(self, callback: Callable[[str], None]) -> None:
-        # State kept elsewhere per vehicle key (desired state) follows the
-        # registry's removals without the registry knowing about it
-        with self._lock:
-            self._onRemove = self._onRemove + [callback]
-
     def _removed(self, keys: List[str]) -> None:
         # Outside the lock
-        with self._lock:
-            callbacks = list(self._onRemove)
         for key in keys:
-            for callback in callbacks:
-                try:
-                    callback(key)
-                except Exception as e:
-                    logger.debug("Vehicle removal callback raised %s", type(e).__name__)
+            try:
+                if self.removed is not None:
+                    self.removed(key)
+            except Exception as e:
+                logger.debug("Vehicle removal callback raised %s", type(e).__name__)
 
     def forget(self, key: str) -> bool:
         with self._lock:

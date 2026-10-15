@@ -263,7 +263,7 @@ class TelmetryBase:
         # source's last report is not news either: restamping it would make
         # a stale value look newer than our own write, and an unhealthy
         # feed's value look current.
-        mine = vehicle.reportedBy(field, source)
+        mine = vehicle.reported(field).get(source)
         if mine is not None and mine.value == value:
             return
         # A different retained value may predate our own write: stamped no

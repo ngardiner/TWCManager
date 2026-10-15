@@ -119,8 +119,9 @@ def test_dispatch_treats_error_and_exceptions_as_failures():
     assert o.dispatch(None, C.WAKE, lambda p: p.wake(VIN)) is False and f.wake.call_count == 2
 
 def workers_master():
-    from TWCManager.Vehicle.Reconcile.Run import Workers
-    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); del m.reconciler; m.workers = Workers(m, inline=True); return m
+    from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
+    from tests.unit.reconcile_helpers import inline
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); m.reconciler = inline(VehicleReconciler(m)); return m
 
 def test_debug_command_goes_through_the_order():
     m = workers_master(); f = fleet(); f._result = O.Outcome(O.DONE); o = order(m, f); m.providerOrder = o
@@ -130,8 +131,8 @@ def test_debug_command_goes_through_the_order():
     assert o.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}") is False and o.debugCommand("honk", VIN, "{}") is False
     assert len(f.calls) == 3
 
-def test_debug_command_without_workers_submits_nothing():
-    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); m.workers = None; f = fleet(); o = order(m, f)
+def test_debug_command_without_a_reconciler_submits_nothing():          # until Task 11 wires it (ledger L35)
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); m.reconciler = None; f = fleet(); o = order(m, f)
     assert o.debugCommand("wakeVehicle", VIN, "{}") is False and f.calls == []
 
 @pytest.mark.parametrize("params", ['{"charge_rate": "inf"}', '{"charge_rate": 1e999}', '{"charge_rate": "-inf"}'])
