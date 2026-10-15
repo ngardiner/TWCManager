@@ -1,6 +1,18 @@
 from typing import Dict, FrozenSet, Optional, Tuple
 
+from ..Reconcile.Outcome import UNSUPPORTED, Outcome
 from .Capability import Cost, Declaration
+
+# A lane-only pseudo-capability: a cheap, non-waking reachability check. Never
+# in Capability.COMMANDS, so no provider declares it and the order never
+# offers it
+PROBE = "probe"
+
+
+def commandMethod(capability) -> str:
+    # The Provider method a lane calls for a capability (or PROBE); the
+    # capability names are the method names
+    return capability
 
 
 class Provider:
@@ -43,11 +55,27 @@ class Provider:
         span = self.ampsRange(vehicle)
         return span is not None and span[0] <= amps <= span[1]
 
-    def setAmps(self, vin: str, amps: int) -> bool:
-        raise NotImplementedError
+    # Command methods: each returns an Outcome (Reconcile/Outcome.py's
+    # contract). Only a lane calls them; a provider never stamps a write.
 
-    def wake(self, vin: str) -> bool:
-        raise NotImplementedError
+    def setChargeLimit(self, vin: str, limit: int) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def startCharging(self, vin: str) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def stopCharging(self, vin: str) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def setAmps(self, vin: str, amps: int) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def wake(self, vin: str) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def probe(self, vin: str) -> Outcome:
+        # DONE when the car answered; never wakes it
+        return Outcome(UNSUPPORTED, "not implemented")
 
     def attempts(self) -> int:
         # Today's BLE 3 / API 2 (VehiclePriority's priority 20 / 10)
