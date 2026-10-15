@@ -70,15 +70,30 @@ class TeslaBLEReadSource(ReadSource):
 
 
 class TeslaAPIReadSource(ReadSource):
+    # One per token slot. The observation source stays "TeslaAPI"; the
+    # provider says which slot paid for the read.
     name = "TeslaAPI"
     order = 1
     fields = CHARGE_FIELDS | LOCATION_FIELDS
 
-    def __init__(self, carapi):
+    def __init__(self, carapi, kind: str = "owner"):
         self.carapi = carapi
+        self.kind = kind
+        self.provider = "FleetAPI" if kind == "fleet" else "OwnerAPI"
+
+    def slot(self):
+        if self.kind == "fleet":
+            return self.carapi.fleetSlot
+        return self.carapi.ownerSlot
 
     def canRead(self, vehicle) -> bool:
-        return vehicle.attachment("TeslaAPI") is not None
+        if vehicle.attachment("TeslaAPI") is None:
+            return False
+        if not self.slot().usable("read"):
+            return False
+        # A Fleet vehicle_data is paid: only when the Owner slot cannot read,
+        # as slotFor("read") chooses
+        return self.kind != "fleet" or not self.carapi.ownerSlot.usable("read")
 
     def fetch(self, vehicle, field: str, allowWake: bool) -> Optional[Dict[str, Any]]:
         # Never wakes, whatever allowWake says: a cloud wake is never worth a
@@ -90,11 +105,12 @@ class TeslaAPIReadSource(ReadSource):
             # As update_vehicle_data: a deferred car reports its stored
             # values without a request.
             return {}
+        slot = self.slot()
         # Free online check (vehicles/{vin}) before a paid vehicle_data.
-        if not car.is_awake():
+        if not car.is_awake(slot=slot):
             return None
         # update_vehicle_data observes through the CarApiVehicle fields.
-        return {} if car.update_vehicle_data() else None
+        return {} if car.update_vehicle_data(slot=slot) else None
 
 
 # What Home Assistant's entities can report.
