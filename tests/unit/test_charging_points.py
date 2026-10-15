@@ -49,8 +49,19 @@ def distributor(points, amps, controllers=("Gen2TWCs", "VehicleEndpoints")):
 def test_stopped_car_stays_one_point():                             # Review Focus 5 / A18
     twc = ep("Gen2TWC-8244", VIN, local=True, wants=False); car = ep("Vehicle-" + VIN, VIN, wants=True)
     pts = groupEndpoints(Mock(), [twc, car]); assert len(pts) == 1
-    distributor(pts, 40).distributeEVSEPower()
-    twc.setTargetPower.assert_called_once_with(7680); car.setTargetPower.assert_not_called()
+    distributor(pts, 40).distributeEVSEPower()                                       # the TWC reports no demand: its idle minimum (M1)
+    twc.setTargetPower.assert_called_once_with(1200); car.setTargetPower.assert_not_called()
+
+def test_the_twc_decides_whether_its_point_wants_power():                          # final review M1
+    # A stale registry "Charging" must not outweigh a TWC reporting no demand
+    finished = ep("Gen2TWC-8244", VIN, local=True, wants=False, minW=1440); stale = ep("Vehicle-" + VIN, VIN, wants=True)
+    busy = ep("Gen2TWC-8245", VIN2, local=True, wants=True); car2 = ep("Vehicle-" + VIN2, VIN2, wants=True)
+    pts = groupEndpoints(Mock(), [finished, stale, busy, car2])
+    assert [p.wantsToCharge for p in pts] == [False, True]
+    distributor(pts, 40).distributeEVSEPower()                                       # 9600 W: 7680 to the charging car, the idle minimum to the finished one
+    assert busy.setTargetPower.call_args.args[0] == 7680 and finished.setTargetPower.call_args.args[0] == 1440
+    stale.setTargetPower.assert_not_called()
+    assert ChargingPoint(Mock(), VIN, [ep("c", VIN, wants=True)]).wantsToCharge is True     # no local member: the car decides
 
 def test_idle_twc_keeps_its_minimum_when_budget_allows():
     busy = ep("Vehicle-" + VIN, VIN, maxW=4800); idle = ep("Gen2TWC-8245", None, local=True, wants=False, minW=1440)
@@ -130,7 +141,11 @@ def test_stopped_car_and_its_endpoint_form_one_point_with_the_twc_minimum():    
     assert pt.ID == "Point-" + VIN and [e.ID for e in pt.endpoints] == ["Gen2TWC-8244", "Vehicle-" + VIN]
     assert pt.minPower == s.minPower == 6 * 240
     m.distributeEVSEPower()
-    assert s._evseTargetAmps == 32 and setAmps(m) == []
+    # The TWC decides (M1): reporting no demand, it gets its idle minimum...
+    assert s._evseTargetAmps == 6 and setAmps(m) == []
+    s.reportedAmpsActual = 5.5                                                   # ...the paused car takes it...
+    m.distributeEVSEPower()
+    assert s._evseTargetAmps == 32 and setAmps(m) == []                         # ...and the full share follows
 
 def test_lower_case_vin_on_the_twc_groups_with_the_endpoint():                     # 2
     m = real(); s = stoppedTwc(m, VIN.lower()); car(m, VIN, "Stopped")
@@ -144,7 +159,7 @@ def test_mode_1_budget_below_the_twc_floor_offers_zero_and_no_fleet_send():     
     assert s._evseTargetAmps == 0 and setAmps(m) == []
 
 def test_mode_2_named_twc_leaves_the_rate_to_the_heartbeat():                      # 4
-    m = real(mode=2); s = m.newSlave(b"\x82\x44", 80); s.currentVIN = VIN; car(m, VIN, "Charging"); budget(m, 20)
+    m = real(mode=2); s = m.newSlave(b"\x82\x44", 80); s.currentVIN = VIN; s.reportedAmpsMax = 32; car(m, VIN, "Charging"); budget(m, 20)
     assert m.modules["VehicleEndpoints"]["ref"].allEVSEs[0].provider == "FleetAPI"   # mode 2: the endpoint is writable over Fleet
     m.distributeEVSEPower()
     assert setAmps(m) == [] and s._evseTargetAmps == 20
@@ -155,7 +170,9 @@ def test_mode_2_named_twc_leaves_the_rate_to_the_heartbeat():                   
 
 def test_twc_point_sets_the_twc_target_and_never_the_endpoint():                   # 5
     m = real(); s = stoppedTwc(m); car(m, VIN, "Stopped"); budget(m, 20); e = endpoint(m, VIN)
+    s.reportedAmpsMax = 20                                                       # the TWC echoes its offer: it wants power
     m.distributeEVSEPower(); assert s._evseTargetAmps == 20                     # water-fill
+    s.reportedAmpsMax = 0
     m.vehicleRegistry.get(VIN).observe("chargingState", "Complete", "TeslaAPI")
     m.distributeEVSEPower(); assert s._evseTargetAmps == 6                      # nobody wants power: idle TWC keeps its minimum
     car(m, VIN2, "Charging"); budget(m, 32)
@@ -166,7 +183,8 @@ def test_twc_point_sets_the_twc_target_and_never_the_endpoint():                
     assert [a["vin"] for a in setAmps(m)] == [VIN2]
 
 def test_car_on_no_twc_is_its_own_point_and_queues_amps():                          # 6
-    m = real(); s = m.newSlave(b"\x82\x44", 80); s.currentVIN = VIN2; car(m, VIN2, "Charging"); car(m, VIN, "Charging"); budget(m, 40)
+    m = real(); s = m.newSlave(b"\x82\x44", 80); s.currentVIN = VIN2; s.reportedAmpsMax = 32; s.reportedAmpsActual = 20
+    car(m, VIN2, "Charging"); car(m, VIN, "Charging"); budget(m, 40)
     assert sorted(p.ID for p in m.chargingPoints()) == ["Point-" + VIN, "Point-" + VIN2]
     m.distributeEVSEPower()
     assert setAmps(m) == [{"cmd": "setAmps", "vin": VIN, "amps": 20}] and s._evseTargetAmps == 20
