@@ -509,10 +509,20 @@ class TeslaBLE:
         output = self._sendCommand_internal(
             vin, "body-controller-state", noteProof=False
         )
-        return self._classify(vin, output)
+        outcome = self._classify(vin, output)
+        if output is not None and outcome.kind != REFUSED:
+            # The channel is demonstrably up: close an open breaker so the
+            # command the probe clears the way for is sent. A failed probe
+            # records nothing
+            self.circuit_breaker.record_success(vin)
+        return outcome
 
     def _classify(self, vin, output):
         if getattr(self._keyRefusal, "refused", False):
+            if self._inPairingWindow(vin):
+                # The owner has not tapped the key card yet: the claim is
+                # kept, and the next try may prove the key
+                return Outcome(ERROR, "pairing")
             return Outcome(REFUSED, "key")
         if self._storedStatus(vin)["status"] == "refused":
             return Outcome(REFUSED, "key")
@@ -701,10 +711,12 @@ class TeslaBLE:
                         self._safeNote(self._noteBleProof, vin)
                     return output
 
+                # The -debug output carries session detail: DEBUG only
                 logger.warning(
-                    f"BLE command '{command}' failed with return code {return_code}: {output}"
+                    f"BLE command '{command}' failed with return code "
+                    f"{return_code}: {self._errorCategory(output)}"
                 )
-                logger.warning(f"BLE command full error output: {output}")
+                logger.debug(f"BLE command '{command}' error output: {output[:200]}")
                 if self._isKeyRefusal(output):
                     self._keyRefusal.refused = True
                     self._safeNote(self._noteBleRefusal, vin, output)

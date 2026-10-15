@@ -25,6 +25,9 @@ class TWCSlave:
     minAmpsTWCSupports = 6
     masterHeartbeatData = bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
     timeLastRx = time.time()
+    # A mode-3 stop published off the serial thread (Gen2TWCProvider);
+    # send_master_heartbeat consumes and sends it
+    stopRequested = False
 
     # reported* vars below are reported to us in heartbeat messages from a Slave
     # TWC.
@@ -371,7 +374,7 @@ class TWCSlave:
         # Heartbeat includes 7 bytes (Protocol 1) or 9 bytes (Protocol 2) of data
         # that we store in masterHeartbeatData.
 
-        if getattr(self, "stopRequested", False):
+        if self.stopRequested:
             # The only place a stop reaches RS-485: on the serial thread
             self.stopRequested = False
             self.master.sendStopCommand(self.TWCID)

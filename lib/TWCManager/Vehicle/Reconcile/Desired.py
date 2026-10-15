@@ -524,6 +524,11 @@ class DesiredStore:
         with self._lock:
             return self._state(key)
 
+    def peek(self, key) -> Optional[ControlState]:
+        # A read that never creates an entry (readiness, summaries)
+        with self._lock:
+            return self._states.get(key)
+
     def bounds(self, key) -> SessionBounds:
         with self._lock:
             return self._state(key).bounds

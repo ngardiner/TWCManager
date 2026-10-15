@@ -81,7 +81,8 @@ class Gen2TWCProvider(Provider):
             desired = getattr(self.master, "desired", None)
             if desired is None:
                 return False
-            return desired.state(vehicle.key).lastStopProvider == self.name
+            state = desired.peek(vehicle.key)
+            return state is not None and state.lastStopProvider == self.name
         return False
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
