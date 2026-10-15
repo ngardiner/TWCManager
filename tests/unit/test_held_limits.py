@@ -387,7 +387,8 @@ def test_listing_before_load_is_resolved_on_the_next_check(tmp_path, requests_mo
 def test_both_keys_present_the_store_wins(tmp_path, caplog):
     blob = {
         "heldLimits": {VIN: {"outside": 66, "held": None}},
-        "chargeLimits": {VIN: [95, 55]},
+        # an out-of-range held value on a car the store keeps: no warning
+        "chargeLimits": {VIN: [95, 101]},
     }
     m = fileMaster(tmp_path, blob)
     with caplog.at_level(logging.WARNING):
