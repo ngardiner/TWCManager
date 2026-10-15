@@ -525,8 +525,11 @@ class TWCMaster:
         - A car on no TWC has had VehicleEndpoint.setTargetPower() called
           (→ a queued setAmps).
 
-        An idle Gen2 TWC (a point not wanting power) is offered its minimum
-        while the budget allows, so it can see a car plug in.
+        A point not wanting power (an idle TWC) gets a target of 0 and counts
+        nothing against the budget.  On the wire, TWCSlave offers it 0 when no
+        car is charging (a Gen2 treats 0 as its hardware minimum) and its
+        hardware minimum when another car charges with at least
+        minAmpsPerTWC of power per car, so it can see a car plug in.
 
         Only runs when an EVSEController other than Gen2TWCs is registered;
         pure Gen2 deployments keep the existing per-slave heartbeat

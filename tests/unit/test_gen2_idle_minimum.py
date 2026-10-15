@@ -1,9 +1,9 @@
 # tests/unit/test_gen2_idle_minimum.py
 #
-# An idle Gen2 TWC is offered its minimum so it can detect a plug-in. The
-# minimum the distributor budgets (point.minPower) must be what the real
-# heartbeat sends: TWCSlave zeroes any offer below minAmpsToOffer() while no
-# car charges, so a lower minimum would go out as 0 A.
+# An idle TWC gets a distributor target of 0 and counts nothing against the
+# budget. On the wire TWCSlave offers it 0 when no car charges (a Gen2 treats
+# 0 as its hardware minimum) and minAmpsTWCSupports when another car charges
+# with enough power per car; these tests use the real TWCMaster and TWCSlave.
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -102,6 +102,18 @@ def test_idle_twc_sends_zero_which_the_twc_treats_as_its_hardware_minimum():
     assert point(m, s).minPower == s.convertAmpsToWatts(12, s.currentVoltage)
     assert set(offers(s, iface)) == {0}
     assert set(offers(s, iface, spike=False)) == {0}
+
+
+def test_idle_twc_offered_6a_on_wire_when_other_car_charges():
+    # Another car is charging with at least minAmpsPerTWC of power per car:
+    # the idle TWC's target is 0, but the wire offer is minAmpsTWCSupports
+    m, iface = real(minAmps=12, feed=40)
+    chargingSlave(m, b"\x82\x45", VIN)
+    idle = idleSlave(m)
+    m.distributeEVSEPower()
+    assert idle._evseTargetAmps == 0
+    assert idle.minAmpsTWCSupports == 6
+    assert set(offers(idle, iface, spike=False)) == {6}
 
 
 def test_range_override_governs_allocation_not_the_idle_offer():

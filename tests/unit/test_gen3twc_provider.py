@@ -29,7 +29,7 @@ def test_properties_never_fetch_and_a_stale_cache_queues_one_background_task(): 
     with patch("urllib.request.urlopen", side_effect=AssertionError("no HTTP on the caller's thread")):
         assert ctl.allEVSEs == [] and u.isReachable is False and u.occupied is None and u.wantsToCharge is False
     m.queue_background_task.assert_called_once_with({"cmd": "gen3Vitals"})
-    assert vitals(u, True, 12.0) is True and ctl.allEVSEs == [u] and u.currentAmps == 12.0 and u.isLocal and u.idleMinimum is False
+    assert vitals(u, True, 12.0) is True and ctl.allEVSEs == [u] and u.currentAmps == 12.0 and u.isLocal
 
 def test_connect_begins_an_anonymous_session_and_disconnect_ends_it():            # G3
     m, ctl, p = make(); (u,) = ctl.devices(); reg = m.vehicleRegistry
