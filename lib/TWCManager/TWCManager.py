@@ -333,6 +333,10 @@ def background_tasks_thread(master):
                     vehicleModule.updateChargeAtHome()
                 elif task["cmd"] == "checkCharge":
                     vehicleModule.updateChargeAtHome()
+                elif task["cmd"] == "loadVehicleList":
+                    carapi = master.getModuleByName("TeslaAPI")
+                    if carapi:
+                        carapi.loadList()
                 elif task["cmd"] == "checkDeparture":
                     onDeparture(master)
                 elif task["cmd"] == "checkGreenEnergy":
@@ -1033,6 +1037,10 @@ while True:
             carapi = master.getModuleByName("TeslaAPI")
             if carapi:
                 carapi.refreshTokenIfNeeded()
+                if carapi.listPending():
+                    # A list load that failed (at boot, say) or held limits
+                    # still waiting on it retry here: free calls only
+                    master.queue_background_task({"cmd": "loadVehicleList"})
 
         ########################################################################
         # See if there's an incoming message on the input interface.

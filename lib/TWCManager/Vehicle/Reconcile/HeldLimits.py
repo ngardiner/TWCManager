@@ -89,6 +89,10 @@ class HeldLimits:
         self.master = master
         # Vehicle ID -> HeldLimit, until a vehicle list resolves them
         self._waiting: Dict[str, HeldLimit] = {}
+        # The VINs the store held after load(): their entries beat a legacy
+        # one. A record made later (by the reconciler, from a car still at
+        # our old limit) keeps its hold but takes the legacy normal limit
+        self._loadedVins = frozenset()
 
     def _save(self) -> None:
         self.master.queue_background_task({"cmd": "saveSettings"})
@@ -147,6 +151,7 @@ class HeldLimits:
                     del settings[self.LEGACY_KEY]
                 changed = ids != legacy
         self._waiting = waiting
+        self._loadedVins = frozenset(k for k in store if isWellFormedVIN(str(k)))
         # Logged outside the lock.
         for key in dropped:
             logger.warning(
@@ -177,12 +182,13 @@ class HeldLimits:
     def resolveLegacyIds(self, listed: Dict[Any, Any]) -> None:
         """Move each waiting ID's held limit under the VIN listed for it, and
         drop the rest, once listed (every Tesla account's vehicle IDs to
-        VINs) names at least one car. A car the store has already keeps
-        its own entry."""
+        VINs) names at least one car. A car the store held at load keeps
+        its own entry; one recorded since keeps its hold and takes the
+        legacy normal limit."""
         listed = {str(k): str(v).upper() for k, v in listed.items() if v}
         if not listed:
             return
-        lost = []
+        lost, merged = [], []
         with self.master.settingsLock:
             # Taken under the lock: a second caller finds nothing waiting
             waiting, self._waiting = self._waiting, {}
@@ -198,9 +204,29 @@ class HeldLimits:
                     lost.append((ident, limit))
                 elif vin not in store:
                     store[vin] = _encode(limit)
+                else:
+                    own = _storedEntry(store[vin])
+                    kept = vin in self._loadedVins or own is None
+                    if own is None:
+                        own = limit
+                    if not kept:
+                        store[vin] = _encode(HeldLimit(limit.outside, own.held))
+                    merged.append((ident, vin, limit, own, kept))
             for key in [k for k in store if str(k).startswith("id:")]:
                 del store[key]
             settings.pop(self.LEGACY_KEY, None)
+        for ident, vin, limit, own, kept in merged:
+            # Either way one saved normal limit is discarded
+            logger.info(
+                "Tesla vehicle ID %s is %s: kept normal limit %s%%, discarded %s%%",
+                ident,
+                vin,
+                *(
+                    (own.outside, limit.outside)
+                    if kept
+                    else (limit.outside, own.outside)
+                )
+            )
         for ident, limit in lost:
             logger.warning(
                 "Dropped the saved charge limit of Tesla vehicle ID %s, which no "

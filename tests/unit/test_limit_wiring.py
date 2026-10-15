@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 def cars(m):
     reg = m.vehicleRegistry; a = reg.get(VIN); a.observe("twcVin", "8244", "TWC")
-    b = reg.getOrCreate(VIN2, "t"); b.attach("TeslaAPI", SimpleNamespace(atHome=False, ID=2, VIN=VIN2))
+    b = reg.getOrCreate(VIN2, "t"); b.attach("TeslaAPI", SimpleNamespace(atHome=False, ID=2, VIN=VIN2, update_location=lambda minInterval=0: True))
     d = reg.getOrCreate(VIN3, "t"); d.claim("TeslaBLE", True, "paired"); return a, b, d
 
 def test_present_rule_until_phase_5():
@@ -100,7 +100,8 @@ def test_legacy_ids_resolve_once_from_the_first_vehicle_list(requests_mock, capl
     owner = requests_mock.get(OWNER_API_URL[:-8] + "products", text=listing((11, VIN2), (33, VIN4)))
     fleet = requests_mock.get(FLEET_NA_URL, text=listing((22, VIN3)))           # Owner and Fleet: different accounts
     m.tasks.clear()
-    with caplog.at_level(logging.WARNING):
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+    with caplog.at_level(1), caplog.at_level(1, logger=teslaapi.logger.name):    # every level: INFO8/DEBUG lines too
         assert api.loadVehicleList() is True
     assert (owner.call_count, fleet.call_count) == (1, 1)
     assert m.settings["heldLimits"] == {VIN: {"outside": 80, "held": None}, VIN2: {"outside": 90, "held": 50},
@@ -108,6 +109,8 @@ def test_legacy_ids_resolve_once_from_the_first_vehicle_list(requests_mock, capl
     assert "chargeLimits" not in m.settings and not m.heldLimits.waiting() and m.tasks == [{"cmd": "saveSettings"}]
     warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warned) == 1 and "44" in warned[0] and "75%" in warned[0]       # unmatched: dropped, one warning naming the ID and its limit
+    assert any("33" in r.getMessage() and "70%" in r.getMessage() and VIN4 in r.getMessage() for r in caplog.records if r.levelno == logging.INFO)   # the discard is logged (M5)
+    assert "Car API cmd vehicles" in caplog.text and "Car API vehicle list" in caplog.text    # the INFO8 and DEBUG lines were captured
     assert not any(t in caplog.text for t in (api.ownerSlot.accessToken, api.fleetSlot.accessToken))
     api.carApiVehicles = []; api.loadVehicleList(); assert (owner.call_count, fleet.call_count) == (2, 1)   # once: nothing waits, no second list
 
@@ -167,3 +170,64 @@ def test_a_satisfied_restore_removes_the_held_record():                    # led
     m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
     assert r.pass_() == 0 and m.heldLimits.get(VIN) is None and m.heldLimits.holding() == []
     assert m.desired.get(VIN, CHARGE_LIMIT) is None and prov(m, "TeslaBLE").calls == []
+
+# Fix round 1
+
+FLEET_CAR = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
+
+def fleetCarOffItsPoint(requests_mock, home):
+    # A Fleet-only car we hold at 50 (normal 90), reported by its TWC, then
+    # unplugged; it reads as at home or away
+    from unittest.mock import Mock
+    m, r, v, c = setup(clock=False); api = new_api(master=m); api.storeToken(fleet_token())
+    for p in api.providers(): m.providerOrder.register(p)
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); car = api.getCarApiVehicles()[0]
+    api.is_location_home = Mock(return_value=home); api.is_far_from_home = Mock(return_value=False)
+    car.atHome = True; v.observe("twcVin", "8244", "TWC"); v.observe("twcVin", None, "TWC", seen=False)
+    m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaAPI")
+    requests_mock.get(FLEET_CAR, json={"response": {"state": "online"}})
+    requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"drive_state": {"latitude": 1.0, "longitude": 2.0, "shift_state": "D"},
+                                                                    "charge_state": {"charge_limit_soc": 50}, "vehicle_state": {}}})
+    requests_mock.post(re.compile(r".*/command/.*"), json={"response": {"result": True, "reason": ""}})
+    requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "online"}})
+    return m, r, car
+
+def paid(requests_mock):
+    return [q.url.split("?")[0].split("/")[-1] for q in requests_mock.request_history if q.url.split("?")[0] != FLEET_CAR]
+
+def test_a_fleet_car_that_unplugs_and_leaves_gets_its_normal_limit_back(requests_mock):   # C1, paid counted
+    m, r, car = fleetCarOffItsPoint(requests_mock, home=False)
+    onDeparture(m); d = m.desired.get(VIN, CHARGE_LIMIT)
+    assert car.atHome is False and d is not None and d.restore and d.value == 90
+    r.pass_()
+    assert paid(requests_mock) == ["vehicle_data", "set_charge_limit"]                  # one read, one command, never a wake
+    assert requests_mock.request_history[-1].json() == {"percent": 90}
+
+def test_an_unplug_at_home_is_not_a_departure(requests_mock):
+    m, r, car = fleetCarOffItsPoint(requests_mock, home=True)
+    onDeparture(m); r.pass_()
+    assert m.desired.get(VIN, CHARGE_LIMIT) is None and paid(requests_mock) == ["vehicle_data"]
+
+def test_a_policy_change_while_the_car_is_away_sends_nothing(requests_mock):  # C1, paid counted
+    m, r, car = fleetCarOffItsPoint(requests_mock, home=False)
+    onDeparture(m); r.pass_(); before = len(requests_mock.request_history)
+    m.setPolicyLimit(60, transition=True); r.pass_()
+    assert m.desired.get(VIN, CHARGE_LIMIT).value == 90 and len(requests_mock.request_history) == before
+
+def test_a_limit_recorded_while_an_id_waits_keeps_the_legacy_normal(caplog):  # I1
+    m, s = make(); m.settings["chargeLimits"] = {"11": [90, 50]}; m.heldLimits.load()
+    m.heldLimits.set(VIN, 50, 60)                                               # the reconciler, from a car still at our old 50
+    with caplog.at_level(logging.INFO):
+        m.heldLimits.resolveLegacyIds({"11": VIN})
+    assert m.heldLimits.get(VIN) == HeldLimit(90, 60) and "50%" in caplog.text and "90%" in caplog.text
+
+def test_a_failed_boot_list_load_recovers_without_an_arrival(requests_mock):  # I2
+    master = FakeMaster(); master.vehicleRegistry = VehicleRegistry({}); api = new_api(master=master); api.storeToken(fleet_token())
+    requests_mock.get(FLEET_NA_URL, [{"status_code": 500, "text": "{}"}, {"text": listing((1, VIN))}])
+    api.updateChargeAtHome(); assert api.getVehicleCount() == 0 and api.listPending()   # the boot checkCharge failed
+    api.loadList(); assert api.getVehicleCount() == 1 and not api.listPending()      # the periodic retry
+    assert [q.method for q in requests_mock.request_history] == ["GET", "GET"]
+    source = (REPO / "lib/TWCManager/TWCManager.py").read_text()
+    tick = source[source.index("master.lastTeslaTokenRefreshCheck = time.time()"):]
+    assert tick.index("carapi.listPending()") < tick.index('{"cmd": "loadVehicleList"}') < 600
+    assert 'task["cmd"] == "loadVehicleList"' in source and "carapi.loadList()" in source
