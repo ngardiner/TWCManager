@@ -573,7 +573,9 @@ class TWCSlave:
                     # to near zero within a few seconds.
                     self.master.stopCarsCharging(self.currentVIN)
             elif (
-                self.lastAmpsOffered >= self.config["config"]["minAmpsPerTWC"]
+                # minAmpsToOffer: this TWC's floor, which a per-TWC range
+                # override can set below minAmpsPerTWC
+                self.lastAmpsOffered >= self.minAmpsToOffer()
                 and self.reportedAmpsActual < 1.0
                 and self.reportedState != 0x02
             ):

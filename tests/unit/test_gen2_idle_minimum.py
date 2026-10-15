@@ -151,3 +151,18 @@ def test_idle_minimum_does_not_starve_a_charging_twc():
     # its full offer; the idle TWC gets its minimum only from what is left
     assert chargingAndIdle(feed=40) == (32, 0)
     assert chargingAndIdle(feed=50) == (32, 12)
+
+
+def test_start_request_follows_the_range_override():
+    # Concern rulings, item 3: a TWC offering its override minimum (8 A,
+    # below minAmpsPerTWC 12) still asks a paused car to start
+    m, iface = real(minAmps=12, ranges={"8244": {"minAmps": 8}})
+    s = idleSlave(m)
+    s.protocolVersion = 2
+    m.startCarsCharging = Mock()
+    s.lastAmpsOffered = 8
+    s.send_master_heartbeat()
+    assert m.startCarsCharging.call_count == 1
+    s.lastAmpsOffered = 7
+    s.send_master_heartbeat()
+    assert m.startCarsCharging.call_count == 1
