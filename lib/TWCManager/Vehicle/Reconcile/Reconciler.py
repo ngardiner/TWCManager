@@ -41,7 +41,6 @@ from .Outcome import (
     isNotSent,
 )
 from .Rules import (
-    CHARGING_LIKE,
     VEHICLE_SOURCES_EXCLUDED,
     decideChargeLimit,
     needsLiveRead,
@@ -77,6 +76,8 @@ _REFUSALS = frozenset({"wake refused", "no command token"})
 # TWC current at or above this means the car is drawing power
 POWER_FLOWING_AMPS = 1.0
 
+# A car reporting one of these is drawing power, so awake
+_DRAWING = frozenset({"Charging", "Starting"})
 # The plan order: a limit is planned before a start
 _ORDER = (CHARGE_LIMIT, CHARGING, AMPS)
 
@@ -386,8 +387,8 @@ class VehicleReconciler(threading.Thread):
             and now - ch.failingSince >= PAID_AFTER[aspect]
             and now - ch.lastAttemptAt < PROBE_AFTER
         )
-        # At most two paid sends per desire: one, then one more after a
-        # failure or a reading that reached the car (I2)
+        # At most two paid sends per arm, and two arms per desire: one send,
+        # then one more after a failure or a reading that reached the car (I2)
         # A start goes with the limit first: its wake carries the limit
         ride = aspect == CHARGE_LIMIT and self._startWanted(vehicle, config)
         field = FIELD_FOR[aspect]
@@ -400,9 +401,11 @@ class VehicleReconciler(threading.Thread):
             and (reached or ride or self._chargingSince(vehicle, aspect, rec.paidAt))
         ):
             # No paid send reached the car: a reading shows it awake, or a
-            # start will wake it. Two more sends, once per desire (N1, I2)
+            # start will wake it. At most two more sends, once per desire, each
+            # with the normal wake and read (N1, I2)
             rec.paidSends = 0
             rec.rearmed = True
+            rec.paidRetryDue = False
         paidAgain = rec.paidSends == 0 or (
             rec.paidSends < 2
             and now - rec.paidAt >= RETRY[aspect]
@@ -427,7 +430,7 @@ class VehicleReconciler(threading.Thread):
                 or dl is not None
                 and limit.lastOutcome is not None
                 and not satisfied(CHARGE_LIMIT, dl.value, known(vehicle, CHARGE_LIMIT))
-                and not self._limitSpent(limit)
+                and not self._limitSpent(vehicle, limit)
             ):
                 # A limit always goes first, and settles before a start
                 return None
@@ -471,21 +474,21 @@ class VehicleReconciler(threading.Thread):
     @staticmethod
     def _chargingSince(vehicle, aspect, since) -> bool:
         # A car drawing power is awake: a lowered limit gets one more send
-        # (I4)
+        # (I4). Not "Complete": a finished car may be asleep
         return aspect == CHARGE_LIMIT and any(
-            obs.value in CHARGING_LIKE
-            for obs in _newer(vehicle, FIELD_FOR[CHARGING], since)
+            obs.value in _DRAWING for obs in _newer(vehicle, FIELD_FOR[CHARGING], since)
         )
 
-    def _limitSpent(self, limit) -> bool:
+    def _limitSpent(self, vehicle, limit) -> bool:
         # The limit cannot be delivered, so it no longer holds the start
-        # (c4): every provider declaring it is excluded, ready or not (M11);
+        # (c4): every provider that can serve this car is excluded (a paired
+        # BLE with its radio down still can: readiness is the claim, M11);
         # both paid sends went to a car that answered; its one re-arm is
         # used with no blind retry left; or a refusal holds it unsent
-        declared = self.master.providerOrder.ordered(SET_CHARGE_LIMIT)
+        able = self.master.providerOrder.candidates(vehicle, SET_CHARGE_LIMIT)
         last = limit.lastOutcome
         return (
-            all(p.name in limit.excluded for p in declared)
+            all(p.name in limit.excluded for p in able)
             or limit.paidSends >= 2
             and limit.paidReached
             or limit.paidSends

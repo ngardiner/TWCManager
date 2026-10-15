@@ -12,8 +12,9 @@
 # Two kinds of instance: the legacy one (run=None) dispatches command dicts
 # to the vehicle module (normally VehiclePriority) until Task 13; the
 # reconciler's attempt queues (Vehicle/Reconcile/Reconciler.py) pass their
-# own run, key, isHigh, report and lost. Every entry such an instance accepts is reported exactly
-# once, through report or lost. Callbacks never run under _cond.
+# own run, key, isHigh, report and lost. Every entry such an instance
+# accepts is reported exactly once, through report or lost. Callbacks never
+# run under _cond.
 import collections
 import threading
 import time

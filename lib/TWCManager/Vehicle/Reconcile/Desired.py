@@ -364,9 +364,10 @@ class DesiredStore:
                 record.lastOutcomeAt = now
                 record.lastProvider = attempt.provider
             sent = not isNotSent(outcome)
-            if sent:
+            if sent and outcome.kind not in EXCLUDING:
                 # Even for a replaced desire: a start still in flight when
-                # the desire flips spaces the stop (I5)
+                # the desire flips spaces the stop (I5). An excluding outcome
+                # changed nothing on the car: the fallback need not wait
                 record.lastSentAt = now
             if current and sent:
                 if not paid:
