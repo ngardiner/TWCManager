@@ -14,6 +14,7 @@ error (which would back off reads too). Reads still run.
 """
 
 import logging
+import time
 import re
 from unittest.mock import Mock
 
@@ -646,7 +647,9 @@ class TestOwnerCommandRefusedByTesla:
     ):
         api, vehicle = owner_car("off")
         vehicle.lastAPIAccessTime = 0  # not known to be awake
-        vehicle.firstChargeNeededTime = 1  # pre-wake hold long over
+        # A live charge need whose pre-wake hold is long over
+        vehicle.firstChargeNeededTime = 1
+        vehicle.lastChargeNeededTime = time.time()
         requests_mock.get(
             OWNER_URL + "/5YJ3E1EA1KF000001", json={"response": {"state": "asleep"}}
         )

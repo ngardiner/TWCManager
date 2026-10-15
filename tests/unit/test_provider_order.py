@@ -5,6 +5,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Provider import Provider
 from TWCManager.Vehicle.Providers.Suppressions import Suppressions
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Registry.ReadSource import ReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 VIN = "5YJ3E1EA1KF000001"
@@ -115,12 +116,21 @@ def test_dispatch_treats_error_and_exceptions_as_failures():
     o = order(master(), b, f)
     assert o.dispatch(None, C.WAKE, lambda p: p.wake(VIN)) is False and f.wake.call_count == 2
 
+def workers_master():
+    from TWCManager.Vehicle.Reconcile.Run import Workers
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); del m.reconciler; m.workers = Workers(m, inline=True); return m
+
 def test_debug_command_goes_through_the_order():
-    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); f = fleet(); o = order(m, f)
+    m = workers_master(); f = fleet(); f._result = O.Outcome(O.DONE); o = order(m, f); m.providerOrder = o
     assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": "12"}') is True and f.calls == [("setAmps", VIN, 12)]
     assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 0}') is True and f.calls[-1] == ("setAmps", VIN, 1)
     assert o.debugCommand("wakeVehicle", VIN, "not json") is True and f.calls[-1] == ("wake", VIN)
     assert o.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}") is False and o.debugCommand("honk", VIN, "{}") is False
+    assert len(f.calls) == 3
+
+def test_debug_command_without_workers_submits_nothing():
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); m.workers = None; f = fleet(); o = order(m, f)
+    assert o.debugCommand("wakeVehicle", VIN, "{}") is False and f.calls == []
 
 @pytest.mark.parametrize("params", ['{"charge_rate": "inf"}', '{"charge_rate": 1e999}', '{"charge_rate": "-inf"}'])
 def test_debug_command_refuses_an_infinite_rate(params):
@@ -128,19 +138,17 @@ def test_debug_command_refuses_an_infinite_rate(params):
     assert o.debugCommand("setChargeRate", VIN, params) is False and f.calls == []
 
 def test_debug_command_tries_each_provider_once():
-    # User-initiated: a failed wake is never sent twice
-    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); b = ble(); b._result = False; f = fleet(); f._result = False
-    o = order(m, b, f)
-    assert o.debugCommand("wakeVehicle", VIN, "{}") is False and b.calls == [("wake", VIN)] and f.calls == [("wake", VIN)]
-    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 3}') is False and b.calls[1:] == [("setAmps", VIN, 3)]
-    assert f.calls[1:] == [("setAmps", VIN, 3)]        # readiness only (M1): Fleet follows BLE, once
+    # User-initiated: one provider per command, never sent twice, no fall-through
+    m = workers_master(); b = ble(); b._result = O.Outcome(O.UNREACHABLE, "timeout"); f = fleet(); f._result = O.Outcome(O.DONE)
+    o = order(m, b, f); m.providerOrder = o
+    assert o.debugCommand("wakeVehicle", VIN, "{}") is True and b.calls == [("wake", VIN)] and f.calls == []
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 3}') is True and b.calls[1:] == [("setAmps", VIN, 3)] and f.calls == []
 
 def test_debug_set_charge_rate_reaches_fleet_past_a_covering_twc():         # M1
     # As the facade's setChargeRate: the TWC cannot lift the car's own limit
-    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); f = fleet(); f._result = False
-    t = twc(); t.module = None                      # as Gen2TWCProvider: dispatch never drives it
-    o = order(m, t, f)
-    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 16}') is False and f.calls == [("setAmps", VIN, 16)]
+    m = workers_master(); f = fleet(); f._result = O.Outcome(O.DONE)
+    t = twc(); t.module = None                      # as Gen2TWCProvider: never written from the HTTP thread
+    o = order(m, t, f); m.providerOrder = o
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 16}') is True and f.calls == [("setAmps", VIN, 16)] and t.calls == []
     f._result = True
-    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 16}') is True
     assert o.dispatch(m.vehicleRegistry.get(VIN), C.SET_AMPS, lambda p: p.setAmps(VIN, 16), amps=16) is False   # setAmps keeps the rule

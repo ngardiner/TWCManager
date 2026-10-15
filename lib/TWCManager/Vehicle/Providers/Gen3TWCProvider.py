@@ -6,6 +6,7 @@
 # zero headroom, a normal local stop (unverified on hardware).
 from typing import Optional, Tuple
 
+from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
 from .Capability import (
     LOCAL,
     NO_INDIVIDUAL_STOP,
@@ -23,6 +24,7 @@ class Gen3TWCProvider(Provider):
     name = "Gen3TWC"
     rank = 1
     local = True
+    worker = "local"
     module = None
     sharedControl = True
 
@@ -63,25 +65,24 @@ class Gen3TWCProvider(Provider):
             return frozenset({NO_INDIVIDUAL_STOP})
         return frozenset()
 
-    def setAmps(self, vin: str, amps: int) -> bool:
+    def setAmps(self, vin: str, amps: int) -> Outcome:
         unit = self._unitForKey(vin)
         if unit is None:
-            return False
+            return Outcome(UNSUPPORTED, "no unit")
         unit.setTargetPower(unit.convertAmpsToWatts(amps))
-        return True
+        return Outcome(DONE)
 
-    def stopCharging(self, vin: str) -> bool:
-        # No Phase 2 caller: TWCMaster.stopCarsCharging is unchanged
+    def stopCharging(self, vin: str) -> Outcome:
+        # A zero headroom: a normal local stop (unverified on hardware)
         unit = self._unitForKey(vin)
         if unit is None:
-            return False
+            return Outcome(UNSUPPORTED, "no unit")
         unit.stopCharging()
-        return True
+        return Outcome(DONE)
 
-    def startCharging(self, vin: str) -> bool:
-        # No Phase 2 caller
+    def startCharging(self, vin: str) -> Outcome:
         unit = self._unitForKey(vin)
         if unit is None:
-            return False
+            return Outcome(UNSUPPORTED, "no unit")
         unit.startCharging()
-        return True
+        return Outcome(DONE)

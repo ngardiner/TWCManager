@@ -1,6 +1,13 @@
 from typing import Dict, FrozenSet, Optional, Tuple
 
+from ..Reconcile.Outcome import UNSUPPORTED, Outcome
 from .Capability import Cost, Declaration
+
+
+def commandMethod(capability) -> str:
+    # The Provider method a worker calls for a capability; the capability
+    # names are the method names
+    return capability
 
 
 class Provider:
@@ -9,6 +16,9 @@ class Provider:
     # telemetry 3, OwnerAPI 4, FleetAPI 5, HomeAssistant 6, anything else 100
     rank: int = 100
     local: bool = False
+    # The attempt worker its commands run on: "ble", "cloud", or "local"
+    # (no I/O, run inline on the caller's thread)
+    worker: str = "cloud"
     # True when the provider's endpoints share one actuator, as Gen3 units on
     # one Neurio bus do
     sharedControl: bool = False
@@ -43,11 +53,23 @@ class Provider:
         span = self.ampsRange(vehicle)
         return span is not None and span[0] <= amps <= span[1]
 
-    def setAmps(self, vin: str, amps: int) -> bool:
-        raise NotImplementedError
+    # Command methods: each returns an Outcome (Reconcile/Outcome.py's
+    # contract). Only a worker calls them; a provider never stamps a write.
 
-    def wake(self, vin: str) -> bool:
-        raise NotImplementedError
+    def setChargeLimit(self, vin: str, limit: int) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def startCharging(self, vin: str) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def stopCharging(self, vin: str) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def setAmps(self, vin: str, amps: int) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
+
+    def wake(self, vin: str) -> Outcome:
+        return Outcome(UNSUPPORTED, "not implemented")
 
     def attempts(self) -> int:
         # Today's BLE 3 / API 2 (VehiclePriority's priority 20 / 10)

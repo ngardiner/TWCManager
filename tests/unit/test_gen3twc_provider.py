@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, Mock, patch
 from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Gen3TWCProvider import Gen3TWCProvider
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 VIN1 = "5YJ3E1EA1KF000001"; VIN2 = "5YJ3E1EA1KF000002"; IP1, IP2 = "10.0.0.1", "10.0.0.2"
 
@@ -94,8 +95,14 @@ def test_zero_target_beside_a_charging_sibling_declares_no_individual_stop():   
 
 def test_provider_commands_go_to_the_unit():
     m, ctl, p = make(); (u,) = ctl.devices(); vitals(u, True); anon = m.vehicleRegistry.get("anon:" + u.ID)
-    assert p.setAmps(anon.key, 16) is True; ctl.setHouseWatts.assert_called_with(watts=11520 - 3840, phases=1, voltage=240)
-    assert p.stopCharging(anon.key) is True; ctl.setHouseWatts.assert_called_with(watts=11520, phases=1, voltage=240)
+    assert p.setAmps(anon.key, 16).kind == O.DONE; ctl.setHouseWatts.assert_called_with(watts=11520 - 3840, phases=1, voltage=240)
+    assert p.stopCharging(anon.key).kind == O.DONE; ctl.setHouseWatts.assert_called_with(watts=11520, phases=1, voltage=240)
+
+def test_gen3_commands_return_outcomes():
+    m, ctl, p = make(); (u,) = ctl.devices(); vitals(u, True); anon = m.vehicleRegistry.get("anon:" + u.ID)
+    assert p.stopCharging(anon.key).kind == O.DONE and p.startCharging(anon.key).kind == O.DONE and p.setAmps(anon.key, 10).kind == O.DONE
+    for call in (p.stopCharging, p.startCharging, lambda key: p.setAmps(key, 10)):
+        assert call("anon:nobody") == O.Outcome(O.UNSUPPORTED, "no unit")
 
 def test_amps_range_is_never_none_while_set_amps_is_ready():                       # Task 2 constraint
     m, ctl, p = make((IP1, IP2)); a, b = ctl.devices(); reg = m.vehicleRegistry

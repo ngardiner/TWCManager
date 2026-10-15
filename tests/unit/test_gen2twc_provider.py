@@ -5,6 +5,7 @@ import pytest
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
+from TWCManager.Vehicle.Reconcile import Outcome as O
 
 VIN = "5YJ3E1EA1KF000001"
 CONFIG = {
@@ -158,21 +159,24 @@ def test_disruptive_stop_declared_very_high_cost_and_off_by_default():
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
     s.currentVIN = VIN
     assert p.cost(C.STOP_CHARGING) == C.DISRUPTIVE and p.ready(v, C.STOP_CHARGING) is False
-    assert p.stopCharging(VIN) is False
+    assert p.stopCharging(VIN) == O.Outcome(O.UNSUPPORTED, "mode 1")
     m.settings["chargeStopMode"] = "2"
-    assert p.ready(v, C.STOP_CHARGING) and p.stopCharging(VIN) is True
+    assert p.ready(v, C.STOP_CHARGING) and p.stopCharging(VIN) == O.Outcome(
+        O.DONE, "respond"
+    )
     assert m.settings["respondToSlaves"] == 0
     m.settings["respondToSlaves"] = 1
     m.stopCarsCharging(VIN)
     assert m.settings["respondToSlaves"] == 0  # same helper
     m.settings["chargeStopMode"] = "3"
     m.sendStopCommand = Mock()
-    assert p.stopCharging(VIN) is True
-    m.sendStopCommand.assert_called_once_with(s.TWCID)
+    # Queued for the serial thread's heartbeat; nothing is written here
+    assert p.stopCharging(VIN) == O.Outcome(O.DONE, "queued") and s.stopRequested
+    assert m.sendStopCommand.call_count == 0
 
 
 def test_set_amps_publishes_a_target_for_the_heartbeat():
     m, s = make()
     p = m.providerOrder.provider("Gen2TWC")
     s.currentVIN = VIN
-    assert p.setAmps(VIN, 16) is True and s._evseTargetAmps == 16
+    assert p.setAmps(VIN, 16).kind == O.DONE and s._evseTargetAmps == 16
