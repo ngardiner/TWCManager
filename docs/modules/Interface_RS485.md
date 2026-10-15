@@ -32,3 +32,17 @@ Examples of the configuration of these protocols:
 ```"device": "rfc2217://192.168.1.2:4000/"```
 
 ```"device": "socket://192.168.1.2:4000/"```
+
+## Per-TWC amps range
+
+By default every slave TWC is offered between minAmpsPerTWC (never less than the TWC itself supports) and its wiring maximum. An idle TWC is offered that minimum so it can see a car plug in. To set a different range for one TWC, add `controller.Gen2TWCs` to config.json:
+
+```json
+"controller.Gen2TWCs": {
+    "ranges": {
+        "8244": { "minAmps": 8, "maxAmps": 16 }
+    }
+}
+```
+
+The key is the TWC's ID as four hex digits, as the log and web page show it. `minAmps` replaces minAmpsPerTWC for that TWC, but never goes below what the TWC supports. `maxAmps` caps what the power distributor offers it; wiringMaxAmpsPerTWC and wiringMaxAmpsAllTWCs still apply. Both are optional; a value that is not a positive number is ignored.
