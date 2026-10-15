@@ -300,3 +300,9 @@ def test_teslaapi_listing_without_a_store_is_harmless():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     assert reg.get(VIN) is not None
+
+
+def test_store_never_keeps_the_sentinel():
+    m, s = make()
+    m.heldLimits.set(VIN, 80, -1)
+    assert m.settings["heldLimits"][VIN] == {"outside": 80, "held": None}

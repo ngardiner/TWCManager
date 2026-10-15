@@ -125,6 +125,9 @@ class HeldLimits:
         return _storedEntry(store.get(key))
 
     def _set(self, key: str, outside: int, held: Optional[int]) -> None:
+        if held == -1:
+            # The legacy "holds none" sentinel is never stored.
+            held = None
         with self.master.settingsLock:
             store = self.master.settings.get(self.KEY)
             if not isinstance(store, dict):
