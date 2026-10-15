@@ -456,7 +456,8 @@ class Lane:
                     continue
                 attempt = self._pending.pop(0)[1]
                 self._running = attempt
-                if len(self._pending) < self.MAX_PENDING:
+                if not self._pending:
+                    # The backlog has cleared: the next overflow warns again
                     self._overflowWarned = False
             try:
                 self._runOne(attempt)
