@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Any, Callable, List, Optional
 
+from ..Reconcile.Outcome import SETTLED, isOutcome
 from ..Registry.ReadSource import ReadSource
 from .Capability import READ_CHARGE, READS, SET_AMPS, TIER_BILLED, WAKE
 from .Provider import Provider
@@ -155,7 +156,7 @@ class ProviderOrder:
                         "%s %s raised %s", p.name, capability, type(e).__name__
                     )
                     continue
-                if result and result != "error":
+                if _succeeded(result):
                     self._count("moduleSuccess", p.name)
                     return result
             self._count("moduleFailures", p.name)
@@ -220,6 +221,14 @@ class ProviderOrder:
             since=time.time(),
         )
         return bool(lanes.submit(attempt))
+
+
+def _succeeded(result) -> bool:
+    # An Outcome is always truthy: read its kind. A legacy return keeps
+    # today's truthiness rule until the facade goes
+    if isOutcome(result):
+        return result.kind in SETTLED
+    return bool(result) and result != "error"
 
 
 def registerProviders(master) -> List[str]:

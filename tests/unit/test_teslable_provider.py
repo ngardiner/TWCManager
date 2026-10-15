@@ -2,6 +2,7 @@
 from unittest.mock import Mock
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.test_teslable_pairing_status import make, VIN
 
 
@@ -36,12 +37,12 @@ def test_amps_range_is_one_to_vehicle_max():
 def test_commands_call_the_module_by_vin():
     ble, reg, master = make()
     (p,) = ble.providers()
-    ble.setChargeRate = Mock(return_value=True)
-    ble.wakeVehicle = Mock(return_value=False)
-    assert p.setAmps(VIN, 12.6) is True
-    ble.setChargeRate.assert_called_once_with(12, VIN)
-    assert p.wake(VIN) is False
-    ble.wakeVehicle.assert_called_once_with(VIN)
+    ble.sendCommand = Mock(return_value="Command executed successfully")
+    assert p.setAmps(VIN.lower(), 12.6).kind == O.DONE
+    ble.sendCommand.assert_called_once_with(VIN, "charging-set-amps", 12)
+    ble.sendCommand = Mock(return_value=None)
+    assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "no reply")
+    ble.sendCommand.assert_called_once_with(VIN, "wake")
 
 
 def test_read_source_no_longer_consults_command_policy():
