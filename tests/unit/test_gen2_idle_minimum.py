@@ -172,10 +172,11 @@ def test_start_request_follows_the_range_override():
     m, iface = real(minAmps=12, ranges={"8244": {"minAmps": 8}})
     s = idleSlave(m)
     s.protocolVersion = 2
+    s.currentVIN = "5YJ3E1EA1KF000001"
     m.startCarsCharging = Mock()
     s.lastAmpsOffered = 8
     s.send_master_heartbeat()
-    assert m.startCarsCharging.call_count == 1
+    m.startCarsCharging.assert_called_once_with("5YJ3E1EA1KF000001")
     s.lastAmpsOffered = 7
     s.send_master_heartbeat()
     assert m.startCarsCharging.call_count == 1

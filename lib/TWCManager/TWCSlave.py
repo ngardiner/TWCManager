@@ -3,6 +3,7 @@ import logging
 import re
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Reconcile.Desired import CHARGING
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
 
@@ -72,6 +73,8 @@ class TWCSlave:
     VINData = ["", "", ""]
     currentVIN = ""
     lastVIN = ""
+    # The registry key of the car on this TWC (Gen2TWC); None decides nothing
+    vehicleKey = None
 
     def __init__(self, TWCID, maxAmps, config, master):
         self.config = config
@@ -485,7 +488,10 @@ class TWCSlave:
         if len(self.master.getMasterHeartbeatOverride()) >= 7:
             self.masterHeartbeatData = self.master.getMasterHeartbeatOverride()
 
-        if self.protocolVersion == 2:
+        # Start and stop are decided for the car on this TWC only: with no
+        # vehicle key, nothing (never every car)
+        key = self.vehicleKey
+        if self.protocolVersion == 2 and key is not None:
             # TODO: Start and stop charging using protocol 2 commands to TWC
             # instead of car api if I ever figure out how.
             if self.lastAmpsOffered == 0 and self.reportedAmpsActual > 4.0:
@@ -572,14 +578,13 @@ class TWCSlave:
                         + str(self.reportedAmpsActual)
                         + " < 4"
                     )
-                    self.master.cancelStopCarsCharging()
+                    self.master.cancelStopCarsCharging(key)
                 else:
-                    # Car is trying to charge, so stop it via car API.
-                    # car_api_charge() will prevent telling the car to start or stop
-                    # more than once per minute. Once the car gets the message to
-                    # stop, reportedAmpsActualSignificantChangeMonitor should drop
-                    # to near zero within a few seconds.
-                    self.master.stopCarsCharging(self.currentVIN)
+                    # Car is trying to charge, so stop it. The reconciler
+                    # sends it once per our own write. Once the car gets the
+                    # message to stop, reportedAmpsActualSignificantChangeMonitor
+                    # should drop to near zero within a few seconds.
+                    self.master.stopCarsCharging(key)
             elif (
                 # minAmpsToOffer: this TWC's floor, which a per-TWC range
                 # override can set below minAmpsPerTWC
@@ -588,20 +593,15 @@ class TWCSlave:
                 and self.reportedState != 0x02
             ):
                 # Car is not charging and is not reporting an error state, so
-                # try starting charge via car api.
-                self.master.startCarsCharging(self.currentVIN)
-            elif self.reportedAmpsActual >= 1.0:
-                # At least one plugged in car is successfully charging. We don't
-                # know which car it is, so we must set
-                # vehicle.stopAskingToStartCharging = False on all vehicles such
-                # that if any vehicle is not charging without us calling
-                # car_api_charge(False), we'll try to start it charging again at
-                # least once. This probably isn't necessary but might prevent
-                # some unexpected case from never starting a charge. It also
-                # seems less confusing to see in the output that we always try
-                # to start API charging after the car stops taking a charge.
-                for vehicle in self.master.vehicleRegistry.attached("TeslaAPI"):
-                    vehicle.stopAskingToStartCharging = False
+                # try starting it
+                self.master.startCarsCharging(key)
+            elif (
+                self.lastAmpsOffered < self.minAmpsToOffer()
+                and self.reportedAmpsActual < 1.0
+            ):
+                # Too little on offer and the car is not drawing: a start not
+                # yet sent is moot, and never wakes the car
+                self.master.desired.clearIf(key, CHARGING, True)
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
             bytearray(b"\xfb\xe0")
@@ -622,6 +622,13 @@ class TWCSlave:
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
         self.refreshingChargerLoadStatus()
+        key = self.vehicleKey
+        vehicle = self.master.vehicleRegistry.get(key) if key else None
+        if vehicle is not None:
+            # A VIN heard but not yet confirmed names no registry car: skipped
+            vehicle.observe(
+                "actualCurrent", self.reportedAmpsActual, "Gen2TWC", seen=False
+            )
 
         if self.reportedState == 0x02:
             logger.info(
@@ -677,15 +684,6 @@ class TWCSlave:
             self.master.queue_background_task({"cmd": "checkDeparture"}, 5 * 60)
             self.master.queue_background_task({"cmd": "checkDeparture"}, 20 * 60)
             self.master.queue_background_task({"cmd": "checkDeparture"}, 45 * 60)
-
-            # If the drop-off was an expected completion, don't restart
-            lastVehicle = self.getLastVehicle()
-            if (
-                lastVehicle is not None
-                and lastVehicle.chargingState == "Charging"
-                and lastVehicle.timeToFullCharge * 60 <= 5
-            ):
-                lastVehicle.stopAskingToStartCharging = True
 
         # Keep track of the amps the slave is actually using and the last time it
         # changed by more than 0.8A.
@@ -1073,8 +1071,9 @@ class TWCSlave:
         # final value for desiredAmpsOffered.
         desiredAmpsOffered = self.set_last_amps_offered(desiredAmpsOffered)
 
-        if desiredAmpsOffered > 0:
-            self.master.cancelStopCarsCharging()
+        key = self.vehicleKey
+        if key is not None and desiredAmpsOffered > 0:
+            self.master.cancelStopCarsCharging(key)
 
         # See notes in send_slave_heartbeat() for details on how we transmit
         # desiredAmpsOffered and the meaning of the code in
