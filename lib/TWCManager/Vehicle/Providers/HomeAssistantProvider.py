@@ -33,7 +33,11 @@ class HomeAssistantProvider(Provider):
     def __init__(self, ha):
         self.ha = ha
         self.module = ha
-        self.readSource = ha.readSource
+
+    @property
+    def readSource(self):
+        # Read through, so a rebuilt read source is never stale
+        return self.ha.readSource
 
     def declarations(self):
         return {capability: Declaration(HA_BILLED) for capability in CAPABILITIES}
