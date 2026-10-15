@@ -350,3 +350,35 @@ def test_base_exception_in_a_run_still_reports_and_clears_busy():            # l
     with pytest.raises(SystemExit):
         m.workers.submit(attempt())
     assert reports[-1] == ("TeslaBLE", O.ERROR, "SystemExit") and not q.busy
+
+
+# Fix round 1
+
+@pytest.mark.parametrize("putFirst", [True, False])
+def test_a_stop_put_as_the_worker_exits_is_dropped_and_reported_once(putFirst):   # review I1
+    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, reports = setup(p, inline=False); q = m.workers.cloud
+    real = q._next; gap = threading.Event(); hold = threading.Event()
+    def slow():
+        item = real()
+        if item is None: gap.set(); hold.wait(5)     # widen the worker's exit window
+        return item
+    q._next = slow; m.workers.start()
+    try:
+        q.close(); assert gap.wait(5)
+        stop = attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING)
+        if not putFirst: assert q.waitDrained(time.monotonic() + 1) is True
+        t0 = time.monotonic(); assert m.workers.submit(stop) is False and reports == [("FleetAPI", O.ERROR, "dropped")]
+        if putFirst: assert q.waitDrained(time.monotonic() + 1) is True and time.monotonic() - t0 < 0.5
+        assert q.pending() == 0 and p.calls == []
+    finally:
+        hold.set(); joined(q)
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")   # the SystemExit is the point
+def test_a_dead_worker_rejects_new_entries_and_its_drain_does_not_wait():   # review M2
+    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, reports = setup(p, inline=False); q = m.workers.cloud
+    def exit_now(vin): raise SystemExit("bye")
+    p.stopCharging = exit_now; q.start()
+    q.put(attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING)); joined(q)
+    assert reports == [("FleetAPI", O.ERROR, "SystemExit")]
+    assert q.put(attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING)) is False and reports[-1] == ("FleetAPI", O.ERROR, "dropped")
+    t0 = time.monotonic(); assert q.waitDrained(time.monotonic() + 2) is True and time.monotonic() - t0 < 0.5

@@ -123,9 +123,13 @@ class VehicleCommandQueue:
             try:
                 self._lost(entry, detail)
             except Exception as e:
-                logger.warning(
-                    "%s lost callback raised %s", self.name, type(e).__name__
-                )
+                self._logFailure("lost callback", e)
+
+    def _logFailure(self, what, e):
+        # The type name only at WARNING; the traceback, which may carry
+        # vehicle data, at DEBUG
+        logger.warning("%s %s raised %s", self.name, what, type(e).__name__)
+        logger.debug("%s %s traceback: %s", self.name, what, traceback.format_exc())
 
     def _deliver(self, entry, callback, result):
         for fn, args in ((callback, (result,)), (self._report, (entry, result))):
@@ -134,7 +138,7 @@ class VehicleCommandQueue:
             try:
                 fn(*args)
             except Exception as e:
-                logger.error("%s callback raised %s", self.name, type(e).__name__)
+                self._logFailure("callback", e)
 
     # --- the queue ---
 
@@ -145,12 +149,14 @@ class VehicleCommandQueue:
         try:
             key, high = self._keyOf(entry), bool(self._isHigh(entry))
         except Exception as e:
-            logger.error("Failed to queue vehicle command: %s", type(e).__name__)
+            self._logFailure("key", e)
             return False
         losers, accepted, warn = [], True, False
         with self._cond:
-            if self._draining and not (high and (self.inline or self._live)):
-                # Shutting down: only a stop a worker can still run is taken
+            dead = not self.inline and self._thread is not None and not self._live
+            if dead or (self._draining and not (high and (self.inline or self._live))):
+                # A dead or exited worker takes nothing; shutting down, only
+                # a stop a worker can still run is taken
                 losers.append((entry, "dropped"))
                 accepted = False
             elif self.inline:
@@ -260,13 +266,16 @@ class VehicleCommandQueue:
             if self._thread is None and not self.inline:
                 # Never started (startup died first): nothing will run them
                 done = False
+            elif not self.inline and not self._live:
+                # The worker has exited or died: there is nothing to wait for
+                done = not self._high and not self._busy
             else:
                 done = self._cond.wait_for(
                     lambda: not self._high and not self._busy,
                     max(0.0, deadline - time.monotonic()),
                 )
             losers = []
-            if not done and (self._lost is not None or self._thread is None):
+            if not done and (self._lost is not None or not self._live):
                 losers = [(e, "dropped") for e, _ in self._high.values()]
                 self._high.clear()
             elif not done:
@@ -291,7 +300,10 @@ class VehicleCommandQueue:
         with self._cond:
             self._cond.wait_for(lambda: self._high or self._low or self._draining)
             if not self._high and not self._low:
-                # Drained: nothing left to run
+                # Drained: nothing left to run. Not live from here on, under
+                # the same lock, so a racing put is rejected, never orphaned
+                self._live = False
+                self._cond.notify_all()
                 return None
             table = self._high if self._high else self._low
             _, (entry, callback) = table.popitem(last=False)
