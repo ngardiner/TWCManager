@@ -26,6 +26,7 @@ class TeslaBLEReadSource(ReadSource):
     name = "TeslaBLE"
     order = 0
     fields = CHARGE_FIELDS | LOCATION_FIELDS
+    provider = "TeslaBLE"
 
     def __init__(self, ble, master):
         self.ble = ble
@@ -33,10 +34,9 @@ class TeslaBLEReadSource(ReadSource):
 
     def canRead(self, vehicle) -> bool:
         # Only claimed VINs: each miss costs the BLE command timeout.
-        if not vehicle.vin or "TeslaBLE" not in vehicle.claims:
-            return False
-        vp = self.master.getModuleByName("VehiclePriority")
-        return getattr(vp, "commandPolicy", "prefer_ble") != "api_only"
+        # commandPolicy is not consulted here: the provider order drops a
+        # suppressed source before the cascade sees it.
+        return bool(vehicle.vin) and "TeslaBLE" in vehicle.claims
 
     def _location(self, vin: str) -> Optional[Dict[str, Any]]:
         loc = self.ble.get_location_state(vin)
