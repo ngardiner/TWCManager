@@ -210,28 +210,50 @@ def test_loaded_list_without_the_car_still_skips_fleet():
     api.addVehicle({"id": 2, "vin": "5YJ3E1EA1KF000009", "display_name": "Other"})
     assert vp.car_api_charge({"charge": False, "vin": VIN}) is False and api.car_api_charge.call_count == 0
 
-def _haCars(*vins):
+OTHER = "5YJ3E1EA1KF000009"
+
+def _haCars(*vins, fleet=True):
+    # HA's real car_api_charge/applyChargeLimit over stand-in HA cars, each
+    # at home, connected and charging; _call_service records the entities
     m, vp, ha, reg = _haMaster()
     cars = []
     for vin in vins:
-        hv = Mock(vin=vin, has_charge_switch=True, has_charge_limit_number=True); cars.append(hv)
+        hv = Mock(vin=vin, at_home=True, charging=True, charge_limit=None, has_charge_switch=True, has_charge_limit_number=True,
+                  entity_ids={"charge_switch": "switch." + vin, "charge_limit_number": "number." + vin})
+        hv.name = vin; cars.append(hv)
         reg.getOrCreate(vin, "t").attach("HomeAssistant", hv)
     ha.carApiVehicles = cars
-    ha.car_api_charge = Mock(return_value="success"); ha.applyChargeLimit = Mock(return_value="success")
-    fleet = mod(car_api_charge="error", applyChargeLimit="error")
-    m.providerOrder.register(P("FleetAPI", 5, False, fleet, caps={c: C.Declaration(C.FLEET_COMMAND) for c in C.COMMANDS}))
-    return m, vp, ha, fleet
+    ha.car_api_available = Mock(return_value=True); ha._is_vehicle_connected = Mock(return_value=True)
+    ha._call_service = Mock(return_value=True)
+    api = None
+    if fleet:
+        api = mod(car_api_charge="error", applyChargeLimit="error")
+        m.providerOrder.register(P("FleetAPI", 5, False, api, caps={c: C.Declaration(C.FLEET_COMMAND) for c in C.COMMANDS}))
+    return m, vp, ha, api
 
-def test_targeted_command_never_reaches_home_assistant_holding_other_cars():  # I1
-    # HA's legacy car_api_charge/applyChargeLimit act on every HA car
-    m, vp, ha, fleet = _haCars(VIN, "5YJ3E1EA1KF000009")
-    assert vp.car_api_charge({"charge": False, "vin": VIN}) is False and fleet.car_api_charge.call_count == 2
-    assert vp.applyChargeLimit(limit=80, vin=VIN) is False
-    assert ha.car_api_charge.call_count == 0 and ha.applyChargeLimit.call_count == 0
-    assert vp.car_api_charge({"charge": False}) == "success"        # a broadcast means every car
+def _entities(ha):
+    return [c.args[2]["entity_id"] for c in ha._call_service.call_args_list]
 
-def test_targeted_command_reaches_home_assistant_holding_only_that_car():
-    # Its one car is the target (HA is ready only for attached VINs), as
-    # on an HA-only install today
-    m, vp, ha, fleet = _haCars(VIN)
-    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success" and ha.car_api_charge.call_count == 1
+def test_ha_only_targeted_stop_affects_only_the_target():                   # N1
+    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success" and _entities(ha) == ["switch." + VIN]
+
+def test_fleet_failure_falls_to_home_assistant_for_the_target_only():       # I1
+    m, vp, ha, api = _haCars(VIN, OTHER)
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success" and api.car_api_charge.call_count == 2
+    assert vp.applyChargeLimit(limit=80, vin=VIN) == "success"
+    assert _entities(ha) == ["switch." + VIN, "number." + VIN]
+
+def test_broadcast_still_reaches_every_home_assistant_car():
+    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
+    assert vp.car_api_charge({"charge": False}) == "success"
+    assert vp.applyChargeLimit(limit=80) == "success"
+    assert _entities(ha) == ["switch." + VIN, "switch." + OTHER, "number." + VIN, "number." + OTHER]
+
+def test_unknown_vin_affects_no_home_assistant_car():
+    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
+    unknown = "5YJ3E1EA1KF000077"
+    assert ha.car_api_charge({"charge": False, "vin": unknown}) == "error"
+    assert ha.applyChargeLimit(80, vin=unknown) == "error"
+    assert ha._call_service.call_count == 0
+    assert ha.car_api_charge({"charge": False, "vin": VIN.lower()}) == "success"     # not rate limited by the refusal
