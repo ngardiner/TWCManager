@@ -38,7 +38,6 @@ class VehicleCommandQueue:
     MAX_PENDING = 64
 
     _DISPATCH = {
-        "charge": lambda module, task: module.car_api_charge(task),
         "setChargeRate": lambda module, task: module.setChargeRate(
             task["amps"], task.get("vehicle")
         ),
@@ -61,7 +60,8 @@ class VehicleCommandQueue:
         self._legacy = run is None
         self._runEntry = self._execute if run is None else run
         self._keyOf = key or self._key
-        self._isHigh = isHigh or self._is_high_priority
+        # The legacy instance runs no stops: none is high
+        self._isHigh = isHigh or (lambda entry: False)
         self._report = report
         self._lost = lost
         self._cond = threading.Condition()
@@ -82,10 +82,6 @@ class VehicleCommandQueue:
             return (cmd, getattr(vehicle, "VIN", vehicle))
         # None is a distinct target meaning "every vehicle".
         return (cmd, task.get("vin"))
-
-    @staticmethod
-    def _is_high_priority(task):
-        return task["cmd"] == "charge" and "charge" in task and not task["charge"]
 
     def start(self):
         with self._cond:
@@ -189,10 +185,6 @@ class VehicleCommandQueue:
             logger.debug("%s: cancelled %d pending command(s)", self.name, len(losers))
         self._lose(losers)
         return len(losers)
-
-    def cancel(self, cmd, match):
-        # Legacy: until Task 13
-        return self.remove(lambda task: task["cmd"] == cmd and match(task))
 
     # --- shutdown ---
 

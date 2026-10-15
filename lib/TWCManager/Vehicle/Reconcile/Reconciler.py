@@ -140,7 +140,7 @@ def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
     if vehicle.value("scheduledChargingPending") is True and (config or {}).get(
         "respectVehicleSchedule", True
     ):
-        # As car_api_charge: a start would override the car's own schedule
+        # A start would override the car's own schedule (as on main)
         return "scheduled charging is pending (respectVehicleSchedule)"
     return None
 

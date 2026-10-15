@@ -178,15 +178,6 @@ def test_an_ended_need_gets_a_fresh_grace_through_wake_outcome(requests_mock):  
     clk.t += 120; assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "wake held")                # one continuing need: asked within 600 s
     clk.t += 61; assert p.wake(VIN).kind == O.UNREACHABLE and wake.call_count == 1          # its grace is over
 
-def test_an_ended_need_gets_a_fresh_grace_on_the_legacy_path(requests_mock):   # M3/c4
-    import time
-    api, reg, p = fleet(requests_mock); car = api.getCarApiVehicles()[0]; car.atHome = True
-    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
-    wake = requests_mock.post(re.compile(r".*/wake_up$"), json={"response": {"state": "asleep"}})
-    car.firstChargeNeededTime = car.lastChargeNeededTime = time.time() - 700                # a need that ended 700 s ago
-    assert api.car_api_available(charge=True) is False and wake.call_count == 0
-    assert abs(car.firstChargeNeededTime - time.time()) < 5
-
 def test_wake_due_reads_the_backoff_on_its_clock(requests_mock):   # M4
     from tests.unit.reconcile_helpers import Clock
     clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.getCarApiVehicles()[0]

@@ -142,18 +142,6 @@ def test_vehicle_list_loads_without_any_legacy_command(requests_mock):       # C
     fleetProvider = api.providers()[1]
     assert fleetProvider.ready(master.vehicleRegistry.get(VIN), C.STOP_CHARGING)
 
-def test_legacy_fleet_start_sends_no_limit_first(monkeypatch, requests_mock):   # pre-flight M10, paid counted
-    import TWCManager.Vehicle.TeslaAPI as teslaapi
-    from unittest.mock import Mock
-    monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
-    api = new_api(); api.storeToken(fleet_token()); api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
-    car = api.getCarApiVehicles()[0]; car.atHome = True; car.lastAPIAccessTime = time.time(); car.chargingState = "Stopped"
-    car.batteryLevel = 50; car.chargeLimit = 90; car.update_charge = Mock(return_value=True); car.update_location = Mock(return_value=True)
-    setattr(api, "lastChargeLimitApplied", 60)                                  # the copy BASE kept and sent before every start
-    requests_mock.register_uri("POST", re.compile(r".*/command/.*"), json={"response": {"result": True, "reason": ""}})
-    api.car_api_charge({"cmd": "charge", "charge": True, "vin": VIN})
-    assert [r.url.split("/")[-1] for r in requests_mock.request_history] == ["charge_start"]
-
 # Rules and the held record
 
 def test_rules_need_no_sentinel():

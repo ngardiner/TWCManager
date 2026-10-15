@@ -189,7 +189,6 @@ class HaVehicle:
 class HomeAssistant:
     """Home Assistant-backed vehicle module for TWCManager."""
 
-    carApiLastStartOrStopChargeTime = 0
     minChargeLevel = -1
     lastStateRefreshTime = 0
     connectionFailures = 0  # bumped by _get_state on a connection error
@@ -592,90 +591,6 @@ class HomeAssistant:
 
     def getVehicleCount(self):
         return len(self.carApiVehicles)
-
-    def car_api_available(self, *args, **kwargs):
-        if not self._enabled or not self.carApiVehicles:
-            return False
-
-        ent = self.carApiVehicles[0].entity_ids.get("battery_level_sensor")
-        if not ent:
-            return False
-
-        return self._get_state(ent) is not None
-
-    def _vehiclesFor(self, vin) -> Optional[list]:
-        # Every HA car for a broadcast; only the named car when a VIN is
-        # given (looked up as HomeAssistantProvider does), or None when the
-        # VIN is not one of HA's cars
-        if not vin:
-            return list(self.carApiVehicles)
-        registryVehicle = self.registry.get(str(vin).upper())
-        hv = registryVehicle.attachment("HomeAssistant") if registryVehicle else None
-        return None if hv is None else [hv]
-
-    def car_api_charge(self, task) -> str:
-        charge = task.get("charge", None) if isinstance(task, dict) else task
-        vin = task.get("vin") if isinstance(task, dict) else None
-        now = time.time()
-        if now - self.carApiLastStartOrStopChargeTime < 10:
-            logger.debug("Charge command rate limited (10s minimum between commands)")
-            return "error"
-
-        if not self.car_api_available():
-            logger.debug("Home Assistant API not available for charge command")
-            return "error"
-
-        vehicles = self._vehiclesFor(vin)
-        if vehicles is None:
-            logger.debug("Charge command for a vehicle Home Assistant does not hold")
-            return "error"
-
-        desired = charge  # True = start, False = stop
-        svc = "turn_on" if desired else "turn_off"
-        action = "start" if desired else "stop"
-
-        self.carApiLastStartOrStopChargeTime = now
-        result = "success"
-        vehicles_processed = 0
-
-        for v in vehicles:
-            v.refresh_from_home_assistant(self)
-
-            if not v.at_home:
-                logger.debug("%s not at home; skipping charge %s", v.name, action)
-                continue
-
-            if not v.has_charge_switch:
-                logger.warning("%s: charge_switch entity not available", v.name)
-                result = "error"
-                continue
-
-            if not self._is_vehicle_connected(v):
-                logger.debug("%s not connected; skipping charging change.", v.name)
-                continue
-
-            # Only act if state differs
-            if v.charging == desired:
-                logger.info(
-                    "Skipping %s: already %s charging",
-                    v.name,
-                    "enabled" if desired else "disabled",
-                )
-                continue
-
-            ent = v.entity_ids["charge_switch"]
-            logger.info("Calling switch.%s on %s to %s charging", svc, ent, action)
-
-            ok = self._call_service("switch", svc, {"entity_id": ent})
-            if not ok:
-                result = "error"
-            else:
-                vehicles_processed += 1
-
-        if vehicles_processed == 0 and result == "success":
-            logger.info("No vehicles processed for charge %s command", action)
-
-        return result
 
     def setChargeRate(
         self, amps: float, vehicle: Optional[HaVehicle] = None, *args, **kwargs
