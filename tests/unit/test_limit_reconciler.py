@@ -92,6 +92,14 @@ def test_restore_to_an_absent_car_retries_hourly_and_never_wakes():
     assert [x[0] for x in b.calls] == ["setChargeLimit"]; c.t += 3599; r.pass_(); assert len(b.calls) == 1
     c.t += 1; r.pass_(); assert len(b.calls) == 2 and not any(x[0] == "wake" for x in b.calls)
 
+def test_a_restore_falls_to_fleet_without_a_wake_and_at_most_twice():    # pre-flight L4, paid counted
+    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.UNREACHABLE, "timeout"))); f = prov(m, "FleetAPI")
+    m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaAPI"); m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
+    r.pass_(); assert f.calls == []
+    c.t += PAID_AFTER[CHARGE_LIMIT]; r.pass_(); assert names(f) == ["setChargeLimit"]
+    for _ in range(40): c.t += 300; r.pass_()
+    assert names(f) == ["setChargeLimit"] * 2 and not any(x[0] == "wake" for x in prov(m, "TeslaBLE").calls)   # never a wake; one blind retry
+
 def test_stale_free_failure_gets_the_real_command_over_ble_before_paid():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); b, f = prov(m, "TeslaBLE"), prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
     m.desired.free(VIN).failure(c() - PROBE_AFTER - 300)                     # failing long enough, but untried for > PROBE_AFTER (pre-flight M1)
