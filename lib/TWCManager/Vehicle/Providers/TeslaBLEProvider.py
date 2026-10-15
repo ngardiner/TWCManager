@@ -4,6 +4,7 @@
 from typing import Optional, Tuple
 
 from .Capability import (
+    ALL,
     LOCAL,
     READ_CHARGE,
     READ_LOCATION,
@@ -37,14 +38,14 @@ class TeslaBLEProvider(Provider):
     rank = 2
     local = True
     worker = "ble"
+    DECLARATIONS = {capability: Declaration(LOCAL) for capability in CAPABILITIES}
+    # api_only blocks BLE commands and the BLE read source alike
+    SUPPRESSED = {"api_only": ALL}
 
     def __init__(self, ble, master):
         self.ble = ble
         self.master = master
         self.module = ble
-
-    def declarations(self):
-        return {capability: Declaration(LOCAL) for capability in CAPABILITIES}
 
     def ready(self, vehicle, capability) -> bool:
         # Called from the distributor: reads the claim only, never settings

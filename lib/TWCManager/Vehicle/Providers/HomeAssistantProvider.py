@@ -15,7 +15,7 @@ from .Capability import (
     Declaration,
     RateLimit,
 )
-from .Provider import Provider, vehicleMaxAmps
+from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
 
 # HA's former 10 s gate between charge switch calls, now per car
 CHARGE_SWITCH_LIMIT = RateLimit(1, 10)
@@ -35,17 +35,20 @@ class HomeAssistantProvider(Provider):
     rank = 6
     local = False
     vehicleAttachment = "HomeAssistant"
+    DECLARATIONS = {
+        READ_CHARGE: Declaration(HA_BILLED),
+        READ_LOCATION: Declaration(HA_BILLED),
+        SET_CHARGE_LIMIT: Declaration(HA_BILLED),
+        # At most one start or stop per car every 10 s (the worker applies it)
+        START_CHARGING: Declaration(HA_BILLED, CHARGE_SWITCH_LIMIT),
+        STOP_CHARGING: Declaration(HA_BILLED, CHARGE_SWITCH_LIMIT),
+        SET_AMPS: Declaration(HA_BILLED),
+    }
+    SUPPRESSED = CLOUD_SUPPRESSED
 
     def __init__(self, ha):
         self.ha = ha
         self.module = ha
-
-    def declarations(self):
-        declared = {capability: Declaration(HA_BILLED) for capability in CAPABILITIES}
-        for capability in (START_CHARGING, STOP_CHARGING):
-            # At most one start or stop per car every 10 s (the lane applies it)
-            declared[capability] = Declaration(HA_BILLED, CHARGE_SWITCH_LIMIT)
-        return declared
 
     def attempts(self) -> int:
         # HomeAssistant had no VehiclePriority priority: one call, as when it

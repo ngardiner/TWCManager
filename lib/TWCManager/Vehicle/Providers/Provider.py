@@ -1,7 +1,12 @@
 from typing import Dict, FrozenSet, Optional, Tuple
 
 from ..Reconcile.Outcome import UNSUPPORTED, Outcome
-from .Capability import Cost, Declaration
+from .Capability import COMMANDS, STOP_CHARGING, Cost, Declaration
+
+# What a cloud provider may not do under each suppression condition: no
+# command under ble_only, and no stop when the user chose a disruptive local
+# stop (chargeStopMode 2/3), which pays nothing
+CLOUD_SUPPRESSED = {"ble_only": COMMANDS, "localStops": frozenset({STOP_CHARGING})}
 
 
 def commandMethod(capability) -> str:
@@ -29,11 +34,17 @@ class Provider:
     # rather than the TeslaAPI vehicle the callers pass; None to pass through
     vehicleAttachment = None
 
+    # What the provider can do, at what cost and how often
+    DECLARATIONS: Dict[str, Declaration] = {}
+    # Suppression condition ("ble_only", "api_only", "localStops") to the
+    # capabilities it suppresses here; None for the locality rule
+    SUPPRESSED: Optional[Dict[str, FrozenSet[str]]] = None
+
     # The vin argument of the command methods is the vehicle's registry key: a
     # VIN, or an anon:... key that only local providers can serve.
 
     def declarations(self) -> Dict[str, Declaration]:
-        return {}
+        return self.DECLARATIONS
 
     def declares(self, capability) -> bool:
         return capability in self.declarations()
@@ -96,6 +107,15 @@ class Provider:
                 for capability, declaration in self.declarations().items()
             },
         }
+
+
+def suppressedFor(provider, condition) -> FrozenSet[str]:
+    # A provider without a table (a test double, a Mock) gets the locality
+    # rule; anything not known to be local is cloud, so it fails closed
+    table = getattr(provider, "SUPPRESSED", None)
+    if not isinstance(table, dict):
+        table = {} if getattr(provider, "local", False) is True else CLOUD_SUPPRESSED
+    return table.get(condition, frozenset())
 
 
 def vehicleMaxAmps(vehicle, configConfig: dict) -> float:

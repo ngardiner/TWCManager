@@ -1,10 +1,12 @@
 # Which provider may not perform which operation: the explicit
-# providerSuppressions setting, plus the commandPolicy setting mapped onto
-# providers. Settings are read on every call, so a change applies at once.
+# providerSuppressions setting, plus each provider's SUPPRESSED table for the
+# conditions in force (commandPolicy, and chargeStopMode 2/3). Settings are
+# read on every call, so a change applies at once.
 import logging
 from typing import Dict, FrozenSet
 
-from .Capability import ALL, COMMANDS, STOP_CHARGING
+from .Capability import ALL
+from .Provider import suppressedFor
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Providers")
 
@@ -84,26 +86,22 @@ class Suppressions:
         )
         return merged
 
+    def conditions(self) -> FrozenSet[str]:
+        # The commandPolicy, plus "localStops" when the user chose a
+        # disruptive local stop
+        conditions = {self.commandPolicy}
+        settings = getattr(self.master, "settings", None) or {}
+        try:
+            if int(settings.get("chargeStopMode", 1)) in (2, 3):
+                conditions.add("localStops")
+        except (TypeError, ValueError):
+            pass
+        return frozenset(conditions)
+
     def suppressed(self, provider, capability) -> bool:
         if capability in self.explicit().get(provider.name, frozenset()):
             return True
-        if capability == STOP_CHARGING and not provider.local and self._localStops():
-            # A user who chose a disruptive local stop pays nothing for stops
-            return True
-        policy = self.commandPolicy
-        if policy == "ble_only":
-            return not provider.local and capability in COMMANDS
-        if policy == "api_only":
-            # Today api_only blocks BLE commands and the BLE read source alike
-            return provider.name == "TeslaBLE"
-        return False
-
-    def _localStops(self) -> bool:
-        settings = getattr(self.master, "settings", None) or {}
-        try:
-            return int(settings.get("chargeStopMode", 1)) in (2, 3)
-        except (TypeError, ValueError):
-            return False
+        return any(capability in suppressedFor(provider, c) for c in self.conditions())
 
     def noticeOnce(self) -> None:
         if self.commandPolicy != "api_only" or self._noticed:
