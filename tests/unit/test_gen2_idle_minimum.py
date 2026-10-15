@@ -1,9 +1,9 @@
 # tests/unit/test_gen2_idle_minimum.py
 #
-# An idle Gen2 TWC is offered its minimum so it can detect a plug-in. The
-# minimum the distributor budgets (point.minPower) must be what the real
-# heartbeat sends: TWCSlave zeroes any offer below minAmpsToOffer() while no
-# car charges, so a lower minimum would go out as 0 A.
+# An idle TWC gets a distributor target of 0 and counts nothing against the
+# budget. On the wire TWCSlave offers it 0 when no car charges (a Gen2 treats
+# 0 as its hardware minimum) and minAmpsTWCSupports when another car charges
+# with enough power per car; these tests use the real TWCMaster and TWCSlave.
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -90,27 +90,39 @@ def point(m, s):
     return next(p for p in m.chargingPoints() if s in p.endpoints)
 
 
-def test_idle_twc_is_offered_min_amps_per_twc_on_the_wire():
-    # The shipped config's minAmpsPerTWC is 12
+def test_idle_twc_sends_zero_which_the_twc_treats_as_its_hardware_minimum():
+    # minAmpsPerTWC is 12. The distributor's target for an idle TWC is 0 and
+    # the heartbeat sends 0 (spike or no spike). A Gen2 TWC treats an offer of
+    # 0 as its hardware minimum, so it still sees a car plug in.
     m, iface = real(minAmps=12)
     s = idleSlave(m)
+    assert s.minAmpsToOffer() == 12
     m.distributeEVSEPower()
-    assert s._evseTargetAmps == 12
+    assert s._evseTargetAmps == 0
     assert point(m, s).minPower == s.convertAmpsToWatts(12, s.currentVoltage)
-    assert all(amps > 0 for amps in offers(s, iface)), "zeroed on the wire"
-    assert set(offers(s, iface, spike=False)) == {12}
+    assert set(offers(s, iface)) == {0}
+    assert set(offers(s, iface, spike=False)) == {0}
 
 
-def test_range_override_is_what_the_heartbeat_sends():
-    # A per-TWC minimum below minAmpsPerTWC is honoured on the wire too
+def test_idle_twc_offered_6a_on_wire_when_other_car_charges():
+    # Another car is charging with at least minAmpsPerTWC of power per car:
+    # the idle TWC's target is 0, but the wire offer is minAmpsTWCSupports
+    m, iface = real(minAmps=12, feed=40)
+    chargingSlave(m, b"\x82\x45", VIN)
+    idle = idleSlave(m)
+    m.distributeEVSEPower()
+    assert idle._evseTargetAmps == 0
+    assert idle.minAmpsTWCSupports == 6
+    assert set(offers(idle, iface, spike=False)) == {6}
+
+
+def test_range_override_governs_allocation_not_the_idle_offer():
     m, iface = real(minAmps=12, ranges={"8244": {"minAmps": 8}})
     s = idleSlave(m)
     assert s.minAmps == 8 and s.minAmpsToOffer() == 8
     m.distributeEVSEPower()
-    assert s._evseTargetAmps == 8
+    assert s._evseTargetAmps == 0
     assert point(m, s).minPower == s.convertAmpsToWatts(8, s.currentVoltage)
-    assert all(amps > 0 for amps in offers(s, iface)), "zeroed on the wire"
-    assert set(offers(s, iface, spike=False)) == {8}
 
 
 def test_override_never_goes_below_what_the_twc_supports():
@@ -148,9 +160,10 @@ def chargingAndIdle(feed):
 
 def test_idle_minimum_does_not_starve_a_charging_twc():
     # One TWC charging, one idle, minAmpsPerTWC 12: the charging car keeps
-    # its full offer; the idle TWC gets its minimum only from what is left
+    # its full offer, whatever the budget; the idle TWC's offer (0, its
+    # hardware minimum on the wire) takes nothing from it
     assert chargingAndIdle(feed=40) == (32, 0)
-    assert chargingAndIdle(feed=50) == (32, 12)
+    assert chargingAndIdle(feed=50) == (32, 0)
 
 
 def test_start_request_follows_the_range_override():
@@ -166,3 +179,81 @@ def test_start_request_follows_the_range_override():
     s.lastAmpsOffered = 7
     s.send_master_heartbeat()
     assert m.startCarsCharging.call_count == 1
+
+
+def chargingSlave(m, twcid, vin):
+    s = m.newSlave(twcid, 80)
+    s.protocolVersion = 1
+    s.currentVIN = vin
+    s.reportedState, s.reportedAmpsMax, s.reportedAmpsActual = 0x01, 32, 20
+    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI")
+    v.attach(
+        "TeslaAPI",
+        SimpleNamespace(VIN=vin, atHome=True, syncSource="TeslaAPI", pluggedIn=None),
+    )
+    v.observe("chargingState", "Charging", "TeslaAPI")
+    return s
+
+
+def test_idle_minimum_is_not_counted_against_the_budget():
+    # One car takes the whole 32 A budget; the idle TWC neither blocks nor
+    # shrinks that, and is not gated on what is left
+    m, iface = real(minAmps=12, feed=32)
+    busy = chargingSlave(m, b"\x82\x45", VIN)
+    idle = idleSlave(m)
+    m.distributeEVSEPower()
+    assert (busy._evseTargetAmps, idle._evseTargetAmps) == (32, 0)
+
+
+def test_idle_minimum_ignores_the_controller_budget():
+    m, iface = real(minAmps=12, feed=200)
+    m.config["config"]["wiringMaxAmpsAllTWCs"] = 33
+    busy = chargingSlave(m, b"\x82\x45", VIN)
+    idle = idleSlave(m)
+    m.distributeEVSEPower()
+    assert (busy._evseTargetAmps, idle._evseTargetAmps) == (32, 0)
+
+
+def test_idle_twc_gets_zero_when_policy_budget_is_zero():
+    m, iface = real(minAmps=12, feed=0)
+    idle = idleSlave(m)
+    m.distributeEVSEPower()
+    assert idle._evseTargetAmps == 0
+
+
+def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
+    m, iface = real(minAmps=12, feed=32)
+    busy = chargingSlave(m, b"\x82\x45", VIN)
+    idle = idleSlave(m)
+    m.distributeEVSEPower()
+    assert busy._evseTargetAmps + idle._evseTargetAmps == 32
+    # The idle TWC's car plugs in and wants power
+    idle.currentVIN = "5YJ3E1EA1KF000002"
+    idle.reportedState, idle.reportedAmpsMax, idle.reportedAmpsActual = 0x01, 32, 20
+    v = m.vehicleRegistry.getOrCreate(idle.currentVIN, "TeslaAPI")
+    v.attach(
+        "TeslaAPI",
+        SimpleNamespace(
+            VIN=idle.currentVIN, atHome=True, syncSource="TeslaAPI", pluggedIn=None
+        ),
+    )
+    v.observe("chargingState", "Charging", "TeslaAPI")
+    m.distributeEVSEPower()
+    assert busy._evseTargetAmps == idle._evseTargetAmps == 16
+    assert busy._evseTargetAmps + idle._evseTargetAmps <= 32
+
+
+def test_charging_point_below_min_amps_per_twc_gets_a_stop():
+    # A 10 A budget is under minAmpsPerTWC 12: the charging TWC is offered 0,
+    # not a partial amount
+    m, iface = real(minAmps=12, feed=10)
+    busy = chargingSlave(m, b"\x82\x45", VIN)
+    m.distributeEVSEPower()
+    assert busy._evseTargetAmps == 0
+    # Two cars, 20 A: the 10 A fair share is under the floor, so that car is
+    # stopped and the other takes the rest, never a partial amount
+    m, iface = real(minAmps=12, feed=20)
+    a = chargingSlave(m, b"\x82\x45", VIN)
+    b = chargingSlave(m, b"\x82\x46", "5YJ3E1EA1KF000002")
+    m.distributeEVSEPower()
+    assert sorted([a._evseTargetAmps, b._evseTargetAmps]) == [0, 20]

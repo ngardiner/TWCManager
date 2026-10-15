@@ -525,8 +525,11 @@ class TWCMaster:
         - A car on no TWC has had VehicleEndpoint.setTargetPower() called
           (→ a queued setAmps).
 
-        An idle Gen2 TWC (a point not wanting power) is offered its minimum
-        while the budget allows, so it can see a car plug in.
+        A point not wanting power (an idle TWC) gets a target of 0 and counts
+        nothing against the budget.  On the wire, TWCSlave offers it 0 when no
+        car is charging (a Gen2 treats 0 as its hardware minimum) and its
+        hardware minimum when another car charges with at least
+        minAmpsPerTWC of power per car, so it can see a car plug in.
 
         Only runs when an EVSEController other than Gen2TWCs is registered;
         pure Gen2 deployments keep the existing per-slave heartbeat
@@ -604,19 +607,16 @@ class TWCMaster:
                         )
                 pending.remove(point)
 
-        # Points that don't want power: an idle Gen2 TWC keeps its minimum
-        # while the budget allows (it must offer it to see a car plug in);
-        # every other idle point (a Gen3 unit, a car) gets 0
+        # Points that don't want power get a target of 0. For an idle Gen2 TWC
+        # that 0 goes out as its hardware minimum (the TWC treats an offer of 0
+        # as its minimum), which it needs to see a car plug in. The minimum is
+        # deliberately never counted against or gated on any budget: the
+        # configured limits are already derated, and the next cycle rebalances.
         for point in points:
             if point in wants_power or point.isReadOnly:
                 continue
-            offer = 0
-            if any(getattr(e, "idleMinimum", False) is True for e in point.endpoints):
-                if remaining_watts >= point.minPower:
-                    offer = point.minPower
-                    remaining_watts -= offer
-            point.setTargetPower(offer)
-            offers.append((point.ID, offer))
+            point.setTargetPower(0)
+            offers.append((point.ID, 0))
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(

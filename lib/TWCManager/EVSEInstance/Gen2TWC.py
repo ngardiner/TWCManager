@@ -23,9 +23,6 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     # Heartbeat states in which a car is plugged in
     PLUGGED_STATES = (0x01, 0x03, 0x04, 0x05, 0x08, 0x09)
 
-    # An idle Gen2 must be offered its minimum to detect a plug-in
-    idleMinimum = True
-
     def __init__(self, TWCID, maxAmps, config, master):
         # Backing stores for properties that shadow TWCSlave class attributes.
         # These must be initialised before TWCSlave.__init__ runs so that any
