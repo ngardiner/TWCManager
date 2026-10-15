@@ -2178,10 +2178,6 @@ class TeslaAPI:
         slot = self.slotFor("command")
         if slot is None:
             return Outcome(REFUSED, "no command token")
-        if not slot.usable("wake"):
-            # Tesla refused a wake with this token (403): no request, not
-            # even the free check, until the token changes
-            return Outcome(UNREACHABLE, "wake refused")
         if self.getCarApiRetryRemaining(vehicle, now=now):
             # Told to back off: not even the free check
             return Outcome(UNREACHABLE, "backoff")
@@ -2195,6 +2191,11 @@ class TeslaAPI:
         if not vehicle.lastVehicleAwakeKnown:
             # No free answer (no read token, an error): never wake blind
             return Outcome(UNREACHABLE, "online check failed")
+        if not slot.usable("wake"):
+            # Tesla refused a wake with this token (403): no wake_up until
+            # the token changes. Checked after the free online check, so an
+            # online car still gets its command
+            return Outcome(UNREACHABLE, "wake refused")
         if vehicle.firstChargeNeededTime == 0:
             vehicle.firstChargeNeededTime = now
             if self.wakeDelayMins:
@@ -2498,6 +2499,9 @@ class TeslaAPI:
                 # We're explicitly being told to back off
                 self.errorCount = max(30, self.errorCount)
                 self.updateCarApiLastErrorTime(vehicle)
+            elif req.status_code == 403:
+                # As _paidPost: no wake_up goes to this token again
+                slot.reportScopeRefused("wake", refused=True)
             return False
         except json.decoder.JSONDecodeError:
             return False

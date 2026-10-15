@@ -162,11 +162,20 @@ def test_a_403_on_wake_refuses_wakes_only(requests_mock, monkeypatch):     # pai
     assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "wake refused") and len(calls(requests_mock, "wake_up")) == 1
     free = len(calls(requests_mock, "/vehicles/" + VIN)); clk.t += 4000
     assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "wake refused") and len(calls(requests_mock, "wake_up")) == 1
-    assert len(calls(requests_mock, "/vehicles/" + VIN)) == free                                   # checked before the free online check
+    assert len(calls(requests_mock, "/vehicles/" + VIN)) == free + 1                               # the free online check runs first (Task 9 carry b)
     assert O.isNotSent(O.Outcome(O.UNREACHABLE, "wake refused"))
     assert p.setAmps(VIN, 10).kind == O.DONE and api.fleetSlot.usable("command") and p.ready(reg.get(VIN), C.STOP_CHARGING)
     assert api.wakeVehicle(car) is False and len(calls(requests_mock, "wake_up")) == 1           # the legacy wake path too
+    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "online"}}); clk.t += 4000
+    assert p.wake(VIN) == O.Outcome(O.SATISFIED, "online") and len(calls(requests_mock, "wake_up")) == 1   # an online car still gets its command
     api.storeToken(fleet_token()); assert api.fleetSlot.usable("wake")                            # a new token lifts it
+
+def test_a_403_on_the_legacy_wake_refuses_wakes_only(requests_mock):        # Task 9 carry (c)
+    api, reg = api_with_registry(); api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"}); api.storeToken(fleet_token()); car = api.getCarApiVehicles()[0]
+    requests_mock.post(re.compile(r".*/wake_up$"), status_code=403, json={})
+    assert api.wakeVehicle(car) is False and len(calls(requests_mock, "wake_up")) == 1
+    assert not api.fleetSlot.usable("wake") and api.fleetSlot.usable("command")
+    assert api.wakeVehicle(car) is False and len(calls(requests_mock, "wake_up")) == 1                # never sent again to the refused token
 
 def test_a_command_403_still_refuses_commands(requests_mock):
     api, reg = api_with_registry(); api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"}); api.storeToken(fleet_token())

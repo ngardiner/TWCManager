@@ -42,6 +42,7 @@ from .Outcome import (
     SATISFIED,
     UNSUPPORTED,
     Outcome,
+    isNotSent,
     isOutcome,
 )
 
@@ -123,7 +124,8 @@ def checked(provider, method, result) -> Outcome:
 
 
 def _tagged(outcome, prefix) -> Outcome:
-    if outcome.detail.startswith(prefix.strip()):
+    # An outcome that sent no request keeps its NOT_SENT detail
+    if isNotSent(outcome) or outcome.detail.startswith(prefix.strip()):
         return outcome
     return outcome._replace(detail=(prefix + outcome.detail).rstrip())
 
