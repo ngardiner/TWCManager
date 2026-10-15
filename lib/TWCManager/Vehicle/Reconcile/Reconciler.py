@@ -92,17 +92,16 @@ def known(vehicle, aspect):
     return obs
 
 
-def newerReading(vehicle, aspect, since) -> bool:
+def newerReading(vehicle, aspect, since, unlike=None) -> bool:
+    # A reading of the value unlike (what a paid send saw), or of None, is
+    # no evidence (I2)
     field = FIELD_FOR[aspect]
     obs = vehicle.latestFrom(field, exclude=VEHICLE_SOURCES_EXCLUDED)
-    if obs is not None and obs.at > since:
-        return True
     if aspect == CHARGING and vehicle.believed(field, VEHICLE_SOURCES_EXCLUDED) is None:
         # Only while known uses the stand-in: for a car a vehicle source
         # describes, the heartbeat's readings are never evidence
-        standIn = _standIn(vehicle)
-        return standIn is not None and standIn.at > since
-    return False
+        obs = _standIn(vehicle)
+    return obs is not None and obs.at > since and obs.value != unlike
 
 
 def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
@@ -258,12 +257,16 @@ class VehicleReconciler(threading.Thread):
                     "%s charge limit set elsewhere to %s; adopted", key, adopted
                 )
                 return None
+        held = self._held(vehicle)
         if satisfied(aspect, d.value, k):
             if d.lift:
                 # A lift is a one-shot desire
                 self.desired.clearIf(key, AMPS, d.value)
+            elif d.restore and held is not None and held.held is not None:
+                # Already back at the outside limit: nothing is held (M1)
+                self._save(vehicle, k.value, None)
+                self.desired.clear(key, aspect)
             return None
-        held = self._held(vehicle)
         if d.restore and (held is None or held.held is None):
             # Nothing to restore
             self.desired.clear(key, aspect)
@@ -309,13 +312,20 @@ class VehicleReconciler(threading.Thread):
             and now - ch.failingSince >= PAID_AFTER[aspect]
             and now - ch.lastAttemptAt < PROBE_AFTER
         )
-        paidAgain = rec.paidAt is None or (
-            now - rec.paidAt >= RETRY[aspect]
-            and (rec.paidRetryDue or newerReading(vehicle, aspect, rec.paidAt))
+        # At most two paid sends per desire: one, then one more after a
+        # failure or a reading of a new value (I2)
+        paidAgain = rec.paidSends == 0 or (
+            rec.paidSends < 2
+            and now - rec.paidAt >= RETRY[aspect]
+            and (
+                rec.paidRetryDue
+                or newerReading(vehicle, aspect, rec.paidAt, rec.paidSaw)
+            )
         )
         freeGap = RESTORE_RETRY if d.restore and rec.lastFreeAt else RETRY[aspect]
         if paid and freeFailed and paidAgain:
             p = paid[0]
+            rec.paidSaw = k.value if k is not None else None
         elif free and now - rec.lastFreeAt >= freeGap:
             p = free[0]
         else:
@@ -328,16 +338,22 @@ class VehicleReconciler(threading.Thread):
             ):
                 # A limit always goes first, and settles before a start
                 return None
+        # The blind retry never wakes (M8) and reads nothing: the first
+        # attempt read. A paid attempt reads only a value older than its
+        # whole window (I3)
+        blind = p in paid and rec.paidRetryDue
         attempt = Attempt(
             key,
             aspect,
             capability,
             d.value,
             p.name,
-            wake=allowWake(aspect, d, k) and (p.local or aspect != AMPS)
-            # The blind retry never wakes (M8)
-            and not (p in paid and rec.paidRetryDue),
-            maxAge=None if aspect == AMPS else READ_MAX_AGE,
+            wake=allowWake(aspect, d, k) and (p.local or aspect != AMPS) and not blind,
+            maxAge=(
+                None
+                if aspect == AMPS or blind
+                else READ_MAX_AGE + (PAID_AFTER[aspect] if p in paid else 0)
+            ),
             restore=d.restore,
             since=now,
             force=aspect == CHARGE_LIMIT

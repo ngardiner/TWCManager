@@ -8,6 +8,7 @@ from TWCManager.Vehicle.Reconcile.Reconciler import PAID_AFTER, PROBE_AFTER, RET
 from TWCManager.Vehicle.Reconcile.Run import Workers
 from tests.unit.reconcile_helpers import Clock, ScriptedProvider
 from tests.unit.test_gen2twc_provider import VIN, make as make_master
+from tests.unit.test_workers import Src
 
 def setup(*providers, clock=True):
     m, s = make_master(); c = Clock(1000.0) if clock else time.time
@@ -152,8 +153,8 @@ def test_failed_paid_call_retries_once_then_waits_for_a_newer_reading_or_a_new_v
     c.t += 1; r.pass_(); assert len(f.calls) == 2                                            # the one blind retry, fails again
     for _ in range(10): c.t += 600; r.pass_()
     assert len(f.calls) == 2                                                                 # exactly 2 paid calls for this desire
-    v.observe("chargeLimit", 90, "TeslaAPI"); c.t += 1; r.pass_(); assert len(f.calls) == 3       # a newer reading disagrees
-    m.desired.set(VIN, CHARGE_LIMIT, 60, "policy", decision=True); r.pass_(); assert len(f.calls) == 4
+    v.observe("chargeLimit", 85, "TeslaAPI"); c.t += 600; r.pass_(); assert len(f.calls) == 2     # the cap holds even on a new reading (I2)
+    m.desired.set(VIN, CHARGE_LIMIT, 60, "policy", decision=True); r.pass_(); assert len(f.calls) == 3
     assert cmds(f) == names(f)                                                               # lowering: never a wake
 
 def test_a_paid_retry_that_succeeds_is_not_repeated():
@@ -218,7 +219,7 @@ def test_a_refused_fleet_wake_does_not_exclude_fleet_for_the_car():        # Tas
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "wake refused"), O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 60, "TeslaAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); r.pass_()
     assert names(f) == ["wake"] and m.desired.record(VIN, CHARGE_LIMIT).excluded == {}
-    c.t += RETRY[CHARGE_LIMIT]; m.desired.set(VIN, CHARGE_LIMIT, 55, "policy", decision=True); r.pass_()
+    c.t += 1; m.desired.set(VIN, CHARGE_LIMIT, 55, "policy", decision=True); r.pass_()
     assert names(f) == ["wake", "setChargeLimit"]                             # a lower needs no wake: Fleet still commands
 
 def test_refused_excludes_the_provider_and_unsupported_falls_through():
@@ -255,8 +256,10 @@ def test_a_satisfied_outcome_without_a_stamp_is_not_resent_until_new_evidence():
     m.desired.set(VIN, CHARGING, False, "distributor"); r.pass_()
     for _ in range(5): r.pass_()
     assert names(f) == ["stopCharging"] and v.lastWrite("chargingState") is None                    # settled, unstamped, not repeated, never woken
-    c.t += 10; v.observe("chargingState", "Charging", "TeslaAPI"); assert r.pass_() == 0               # new evidence inside RETRY: still held
+    c.t += 10; v.observe("chargingState", "Starting", "TeslaAPI"); assert r.pass_() == 0               # new evidence inside RETRY: still held
     c.t += RETRY[CHARGING]; assert r.pass_() == 1 and names(f) == ["stopCharging"] * 2                 # new evidence past RETRY: one more
+    for _ in range(10): c.t += 600; v.observe("chargingState", "Charging", "TeslaAPI"); r.pass_()
+    assert names(f) == ["stopCharging"] * 2                                                           # and never a third (I2)
 
 def test_rate_limited_provider_is_skipped_at_plan_time(monkeypatch):        # ledger Task 5 M6
     mono = Clock(); monkeypatch.setattr(Run, "_monotonic", mono)
@@ -294,3 +297,66 @@ def test_the_thread_runs_a_pass_on_a_change_and_exits_on_stop():
     deadline = time.time() + 5
     while not b.calls and time.time() < deadline: time.sleep(0.01)
     r.stop(); r.join(3); assert b.calls == [("setChargeLimit", VIN, 50)] and not r.is_alive() and r.name == "VehicleReconciler" and r.daemon
+
+# Fix round 1
+
+def test_a_stop_set_while_a_start_is_in_flight_is_sent_on_the_next_pass():   # C1, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    start = f.startCharging
+    def midFlight(vin): c.t += 1; m.desired.set(VIN, CHARGING, False, "distributor"); c.t += 2; return start(vin)
+    f.startCharging = midFlight; m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()
+    rec = m.desired.record(VIN, CHARGING); assert rec.settledAt is None and rec.paidAt is None and rec.inFlight is None
+    assert r.pass_() == 1 and names(f) == ["wake", "startCharging", "stopCharging"]
+    for _ in range(10): c.t += 600; r.pass_()
+    assert len(cmds(f)) == 2
+
+def test_a_limit_changed_while_in_flight_sends_the_new_value():             # C1
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
+    send = f.setChargeLimit
+    def midFlight(vin, limit):
+        if limit == 50: m.desired.set(VIN, CHARGE_LIMIT, 60, "policy", decision=True)
+        return send(vin, limit)
+    f.setChargeLimit = midFlight; m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
+    assert not m.desired.settled(VIN, CHARGE_LIMIT) and r.pass_() == 1 and [x[2] for x in f.calls if x[0] != "wake"] == [50, 60]
+    assert m.desired.settled(VIN, CHARGE_LIMIT) and m.heldLimits.get(VIN) == HeldLimit(90, 60)
+
+def test_a_stop_set_after_a_start_s_wake_held_goes_on_the_first_pass():    # I1
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "wake held"), O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_(); assert names(f) == ["wake"]
+    c.t += 5; v.observe("chargingState", "Charging", "TeslaMateVehicle"); m.desired.set(VIN, CHARGING, False, "distributor")
+    assert r.pass_() == 1 and names(f) == ["wake", "stopCharging"]
+
+def test_a_failing_paid_call_under_a_poll_pays_at_most_twice_an_hour():   # I2, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "500"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    for _ in range(60):
+        v.observe("chargeLimit", 90, "TeslaAPI")                              # a poll every minute
+        for _ in range(6): c.t += 10; r.pass_()
+    assert len(cmds(f)) == 2
+
+def test_a_satisfied_stop_with_a_stale_feed_pays_once_an_hour():          # I2, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "not_charging"))); f = prov(m, "FleetAPI"); v.observe("chargingState", "Charging", "TeslaAPI")
+    m.desired.set(VIN, CHARGING, False, "distributor")
+    for _ in range(60):
+        v.observe("chargingState", "Charging", "TeslaMateVehicle")           # the feed still says Charging
+        for _ in range(6): c.t += 10; r.pass_()
+    assert cmds(f) == ["stopCharging"]
+
+def test_the_blind_retry_and_a_fallback_buy_no_paid_read():                 # I3, paid reads counted
+    m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "500"))); f = prov(m, "FleetAPI"); src = Src("FleetAPI", "FleetAPI", 90)
+    m.vehicleRegistry.registerReadSource(src); v.observe("chargeLimit", 90, "TeslaAPI")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    for _ in range(12 * 360): c.t += 10; r.pass_()
+    assert len(cmds(f)) == 2 and src.fetched == 0                            # 500 then 500: 2 commands, no vehicle_data
+    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); src = Src("FleetAPI", "FleetAPI", 90)
+    m.vehicleRegistry.registerReadSource(src); v.observe("chargeLimit", 90, "TeslaAPI")
+    b = prov(m, "TeslaBLE"); fail = b.setChargeLimit
+    def slow(vin, limit): c.t += 20; return fail(vin, limit)                  # BLE takes 20 s to fail
+    b.setChargeLimit = slow; m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    for _ in range(360): c.t += 10; r.pass_()
+    assert cmds(f) == ["setChargeLimit"] and src.fetched == 0                # the fallback reads nothing: 320 s is fresh enough
+
+def test_a_satisfied_restore_settles_the_held_limit_and_its_desire():      # M1
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 90, "TeslaBLE")
+    m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
+    assert r.pass_() == 0 and prov(m, "TeslaBLE").calls == [] and m.heldLimits.get(VIN) == HeldLimit(90, None) and m.desired.get(VIN, CHARGE_LIMIT) is None
