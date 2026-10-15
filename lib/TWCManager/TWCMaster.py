@@ -20,17 +20,13 @@ from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 from TWCManager.Vehicle.Registry import VehicleRegistry
 from TWCManager.Vehicle.Providers import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
-from TWCManager.Vehicle.Reconcile.Desired import DesiredStore
+from TWCManager.Vehicle.Providers.Capability import START_CHARGING, STOP_CHARGING
+from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
-from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit
+from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, targetsFor
 
 logger = LoggerFactory.get_logger("Master", "Master")
-
-# Background task commands that are vehicle commands. They run on the
-# VehicleCommandQueue worker so slow BLE retries don't stall other
-# background work.
-VEHICLE_COMMANDS = frozenset(["charge"])
 
 
 class TWCMaster:
@@ -198,16 +194,13 @@ class TWCMaster:
             return 0
 
     def cancelStopCarsCharging(self, vin=None):
-        # Drop pending stop-charging commands for this VIN (or every VIN when
-        # vin is None). A vehicle-less stop applies to every car, so it is
-        # cancelled too. Returns how many were removed. Closes #667 for the
-        # vehicle queue path.
-        vin = vin or None
-        return self.vehicleCommandQueue.cancel(
-            "charge",
-            lambda task: not task.get("charge")
-            and (vin is None or task.get("vin") in (vin, None)),
-        )
+        # Drops a stop not yet delivered: the desire and any queued attempt.
+        # A start is never cancelled. Returns how many desires were cleared
+        cleared = 0
+        for v in targetsFor(self, vin or None, STOP_CHARGING):
+            cleared += self.desired.clearIf(v.key, CHARGING, False)
+            self.reconciler.cancel(v.key)
+        return cleared
 
     def checkForUpdates(self):
         # This function is used by the Web UI and later on will be used by the console to detect TWCManager Updates
@@ -1351,18 +1344,12 @@ class TWCMaster:
                 self.releaseBackgroundTasksLock()
             return
 
-        if task["cmd"] in VEHICLE_COMMANDS:
-            self.queue_vehicle_command(task)
-            return
-
         self.getBackgroundTasksLock()
         try:
             key = self._taskKey(task)
             if key in self.backgroundTasksCmds:
-                # Some tasks, like cmd='charge', will be called once per second until
-                # a charge starts or we determine the car is done charging.  To avoid
-                # wasting memory queing up a bunch of these tasks when we're handling
-                # a charge cmd already, don't queue two of the same task.
+                # Some tasks are queued every heartbeat. To avoid wasting
+                # memory, don't queue two of the same task.
                 self.backgroundTasksCmds[key].update(task)
                 return
 
@@ -2038,46 +2025,30 @@ class TWCMaster:
             self.queue_background_task({"cmd": "saveSettings"})
 
     def startCarsCharging(self, vin=None):
-        # This function is the opposite functionality to the stopCarsCharging function
-        # below
-        vin = vin or None
-        stopMode = int(self.settings.get("chargeStopMode", 1))
-        if stopMode == 1:
-            self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
-            self.getModuleByName("Policy").clearOverride()
-        elif stopMode == 2:
-            self.settings["respondToSlaves"] = 1
-        elif stopMode == 3:
-            self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
+        # Desired state, decided again each cycle: the reconciler sends it
+        # once per our own write, a limit first. vin is a registry key (a VIN
+        # or an anon: key); None is every present car
+        for v in targetsFor(self, vin or None, START_CHARGING):
+            self.desired.set(v.key, CHARGING, True, "distributor")
+        if int(self.settings.get("chargeStopMode", 1)) == 1:
+            policy = self.getModuleByName("Policy")
+            if policy:
+                policy.clearOverride()
 
     def stopCarsCharging(self, vin=None):
-        # This is called by components (mainly TWCSlave) who want to signal to us to
-        # call our configured routine for stopping vehicles from charging.
-        # The default setting is to use the Tesla API. Some people may not want to do
-        # this, as it only works for Tesla vehicles and requires logging in with your
-        # Tesla credentials. The alternate option is to stop responding to slaves
-
-        # 1 = Stop the car(s) charging via the Tesla API
-        # 2 = Stop the car(s) charging by refusing to respond to slave TWCs
-        # 3 = Send TWC Stop command to each slave
-        vin = vin or None
-        stopMode = int(self.settings.get("chargeStopMode", 1))
-        if stopMode == 1:
-            # A pending start for this car (or for every car) is now moot.
-            self.vehicleCommandQueue.cancel(
-                "charge",
-                lambda task: bool(task.get("charge"))
-                and (vin is None or task.get("vin") in (vin, None)),
-            )
-            self.queue_background_task({"cmd": "charge", "charge": False, "vin": vin})
+        # The opposite of startCarsCharging. chargeStopMode picks how: 1 the
+        # car (BLE, the Tesla API), 2 refusing to answer the slaves, 3 the
+        # TWC stop command; 2 and 3 are the Gen2 provider's, which the
+        # reconciler reaches once a free stop is not to be had
+        for v in targetsFor(self, vin or None, STOP_CHARGING):
+            self.desired.set(v.key, CHARGING, False, "distributor")
+        if int(self.settings.get("chargeStopMode", 1)) == 1:
             if self.stopTimeout == datetime.max:
                 self.stopTimeout = datetime.now() + timedelta(seconds=10)
             elif datetime.now() > self.stopTimeout:
-                self.getModuleByName("Policy").overrideLimit()
-        if stopMode == 2:
-            self.stopRespondingToSlaves()
-        if stopMode == 3:
-            self.sendStopCommand()
+                policy = self.getModuleByName("Policy")
+                if policy:
+                    policy.overrideLimit()
 
     def stopRespondingToSlaves(self):
         # Every slave stops charging once we go quiet; resumes after a minute
