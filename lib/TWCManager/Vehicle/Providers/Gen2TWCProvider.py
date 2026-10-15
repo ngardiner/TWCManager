@@ -71,9 +71,11 @@ class Gen2TWCProvider(Provider):
         if slave is None:
             return None
         if self.chargeRateControl() == 3:
-            # Mode 3 hands the rate to the vehicle below the TWC's own
-            # minimum offer; below it the next provider carries the target
-            return (slave.minAmpsToOffer(), slave.maxOfferAmps)
+            # Mode 3 hands the rate to the vehicle below 6 A
+            # (TWCSlave.send_master_heartbeat), and the TWC never offers
+            # below its own minimum; below the floor the next provider
+            # carries the target
+            return (max(6, slave.minAmpsToOffer()), slave.maxOfferAmps)
         return (slave.minAmps, slave.maxOfferAmps)
 
     def setAmps(self, vin: str, amps: int) -> bool:

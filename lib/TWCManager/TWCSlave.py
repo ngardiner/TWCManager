@@ -114,7 +114,8 @@ class TWCSlave:
     def minAmpsToOffer(self):
         # The lowest offer this TWC makes: the configured minAmpsPerTWC, or
         # what the TWC can reliably start a car at when that is higher
-        return max(self.config["config"]["minAmpsPerTWC"], self.minAmpsTWCSupports)
+        # (6 when unset, as in TWCManager's default config)
+        return max(self.configConfig.get("minAmpsPerTWC", 6), self.minAmpsTWCSupports)
 
     def _resetVehicleRateRaised(self):
         self.vehicleRateRaised = False

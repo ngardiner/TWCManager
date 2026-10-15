@@ -86,29 +86,42 @@ def test_provider_readiness_and_range_per_vehicle():
     assert p.ready(v, C.READ_VIN) and p.declarations()[C.READ_VIN].passive
 
 
-# Mode 3 hands the rate to the vehicle API below the TWC's own minimum
-# offer, so the provider covers a target exactly when TWCSlave carries it
+# Mode 3 hands the rate to the vehicle API below 6 A (TWCSlave's literal
+# handoff), and the TWC never offers below its own minimum, so the provider
+# covers a target exactly when TWCSlave carries it itself
 @pytest.mark.parametrize(
-    "minAmpsPerTWC, supports, floor, covered, uncovered",
+    "minAmpsPerTWC, supports",
     [
-        (6, 6, 6, 6, 5),  # protocol 2
-        (5, 5, 5, 5, 4),  # protocol 1
-        (6, 1, 6, 6, 5),  # 3-phase, minAmpsPerTWC 6
-        (1, 1, 1, 1, 0.5),  # 3-phase, minAmpsPerTWC 1
+        (6, 6),  # protocol 2
+        (5, 5),  # protocol 1: TWCSlave hands 5 A to the API
+        (6, 1),  # 3-phase
+        (1, 1),  # 3-phase, minAmpsPerTWC 1
     ],
 )
-def test_mode_3_floor_is_the_twc_minimum_offer(
-    minAmpsPerTWC, supports, floor, covered, uncovered
-):
+def test_mode_3_floor_is_where_the_twc_carries_the_rate(minAmpsPerTWC, supports):
     m, s = make(withMinAmpsPerTWC(minAmpsPerTWC))
     p = m.providerOrder.provider("Gen2TWC")
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
     s.currentVIN = VIN
     s.minAmpsTWCSupports = supports
+    assert p.ampsRange(v) == (supports, 32)  # mode 1 keeps the plain range
     m.settings["chargeRateControl"] = "3"
-    assert s.minAmpsToOffer() == floor
-    assert p.ampsRange(v) == (floor, 32)
-    assert p.covers(v, covered) and not p.covers(v, uncovered)
+    assert p.ampsRange(v) == (6, 32)
+    assert p.covers(v, 6) and not p.covers(v, 5)
+
+
+def test_min_amps_to_offer():
+    m, s = make(withMinAmpsPerTWC(5))
+    s.minAmpsTWCSupports = 6
+    assert s.minAmpsToOffer() == 6
+    s.minAmpsTWCSupports = 1
+    assert s.minAmpsToOffer() == 5
+    # Without minAmpsPerTWC the default config's 6 applies
+    config = dict(CONFIG, config=dict(CONFIG["config"]))
+    del config["config"]["minAmpsPerTWC"]
+    m2, s2 = make(config)
+    s2.minAmpsTWCSupports = 1
+    assert s2.minAmpsToOffer() == 6
 
 
 @pytest.mark.parametrize("mode", ["1", "3"])
