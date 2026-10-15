@@ -27,7 +27,7 @@ from .Capability import (
     Declaration,
     RateLimit,
 )
-from .Provider import Provider, vehicleMaxAmps
+from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
 
 # Tesla's published per-vehicle command limit; declared, not enforced
 FLEET_COMMAND_LIMIT = RateLimit(50, 60)
@@ -40,18 +40,18 @@ class OwnerAPIProvider(Provider):
     name = "OwnerAPI"
     rank = 4
     local = False
+    DECLARATIONS = {
+        READ_LIST: Declaration(CLOUD_FREE),
+        READ_ONLINE: Declaration(CLOUD_FREE),
+        READ_CHARGE: Declaration(CLOUD_FREE),
+        READ_LOCATION: Declaration(CLOUD_FREE),
+        READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
+    }
+    SUPPRESSED = CLOUD_SUPPRESSED
 
     def __init__(self, carapi):
         self.carapi = carapi
         self.module = carapi
-
-    def declarations(self):
-        declared = {
-            capability: Declaration(CLOUD_FREE)
-            for capability in (READ_LIST, READ_ONLINE, READ_CHARGE, READ_LOCATION)
-        }
-        declared[READ_WALL_CONNECTOR_VINS] = WALL_CONNECTOR_VINS
-        return declared
 
     def ready(self, vehicle, capability) -> bool:
         if capability == READ_WALL_CONNECTOR_VINS:
@@ -72,24 +72,23 @@ class FleetAPIProvider(Provider):
     name = "FleetAPI"
     rank = 5
     local = False
+    DECLARATIONS = {
+        READ_LIST: Declaration(CLOUD_FREE),
+        READ_ONLINE: Declaration(CLOUD_FREE),
+        READ_CHARGE: Declaration(FLEET_DATA),
+        READ_LOCATION: Declaration(FLEET_DATA),
+        SET_CHARGE_LIMIT: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
+        START_CHARGING: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
+        STOP_CHARGING: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
+        SET_AMPS: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
+        WAKE: Declaration(FLEET_WAKE),
+        READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
+    }
+    SUPPRESSED = CLOUD_SUPPRESSED
 
     def __init__(self, carapi):
         self.carapi = carapi
         self.module = carapi
-
-    def declarations(self):
-        return {
-            READ_LIST: Declaration(CLOUD_FREE),
-            READ_ONLINE: Declaration(CLOUD_FREE),
-            READ_CHARGE: Declaration(FLEET_DATA),
-            READ_LOCATION: Declaration(FLEET_DATA),
-            SET_CHARGE_LIMIT: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
-            START_CHARGING: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
-            STOP_CHARGING: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
-            SET_AMPS: Declaration(FLEET_COMMAND, FLEET_COMMAND_LIMIT),
-            WAKE: Declaration(FLEET_WAKE),
-            READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
-        }
 
     def ready(self, vehicle, capability) -> bool:
         if capability == READ_WALL_CONNECTOR_VINS:

@@ -44,6 +44,9 @@ NOT_SENT = LANE_DETAILS | {
     "not listed",
     "online check failed",
     "read",
+    # The worker found no vehicle or no provider to run the attempt on
+    "no vehicle",
+    "no provider",
 }
 RULES = "rules: "
 

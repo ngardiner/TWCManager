@@ -38,7 +38,7 @@ def test_gen2_stop_and_start_outcomes_and_the_billed_stop_suppression():
     m.desired.state(VIN).lastStopProvider = "Gen2TWC"
     assert p.ready(v, C.START_CHARGING) and p.startCharging(VIN).kind == O.DONE and m.settings["respondToSlaves"] == 1
     m.desired.state(VIN).lastStopProvider = "TeslaBLE"; assert p.ready(v, C.START_CHARGING) is False      # a BLE stop is undone over BLE
-    fleet = Mock(local=False, name="FleetAPI"); assert m.providerOrder.suppressions.suppressed(fleet, C.STOP_CHARGING) and not m.providerOrder.suppressions.suppressed(fleet, C.START_CHARGING)
+    fleet = Mock(local=False, SUPPRESSED=None, name="FleetAPI"); assert m.providerOrder.suppressions.suppressed(fleet, C.STOP_CHARGING) and not m.providerOrder.suppressions.suppressed(fleet, C.START_CHARGING)
     m.settings["chargeStopMode"] = "1"; assert not m.providerOrder.suppressions.suppressed(fleet, C.STOP_CHARGING)
     assert p.stopCharging("5YJ3E1EA1KF000009") == O.Outcome(O.UNSUPPORTED, "no slave")
 

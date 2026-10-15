@@ -27,19 +27,18 @@ class Gen3TWCProvider(Provider):
     worker = "local"
     module = None
     sharedControl = True
+    DECLARATIONS = {
+        READ_PLUG: Declaration(LOCAL, passive=True),
+        READ_AMPS: Declaration(LOCAL, passive=True),
+        SET_AMPS: Declaration(LOCAL),
+        START_CHARGING: Declaration(LOCAL),
+        STOP_CHARGING: Declaration(LOCAL),
+    }
+    SUPPRESSED = {}
 
     def __init__(self, controller, master):
         self.controller = controller
         self.master = master
-
-    def declarations(self):
-        return {
-            READ_PLUG: Declaration(LOCAL, passive=True),
-            READ_AMPS: Declaration(LOCAL, passive=True),
-            SET_AMPS: Declaration(LOCAL),
-            START_CHARGING: Declaration(LOCAL),
-            STOP_CHARGING: Declaration(LOCAL),
-        }
 
     def unitFor(self, vehicle):
         return None if vehicle is None else self._unitForKey(vehicle.key)
@@ -51,7 +50,7 @@ class Gen3TWCProvider(Provider):
         return None
 
     def ready(self, vehicle, capability) -> bool:
-        return capability in self.declarations() and self.unitFor(vehicle) is not None
+        return capability in self.DECLARATIONS and self.unitFor(vehicle) is not None
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
         unit = self.unitFor(vehicle)

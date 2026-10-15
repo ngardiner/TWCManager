@@ -30,19 +30,18 @@ class Gen2TWCProvider(Provider):
     local = True
     worker = "local"
     module = None
+    DECLARATIONS = {
+        READ_PLUG: Declaration(LOCAL, passive=True),
+        READ_VIN: Declaration(LOCAL, passive=True),
+        READ_AMPS: Declaration(LOCAL, passive=True),
+        SET_AMPS: Declaration(LOCAL),
+        START_CHARGING: Declaration(LOCAL),
+        STOP_CHARGING: Declaration(DISRUPTIVE),
+    }
+    SUPPRESSED = {}
 
     def __init__(self, master):
         self.master = master
-
-    def declarations(self):
-        return {
-            READ_PLUG: Declaration(LOCAL, passive=True),
-            READ_VIN: Declaration(LOCAL, passive=True),
-            READ_AMPS: Declaration(LOCAL, passive=True),
-            SET_AMPS: Declaration(LOCAL),
-            START_CHARGING: Declaration(LOCAL),
-            STOP_CHARGING: Declaration(DISRUPTIVE),
-        }
 
     def _settings(self) -> dict:
         return getattr(self.master, "settings", None) or {}

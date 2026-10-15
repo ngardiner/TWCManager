@@ -13,11 +13,13 @@ logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 SCOPES = {
     "read": ("vehicle_device_data",),
     "command": ("vehicle_charging_cmds", "vehicle_cmds"),
+    "wake": ("vehicle_charging_cmds", "vehicle_cmds"),
     "energy": ("energy_device_data",),
 }
 SCOPE_LABELS = {
     "read": "vehicle data",
     "command": "charge commands",
+    "wake": "waking the car",
     "energy": "Powerwall Storm Watch and Gen3 Wall Connector VINs",
 }
 SOURCES = ("synced", "pasted", "login")
@@ -25,7 +27,7 @@ PAUSE_SECONDS = 3600
 # Purposes a refusal (HTTP 403) retires until the token changes. Energy
 # refusals are per site and handled by their callers (Storm Watch keeps
 # asking; the Wall Connector read latches per slot change), so they stay out.
-RETIRED_ON_REFUSAL = frozenset({"command"})
+RETIRED_ON_REFUSAL = frozenset({"command", "wake"})
 DEFAULT_LIFETIME = 8 * 60 * 60
 REFRESH_MARGIN = 60 * 60
 REFRESH_TIMEOUT = 30  # seconds, same as the vehicle list request

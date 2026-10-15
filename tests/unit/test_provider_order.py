@@ -25,7 +25,9 @@ class P(Provider):
     _result = True
 
 def twc(ready=True, amps=(6, 32)):  return P("Gen2TWC", 0, True, {C.SET_AMPS: C.Declaration(C.LOCAL)}, ready, amps)
-def ble(ready=True):  return P("TeslaBLE", 2, True, {C.SET_AMPS: C.Declaration(C.LOCAL), C.WAKE: C.Declaration(C.LOCAL)}, ready, (1, 32), readTier=0)
+def ble(ready=True):
+    b = P("TeslaBLE", 2, True, {C.SET_AMPS: C.Declaration(C.LOCAL), C.WAKE: C.Declaration(C.LOCAL)}, ready, (1, 32), readTier=0)
+    b.SUPPRESSED = {"api_only": C.ALL}; return b                  # the real provider's table; the others keep the locality rule
 def owner():          return P("OwnerAPI", 4, False, {}, readTier=1)
 def fleet(ready=True): return P("FleetAPI", 5, False, {C.SET_AMPS: C.Declaration(C.FLEET_COMMAND), C.WAKE: C.Declaration(C.FLEET_WAKE)}, ready, (1, 32), readTier=2)
 def ha(ready=True):   return P("HomeAssistant", 6, False, {C.SET_AMPS: C.Declaration(C.HA_BILLED)}, ready, (1, 32), readTier=2)
