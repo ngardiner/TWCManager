@@ -1,5 +1,6 @@
 # tests/unit/test_provider_registration.py
 import ast
+import logging
 import os
 from unittest.mock import Mock, patch
 
@@ -11,6 +12,8 @@ from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProv
 from TWCManager.Vehicle.Providers.Order import ProviderOrder, registerProviders
 from TWCManager.Vehicle.Providers.TelemetryProvider import TelemetryProvider
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from TWCManager.Vehicle.HomeAssistant import HomeAssistant
+from TWCManager.Vehicle.TeslaAPI import TeslaAPI
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
 from tests.unit.test_gen2twc_provider import CONFIG
 from tests.unit.test_homeassistant_registry import make_ha
@@ -38,6 +41,7 @@ def test_home_assistant_provider_follows_entities():
     assert p.ready(v, C.START_CHARGING) and p.ready(v, C.SET_CHARGE_LIMIT) and not p.ready(v, C.SET_AMPS) and not p.declares(C.WAKE)
     ha.setChargeRate = Mock(return_value=True); hv.has_charge_current_number = True
     assert p.setAmps(VIN, 8) is True; ha.setChargeRate.assert_called_once_with(8, vehicle=hv)
+    ha.readSource = rebuilt = Mock(); assert p.readSource is rebuilt   # read through, never a stale snapshot
 
 def test_passive_providers_never_enter_the_walk():
     m = Mock(); m.settings = {}; m.config = {}; m.stats = {"moduleSuccess": {}, "moduleFailures": {}}; m.vehicleRegistry = VehicleRegistry({})
@@ -115,11 +119,35 @@ def test_other_policies_keep_reading_over_ble(policy):
     assert v.read("batteryLevel", maxAge=0).value == 50
     ble.get_charge_state.assert_called_once_with(VIN)
 
-def test_pure_gen2_registers_nothing_new():
+def test_no_vehicle_modules_registers_only_gen2():
     m = TWCMaster("AB", CONFIG)
     assert registerProviders(m) == ["Gen2TWC"]
     # The distributor runs only beside a controller other than Gen2TWCs
     assert [c["name"] for c in m.getModulesByType("EVSEController")] == ["Gen2TWCs"]
+
+def test_default_boot_registers_unconfigured_modules_that_never_command():
+    # A config with no vehicle sections still loads TeslaAPI and HomeAssistant
+    # (the module loop's enabled default); neither may reach a car or a site
+    m = TWCMaster("AB", CONFIG)
+    for name, cls in (("TeslaAPI", TeslaAPI), ("HomeAssistant", HomeAssistant)):
+        m.registerModule({"name": name, "ref": cls(m), "type": "Vehicle"})
+    assert registerProviders(m) == ["Gen2TWC", "OwnerAPI", "FleetAPI", "HomeAssistant"]
+    v = m.vehicleRegistry.getOrCreate(VIN, "test")
+    for cap in sorted(C.COMMANDS):
+        assert [p.name for p in m.providerOrder.candidates(v, cap) if not p.local] == []
+    assert m.providerOrder.candidates(None, C.READ_WALL_CONNECTOR_VINS) == []
+    assert [c["name"] for c in m.getModulesByType("EVSEController")] == ["Gen2TWCs"]
+
+def test_one_failing_module_does_not_stop_the_others(caplog):
+    m = Mock(); m.settings = {}; m.config = {}; m.stats = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    ha, reg = make_ha(); ble = Mock(); ble.providers = lambda: [bleStub()]
+    broken = Mock(); broken.providers = Mock(side_effect=RuntimeError("boom"))
+    m.getModulesByType = Mock(return_value=[{"name": "Broken", "ref": broken}, {"name": "HomeAssistant", "ref": ha}, {"name": "TeslaBLE", "ref": ble}])
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert registerProviders(m) == ["TeslaBLE", "HomeAssistant"]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and r.name.endswith("Vehicle.Providers")]
+    assert len(warnings) == 1 and "Broken" in warnings[0].getMessage()
 
 
 # TWCManager.py starts the app at import, so its wiring is read from source
