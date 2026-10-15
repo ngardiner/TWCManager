@@ -543,7 +543,7 @@ class TWCMaster:
         with a controller-agnostic algorithm that treats Gen2 TWC devices and
         Tesla API vehicles uniformly.  After this method runs:
         - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it.
-        - TeslaAPIEVSE.setTargetPower() has been called (→ setChargeRate API call).
+        - VehicleEndpoint.setTargetPower() has been called (→ a queued setAmps).
 
         Only runs when at least one EVSEController is registered (i.e. the new
         infrastructure is active).  Falls back gracefully to the existing per-slave
@@ -555,7 +555,7 @@ class TWCMaster:
         if not controllers:
             return
 
-        # Only activate the centralized distributor when TeslaAPIController is
+        # Only activate the centralized distributor when VehicleEndpoints is
         # present — otherwise the existing per-slave heartbeat logic is sufficient
         # and more battle-tested for pure Gen2 deployments.
         non_gen2 = [c for c in controllers if c["name"] != "Gen2TWCs"]

@@ -236,25 +236,6 @@ class TestVehiclePrioritySkipsReadOnly:
         assert not getattr(api, method).called
 
 
-class TestTeslaAPIEVSE:
-    def make_evse(self, carapi):
-        from TWCManager.EVSEInstance.TeslaAPIEVSE import TeslaAPIEVSE
-
-        master = Mock()
-        master.config = {"config": {}}
-        master.getModuleByName = Mock(return_value=carapi)
-        return TeslaAPIEVSE(Mock(VIN="5YJ3E1EA1KF000001"), Mock(), master)
-
-    def test_read_only_follows_tesla_api(self, owner_api):
-        evse = self.make_evse(owner_api)
-        assert evse.isReadOnly is True
-        owner_api.storeToken(fleet_token())
-        assert evse.isReadOnly is False
-
-    def test_not_read_only_without_tesla_api(self):
-        assert self.make_evse(None).isReadOnly is False
-
-
 # What Tesla answers a REST command for a car that needs signed commands.
 VCP_403 = {
     "response": None,
@@ -542,15 +523,16 @@ class TestMixedFleet:
         assert amps.call_count == 1
         assert not ble.setChargeRate.called
 
-    def test_evse_read_only_per_vehicle(self, mixed_fleet):
-        from TWCManager.EVSEInstance.TeslaAPIEVSE import TeslaAPIEVSE
+    def test_endpoint_read_only_per_vehicle(self, mixed_fleet):
+        from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint
+        from TWCManager.Vehicle.Providers.Order import ProviderOrder
 
         api, unsigned, signed = mixed_fleet
-        master = Mock()
-        master.config = {"config": {}}
-        master.getModuleByName = Mock(return_value=api)
-        assert TeslaAPIEVSE(unsigned, Mock(), master).isReadOnly is False
-        assert TeslaAPIEVSE(signed, Mock(), master).isReadOnly is True
+        order = ProviderOrder(api.master)
+        for p in api.providers():
+            order.register(p)
+        assert VehicleEndpoint(unsigned.vehicle, order, api.master).isReadOnly is False
+        assert VehicleEndpoint(signed.vehicle, order, api.master).isReadOnly is True
 
 
 # Each owner-command path as VehiclePriority calls it: the endpoint under

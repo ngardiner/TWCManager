@@ -79,7 +79,7 @@ class Provider:
 
 
 def vehicleMaxAmps(vehicle, configConfig: dict) -> float:
-    # Today's TeslaAPIEVSE.maxPower rule
+    # VehicleEndpoint.maxPower's rule
     return vehicle.value("availableCurrent") or configConfig.get(
         "wiringMaxAmpsPerTWC", 32
     )
