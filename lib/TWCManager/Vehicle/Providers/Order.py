@@ -180,8 +180,15 @@ class ProviderOrder:
 def registerProviders(master) -> List[str]:
     # Called from TWCManager.py after the module-load loop
     for mod in master.getModulesByType("Vehicle"):
-        for provider in getattr(mod["ref"], "providers", lambda: [])():
-            master.providerOrder.register(provider)
+        # One module's failure must not stop the others, or startup. Visible:
+        # a skipped TeslaBLE leaves its read source unsuppressed under api_only
+        try:
+            for provider in getattr(mod["ref"], "providers", lambda: [])():
+                master.providerOrder.register(provider)
+        except Exception as e:
+            logger.warning(
+                "Could not register %s providers: %s", mod["name"], type(e).__name__
+            )
     names = [p.name for p in master.providerOrder.providers()]
     logger.info("Providers: %s", ", ".join(names))
     return names

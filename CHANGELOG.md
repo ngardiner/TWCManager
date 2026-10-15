@@ -25,6 +25,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Serialise settings.json saves under a settings lock so a save no longer races writers on other threads
     * (@MikeBishop) - Evaluate charging policy on its own thread instead of the RS485 loop, only when acting as master (#670)
     * (@MikeBishop) - One vehicle registry keyed by VIN holds every per-vehicle field with its source and age; reads cascade BLE then cloud and never wake a car unless asked; a TWC-reported VIN is confirmed by a second query before a vehicle is created; vehicles unseen for 30 days (config vehicle.forgetAfterDays) are forgotten
+    * (@MikeBishop) - A providerSuppressions entry for HomeAssistant now also drops Home Assistant vehicle reads, not only its commands
     * (@MikeBishop) - The debug API `/api/sendTeslaAPICommand` now takes the vehicle's VIN (`vehicleVIN`) instead of the numeric vehicle ID (`vehicleID`); the web UI and debug dump read vehicles from the registry
 * Bugfixes
     * Fix: Add missing module-level time import in HASS, EmonCMS, Growatt, IotaWatt, SmartMe and TCP modules, which crashed EMS polling and caused charge current oscillation (closes #644)
