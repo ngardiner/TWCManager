@@ -9,7 +9,12 @@
 # Every attempt a worker accepts is reported exactly once: run, replaced,
 # dropped or cancelled. Reports carry the submitted Attempt object itself, so
 # a caller can match them by identity. The report callback runs on the
-# worker's thread (or the submitter's, inline).
+# worker's thread for a run; on the caller's thread for a replaced, dropped
+# or cancelled entry and for every inline or local attempt, where the whole
+# of runAttempt (DesiredStore.get, the reconciler's beforeWrite) runs too. So
+# never call Workers.submit or cancel while holding DesiredStore's lock or any
+# lock the report handler takes: it would deadlock (for a TWC, on the serial
+# thread).
 #
 # One clock domain: attempts carry time.time stamps (the registry's). Only
 # the rate-limit windows use time.monotonic. No lock is held while running
@@ -361,6 +366,7 @@ class Workers:
         self._callback = callback
 
     def submit(self, attempt) -> bool:
+        # Never under DesiredStore's lock (see the header)
         worker = _workerOf(self.master, attempt.provider)
         if worker == "local":
             # No I/O: only a request the heartbeat sends
@@ -369,6 +375,7 @@ class Workers:
         return (self.ble if worker == "ble" else self.cloud).put(attempt)
 
     def cancel(self, key) -> int:
+        # Never under DesiredStore's lock: losers report on this thread
         # Pending stops for key only; a running attempt is left alone
         return sum(
             q.remove(lambda a: a.key == key and isStop(a))
