@@ -13,6 +13,10 @@ from typing import Any
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
+    FleetAPIProvider,
+    OwnerAPIProvider,
+)
 from TWCManager.Vehicle.Registry.Fields import TELEMETRY_SOURCES
 from TWCManager.Vehicle.Registry.Sources import TeslaAPIReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
@@ -153,7 +157,12 @@ class TeslaAPI:
     def __init__(self, master):
         self.master = master
         self.registry = VehicleRegistry.forMaster(master)
-        self.registry.registerReadSource(TeslaAPIReadSource(self))
+        # One read source per token slot, Owner first: the Fleet source reads
+        # (paid) only when the Owner slot cannot.
+        self.ownerReadSource = TeslaAPIReadSource(self, "owner")
+        self.fleetReadSource = TeslaAPIReadSource(self, "fleet")
+        self.registry.registerReadSource(self.ownerReadSource)
+        self.registry.registerReadSource(self.fleetReadSource)
         # slot.changes when a skipped sync was last logged, per slot.
         self.syncSkipLoggedAt = {"owner": None, "fleet": None}
 
@@ -198,6 +207,9 @@ class TeslaAPI:
 
     def enabled(self) -> bool:
         return self._enabled
+
+    def providers(self):
+        return [OwnerAPIProvider(self), FleetAPIProvider(self)]
 
     def addVehicle(self, json):
         if "vin" in json:
@@ -2337,14 +2349,20 @@ class CarApiVehicle:
         self.ownerCommandsRetired = False
 
     def _bind(self, vehicle, listed=False):
-        # Joins the registry vehicle: the claim follows command access. A
-        # listing attaches this object; a rebind (after a forget) only takes
-        # an empty attachment, so a stale object never displaces a newer one.
+        # Joins the registry vehicle with both claims. The Owner API never
+        # commands; the Fleet claim follows the Fleet slot live, so a token
+        # pasted or synced after the listing manages the car without a
+        # re-list. A listing attaches this object; a rebind (after a forget)
+        # only takes an empty attachment, so a stale object never displaces a
+        # newer one.
         if vehicle is not self._vehicle:
             if listed or vehicle.attachment("TeslaAPI") is None:
                 vehicle.attach("TeslaAPI", self)
             carapi = self.carapi
-            vehicle.claim("TeslaAPI", lambda: not carapi.readOnly, "listed")
+            vehicle.claim("OwnerAPI", False, "listed")
+            vehicle.claim(
+                "FleetAPI", lambda: carapi.fleetSlot.usable("command"), "listed"
+            )
             self._vehicle = vehicle
         return vehicle
 
@@ -2422,7 +2440,7 @@ class CarApiVehicle:
         )
         return False
 
-    def is_awake(self, minInterval=120, telemetryNotBefore=0):
+    def is_awake(self, minInterval=120, telemetryNotBefore=0, slot=None):
         # Free sources only: telemetry, else the vehicle state GET
         # (vehicles/{vin}; not charged on the Fleet API). Never vehicle_data.
         # The newest observation wins: telemetry (any state) is trusted only
@@ -2430,8 +2448,6 @@ class CarApiVehicle:
         # that GET's cached result or GET again.
         # telemetryNotBefore: also ignore telemetry stamped earlier (e.g.
         # before a wake_up we sent; it can't tell us whether the wake worked).
-        # Fresh is the registry's age, so a live feed keeps an old reading
-        # fresh; it still loses to a state GET made after it.
         now = time.time()
         obs, age = self._telemetryState()
         if (
@@ -2447,17 +2463,22 @@ class CarApiVehicle:
         if now - self.lastVehicleAwakeTime < minInterval:
             return self.lastVehicleAwakeState
         result, response = self.get_car_api(
-            str(self.VIN), checkReady=False, provesOnline=False
+            str(self.VIN), checkReady=False, provesOnline=False, slot=slot
         )
         awakeState = result and response.get("state", "") == "online"
         self.lastVehicleAwakeState = awakeState
         self.lastVehicleAwakeTime = now
         return awakeState
 
-    def get_car_api(self, path, checkReady=True, provesOnline=True):
+    def get_car_api(self, path, checkReady=True, provesOnline=True, slot=None):
         # path is relative to the read slot's base URL, e.g. "<VIN>" or
-        # "<VIN>/vehicle_data?endpoints=...".
-        slot = self.carapi.slotFor("read")
+        # "<VIN>/vehicle_data?endpoints=...". slot (a read source's) overrides
+        # slotFor("read").
+        if slot is None:
+            slot = self.carapi.slotFor("read")
+        elif not slot.usable("read"):
+            # Cleared or paused since the source chose it
+            return False, None
         if slot is None:
             # No usable token (car_api_available logs why).
             return False, None
@@ -2594,7 +2615,7 @@ class CarApiVehicle:
         self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
         return True
 
-    def update_vehicle_data(self):
+    def update_vehicle_data(self, slot=None):
         path = (
             str(self.VIN)
             + "/vehicle_data?endpoints="
@@ -2609,7 +2630,7 @@ class CarApiVehicle:
             return True
 
         try:
-            result, response = self.get_car_api(path)
+            result, response = self.get_car_api(path, slot=slot)
         except TypeError:
             logger.error("Got None response from get_car_api()")
             return False

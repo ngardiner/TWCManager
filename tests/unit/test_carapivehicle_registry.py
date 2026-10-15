@@ -158,7 +158,7 @@ def test_writes_after_forget_land_on_the_live_vehicle():
     car.chargeLimit = 80  # the account still lists it: next sighting rejoins
     v = reg.get(VIN)
     assert v is not None and v.latest("chargeLimit").value == 80
-    assert v.attachment("TeslaAPI") is car and "TeslaAPI" in v.claims
+    assert v.attachment("TeslaAPI") is car and "FleetAPI" in v.claims
 
 
 def test_writes_after_forget_and_relist_by_another_provider():
@@ -169,7 +169,7 @@ def test_writes_after_forget_and_relist_by_another_provider():
     fresh = reg.getOrCreate(VIN, "TWC")
     car.chargeLimit = 80
     assert reg.get(VIN) is fresh and fresh.latest("chargeLimit").value == 80
-    assert fresh.attachment("TeslaAPI") is car and "TeslaAPI" in fresh.claims
+    assert fresh.attachment("TeslaAPI") is car and "FleetAPI" in fresh.claims
 
 
 def test_relisting_the_api_attaches_the_new_car():
