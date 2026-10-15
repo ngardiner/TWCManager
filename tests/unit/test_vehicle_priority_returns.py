@@ -148,3 +148,64 @@ def test_home_assistant_update_charge_at_home_returns_true():
     car = Mock()
     ha.carApiVehicles = [car]
     assert ha.updateChargeAtHome() is True and car.refresh_from_home_assistant.call_count == 1
+
+
+# Concern rulings, item 1: Home Assistant reached only because a billed
+# provider failed is held to Fleet's cadence, per car and command
+
+VIN = "5YJ3E1EA1KF000001"
+OTHER = "5YJ3E1EA1KF000009"
+FLEET_CMDS = {c: C.Declaration(C.FLEET_COMMAND) for c in C.COMMANDS}
+HA_CMDS = {c: C.Declaration(C.HA_BILLED) for c in C.COMMANDS}
+
+
+class Clock:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+def _backoff(fleet=True):
+    api = mod(car_api_charge="error", applyChargeLimit="error")
+    ha = mod(car_api_charge="success", applyChargeLimit="success")
+    providers = [P("HomeAssistant", 6, False, ha, caps=HA_CMDS)]
+    if fleet:
+        providers.append(P("FleetAPI", 5, False, api, caps=FLEET_CMDS))
+    m, vp = make({}, *providers)
+    for vin in (VIN, OTHER):
+        m.vehicleRegistry.getOrCreate(vin, "t")
+    vp._clock = clock = Clock()
+    return vp, ha, api, clock
+
+
+def test_ha_after_a_fleet_failure_is_held_to_fleets_cadence():
+    vp, ha, api, clock = _backoff()
+    start = {"charge": True, "vin": VIN}
+    assert vp.car_api_charge(start) == "success"
+    clock.t += 10
+    assert vp.car_api_charge(start) is False                    # Fleet tried, HA held
+    assert (api.car_api_charge.call_count, ha.car_api_charge.call_count) == (4, 1)
+    clock.t += 51
+    assert vp.car_api_charge(start) == "success" and ha.car_api_charge.call_count == 2
+
+
+def test_the_hold_is_per_car_and_per_command():
+    vp, ha, api, clock = _backoff()
+    assert vp.car_api_charge({"charge": True, "vin": VIN}) == "success"
+    assert vp.car_api_charge({"charge": True, "vin": OTHER}) == "success"
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
+    assert vp.applyChargeLimit(limit=80, vin=VIN) == "success"
+    assert (ha.car_api_charge.call_count, ha.applyChargeLimit.call_count) == (3, 1)
+    clock.t += 10
+    assert vp.applyChargeLimit(limit=80, vin=VIN) is False and ha.applyChargeLimit.call_count == 1
+
+
+def test_ha_only_install_keeps_its_own_cadence():
+    vp, ha, api, clock = _backoff(fleet=False)
+    start = {"charge": True, "vin": VIN}
+    for _ in range(3):
+        assert vp.car_api_charge(start) == "success"
+        clock.t += 10
+    assert ha.car_api_charge.call_count == 3
