@@ -69,7 +69,7 @@ Add the following to `config.json` and set `"enabled": true`:
 | `ip` | string | - | IP address of the Gen3 TWC (for vitals readback) |
 | `fuseAmps` | int | `48` | Circuit breaker rating x 0.8, in amps |
 | `phases` | int | `1` | Number of AC phases (`1` for North America, `3` for most of Europe) |
-| `din` | string | - | Optional.  The unit's DIN as the Tesla app lists it, if TWCManager's guess is wrong (see [Which car is connected](#which-car-is-connected)) |
+| `din` | string | - | Optional.  The unit's DIN as Tesla reports it, if TWCManager's guess is wrong (see [Which car is connected](#which-car-is-connected)) |
 
 > **fuseAmps** follows the same 80% derating convention as
 > `wiringMaxAmpsAllTWCs`.  A 60 A breaker -> `"fuseAmps": 48`.
@@ -151,7 +151,7 @@ needs:
 - The unit's DIN.  TWCManager reads it from the unit
   (`http://<ip>/api/1/version`, as `<part_number>--<serial_number>`).  If
   the log shows `no DIN match` for your unit, set its `din` key to the
-  DIN the Tesla app shows.  With only one Gen3 and one Wall Connector on
+  DIN Tesla reports for the unit.  With only one Gen3 and one Wall Connector on
   the account, no DIN is needed.
 
 The cloud lookup has not yet been tested on real hardware.

@@ -224,3 +224,13 @@ def test_a_retried_rising_edge_leaves_no_orphan_anonymous_vehicle():            
         vitals(u, True)                                                       # the retried edge
     assert reg.get("anon:" + u.ID) is None and u.vehicleKey == VIN1
     vitals(u, False); assert u.vehicleKey is None
+
+def test_a_configured_din_skips_the_version_fetch(requests_mock):
+    api, reg, ctl, u = setup(requests_mock)
+    vitals(u, True); assert u._version is None and u.din == DIN
+
+def test_a_provider_without_a_rate_limit_is_asked():
+    p = Mock(); p.name = "X"; p.declarations.return_value = {C.READ_WALL_CONNECTOR_VINS: C.Declaration(C.CLOUD_FREE)}
+    p.wallConnectorVins.return_value = {DIN: VIN}
+    order = Mock(); order.candidates.return_value = [p]
+    assert WallConnectorVinReader(Mock(), order, clock=Clock()).query([]) == {DIN: VIN}
