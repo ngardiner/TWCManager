@@ -1,0 +1,74 @@
+# The vocabulary a provider declares itself in: what it can do, what each
+# operation costs, and how often it may be asked. Nothing here imports the
+# Registry package, so ReadSource can stay import-free of providers.
+from typing import NamedTuple, Optional
+
+# Reads
+READ_LIST = "readList"
+READ_ONLINE = "readOnline"
+READ_CHARGE = "readCharge"
+READ_LOCATION = "readLocation"
+READ_PLUG = "readPlug"
+READ_VIN = "readVin"
+READ_AMPS = "readAmps"
+# An energy-site read: which VIN each Wall Connector on the account reports
+READ_WALL_CONNECTOR_VINS = "wallConnectorVins"
+
+# Commands
+SET_CHARGE_LIMIT = "setChargeLimit"
+START_CHARGING = "startCharging"
+STOP_CHARGING = "stopCharging"
+SET_AMPS = "setAmps"
+WAKE = "wake"
+
+READS = frozenset(
+    {
+        READ_LIST,
+        READ_ONLINE,
+        READ_CHARGE,
+        READ_LOCATION,
+        READ_PLUG,
+        READ_VIN,
+        READ_AMPS,
+        READ_WALL_CONNECTOR_VINS,
+    }
+)
+COMMANDS = frozenset({SET_CHARGE_LIMIT, START_CHARGING, STOP_CHARGING, SET_AMPS, WAKE})
+ALL = READS | COMMANDS
+
+# Cost tiers, cheapest first
+TIER_LOCAL = 0
+TIER_CLOUD_FREE = 1
+TIER_BILLED = 2
+TIER_DISRUPTIVE = 3
+
+
+class Cost(NamedTuple):
+    tier: int
+    price: Optional[float] = None  # USD per operation; None = unknown
+
+
+LOCAL = Cost(TIER_LOCAL, 0.0)
+CLOUD_FREE = Cost(TIER_CLOUD_FREE, 0.0)
+FLEET_COMMAND = Cost(TIER_BILLED, 0.001)
+FLEET_DATA = Cost(TIER_BILLED, 0.002)
+FLEET_WAKE = Cost(TIER_BILLED, 0.02)
+HA_BILLED = Cost(TIER_BILLED, None)
+DISRUPTIVE = Cost(TIER_DISRUPTIVE, 0.0)
+
+
+class RateLimit(NamedTuple):
+    calls: int
+    perSeconds: float
+
+
+# A limitation a provider may declare per vehicle: a stop through this
+# provider also affects other endpoints (Gen3 units on one bus).
+NO_INDIVIDUAL_STOP = "noIndividualStop"
+
+
+class Declaration(NamedTuple):
+    cost: Cost
+    rateLimit: Optional[RateLimit] = None
+    # The provider reports this on its own and cannot be asked (telemetry)
+    passive: bool = False
