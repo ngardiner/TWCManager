@@ -85,12 +85,42 @@ def test_throttled_start_is_not_a_failure(no_http):
 
 
 def test_a_failed_fleet_start_still_falls_to_ha(no_http):
-    # A real failure (Fleet unavailable) keeps the sanctioned fall-through
+    # A real failure (the API in its error backoff) keeps the sanctioned
+    # fall-through
+    from tests.unit.teslatokens import add_home_vehicle
+
     ha = mod(car_api_charge="success")
     api, vp = _fleetThenHa(ha)
-    api.car_api_available = Mock(return_value=False)
+    add_home_vehicle(api)
+    api.updateCarApiLastErrorTime()
+    assert api.car_api_charge({"charge": True}) == "error"
     assert vp.car_api_charge({"charge": True}) == "success"
     assert ha.car_api_charge.call_count == 1
+
+
+def _asleep(api):
+    from tests.unit.teslatokens import add_home_vehicle
+
+    car = add_home_vehicle(api)
+    car.lastAPIAccessTime = 0
+    car.is_awake = Mock(return_value=False)
+    return car
+
+
+def test_the_pre_wake_hold_is_not_a_failure(no_http):
+    # A sleeping car just plugged in: Fleet holds off waking it on purpose
+    # (wakeDelayMins). HA must not start it instead, which would wake it
+    # and bill through HA's Tesla integration
+    ha = mod(car_api_charge="success", applyChargeLimit="success")
+    api, vp = _fleetThenHa(ha)
+    car = _asleep(api)
+    assert api.car_api_charge({"charge": True}) not in (None, False, "error")
+    assert car.firstChargeNeededTime > 0                       # the hold began
+    api.carApiLastStartOrStopChargeTime = 0
+    assert vp.car_api_charge({"charge": True}) and ha.car_api_charge.call_count == 0
+    api.master.getNormalChargeLimit = Mock(return_value=(True, 70, 70))
+    assert vp.applyChargeLimit(limit=80) and ha.applyChargeLimit.call_count == 0
+    assert no_http.call_count == 0
 
 
 def test_update_charge_at_home_ends_at_teslaapi_when_it_holds_cars(no_http):

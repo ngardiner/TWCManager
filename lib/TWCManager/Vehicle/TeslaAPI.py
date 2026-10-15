@@ -800,7 +800,7 @@ class TeslaAPI:
                 logging.INFO8,
                 "car_api_charge return because car_api_available() == False",
             )
-            return "error"
+            return self._unavailableResult()
 
         startOrStop = "start" if charge else "stop"
         result = "success"
@@ -1162,7 +1162,7 @@ class TeslaAPI:
                 logging.INFO8,
                 "applyChargeLimit return because car_api_available() == False",
             )
-            return "error"
+            return self._unavailableResult()
 
         if self.lastChargeLimitApplied != limit:
             if limit != -1:
@@ -1273,6 +1273,21 @@ class TeslaAPI:
         # VehiclePriority reads None as failure and would try the next
         # provider (Home Assistant: a second, billed command)
         return "success"
+
+    def _unavailableResult(self):
+        # car_api_available() is False on a failure (no usable token, no
+        # vehicle list, the error backoff) and also while it holds off waking
+        # a car on purpose (wakeDelayMins, the post-wake wait). A hold is a
+        # skip: "error" would hand the command to the next provider (Home
+        # Assistant, billed), which would wake the car.
+        if (
+            self.slotFor("command") is not None
+            and self.slotFor("read") is not None
+            and self.getVehicleCount() > 0
+            and not self.getCarApiRetryRemaining()
+        ):
+            return "skipped"
+        return "error"
 
     def getCarApiErrorRetryMins(self, vehicle=None):
         errorCount = self.errorCount
