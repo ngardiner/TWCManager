@@ -10,9 +10,8 @@ from tests.unit.test_gen3twc_provider import vitals
 from tests.unit.test_provider_order import fleet
 VIN = "5YJ3E1EA1KF000001"; VIN2 = "5YJ3E1EA1KF000002"
 
-def ep(ID, key=None, local=False, minW=1200, maxW=7680, wants=True, ro=False, occupied=None, amps=0.0, idleMin=None):
+def ep(ID, key=None, local=False, minW=1200, maxW=7680, wants=True, ro=False, occupied=None, amps=0.0):
     e = MagicMock(); e.ID = ID; e.vehicleKey = key; e.isLocal = local; e.minPower = minW; e.maxPower = maxW
-    e.idleMinimum = local if idleMin is None else idleMin                  # a Gen2 TWC by default; Gen3 passes idleMin=False
     e.wantsToCharge = wants; e.isReadOnly = ro; e.occupied = occupied; e.currentAmps = amps; e.currentVoltage = [240, 0, 0]
     e.currentVIN = key if key and not key.startswith("anon:") else ""; e.controllers = ["Gen2TWCs" if local else "VehicleEndpoints"]; return e
 
@@ -83,14 +82,14 @@ def test_fair_share_below_the_point_minimum_is_a_stop_not_a_partial_amount():
     assert got == [0, 4800]                                                              # one is stopped, the other takes the rest; never a partial amount
 
 def test_idle_gen3_units_get_zero_and_two_units_are_two_points():                  # G2 (grouping side)
-    g1 = ep("Gen3TWC-10.0.0.1", "anon:Gen3TWC-10.0.0.1", local=True, wants=True, maxW=11520, idleMin=False)
-    g2 = ep("Gen3TWC-10.0.0.2", None, local=True, wants=False, minW=1440, idleMin=False)
+    g1 = ep("Gen3TWC-10.0.0.1", "anon:Gen3TWC-10.0.0.1", local=True, wants=True, maxW=11520)
+    g2 = ep("Gen3TWC-10.0.0.2", None, local=True, wants=False, minW=1440)
     pts = groupEndpoints(Mock(), [g1, g2]); assert [p.ID for p in pts] == ["Point-anon:Gen3TWC-10.0.0.1", "Point-Gen3TWC-10.0.0.2"]
     distributor(pts, 40).distributeEVSEPower()
     assert g1.setTargetPower.call_args.args[0] == 9600 and g2.setTargetPower.call_args.args[0] == 0
 
 def test_correlated_car_joins_its_gen3_point():
-    g = ep("Gen3TWC-10.0.0.1", VIN, local=True, idleMin=False); car = ep("Vehicle-" + VIN, VIN)
+    g = ep("Gen3TWC-10.0.0.1", VIN, local=True); car = ep("Vehicle-" + VIN, VIN)
     (pt,) = groupEndpoints(Mock(), [g, car]); pt.setTargetPower(2400)
     g.setTargetPower.assert_called_once_with(2400); car.setTargetPower.assert_not_called()
 

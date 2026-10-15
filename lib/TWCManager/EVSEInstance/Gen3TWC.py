@@ -329,9 +329,6 @@ class Gen3TWC(EVSEInstance):
     def isLocal(self) -> bool:
         return True
 
-    # Vitals report vehicle_connected whatever the headroom
-    idleMinimum = False
-
     # ------------------------------------------------------------------
     # EVSEInstance: state
     # ------------------------------------------------------------------
