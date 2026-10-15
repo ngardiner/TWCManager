@@ -131,9 +131,10 @@ class Gen3TWC(EVSEInstance):
         connected = bool(data.get("vehicle_connected", False))
         rising = connected and not self._connected
         falling = self._connected and not connected
-        self._connected = connected
         try:
             self._plugEdges(rising, falling, connected)
+            # Only once the edge is handled: a failure is retried next fetch
+            self._connected = connected
         except Exception as exc:
             logger.warning("Gen3TWC %s: registry update failed: %s", self._ip, exc)
         self.controller.noteVitals(self, rising)
