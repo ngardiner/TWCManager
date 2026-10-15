@@ -1141,7 +1141,7 @@ class TeslaAPI:
                 vehicle.stopTryingToApplyLimit = False
                 vehicle.stopAskingToStartCharging = False
 
-        if needToWake and self.car_api_available(applyLimit=True) is False:
+        if needToWake and self.car_api_available(applyLimit=True, vin=target) is False:
             logger.log(
                 logging.INFO8,
                 "applyChargeLimit return because car_api_available() == False",
