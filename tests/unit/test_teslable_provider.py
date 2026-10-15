@@ -8,12 +8,11 @@ from tests.unit.test_teslable_pairing_status import make, VIN
 def test_provider_is_local_free_and_ready_for_claimed_vins():
     ble, reg, master = make()
     (p,) = ble.providers()
-    assert (p.name, p.local, p.cost(C.SET_AMPS), p.module, p.readSource) == (
+    assert (p.name, p.local, p.cost(C.SET_AMPS), p.module) == (
         "TeslaBLE",
         True,
         C.LOCAL,
         ble,
-        ble.readSource,
     )
     v = reg.getOrCreate(VIN, "t")
     assert p.ready(v, C.SET_AMPS) is False

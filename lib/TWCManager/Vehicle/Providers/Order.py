@@ -52,12 +52,6 @@ class ProviderOrder:
     def _key(self, provider, capability, index) -> tuple:
         return (provider.cost(capability).tier, provider.rank, index)
 
-    def orderKey(self, provider, capability) -> tuple:
-        index = next(
-            (i for i, p in self._indexed() if p is provider), len(self._providers)
-        )
-        return self._key(provider, capability, index)
-
     def ordered(self, capability) -> List[Provider]:
         found = []
         for index, p in self._indexed():

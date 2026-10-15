@@ -40,7 +40,6 @@ class OwnerAPIProvider(Provider):
     def __init__(self, carapi):
         self.carapi = carapi
         self.module = carapi
-        self.readSource = carapi.ownerReadSource
 
     def declarations(self):
         declared = {
@@ -73,7 +72,6 @@ class FleetAPIProvider(Provider):
     def __init__(self, carapi):
         self.carapi = carapi
         self.module = carapi
-        self.readSource = carapi.fleetReadSource
 
     def declarations(self):
         return {

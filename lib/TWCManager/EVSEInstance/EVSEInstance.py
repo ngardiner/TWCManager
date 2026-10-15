@@ -109,9 +109,6 @@ class EVSEInstance(abc.ABC):
         """True when a car is connected, False when none is, None if unknown."""
         return None
 
-    # The provider name that controls this endpoint
-    provider: str = ""
-
     # True when an idle endpoint must be offered its minimum to detect a
     # plug-in
     idleMinimum: bool = False

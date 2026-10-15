@@ -64,8 +64,6 @@ class Gen3TWC(EVSEInstance):
     vitals API.
     """
 
-    provider = "Gen3TWC"
-
     # Seconds within which a car's plug-in observation correlates it
     CORRELATE_WINDOW = 120.0
 
