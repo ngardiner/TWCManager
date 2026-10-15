@@ -70,6 +70,8 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: Don't resend an unchanged Fleet API charge rate, and time out the request after 10s (#694)
     * (@MikeBishop) - Fix: Refresh Owner API tokens with client_id ownerapi at auth.tesla.com, as 1.3.3 does (#687)
     * (@MikeBishop) - Fix: A rejected pasted refresh token keeps the previous tokens, and a 401 on refresh clears the token type (#687)
+    * (@MikeBishop) - Fix: Check for a car coming online after a Fleet API wake_up instead of waking it again 30 minutes later (#699)
+    * (@MikeBishop) - Fix: Stale TeslaMate asleep state no longer stops the free vehicle state check (#699)
 
 ## v1.3.4 - 2026-04-24
 * Features
