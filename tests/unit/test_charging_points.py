@@ -49,8 +49,8 @@ def distributor(points, amps, controllers=("Gen2TWCs", "VehicleEndpoints")):
 def test_stopped_car_stays_one_point():                             # Review Focus 5 / A18
     twc = ep("Gen2TWC-8244", VIN, local=True, wants=False); car = ep("Vehicle-" + VIN, VIN, wants=True)
     pts = groupEndpoints(Mock(), [twc, car]); assert len(pts) == 1
-    distributor(pts, 40).distributeEVSEPower()                                       # the TWC reports no demand: its idle minimum (M1)
-    twc.setTargetPower.assert_called_once_with(1200); car.setTargetPower.assert_not_called()
+    distributor(pts, 40).distributeEVSEPower()                                       # the TWC reports no demand: its idle offer (M1): 0, which the TWC treats as its minimum
+    twc.setTargetPower.assert_called_once_with(0); car.setTargetPower.assert_not_called()
 
 def test_the_twc_decides_whether_its_point_wants_power():                          # final review M1
     # A stale registry "Charging" must not outweigh a TWC reporting no demand
@@ -58,21 +58,29 @@ def test_the_twc_decides_whether_its_point_wants_power():                       
     busy = ep("Gen2TWC-8245", VIN2, local=True, wants=True); car2 = ep("Vehicle-" + VIN2, VIN2, wants=True)
     pts = groupEndpoints(Mock(), [finished, stale, busy, car2])
     assert [p.wantsToCharge for p in pts] == [False, True]
-    distributor(pts, 40).distributeEVSEPower()                                       # 9600 W: 7680 to the charging car, the idle minimum to the finished one
-    assert busy.setTargetPower.call_args.args[0] == 7680 and finished.setTargetPower.call_args.args[0] == 1440
+    distributor(pts, 40).distributeEVSEPower()                                       # 9600 W: 7680 to the charging car, the idle offer (0) to the finished one
+    assert busy.setTargetPower.call_args.args[0] == 7680 and finished.setTargetPower.call_args.args[0] == 0
     stale.setTargetPower.assert_not_called()
     assert ChargingPoint(Mock(), VIN, [ep("c", VIN, wants=True)]).wantsToCharge is True     # no local member: the car decides
 
-def test_idle_twc_keeps_its_minimum_when_budget_allows():
+def test_idle_point_target_is_zero_and_never_counted_against_the_budget():
+    # A Gen2 TWC treats an offer of 0 as its hardware minimum, so an idle point's target is 0
+    # and neither gates on nor takes from the budget
     busy = ep("Vehicle-" + VIN, VIN, maxW=4800); idle = ep("Gen2TWC-8245", None, local=True, wants=False, minW=1440)
-    distributor(groupEndpoints(Mock(), [busy, idle]), 40).distributeEVSEPower()           # 9600 W: 4800 to the car, 1440 to the idle TWC
-    assert busy.setTargetPower.call_args.args[0] == 4800 and idle.setTargetPower.call_args.args[0] == 1440
-    busy2 = ep("Vehicle-" + VIN, VIN, maxW=4800); idle2 = ep("Gen2TWC-8245", None, local=True, wants=False, minW=1440)
-    distributor(groupEndpoints(Mock(), [busy2, idle2]), 20).distributeEVSEPower()          # 4800 W: nothing left for the idle TWC
-    assert idle2.setTargetPower.call_args.args[0] == 0
+    distributor(groupEndpoints(Mock(), [busy, idle]), 40).distributeEVSEPower()           # 9600 W: 4800 to the car
+    assert busy.setTargetPower.call_args.args[0] == 4800 and idle.setTargetPower.call_args.args[0] == 0
+    busy2 = ep("Vehicle-" + VIN, VIN, maxW=9600); idle2 = ep("Gen2TWC-8245", None, local=True, wants=False, minW=1440)
+    distributor(groupEndpoints(Mock(), [busy2, idle2]), 40).distributeEVSEPower()          # the car takes the whole 9600 W budget
+    assert busy2.setTargetPower.call_args.args[0] == 9600 and idle2.setTargetPower.call_args.args[0] == 0
     idle3 = ep("Gen2TWC-8245", None, local=True, wants=False, minW=1440); remote = ep("Vehicle-x", "X", wants=False)
-    distributor(groupEndpoints(Mock(), [idle3, remote]), 40).distributeEVSEPower()         # nobody wants power: idle TWC still gets its minimum
-    assert idle3.setTargetPower.call_args.args[0] == 1440 and remote.setTargetPower.call_args.args[0] == 0
+    distributor(groupEndpoints(Mock(), [idle3, remote]), 40).distributeEVSEPower()
+    assert idle3.setTargetPower.call_args.args[0] == 0 and remote.setTargetPower.call_args.args[0] == 0
+
+def test_fair_share_below_the_point_minimum_is_a_stop_not_a_partial_amount():
+    a = ep("Vehicle-" + VIN, VIN, minW=2880, maxW=7680); b = ep("Vehicle-" + VIN2, VIN2, minW=2880, maxW=7680)
+    distributor(groupEndpoints(Mock(), [a, b]), 20).distributeEVSEPower()                  # 4800 W: 2400 W each, under the 2880 W floor
+    got = sorted([a.setTargetPower.call_args.args[0], b.setTargetPower.call_args.args[0]])
+    assert got == [0, 4800]                                                              # one is stopped, the other takes the rest; never a partial amount
 
 def test_idle_gen3_units_get_zero_and_two_units_are_two_points():                  # G2 (grouping side)
     g1 = ep("Gen3TWC-10.0.0.1", "anon:Gen3TWC-10.0.0.1", local=True, wants=True, maxW=11520, idleMin=False)
@@ -141,8 +149,8 @@ def test_stopped_car_and_its_endpoint_form_one_point_with_the_twc_minimum():    
     assert pt.ID == "Point-" + VIN and [e.ID for e in pt.endpoints] == ["Gen2TWC-8244", "Vehicle-" + VIN]
     assert pt.minPower == s.minPower == 6 * 240
     m.distributeEVSEPower()
-    # The TWC decides (M1): reporting no demand, it gets its idle minimum...
-    assert s._evseTargetAmps == 6 and setAmps(m) == []
+    # The TWC decides (M1): reporting no demand, it gets its idle offer, 0 (the TWC's hardware minimum)...
+    assert s._evseTargetAmps == 0 and setAmps(m) == []
     s.reportedAmpsActual = 5.5                                                   # ...the paused car takes it...
     m.distributeEVSEPower()
     assert s._evseTargetAmps == 32 and setAmps(m) == []                         # ...and the full share follows
@@ -174,11 +182,11 @@ def test_twc_point_sets_the_twc_target_and_never_the_endpoint():                
     m.distributeEVSEPower(); assert s._evseTargetAmps == 20                     # water-fill
     s.reportedAmpsMax = 0
     m.vehicleRegistry.get(VIN).observe("chargingState", "Complete", "TeslaAPI")
-    m.distributeEVSEPower(); assert s._evseTargetAmps == 6                      # nobody wants power: idle TWC keeps its minimum
+    m.distributeEVSEPower(); assert s._evseTargetAmps == 0                      # nobody wants power: the idle offer
     car(m, VIN2, "Charging"); budget(m, 32)
     m.distributeEVSEPower(); assert s._evseTargetAmps == 0                      # zero-out: VIN2 takes all 32 A
     budget(m, 40)
-    m.distributeEVSEPower(); assert s._evseTargetAmps == 6                      # zero-out loop with room: the minimum
+    m.distributeEVSEPower(); assert s._evseTargetAmps == 0                      # zero-out loop with room: the idle offer
     e.setTargetPower.assert_not_called()
     assert [a["vin"] for a in setAmps(m)] == [VIN2]
 
@@ -201,7 +209,7 @@ def test_gen2_at_00_with_a_sleeping_car_is_two_points_as_before_task_10():      
     m = real(); s = m.newSlave(b"\x82\x44", 80); car(m, VIN, "Stopped"); budget(m, 40)
     assert s.vehicleKey is None and [p.ID for p in m.chargingPoints()] == ["Point-Gen2TWC-8244", "Point-" + VIN]
     m.distributeEVSEPower()
-    assert [a["vin"] for a in setAmps(m)] == [VIN] and s._evseTargetAmps == 6
+    assert [a["vin"] for a in setAmps(m)] == [VIN] and s._evseTargetAmps == 0
 
 # Fix round 1 (review I1): a stale Gen2 lastVIN must not put two TWCs in one point
 
