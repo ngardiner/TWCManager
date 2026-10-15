@@ -121,3 +121,8 @@ def test_debug_command_goes_through_the_order():
     assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 0}') is True and f.calls[-1] == ("setAmps", VIN, 1)
     assert o.debugCommand("wakeVehicle", VIN, "not json") is True and f.calls[-1] == ("wake", VIN)
     assert o.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}") is False and o.debugCommand("honk", VIN, "{}") is False
+
+@pytest.mark.parametrize("params", ['{"charge_rate": "inf"}', '{"charge_rate": 1e999}', '{"charge_rate": "-inf"}'])
+def test_debug_command_refuses_an_infinite_rate(params):
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); f = fleet(); o = order(m, f)
+    assert o.debugCommand("setChargeRate", VIN, params) is False and f.calls == []
