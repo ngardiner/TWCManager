@@ -9,7 +9,7 @@ import secrets
 import ssl
 from threading import RLock
 import time
-from typing import Any
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -61,6 +61,10 @@ class TLS13Adapter(HTTPAdapter):
 class TeslaAPI:
     # A charge rate the car accepted is not resent for this long (seconds).
     CHARGE_RATE_RESEND_AFTER = 600
+    # The energy-site list (/products) is fetched at most this often (seconds)
+    ENERGY_SITES_TTL = 3600
+    # Seconds a free energy-site request may take (background thread)
+    ENERGY_TIMEOUT = 10
     regionURL = {
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
@@ -165,6 +169,17 @@ class TeslaAPI:
         self.registry.registerReadSource(self.fleetReadSource)
         # slot.changes when a skipped sync was last logged, per slot.
         self.syncSkipLoggedAt = {"owner": None, "fleet": None}
+        # Energy-site state per slot kind, for the Wall Connector VIN read.
+        # (slot.changes, time, sites) of the last good /products answer
+        self._energySites = {}
+        # time.time() when the slot's sites were found to hold no Wall
+        # Connector; ready again after ENERGY_SITES_TTL
+        self._energySitesEmpty = {}
+        # Site IDs whose live_status had no wall_connectors key, until the
+        # site list is fetched again
+        self._wallConnectorSitesDropped = {}
+        # slot.changes when the slot's token was refused energy data
+        self._wallConnectorsRefused = {}
 
         try:
             self.config = master.config
@@ -1371,6 +1386,160 @@ class TeslaAPI:
         if slot.tokenType == "owner":
             return slot.baseURL[: -len("vehicles")] + "products"
         return slot.baseURL
+
+    # Energy sites and the Wall Connector VINs. Only the free /products and
+    # /energy_sites/<id>/live_status are ever requested here: never a vehicle
+    # endpoint, vehicle_data, a wake or a command. Background thread only.
+    # Unverified on hardware: that live_status lists wall_connectors, each
+    # with a din and, while a car is connected, its vin (tesla-fleet-api npm
+    # types), and whether the Owner API serves live_status at all (a refusal
+    # falls to the Fleet slot).
+
+    def _energyURL(self, slot, path):
+        # The API root under the slot's vehicles URL, as vehicleListURL
+        return slot.baseURL[: -len("vehicles")] + path
+
+    def _energyGet(self, slot, path):
+        # (status code, parsed body or None); a transport error raises
+        req = requests.get(
+            self._energyURL(slot, path),
+            headers={
+                "accept": "application/json",
+                "Authorization": "Bearer " + slot.accessToken,
+            },
+            verify=slot.verifyCert,
+            timeout=self.ENERGY_TIMEOUT,
+        )
+        try:
+            body = req.json()
+        except ValueError:
+            body = None
+        return req.status_code, body
+
+    # Answers that latch the Wall Connector read off for a slot until its
+    # token changes, as the vehicle reads treat 403/410/412
+    ENERGY_REFUSALS = (401, 403, 410, 412)
+
+    def _energyRefused(self, slot, status, liveStatus=False):
+        # A 404 from live_status on the Owner API is taken as the Owner API
+        # not serving it (unverified), so the Fleet slot is asked instead
+        return status in self.ENERGY_REFUSALS or (
+            liveStatus and status == 404 and slot.kind == "owner"
+        )
+
+    def _refuseWallConnectors(self, slot, status):
+        if status == 403:
+            # Only a 403 says the scope is missing; a 401 is authentication
+            slot.reportScopeRefused("energy", refused=True)
+        self._wallConnectorsRefused[slot.kind] = slot.changes
+        logger.info(
+            "Wall Connector VINs: %s token refused energy data (HTTP %d); not "
+            "asking again until the token changes" % (slot.kind, status)
+        )
+
+    def _fetchEnergySites(self, slot) -> Optional[List[dict]]:
+        # The slot's energy sites, cached for ENERGY_SITES_TTL; None when
+        # they could not be read. Never raises.
+        now = time.time()
+        cached = self._energySites.get(slot.kind)
+        if (
+            cached is not None
+            and cached[0] == slot.changes
+            and now - cached[1] < self.ENERGY_SITES_TTL
+        ):
+            return cached[2]
+        try:
+            status, body = self._energyGet(slot, "products")
+        except requests.exceptions.RequestException as e:
+            logger.debug("Energy sites: %s", type(e).__name__)
+            return None
+        if self._energyRefused(slot, status):
+            self._refuseWallConnectors(slot, status)
+            return None
+        if status != 200:
+            return None
+        try:
+            sites = [
+                entry
+                for entry in body["response"]
+                if isinstance(entry, dict) and "energy_site_id" in entry
+            ]
+        except (KeyError, TypeError):
+            return None
+        self._energySites[slot.kind] = (slot.changes, now, sites)
+        self._wallConnectorSitesDropped[slot.kind] = set()
+        return sites
+
+    def energySites(self, slot=None) -> List[dict]:
+        # The /products entries with an energy_site_id; [] on failure
+        slot = slot or self.slotFor("energy")
+        if slot is None:
+            return []
+        sites = self._fetchEnergySites(slot)
+        return [] if sites is None else list(sites)
+
+    def wallConnectorVinsReady(self, slot) -> bool:
+        # Cache reads only, no I/O (a provider's ready() asks this). The
+        # scope is checked first: usable() would log a missing one, and this
+        # is asked of every token whether or not a Gen3 is configured.
+        if slot is None or not slot.grants("energy") or not slot.usable("energy"):
+            return False
+        if self._wallConnectorsRefused.get(slot.kind) == slot.changes:
+            return False
+        emptyAt = self._energySitesEmpty.get(slot.kind)
+        return emptyAt is None or time.time() - emptyAt >= self.ENERGY_SITES_TTL
+
+    def wallConnectorVins(self, slot) -> Optional[Dict[str, str]]:
+        # {din: vin} over every energy site's live_status wall_connectors
+        # that report a vin. None when nothing could be read or the token
+        # was refused. Never raises.
+        if slot is None:
+            return None
+        self.refreshTokenIfNeeded()
+        sites = self._fetchEnergySites(slot)
+        if sites is None:
+            return None
+        dropped = self._wallConnectorSitesDropped.setdefault(slot.kind, set())
+        siteIDs = [s["energy_site_id"] for s in sites]
+        siteIDs = [i for i in siteIDs if i not in dropped]
+        if not siteIDs:
+            self._energySitesEmpty[slot.kind] = time.time()
+            return {}
+        self._energySitesEmpty.pop(slot.kind, None)
+        vins = {}
+        answered = False
+        for siteID in siteIDs:
+            try:
+                status, body = self._energyGet(
+                    slot, "energy_sites/%s/live_status" % siteID
+                )
+            except requests.exceptions.RequestException as e:
+                logger.debug("Wall Connector VINs: %s", type(e).__name__)
+                continue
+            if self._energyRefused(slot, status, liveStatus=True):
+                self._refuseWallConnectors(slot, status)
+                return None
+            if status != 200:
+                continue
+            response = body.get("response") if isinstance(body, dict) else None
+            if not isinstance(response, dict):
+                continue
+            answered = True
+            connectors = response.get("wall_connectors")
+            if connectors is None:
+                # No Wall Connector at this site (a Powerwall alone)
+                dropped.add(siteID)
+                continue
+            for wc in connectors if isinstance(connectors, list) else []:
+                if not isinstance(wc, dict):
+                    continue
+                din, vin = wc.get("din"), wc.get("vin")
+                if isinstance(din, str) and din and isinstance(vin, str) and vin:
+                    vins[din] = vin
+        if all(i in dropped for i in siteIDs):
+            # No site has a Wall Connector: not ready until the list is due
+            self._energySitesEmpty[slot.kind] = time.time()
+        return vins if answered else None
 
     def getCarApiRetryRemaining(self, vehicle=None):
         # Calculate the amount of time remaining until the API can be queried
