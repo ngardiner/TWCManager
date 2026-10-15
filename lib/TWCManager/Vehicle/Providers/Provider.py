@@ -16,6 +16,10 @@ class Provider:
     module = None
     # A ReadSource, or None
     readSource = None
+    # The registry attachment holding the legacy module's own vehicle
+    # object, when that module takes its own type (HomeAssistant's HaVehicle)
+    # rather than the TeslaAPI vehicle the callers pass; None to pass through
+    vehicleAttachment = None
 
     # The vin argument of the command methods is the vehicle's registry key: a
     # VIN, or an anon:... key that only local providers can serve.
@@ -48,7 +52,7 @@ class Provider:
         raise NotImplementedError
 
     def attempts(self) -> int:
-        # Today's BLE 3 / API 2
+        # Today's BLE 3 / API 2 (VehiclePriority's priority 20 / 10)
         return 3 if self.local else 2
 
     def limitations(self, vehicle) -> FrozenSet[str]:

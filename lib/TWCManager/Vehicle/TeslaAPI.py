@@ -236,32 +236,6 @@ class TeslaAPI:
                 return
             self.carApiVehicles.append(car)
 
-    def apiDebugInterface(self, command, vin, parameters):
-        # Provides an interface from the Web UI to allow commands to be run interactively
-
-        vehicle = self.getVehicleByVIN(vin)
-        if not vehicle:
-            return False
-
-        # Get parameters
-        params = {}
-        try:
-            params = json.loads(parameters)
-        except json.decoder.JSONDecodeError:
-            pass
-
-        # Execute specified command
-        if command == "setChargeRate":
-            charge_rate = params.get("charge_rate", 0)
-            self.setChargeRate(charge_rate, vehicle)
-            return True
-        elif command == "wakeVehicle":
-            self.wakeVehicle(vehicle)
-            return True
-
-        # If we make it here, we did not execute a command
-        return False
-
     def refreshTokenTypeKnown(self, token):
         # True when the refresh token's type can be told from the token
         # itself: only an Owner API refresh token (a JWT) is recognisable.
@@ -2518,17 +2492,19 @@ class CarApiVehicle:
         self.ownerCommandsRetired = False
 
     def _bind(self, vehicle, listed=False):
-        # Joins the registry vehicle with both claims. The Owner API never
-        # commands; the Fleet claim follows the Fleet slot live, so a token
-        # pasted or synced after the listing manages the car without a
-        # re-list. A listing attaches this object; a rebind (after a forget)
+        # Joins the registry vehicle with both claims. The Owner claim
+        # follows this car's command_signing and the Fleet claim the Fleet
+        # slot, live, so a token pasted or synced after the listing manages
+        # the car without a re-list. A listing attaches this object; a rebind (after a forget)
         # only takes an empty attachment, so a stale object never displaces a
         # newer one.
         if vehicle is not self._vehicle:
             if listed or vehicle.attachment("TeslaAPI") is None:
                 vehicle.attach("TeslaAPI", self)
             carapi = self.carapi
-            vehicle.claim("OwnerAPI", False, "listed")
+            vehicle.claim(
+                "OwnerAPI", lambda: carapi.ownerCommandsAllowed(self), "listed"
+            )
             vehicle.claim(
                 "FleetAPI", lambda: carapi.fleetSlot.usable("command"), "listed"
             )

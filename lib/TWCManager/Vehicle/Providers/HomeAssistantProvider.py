@@ -29,6 +29,7 @@ class HomeAssistantProvider(Provider):
     name = "HomeAssistant"
     rank = 6
     local = False
+    vehicleAttachment = "HomeAssistant"
 
     def __init__(self, ha):
         self.ha = ha
@@ -41,6 +42,15 @@ class HomeAssistantProvider(Provider):
 
     def declarations(self):
         return {capability: Declaration(HA_BILLED) for capability in CAPABILITIES}
+
+    def attempts(self) -> int:
+        # HomeAssistant had no VehiclePriority priority: one call, as when it
+        # was the command module itself
+        return 1
+
+    def available(self, capability) -> bool:
+        # A disabled module gets no broadcast, as getModuleByName skipped it
+        return bool(self.ha.enabled())
 
     def ready(self, vehicle, capability) -> bool:
         # Entity flags only: no I/O

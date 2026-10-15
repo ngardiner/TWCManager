@@ -1,629 +1,259 @@
-"""
-Unit tests for TWCManager Vehicle Priority module.
-
-Tests vehicle module priority selection and fallback logic.
-"""
-
-import pytest
-from unittest.mock import Mock, MagicMock, patch
-
-
-class TestVehiclePriorityInitialization:
-    """Test VehiclePriority initialization."""
-
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
-        return master
-
-    def test_vehicle_priority_initialization(self, mock_master):
-        """Test VehiclePriority initializes correctly."""
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        priority = VehiclePriority(mock_master)
-
-        assert priority.master == mock_master
-
-    def test_update_settings_returns_true(self, mock_master):
-        """Test updateSettings returns True."""
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        priority = VehiclePriority(mock_master)
-        result = priority.updateSettings()
-
-        assert result is True
-
-
-class TestRetryCalculation:
-    """Test retry calculation logic."""
-
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
-        return master
-
-    @pytest.fixture
-    def priority(self, mock_master):
-        """Create a VehiclePriority instance."""
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        return VehiclePriority(mock_master)
-
-    def test_calculate_retries_priority_20(self, priority):
-        """Test retry calculation for priority 20."""
-        retries = priority._calculate_retries(20)
-
-        assert retries == 2
-
-    def test_calculate_retries_priority_10(self, priority):
-        """Test retry calculation for priority 10."""
-        retries = priority._calculate_retries(10)
-
-        assert retries == 1
-
-    def test_calculate_retries_priority_5(self, priority):
-        """Test retry calculation for priority 5."""
-        retries = priority._calculate_retries(5)
-
-        assert retries == 0
-
-    def test_calculate_retries_priority_0(self, priority):
-        """Test retry calculation for priority 0."""
-        retries = priority._calculate_retries(0)
-
-        assert retries == 0
-
-    def test_calculate_retries_priority_30(self, priority):
-        """Test retry calculation for priority 30."""
-        retries = priority._calculate_retries(30)
-
-        assert retries == 3
-
-    def test_calculate_retries_priority_100(self, priority):
-        """Test retry calculation for priority 100."""
-        retries = priority._calculate_retries(100)
-
-        assert retries == 10
-
-
-class TestMethodDelegation:
-    """Test method delegation to vehicle modules."""
-
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
-        return master
-
-    @pytest.fixture
-    def priority(self, mock_master):
-        """Create a VehiclePriority instance."""
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        return VehiclePriority(mock_master)
-
-    def test_method_delegation_success(self, priority):
-        """Test successful method delegation."""
-        module = Mock()
-        module.test_method = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        result = priority.test_method()
-
-        assert result is True
-        module.test_method.assert_called_once()
-
-    def test_method_delegation_failure_fallback(self, priority):
-        """Test method delegation with fallback on failure."""
-        module1 = Mock()
-        module1.test_method = Mock(return_value=False)
-
-        module2 = Mock()
-        module2.test_method = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[
-                ("Module1", module1, 20),
-                ("Module2", module2, 10),
-                (None, None, 0),
-            ]
-        )
-
-        result = priority.test_method()
-
-        assert result is True
-        # Module1 at priority 20 gets 3 attempts (2 retries) before fallback
-        assert module1.test_method.call_count == 3
-        module2.test_method.assert_called_once()
-
-    def test_method_delegation_no_module(self, priority):
-        """Test method delegation when no module available."""
-        priority.master.getModuleByPriority = Mock(return_value=(None, None, 0))
-
-        result = priority.test_method()
-
-        assert result is False
-
-    def test_method_delegation_module_missing_method(self, priority):
-        """Test method delegation when module doesn't have method."""
-        module = Mock(spec=[])  # Empty spec means no methods
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        result = priority.test_method()
-
-        assert result is False
-
-
-class TestRetryLogic:
-    """Test retry logic for failed attempts."""
-
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
-        return master
-
-    @pytest.fixture
-    def priority(self, mock_master):
-        """Create a VehiclePriority instance."""
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        return VehiclePriority(mock_master)
-
-    def test_retry_on_failure(self, priority):
-        """Test that failed attempts are retried."""
-        module = Mock()
-        module.test_method = Mock(side_effect=[False, False, True])
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        result = priority.test_method()
-
-        assert result is True
-        assert module.test_method.call_count == 3
-
-    def test_exception_handling_with_retry(self, priority):
-        """Test that exceptions trigger retries."""
-        module = Mock()
-        module.test_method = Mock(
-            side_effect=[Exception("Test error"), Exception("Test error"), True]
-        )
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        result = priority.test_method()
-
-        assert result is True
-        assert module.test_method.call_count == 3
-
-
-class TestStatisticsTracking:
-    """Test statistics tracking for module success/failure."""
-
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
-        return master
-
-    @pytest.fixture
-    def priority(self, mock_master):
-        """Create a VehiclePriority instance."""
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        return VehiclePriority(mock_master)
-
-    def test_success_statistics_tracked(self, priority):
-        """Test that successful calls are tracked."""
-        module = Mock()
-        module.test_method = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        priority.test_method()
-
-        assert priority.master.stats["moduleSuccess"]["TestModule"] == 1
-
-    def test_failure_statistics_tracked(self, priority):
-        """Test that failed calls are tracked."""
-        module = Mock()
-        module.test_method = Mock(return_value=False)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        priority.test_method()
-
-        assert priority.master.stats["moduleFailures"]["TestModule"] == 1
-
-    def test_multiple_successes_tracked(self, priority):
-        """Test that multiple successes are accumulated."""
-        module = Mock()
-        module.test_method = Mock(return_value=True)
-
-        # Each call to priority.test_method() consumes one getModuleByPriority
-        # entry (success returns immediately; the None sentinel is never reached)
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[
-                ("TestModule", module, 20),
-                ("TestModule", module, 20),
-            ]
-        )
-
-        priority.test_method()
-        priority.test_method()
-
-        assert priority.master.stats["moduleSuccess"]["TestModule"] == 2
-
-
-class TestPriorityOrdering:
-    """Test that modules are tried in priority order."""
-
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
-        return master
-
-    @pytest.fixture
-    def priority(self, mock_master):
-        """Create a VehiclePriority instance."""
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        return VehiclePriority(mock_master)
-
-    def test_higher_priority_tried_first(self, priority):
-        """Test that higher priority modules are tried first."""
-        call_order = []
-
-        module_high = Mock()
-        module_high.test_method = Mock(
-            side_effect=lambda *a, **kw: call_order.append("high") or False
-        )
-
-        module_low = Mock()
-        module_low.test_method = Mock(
-            side_effect=lambda *a, **kw: call_order.append("low") or True
-        )
-
-        # Use priority 5 (0 retries) so each module is attempted exactly once
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[
-                ("HighPriority", module_high, 5),
-                ("LowPriority", module_low, 5),
-                (None, None, 0),
-            ]
-        )
-
-        result = priority.test_method()
-
-        assert result is True
-        assert call_order == ["high", "low"]
-
-
-class TestMethodArguments:
-    """Test that method arguments are passed correctly."""
-
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
-        return master
-
-    @pytest.fixture
-    def priority(self, mock_master):
-        """Create a VehiclePriority instance."""
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        return VehiclePriority(mock_master)
-
-    def test_positional_arguments_passed(self, priority):
-        """Test that positional arguments are passed to module."""
-        module = Mock()
-        module.test_method = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        priority.test_method("arg1", "arg2")
-
-        module.test_method.assert_called_with("arg1", "arg2")
-
-    def test_keyword_arguments_passed(self, priority):
-        """Test that keyword arguments are passed to module."""
-        module = Mock()
-        module.test_method = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        priority.test_method(key1="value1", key2="value2")
-
-        module.test_method.assert_called_with(key1="value1", key2="value2")
-
-    def test_mixed_arguments_passed(self, priority):
-        """Test that mixed arguments are passed to module."""
-        module = Mock()
-        module.test_method = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[("TestModule", module, 20), (None, None, 0)]
-        )
-
-        priority.test_method("arg1", key1="value1")
-
-        module.test_method.assert_called_with("arg1", key1="value1")
-
-
-class TestBLENotLoaded:
-    """Backwards compatibility: VehiclePriority with only TeslaAPI (no BLE)."""
-
-    @pytest.fixture
-    def mock_master(self):
-        master = Mock()
-        master.stats = {
-            "moduleSuccess": {},
-            "moduleFailures": {},
-            "moduleDispatch": {},
-        }
-        return master
-
-    @pytest.fixture
-    def priority(self, mock_master):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        return VehiclePriority(mock_master)
-
-    def test_car_api_charge_only_api_loaded(self, priority):
-        """car_api_charge succeeds when only TeslaAPI is loaded (no BLE)."""
-        tesla_api = Mock()
-        tesla_api.car_api_charge = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[
-                ("TeslaAPI", tesla_api, 10),
-                (None, None, 0),
-            ]
-        )
-
-        task = {"cmd": "charge", "charge": True}
-        result = priority.car_api_charge(task)
-
-        assert result is True
-        tesla_api.car_api_charge.assert_called_once_with(task)
-
-    def test_car_api_charge_task_dict_passed_through(self, priority):
-        """Task dict is forwarded intact to TeslaAPI when BLE is absent."""
-        tesla_api = Mock()
-        tesla_api.car_api_charge = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[
-                ("TeslaAPI", tesla_api, 10),
-                (None, None, 0),
-            ]
-        )
-
-        task = {"cmd": "charge", "charge": False, "vin": "5YJ3E1EA1KF000001"}
-        priority.car_api_charge(task)
-
-        tesla_api.car_api_charge.assert_called_once_with(task)
-
-    def test_car_api_charge_no_modules_loaded(self, priority):
-        """car_api_charge returns False when no vehicle modules are loaded."""
-        priority.master.getModuleByPriority = Mock(return_value=(None, None, 0))
-
-        task = {"cmd": "charge", "charge": True}
-        result = priority.car_api_charge(task)
-
-        assert result is False
-
-    def test_ble_tried_before_api_when_both_loaded(self, priority):
-        """When BLE and TeslaAPI are both loaded, BLE is tried first."""
-        ble_module = Mock()
-        ble_module.car_api_charge = Mock(return_value=False)
-
-        tesla_api = Mock()
-        tesla_api.car_api_charge = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[
-                ("TeslaBLE", ble_module, 20),
-                ("TeslaAPI", tesla_api, 10),
-                (None, None, 0),
-            ]
-        )
-
-        task = {"cmd": "charge", "charge": True}
-        result = priority.car_api_charge(task)
-
-        # BLE at priority 20 gets 3 attempts before fallback (priority // 10 = 2 retries)
-        assert result is True
-        assert ble_module.car_api_charge.call_count == 3
-        tesla_api.car_api_charge.assert_called_once_with(task)
-
-    def test_ble_success_does_not_call_api(self, priority):
-        """When BLE succeeds, TeslaAPI is not called."""
-        ble_module = Mock()
-        ble_module.car_api_charge = Mock(return_value=True)
-
-        tesla_api = Mock()
-        tesla_api.car_api_charge = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[
-                ("TeslaBLE", ble_module, 20),
-                (None, None, 0),
-            ]
-        )
-
-        task = {"cmd": "charge", "charge": True}
-        priority.car_api_charge(task)
-
-        ble_module.car_api_charge.assert_called_once()
-        tesla_api.car_api_charge.assert_not_called()
-
-    def test_stop_charge_only_api_loaded(self, priority):
-        """Stop-charge command works when only TeslaAPI is loaded."""
-        tesla_api = Mock()
-        tesla_api.car_api_charge = Mock(return_value=True)
-
-        priority.master.getModuleByPriority = Mock(
-            side_effect=[
-                ("TeslaAPI", tesla_api, 10),
-                (None, None, 0),
-            ]
-        )
-
-        task = {"cmd": "charge", "charge": False}
-        result = priority.car_api_charge(task)
-
-        assert result is True
-        tesla_api.car_api_charge.assert_called_once_with(task)
-
-
-class TestCommandPolicy:
-    """Test commandPolicy restrictions on state-changing methods."""
-
-    def make_master(self, policy=None, configPolicy=None):
-        master = Mock()
-        master.stats = {
-            "moduleSuccess": {},
-            "moduleFailures": {},
-            "moduleDispatch": {},
-        }
-        master.config = (
-            {"vehicle": {"commandPolicy": configPolicy}} if configPolicy else {}
-        )
-        master.settings = {"commandPolicy": policy} if policy else {}
-        return master
-
-    def make_modules(self, master, ble_result=False, api_result=True):
-        ble = Mock()
-        ble.startCharging = Mock(return_value=ble_result)
-        ble.updateChargeAtHome = Mock(return_value=ble_result)
-        api = Mock()
-        api.startCharging = Mock(return_value=api_result)
-        api.updateChargeAtHome = Mock(return_value=api_result)
-        master.getModuleByPriority = Mock(
-            side_effect=[
-                ("TeslaBLE", ble, 20),
-                ("TeslaAPI", api, 10),
-                ("", None, 0),
-            ]
-        )
-        return ble, api
-
-    def test_default_policy_is_prefer_ble(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        priority = VehiclePriority(self.make_master())
-        assert priority.commandPolicy == "prefer_ble"
-
-    def test_invalid_policy_falls_back_to_prefer_ble(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        priority = VehiclePriority(self.make_master("banana"))
-        assert priority.commandPolicy == "prefer_ble"
-
-    def test_policy_from_settings(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        priority = VehiclePriority(self.make_master("ble_only"))
-        assert priority.commandPolicy == "ble_only"
-        assert priority.commandPolicyOverridden is False
-
-    def test_settings_change_applies_at_runtime(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        master = self.make_master("prefer_ble")
-        priority = VehiclePriority(master)
-        assert priority.commandPolicy == "prefer_ble"
-
-        master.settings["commandPolicy"] = "ble_only"
-        assert priority.commandPolicy == "ble_only"
-
-    def test_config_overrides_settings(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        priority = VehiclePriority(
-            self.make_master(policy="ble_only", configPolicy="api_only")
-        )
-        assert priority.commandPolicy == "api_only"
-        assert priority.commandPolicyOverridden is True
-
-    def test_invalid_config_override_is_ignored(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        priority = VehiclePriority(
-            self.make_master(policy="ble_only", configPolicy="banana")
-        )
-        assert priority.commandPolicy == "ble_only"
-        assert priority.commandPolicyOverridden is False
-
-    def test_prefer_ble_falls_back_to_api_on_command(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        master = self.make_master("prefer_ble")
-        ble, api = self.make_modules(master, ble_result=False, api_result=True)
-        priority = VehiclePriority(master)
-
-        assert priority.startCharging("VIN123") is True
-        assert ble.startCharging.called
-        assert api.startCharging.called
-
-    def test_ble_only_blocks_api_for_commands(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        master = self.make_master("ble_only")
-        ble, api = self.make_modules(master, ble_result=False, api_result=True)
-        priority = VehiclePriority(master)
-
-        assert priority.startCharging("VIN123") is False
-        assert ble.startCharging.called
-        assert not api.startCharging.called
-
-    def test_ble_only_allows_api_for_reads(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        master = self.make_master("ble_only")
-        ble, api = self.make_modules(master, ble_result=False, api_result=True)
-        priority = VehiclePriority(master)
-
-        assert priority.updateChargeAtHome() is True
-        assert api.updateChargeAtHome.called
-
-    def test_api_only_blocks_ble_for_commands(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        master = self.make_master("api_only")
-        ble, api = self.make_modules(master, ble_result=False, api_result=True)
-        priority = VehiclePriority(master)
-
-        assert priority.startCharging("VIN123") is True
-        assert not ble.startCharging.called
-        assert api.startCharging.called
+# tests/unit/test_vehicle_priority.py
+from unittest.mock import Mock
+from TWCManager.Vehicle.Providers import Capability as C
+from TWCManager.Vehicle.Providers.Order import ProviderOrder
+from TWCManager.Vehicle.Providers.Provider import Provider
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+VIN = "5YJ3E1EA1KF000001"
+CMDS = {c: C.Declaration(C.LOCAL) for c in (C.SET_AMPS, C.START_CHARGING, C.STOP_CHARGING, C.SET_CHARGE_LIMIT, C.WAKE)}
+
+class P(Provider):
+    def __init__(self, name, rank, local, module, ready=True, caps=CMDS, amps=(1, 32)):
+        self.name, self.rank, self.local, self.module, self._ready, self._caps, self._amps = name, rank, local, module, ready, caps, amps
+    def declarations(self): return self._caps
+    def ready(self, vehicle, cap): return self._ready
+    def ampsRange(self, vehicle): return self._amps
+    def setAmps(self, vin, amps): return self.module.setAmps(vin, amps)
+
+def make(settings=None, *providers):
+    m = Mock(); m.settings = settings or {}; m.config = {}; m.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
+    m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    for p in providers: m.providerOrder.register(p)
+    return m, VehiclePriority(m)
+
+def mod(**results):
+    x = Mock(spec=list(results)); [setattr(x, k, Mock(return_value=v)) for k, v in results.items()]; return x
+
+def test_command_policy_properties_delegate():
+    m, vp = make({"commandPolicy": "ble_only"})
+    assert vp.commandPolicy == "ble_only" and vp.commandPolicyOverridden is False and vp.updateSettings() is True
+
+def test_no_modules_returns_false():                              # Review Focus 2
+    m, vp = make()
+    assert vp.startCharging(VIN) is False and vp.car_api_charge({"charge": True}) is False
+
+def test_walk_is_order_position_with_local_three_attempts_and_ha_last():
+    ble = mod(startCharging=False); api = mod(startCharging=False); ha = mod(startCharging=True)
+    m, vp = make({}, P("HomeAssistant", 6, False, ha), P("FleetAPI", 5, False, api), P("TeslaBLE", 2, True, ble))
+    assert vp.startCharging(VIN) is True
+    assert (ble.startCharging.call_count, api.startCharging.call_count, ha.startCharging.call_count) == (3, 2, 1)
+    assert m.stats["moduleFailures"] == {"TeslaBLE": 1, "FleetAPI": 1} and m.stats["moduleSuccess"] == {"HomeAssistant": 1}
+
+def test_ble_only_skips_cloud_commands_but_not_reads():
+    ble = mod(startCharging=False, updateChargeAtHome=False); api = mod(startCharging=True, updateChargeAtHome=True)
+    m, vp = make({"commandPolicy": "ble_only"}, P("TeslaBLE", 2, True, ble), P("FleetAPI", 5, False, api))
+    assert vp.startCharging(VIN) is False and api.startCharging.call_count == 0
+    assert vp.updateChargeAtHome() is True and api.updateChargeAtHome.call_count == 1
+
+def test_api_only_walks_fleet_without_ble():                      # Review Focus 1
+    ble = mod(applyChargeLimit=True, updateChargeAtHome=True); api = mod(applyChargeLimit="success", updateChargeAtHome=True)
+    m, vp = make({"commandPolicy": "api_only"}, P("TeslaBLE", 2, True, ble), P("FleetAPI", 5, False, api))
+    assert vp.applyChargeLimit(limit=80) == "success" and ble.applyChargeLimit.call_count == 0
+    assert vp.updateChargeAtHome() is True and ble.updateChargeAtHome.call_count == 0        # reads too: no BLE timeout
+
+def test_broadcast_skips_a_provider_that_is_not_available():
+    api = mod(applyChargeLimit="success"); f = P("FleetAPI", 5, False, api); f.available = lambda cap: False    # Owner-only: no command slot
+    m, vp = make({}, f)
+    assert vp.applyChargeLimit(limit=80) is False and api.applyChargeLimit.call_count == 0 and m.stats["moduleFailures"] == {}
+
+def test_targeted_call_skips_providers_not_ready_for_that_car():
+    ble = mod(applyChargeLimit=True); api = mod(applyChargeLimit="success")
+    m, vp = make({}, P("TeslaBLE", 2, True, ble, ready=False), P("FleetAPI", 5, False, api))
+    m.vehicleRegistry.getOrCreate(VIN, "t")
+    assert vp.applyChargeLimit(limit=80, vin=VIN) == "success" and ble.applyChargeLimit.call_count == 0
+    assert vp.applyChargeLimit(limit=80) is True and ble.applyChargeLimit.call_count == 1      # broadcast: readiness unknown
+
+def test_set_charge_rate_targets_the_car():
+    twc = P("Gen2TWC", 0, True, None, amps=(6, 32)); api = mod(setChargeRate=True)
+    m, vp = make({}, twc, P("FleetAPI", 5, False, api, caps={C.SET_AMPS: C.Declaration(C.FLEET_COMMAND)})); m.vehicleRegistry.getOrCreate(VIN, "t")
+    car = Mock(VIN=VIN)
+    assert vp.setChargeRate(4, car) is True and api.setChargeRate.call_args.args == (4, car)   # below the floor
+    assert VehiclePriority.targetVIN("setChargeRate", (10, car), {}) == VIN and VehiclePriority.targetVIN("wakeVehicle", (VIN.lower(),), {}) == VIN
+    assert VehiclePriority.targetVIN("car_api_charge", ({"charge": False, "vin": VIN},), {}) == VIN
+
+def test_set_charge_rate_zero_still_reaches_the_vehicle():
+    # Mode 2 can queue 0 A; TeslaAPI clamps it to 1 A today. The lookup
+    # clamps too, so 0 does not drop every candidate; the module gets 0.
+    api = mod(setChargeRate=True)
+    m, vp = make({}, P("FleetAPI", 5, False, api, caps={C.SET_AMPS: C.Declaration(C.FLEET_COMMAND)})); m.vehicleRegistry.getOrCreate(VIN, "t")
+    car = Mock(VIN=VIN)
+    assert vp.setChargeRate(0, car) is True and api.setChargeRate.call_args.args == (0, car)
+    assert VehiclePriority.targetAmps("setChargeRate", (0, car), {}) == 1.0
+    assert VehiclePriority.targetAmps("setChargeRate", (), {"charge_rate": "x"}) is None
+
+def test_set_amps_dispatches_through_the_order():
+    ble = Mock(); ble.setAmps = Mock(return_value=True)
+    m, vp = make({}, P("TeslaBLE", 2, True, ble)); m.vehicleRegistry.getOrCreate(VIN, "t")
+    assert vp.setAmps(VIN, 12) is True and ble.setAmps.call_args.args == (VIN, 12)
+    assert vp.setAmps("5YJ3E1EA1KF000009", 12) is False
+
+def test_queue_dispatches_set_amps():
+    from TWCManager.VehicleCommandQueue import VehicleCommandQueue
+    vp = Mock(); vp.setAmps = Mock(return_value=True); q = VehicleCommandQueue(lambda: vp)
+    assert q._execute({"cmd": "setAmps", "vin": VIN, "amps": 7}) is True and VehicleCommandQueue._key({"cmd": "setAmps", "vin": VIN}) == ("setAmps", VIN)
+    assert VehicleCommandQueue(lambda: Mock(spec=[]))._execute({"cmd": "setAmps", "vin": VIN, "amps": 7}) is False   # fallback module without setAmps
+
+def test_same_module_under_two_providers_is_walked_once():
+    # Owner and Fleet share the TeslaAPI module: one walk position, two attempts
+    api = mod(updateChargeAtHome=False)
+    m, vp = make({}, P("OwnerAPI", 4, False, api, caps={}), P("FleetAPI", 5, False, api))
+    assert vp.updateChargeAtHome() is False and api.updateChargeAtHome.call_count == 2
+    assert m.stats["moduleFailures"] == {"OwnerAPI": 1}
+
+def test_exceptions_count_as_failures_and_dunder_probes_do_not_walk():
+    api = Mock(spec=["startCharging"]); api.startCharging = Mock(side_effect=RuntimeError("secret"))
+    m, vp = make({}, P("FleetAPI", 5, False, api))
+    assert vp.startCharging(VIN) is False and api.startCharging.call_count == 2
+    assert m.stats["moduleFailures"] == {"FleetAPI": 1}
+    assert not hasattr(vp, "__deepcopy__") and not hasattr(vp, "_private")
+
+def test_registration_finds_no_providers_on_the_facade(caplog):
+    # registerProviders walks every Vehicle module, VehiclePriority (loaded
+    # first) included; the facade must not walk the order for "providers"
+    import logging
+    from TWCManager.Vehicle.Providers.Order import registerProviders
+    ble = Mock(); ble.providers = lambda: [P("TeslaBLE", 2, True, Mock())]
+    m, vp = make()
+    m.getModulesByType = Mock(return_value=[{"name": "VehiclePriority", "ref": vp}, {"name": "TeslaBLE", "ref": ble}])
+    with caplog.at_level(logging.WARNING):
+        assert registerProviders(m) == ["TeslaBLE"]
+    assert "Could not register" not in caplog.text and vp.providers() == []
+    assert "api_only" in VehiclePriority.VALID_COMMAND_POLICIES
+
+
+def test_rate_raise_reaches_fleet_on_a_fleet_only_install():
+    # The TWC cannot lift the car's own current limit (#660): a raise to the
+    # wiring max must reach Fleet even though the TWC covers that rate
+    twc = P("Gen2TWC", 0, True, None, amps=(6, 32)); api = mod(setChargeRate=True)
+    m, vp = make({}, twc, P("FleetAPI", 5, False, api, caps={C.SET_AMPS: C.Declaration(C.FLEET_COMMAND)})); m.vehicleRegistry.getOrCreate(VIN, "t")
+    car = Mock(VIN=VIN)
+    assert vp.setChargeRate(32, car) is True and api.setChargeRate.call_args.args == (32, car)
+    assert vp.setChargeRate(10, car) is True and api.setChargeRate.call_count == 2
+
+def test_set_amps_keeps_the_local_amps_rule():
+    twc = P("Gen2TWC", 0, True, None, amps=(6, 32)); api = Mock(); api.setAmps = Mock(return_value=True)
+    m, vp = make({}, twc, P("FleetAPI", 5, False, api, caps={C.SET_AMPS: C.Declaration(C.FLEET_COMMAND)})); m.vehicleRegistry.getOrCreate(VIN, "t")
+    assert vp.setAmps(VIN, 10) is False and api.setAmps.call_count == 0     # the TWC carries 10 A
+    assert vp.setAmps(VIN, 4) is True and api.setAmps.call_args.args == (VIN, 4)
+
+
+def _haMaster(enabled=True):
+    from tests.unit.test_homeassistant_registry import make_ha
+    ha, reg = make_ha(enabled=enabled)
+    m, vp = make()
+    m.vehicleRegistry = reg
+    for p in ha.providers():
+        m.providerOrder.register(p)
+    return m, vp, ha, reg
+
+def test_attempts_match_todays_priorities():
+    # TeslaBLE priority 20 -> 3, TeslaAPI 10 -> 2; HomeAssistant has no
+    # priority (today it is called once, directly) -> 1
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.teslatokens import fleet_token
+    m, vp, ha, reg = _haMaster()
+    ha.car_api_charge = Mock(return_value="error")
+    api, _ = api_with_registry(); api.storeToken(fleet_token()); api.car_api_charge = Mock(return_value="error")
+    for p in api.providers():
+        m.providerOrder.register(p)
+    assert vp.car_api_charge({"charge": True}) is False
+    assert (api.car_api_charge.call_count, ha.car_api_charge.call_count) == (2, 1)
+    assert m.stats["moduleFailures"] == {"FleetAPI": 1, "HomeAssistant": 1}
+
+def test_home_assistant_gets_its_own_vehicle_for_set_charge_rate():
+    m, vp, ha, reg = _haMaster()
+    hv = Mock(has_charge_current_number=True); reg.getOrCreate(VIN, "t").attach("HomeAssistant", hv)
+    ha.setChargeRate = Mock(return_value=True); car = Mock(VIN=VIN)
+    assert vp.setChargeRate(10, car) is True and ha.setChargeRate.call_args.args == (10, hv)
+    other = Mock(VIN="5YJ3E1EA1KF000009")                     # no HA vehicle for it: never the TeslaAPI car
+    assert vp.setChargeRate(10, other) is False and ha.setChargeRate.call_count == 1
+
+def test_disabled_home_assistant_gets_no_broadcast():
+    m, vp, ha, reg = _haMaster(enabled=False)
+    ha.car_api_charge = Mock(return_value="success"); ha.updateChargeAtHome = Mock(return_value=True)
+    assert vp.car_api_charge({"charge": True}) is False and ha.car_api_charge.call_count == 0
+    assert vp.updateChargeAtHome() is False and ha.updateChargeAtHome.call_count == 0
+
+
+# Fix round 2
+
+def _fleetUnloaded(withBle):
+    # TeslaAPI holds a Fleet token but has not listed its vehicles yet; the
+    # registry vehicle came from the TWC, so it has no TeslaAPI attachment
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.teslatokens import fleet_token
+    api, reg = api_with_registry(); api.storeToken(fleet_token())
+    api.car_api_charge = Mock(return_value="success"); api.applyChargeLimit = Mock(return_value="success")
+    m, vp = make(); m.vehicleRegistry = reg
+    ble = mod(car_api_charge=False, applyChargeLimit=False)
+    for p in ([P("TeslaBLE", 2, True, ble)] if withBle else []) + api.providers():
+        m.providerOrder.register(p)
+    reg.getOrCreate(VIN, "TWC")
+    assert api.getVehicleCount() == 0
+    return m, vp, api, ble
+
+def test_failed_ble_stop_falls_back_to_fleet_before_the_list_loads():      # C1
+    m, vp, api, ble = _fleetUnloaded(withBle=True)
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
+    assert ble.car_api_charge.call_count == 3 and api.car_api_charge.call_count == 1
+    assert vp.applyChargeLimit(limit=80, vin=VIN) == "success" and api.applyChargeLimit.call_count == 1
+
+def test_fleet_only_targeted_commands_work_from_boot():                      # C1
+    m, vp, api, ble = _fleetUnloaded(withBle=False)
+    api.car_api_charge.return_value = "error"
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) is False and api.car_api_charge.call_count == 2
+    assert m.stats["moduleFailures"] == {"FleetAPI": 1}
+
+def test_loaded_list_without_the_car_still_skips_fleet():
+    m, vp, api, ble = _fleetUnloaded(withBle=False)
+    api.addVehicle({"id": 2, "vin": "5YJ3E1EA1KF000009", "display_name": "Other"})
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) is False and api.car_api_charge.call_count == 0
+
+OTHER = "5YJ3E1EA1KF000009"
+
+def _haCars(*vins, fleet=True):
+    # HA's real car_api_charge/applyChargeLimit over stand-in HA cars, each
+    # at home, connected and charging; _call_service records the entities
+    m, vp, ha, reg = _haMaster()
+    cars = []
+    for vin in vins:
+        hv = Mock(vin=vin, at_home=True, charging=True, charge_limit=None, has_charge_switch=True, has_charge_limit_number=True,
+                  entity_ids={"charge_switch": "switch." + vin, "charge_limit_number": "number." + vin})
+        hv.name = vin; cars.append(hv)
+        reg.getOrCreate(vin, "t").attach("HomeAssistant", hv)
+    ha.carApiVehicles = cars
+    ha.car_api_available = Mock(return_value=True); ha._is_vehicle_connected = Mock(return_value=True)
+    ha._call_service = Mock(return_value=True)
+    api = None
+    if fleet:
+        api = mod(car_api_charge="error", applyChargeLimit="error")
+        m.providerOrder.register(P("FleetAPI", 5, False, api, caps={c: C.Declaration(C.FLEET_COMMAND) for c in C.COMMANDS}))
+    return m, vp, ha, api
+
+def _entities(ha):
+    return [c.args[2]["entity_id"] for c in ha._call_service.call_args_list]
+
+def test_ha_only_targeted_stop_affects_only_the_target():                   # N1
+    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success" and _entities(ha) == ["switch." + VIN]
+
+def test_fleet_failure_falls_to_home_assistant_for_the_target_only():       # I1
+    m, vp, ha, api = _haCars(VIN, OTHER)
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success" and api.car_api_charge.call_count == 2
+    assert vp.applyChargeLimit(limit=80, vin=VIN) == "success"
+    assert _entities(ha) == ["switch." + VIN, "number." + VIN]
+
+def test_broadcast_still_reaches_every_home_assistant_car():
+    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
+    assert vp.car_api_charge({"charge": False}) == "success"
+    assert vp.applyChargeLimit(limit=80) == "success"
+    assert _entities(ha) == ["switch." + VIN, "switch." + OTHER, "number." + VIN, "number." + OTHER]
+
+def test_unknown_vin_affects_no_home_assistant_car():
+    m, vp, ha, _ = _haCars(VIN, OTHER, fleet=False)
+    unknown = "5YJ3E1EA1KF000077"
+    assert ha.car_api_charge({"charge": False, "vin": unknown}) == "error"
+    assert ha.applyChargeLimit(80, vin=unknown) == "error"
+    assert ha._call_service.call_count == 0
+    assert ha.car_api_charge({"charge": False, "vin": VIN.lower()}) == "success"     # not rate limited by the refusal

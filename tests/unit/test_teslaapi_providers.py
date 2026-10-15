@@ -23,7 +23,7 @@ def test_two_providers_with_honest_costs():
         5,
         False,
     )
-    assert owner.cost(C.READ_CHARGE) == C.CLOUD_FREE and owner.cost(C.SET_AMPS) is None
+    assert owner.cost(C.READ_CHARGE) == C.CLOUD_FREE and owner.cost(C.SET_AMPS) == C.OWNER_COMMAND
     assert (
         fleet.cost(C.READ_ONLINE) == C.CLOUD_FREE
         and fleet.cost(C.READ_CHARGE) == C.FLEET_DATA

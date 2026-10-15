@@ -121,3 +121,26 @@ def test_debug_command_goes_through_the_order():
     assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 0}') is True and f.calls[-1] == ("setAmps", VIN, 1)
     assert o.debugCommand("wakeVehicle", VIN, "not json") is True and f.calls[-1] == ("wake", VIN)
     assert o.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}") is False and o.debugCommand("honk", VIN, "{}") is False
+
+@pytest.mark.parametrize("params", ['{"charge_rate": "inf"}', '{"charge_rate": 1e999}', '{"charge_rate": "-inf"}'])
+def test_debug_command_refuses_an_infinite_rate(params):
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); f = fleet(); o = order(m, f)
+    assert o.debugCommand("setChargeRate", VIN, params) is False and f.calls == []
+
+def test_debug_command_tries_each_provider_once():
+    # User-initiated: a failed wake is never sent twice
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); b = ble(); b._result = False; f = fleet(); f._result = False
+    o = order(m, b, f)
+    assert o.debugCommand("wakeVehicle", VIN, "{}") is False and b.calls == [("wake", VIN)] and f.calls == [("wake", VIN)]
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 3}') is False and b.calls[1:] == [("setAmps", VIN, 3)]
+    assert f.calls[1:] == [("setAmps", VIN, 3)]        # readiness only (M1): Fleet follows BLE, once
+
+def test_debug_set_charge_rate_reaches_fleet_past_a_covering_twc():         # M1
+    # As the facade's setChargeRate: the TWC cannot lift the car's own limit
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); f = fleet(); f._result = False
+    t = twc(); t.module = None                      # as Gen2TWCProvider: dispatch never drives it
+    o = order(m, t, f)
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 16}') is False and f.calls == [("setAmps", VIN, 16)]
+    f._result = True
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 16}') is True
+    assert o.dispatch(m.vehicleRegistry.get(VIN), C.SET_AMPS, lambda p: p.setAmps(VIN, 16), amps=16) is False   # setAmps keeps the rule

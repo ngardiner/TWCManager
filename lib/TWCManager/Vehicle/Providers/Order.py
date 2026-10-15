@@ -83,8 +83,16 @@ class ProviderOrder:
             return False
 
     def candidates(
-        self, vehicle, capability, amps: Optional[float] = None
+        self,
+        vehicle,
+        capability,
+        amps: Optional[float] = None,
+        localRule: bool = True,
     ) -> List[Provider]:
+        # localRule False: readiness only. A vehicle-rate change (the
+        # facade's setChargeRate, the debug page) must reach the car even
+        # where the TWC covers the rate, since the TWC cannot lift the car's
+        # own current limit (#660)
         found = [
             p for p in self.ordered(capability) if self._ready(p, vehicle, capability)
         ]
@@ -96,7 +104,7 @@ class ProviderOrder:
                 for p in found
                 if p.ampsRange(vehicle) is None or p.covers(vehicle, amps)
             ]
-        if capability == SET_AMPS:
+        if capability == SET_AMPS and localRule:
             # Paid providers never set amps where the charging point has a
             # local way to
             localPath = any(
@@ -130,14 +138,21 @@ class ProviderOrder:
             counts[name] = counts.get(name, 0) + 1
 
     def dispatch(
-        self, vehicle, capability, call: Callable[[Provider], Any], amps=None
+        self,
+        vehicle,
+        capability,
+        call: Callable[[Provider], Any],
+        amps=None,
+        attempts: Optional[int] = None,
+        localRule: bool = True,
     ) -> Any:
-        for p in self.candidates(vehicle, capability, amps):
+        # attempts overrides each provider's own count (the debug API: one)
+        for p in self.candidates(vehicle, capability, amps, localRule):
             if p.module is None:
                 # The TWC providers: a dispatched command runs off the main
                 # loop and must not write a TWC target; the distributor owns it
                 continue
-            for _ in range(p.attempts()):
+            for _ in range(attempts or p.attempts()):
                 try:
                     result = call(p)
                 except Exception as e:
@@ -163,17 +178,22 @@ class ProviderOrder:
             if not isinstance(params, dict):
                 params = {}
             try:
-                # Vehicle amps are never 0, and 0 would drop every candidate
+                # Vehicle amps are never 0
                 amps = max(1, int(float(params.get("charge_rate", 0))))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return False
             return bool(
                 self.dispatch(
-                    vehicle, SET_AMPS, lambda p: p.setAmps(vin, amps), amps=amps
+                    vehicle,
+                    SET_AMPS,
+                    lambda p: p.setAmps(vin, amps),
+                    attempts=1,
+                    localRule=False,
                 )
             )
         if command == "wakeVehicle":
-            return bool(self.dispatch(vehicle, WAKE, lambda p: p.wake(vin)))
+            # User-initiated: a failed wake is never sent twice
+            return bool(self.dispatch(vehicle, WAKE, lambda p: p.wake(vin), attempts=1))
         return False
 
 

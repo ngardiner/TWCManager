@@ -5,11 +5,12 @@ Without a usable Fleet API token, TeslaAPI commands a vehicle with an Owner
 API token only when Tesla's /products entry for that vehicle says
 command_signing "off". Every other vehicle (signing "required", the field
 missing, or a value never seen) is read-only, as is every vehicle when no
-token can command: no vehicle command may reach Tesla. VehiclePriority skips
-TeslaAPI for command methods while every listed vehicle is read-only, and
-TeslaAPI's own command entry points refuse per vehicle without an HTTP call
-and without recording an API error (which would back off reads too). Reads
-still run.
+token can command: no vehicle command may reach Tesla. The provider order
+keeps TeslaAPI out of a command walk for a read-only car (OwnerAPI is not
+ready for it) and out of every broadcast while every listed car is
+read-only (neither provider is available), and TeslaAPI's own command entry
+points refuse per vehicle without an HTTP call and without recording an API
+error (which would back off reads too). Reads still run.
 """
 
 import logging
@@ -170,53 +171,56 @@ class TestReadsStillRun:
 
 
 class TestVehiclePrioritySkipsReadOnly:
+    # The facade walks the provider order: an Owner-only TeslaAPI whose
+    # listed car needs signed commands has no provider available for a
+    # command, so every broadcast command stays away from it; reads still
+    # go through the Owner slot.
     def make(self, api_read_only):
+        from tests.unit.test_carapivehicle_registry import api_with_registry
+        from TWCManager.Vehicle.Providers import Capability as C
+        from TWCManager.Vehicle.Providers.Order import ProviderOrder
+        from TWCManager.Vehicle.Providers.Provider import Provider
         from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+
+        api, reg = api_with_registry()
+        api.storeToken(owner_token() if api_read_only else fleet_token())
+        add_home_vehicle(api, "required")
+        assert api.readOnly is api_read_only
+        api.setChargeRate = Mock(return_value=True)
+        api.updateChargeAtHome = Mock(return_value=True)
+        ble = Mock()
+        ble.setChargeRate = Mock(return_value=False)
+        ble.updateChargeAtHome = Mock(return_value=False)
+
+        class BLE(Provider):
+            name, rank, local, module = "TeslaBLE", 2, True, ble
+
+            def declarations(self):
+                return {c: C.Declaration(C.LOCAL) for c in C.COMMANDS}
 
         master = Mock()
         master.stats = {"moduleSuccess": {}, "moduleFailures": {}}
         master.config = {}
         master.settings = {}
-        ble = Mock()
-        ble.setChargeRate = Mock(return_value=False)
-        ble.updateChargeAtHome = Mock(return_value=False)
-        api = Mock()
-        api.readOnly = api_read_only
-        api.setChargeRate = Mock(return_value=True)
-        api.updateChargeAtHome = Mock(return_value=True)
-        master.getModuleByPriority = Mock(
-            side_effect=[("TeslaBLE", ble, 20), ("TeslaAPI", api, 10), ("", None, 0)]
-        )
+        master.vehicleRegistry = reg
+        master.providerOrder = ProviderOrder(master)
+        for p in [BLE()] + api.providers():
+            master.providerOrder.register(p)
         return VehiclePriority(master), master, ble, api
 
-    def test_read_only_api_skipped_for_commands(self):
+    def test_read_only_api_skipped_for_commands(self, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
         assert priority.setChargeRate(10) is False
         assert ble.setChargeRate.called
         assert not api.setChargeRate.called
-        assert not api.refuseCommandIfReadOnly.called
-        assert "TeslaAPI" not in master.stats["moduleFailures"]
+        assert "FleetAPI" not in master.stats["moduleFailures"]
 
-    def test_read_only_module_without_refusal_method_skipped(self):
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
-
-        class ReadOnlyModule:
-            readOnly = True
-
-        master = Mock()
-        assert (
-            VehiclePriority(master)._skip_read_only_for_command(
-                ReadOnlyModule(), "setChargeRate"
-            )
-            is True
-        )
-
-    def test_read_only_api_used_for_reads(self):
+    def test_read_only_api_used_for_reads(self, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
         assert priority.updateChargeAtHome() is True
         assert api.updateChargeAtHome.called
 
-    def test_writable_api_used_for_commands(self):
+    def test_writable_api_used_for_commands(self, no_threads):
         priority, master, ble, api = self.make(api_read_only=False)
         assert priority.setChargeRate(10) is True
         assert api.setChargeRate.called
@@ -224,7 +228,7 @@ class TestVehiclePrioritySkipsReadOnly:
     @pytest.mark.parametrize(
         "method", ["car_api_charge", "applyChargeLimit", "wakeVehicle"]
     )
-    def test_every_command_method_skips(self, method):
+    def test_every_command_method_skips(self, method, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
         setattr(ble, method, Mock(return_value=False))
         setattr(api, method, Mock(return_value=True))
@@ -389,16 +393,27 @@ def owner_car(no_threads, no_sleep):
 
 
 def priority_over(api, ble):
-    """VehiclePriority trying TeslaAPI first, then a mock BLE module."""
+    """VehiclePriority walking the provider order: TeslaAPI's providers, then
+    a mock fallback module ranked after them, as HomeAssistant is."""
+    from TWCManager.Vehicle.Providers import Capability as C
+    from TWCManager.Vehicle.Providers.Order import ProviderOrder
+    from TWCManager.Vehicle.Providers.Provider import Provider
     from TWCManager.Vehicle.VehiclePriority import VehiclePriority
 
-    master = Mock()
-    master.stats = {"moduleSuccess": {}, "moduleFailures": {}}
-    master.config = {}
-    master.settings = {}
-    master.getModuleByPriority = Mock(
-        side_effect=[("TeslaAPI", api, 10), ("TeslaBLE", ble, 5), ("", None, 0)]
-    )
+    class Fallback(Provider):
+        name, rank, local, module = "Fallback", 6, False, ble
+
+        def declarations(self):
+            return {c: C.Declaration(C.HA_BILLED) for c in C.COMMANDS}
+
+        def ready(self, vehicle, capability):
+            return True
+
+    master = api.master
+    master.vehicleRegistry = api.registry
+    master.providerOrder = ProviderOrder(master)
+    for p in api.providers() + [Fallback()]:
+        master.providerOrder.register(p)
     return VehiclePriority(master)
 
 
