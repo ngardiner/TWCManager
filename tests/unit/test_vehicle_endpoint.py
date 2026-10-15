@@ -88,3 +88,46 @@ def test_anonymous_car_on_a_gen3_is_blind_but_a_correlated_one_is_not():        
     assert VehicleEndpoints(m).allEVSEs == []
     gen3.devices = lambda: [SimpleNamespace(occupied=True, vehicleKey=VIN1)]
     assert [e.currentVIN for e in VehicleEndpoints(m).allEVSEs] == [VIN1]
+
+def test_occupied_gen3_without_a_vehicle_key_is_blind():                           # Task 10 review
+    m = master({}, fleet()); car(m, VIN1); carapi = m.getModuleByName("TeslaAPI")
+    gen3 = Mock(); gen3.devices = lambda: [SimpleNamespace(occupied=True, vehicleKey=None)]
+    m.getModuleByName = lambda n: {"TeslaAPI": carapi, "Gen3TWCs": gen3}.get(n)
+    assert VehicleEndpoints(m).allEVSEs == []
+    gen3.devices = lambda: [SimpleNamespace(occupied=None, vehicleKey=None), SimpleNamespace(occupied=False, vehicleKey=None)]
+    assert [e.currentVIN for e in VehicleEndpoints(m).allEVSEs] == [VIN1]
+
+def test_a_car_only_ble_can_serve_is_writable_over_ble():                          # Task 10 review
+    for m in (master({}, ble()), master({"commandPolicy": "ble_only"}, ble(), fleet())):
+        e = VehicleEndpoint(car(m, VIN1), m.providerOrder, m)
+        assert not e.isReadOnly and e.provider == "TeslaBLE"
+
+# Final wave: coverage lost with test_teslaapi_controller.py (Task 10 m4)
+
+def test_a_failed_scan_fails_closed():
+    m = master({}, fleet()); car(m, VIN1)
+    def broken(): raise RuntimeError("scan")
+    m.getSlaveTWCs = broken
+    assert VehicleEndpoints(m)._blindTWCs() == (True, True) and VehicleEndpoints(m).allEVSEs == []
+    m.getSlaveTWCs = lambda: []; carapi = m.getModuleByName("TeslaAPI")
+    gen3 = Mock(); gen3.devices = broken                                          # the Gen3 walk is inside the same guard
+    m.getModuleByName = lambda n: {"TeslaAPI": carapi, "Gen3TWCs": gen3}.get(n)
+    assert VehicleEndpoints(m).allEVSEs == []
+
+def test_just_below_power_flowing_is_not_blind():
+    m = master({}, fleet()); car(m, VIN1)
+    m.getSlaveTWCs = lambda: [slave(amps=0.99)]
+    assert [e.currentVIN for e in VehicleEndpoints(m).allEVSEs] == [VIN1]
+    m.getSlaveTWCs = lambda: [slave(amps=1.0)]
+    assert VehicleEndpoints(m).allEVSEs == []
+
+def test_disabled_tesla_api_lists_nothing():
+    m = master({}, fleet()); car(m, VIN1); m.getModuleByName("TeslaAPI").enabled.return_value = False
+    assert VehicleEndpoints(m).allEVSEs == []
+
+def test_a_cached_endpoint_is_dropped_once_hidden():
+    m = master({}, fleet()); car(m, VIN1); ctl = VehicleEndpoints(m)
+    (first,) = ctl.allEVSEs
+    m.getSlaveTWCs = lambda: [slave(amps=5.0)]; assert ctl.allEVSEs == [] and ctl._cache == {}
+    m.getSlaveTWCs = lambda: []; (again,) = ctl.allEVSEs
+    assert again is not first and again.currentVIN == VIN1
