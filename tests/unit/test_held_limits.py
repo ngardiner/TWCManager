@@ -386,14 +386,36 @@ def test_non_integral_floats_are_invalid(caplog):
     assert m.heldLimits.get(VIN2) == HeldLimit(80, None)
     m.settings["heldLimits"][VIN3] = {"outside": 80.5, "held": None}
     assert m.heldLimits.get(VIN3) is None
-    # set refuses a non-integral value and leaves the store unchanged
-    m.heldLimits.set(VIN2, 70, None)
+
+
+def test_set_rounds_finite_numbers():
+    # limitOverride's minBatteryLevelAtHome - 1 from a fractional batteryLevel
+    m, s = make()
+    m.heldLimits.set(VIN, 80.4, 65.3)
+    assert m.heldLimits.get(VIN) == HeldLimit(80, 65)
+    assert m.settings["heldLimits"][VIN] == {"outside": 80, "held": 65}
+    m.saveNormalChargeLimit(VIN2, 79.6, 65.3)
+    assert m.getNormalChargeLimit(VIN2) == (True, 80, 65)
+
+
+def test_set_refuses_what_is_not_a_finite_number(caplog):
+    m, s = make()
+    m.heldLimits.set(VIN, 70, None)
     caplog.clear()
     with caplog.at_level(logging.WARNING):
-        m.heldLimits.set(VIN2, 80.5, None)
-        m.heldLimits.set(VIN2, 80, 50.5)
-    assert m.heldLimits.get(VIN2) == HeldLimit(70, None)
-    assert len(caplog.records) == 2
+        for outside, held in (
+            ("80", None),
+            (None, None),
+            (True, None),
+            (float("nan"), None),
+            (float("inf"), None),
+            (80, "50"),
+            (80, float("nan")),
+            (80, float("-inf")),
+        ):
+            m.heldLimits.set(VIN, outside, held)
+    assert m.heldLimits.get(VIN) == HeldLimit(70, None)
+    assert len(caplog.records) == 8
 
 
 def test_listing_before_load_is_adopted(tmp_path):
@@ -443,3 +465,33 @@ def test_set_refuses_a_non_vin_and_maps_zero_to_none(caplog):
     assert "heldLimits" not in m.settings and caplog.records
     m.heldLimits.set(VIN, 80, 0)
     assert m.heldLimits.get(VIN) == HeldLimit(80, None)
+
+
+def test_bind_skips_the_lock_when_the_vin_already_has_an_entry():
+    # BLE stored by VIN, Fleet by ID: after migration both exist, so
+    # adoption is blocked; a rebind must not take settingsLock each time.
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+
+    api, reg = api_with_registry()
+    m = api.master
+    m.heldLimits = HeldLimits(m)
+    m.settings["chargeLimits"] = {VIN: [80, 50], "7": [80, 50]}
+    m.heldLimits.load()
+    api.addVehicle({"id": 7, "vin": VIN, "display_name": "C"})
+    count = {"n": 0}
+    real = m.settingsLock
+
+    class Counting:
+        def __enter__(self):
+            count["n"] += 1
+            return real.__enter__()
+
+        def __exit__(self, *a):
+            return real.__exit__(*a)
+
+    m.settingsLock = Counting()
+    car = api.getCarApiVehicles()[0]
+    for _ in range(100):
+        car.vehicle
+    assert count["n"] == 0
+    assert "id:7" in m.settings["heldLimits"] and VIN in m.settings["heldLimits"]

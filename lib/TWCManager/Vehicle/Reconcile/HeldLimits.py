@@ -13,6 +13,7 @@
 # loadSettings replaces the settings dict. Only dict work happens under the
 # lock; saves are queued to the background thread after it is released.
 import logging
+import math
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from ..Registry.VIN import isWellFormedVIN
@@ -35,6 +36,16 @@ def _isInt(x: Any) -> bool:
     if isinstance(x, bool) or not isinstance(x, (int, float)):
         return False
     return isinstance(x, int) or x.is_integer()
+
+
+def _rounded(x: Any) -> Optional[int]:
+    # A finite number, rounded; None for anything else (a string, a bool,
+    # NaN, inf). A limit derived from a fractional battery level is kept.
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    if isinstance(x, float) and not math.isfinite(x):
+        return None
+    return int(round(x))
 
 
 def storeKey(ident: Any) -> str:
@@ -163,13 +174,15 @@ class HeldLimits:
         return _storedEntry(store.get(key))
 
     def _set(self, key: str, outside: int, held: Optional[int]) -> None:
-        if held is not None and _isInt(held) and held in (-1, 0):
-            # The legacy "holds none" sentinels are never stored.
-            held = None
-        if not _isInt(outside) or (held is not None and not _isInt(held)):
-            logger.warning("Refused a non-integral held limit for %s", key)
+        outsideInt = _rounded(outside)
+        heldInt = None if held is None else _rounded(held)
+        if outsideInt is None or (held is not None and heldInt is None):
+            logger.warning("Refused a held limit for %s: not a finite number", key)
             return
-        limit = HeldLimit(int(outside), None if held is None else int(held))
+        if heldInt in (-1, 0):
+            # The legacy "holds none" sentinels are never stored.
+            heldInt = None
+        limit = HeldLimit(outsideInt, heldInt)
         with self.master.settingsLock:
             store = self.master.settings.get(self.KEY)
             if not isinstance(store, dict):
@@ -203,8 +216,9 @@ class HeldLimits:
         legacy = LEGACY_PREFIX + str(legacyId)
         vin = str(vin).upper()
         store = self.master.settings.get(self.KEY)
-        # Unlocked fast path: TeslaAPI binds a car on every rebind.
-        if not isinstance(store, dict) or legacy not in store:
+        # Unlocked fast path: TeslaAPI binds a car on every rebind, and
+        # nothing moves while the VIN already has an entry.
+        if not isinstance(store, dict) or legacy not in store or vin in store:
             return
         with self.master.settingsLock:
             store = self.master.settings.get(self.KEY)
