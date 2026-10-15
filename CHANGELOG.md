@@ -20,6 +20,7 @@ This document logs the changes per release of TWCManager.
 * Architecture
     * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used for reads, and for commands only to vehicles Tesla reports with `command_signing: off`
     * (@MikeBishop) - Saved Tesla tokens migrate to separate Owner and Fleet settings on first start; downgrading afterwards loses the Owner API token (#692)
+    * (@MikeBishop) - Held charge limits (the limit a car had before TWCManager changed it) migrate from settings `chargeLimits` to `heldLimits`, keyed by VIN, on first start; downgrading afterwards loses them, and upgrading again after a downgrade uses the held limits saved before the downgrade (the older release's `chargeLimits` is kept but ignored, with a warning)
     * (@MikeBishop) - TWC abstraction layer with EVSEController/EVSEInstance interface (ported from #483)
     * (@ngardiner) - Gen3 TWC support via Neurio Modbus emulation
     * (@MikeBishop) - Run vehicle commands on a dedicated worker thread and serialize tesla-control calls, so BLE retries no longer stall the RS485 loop (#668)

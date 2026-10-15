@@ -144,12 +144,19 @@ class FieldStore:
             return self._fresher(self._latest.get(field), self._writes.get(field))
 
     def trusted(
-        self, field: str, now: Optional[float] = None, liveAt: Any = NOT_TRACKED
+        self,
+        field: str,
+        now: Optional[float] = None,
+        liveAt: Any = NOT_TRACKED,
+        obs: Optional[Observation] = None,
     ) -> Optional[Observation]:
+        # obs, when given, is judged in place of the latest observation (a
+        # caller that leaves some sources out passes its own pick).
         if now is None:
             now = self._clock()
         with self._lock:
-            obs = self._latest.get(field)
+            if obs is None:
+                obs = self._latest.get(field)
             write = self._writes.get(field)
         if obs is None:
             return None

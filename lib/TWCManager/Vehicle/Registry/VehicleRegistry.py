@@ -49,6 +49,8 @@ class VehicleRegistry:
         self._liveness: Dict[str, Callable[[Optional[Vehicle]], Optional[float]]] = {}
         # Per point: {"candidate": vin, "attempts": int, "rejected": bool}.
         self._pending: Dict[str, dict] = {}
+        # Called with a key, outside the lock, whenever a vehicle leaves
+        self._onRemove: List[Callable[[str], None]] = []
 
     @classmethod
     def forMaster(cls, master) -> "VehicleRegistry":
@@ -119,11 +121,29 @@ class VehicleRegistry:
         v.userAsserted = True
         return v
 
+    def onRemove(self, callback: Callable[[str], None]) -> None:
+        # State kept elsewhere per vehicle key (desired state) follows the
+        # registry's removals without the registry knowing about it
+        with self._lock:
+            self._onRemove = self._onRemove + [callback]
+
+    def _removed(self, keys: List[str]) -> None:
+        # Outside the lock
+        with self._lock:
+            callbacks = list(self._onRemove)
+        for key in keys:
+            for callback in callbacks:
+                try:
+                    callback(key)
+                except Exception as e:
+                    logger.debug("Vehicle removal callback raised %s", type(e).__name__)
+
     def forget(self, key: str) -> bool:
         with self._lock:
             removed = self._vehicles.pop(self._normalise(key), None)
         if removed is not None:
             logger.info("Vehicle %s forgotten", removed.key)
+            self._removed([removed.key])
         return removed is not None
 
     def expire(self, now: Optional[float] = None) -> List[str]:
@@ -146,6 +166,7 @@ class VehicleRegistry:
                 key,
                 int(self.forgetAfter // 86400),
             )
+        self._removed(gone)
         return gone
 
     # Plug sessions and TWC VIN confirmation. Called from the serial thread:
@@ -162,11 +183,15 @@ class VehicleRegistry:
 
     def endPlugSession(self, pointId: str) -> None:
         key = ANON_PREFIX + pointId
+        removed = False
         with self._lock:
             v = self._vehicles.get(key)
             if v is not None and v.isAnonymous:
                 del self._vehicles[key]
+                removed = True
             self._pending.pop(pointId, None)
+        if removed:
+            self._removed([key])
         for v in self._attributedTo(pointId):
             v.observe("twcVin", None, "TWC", seen=False)
 
@@ -204,6 +229,7 @@ class VehicleRegistry:
         with self._lock:
             anon = self._vehicles.pop(key, None)
         if anon is not None:
+            self._removed([key])
             # Older stamps never displace newer ones, so the car's own
             # newer values survive the merge.
             for field, obs in anon._fields.snapshot().items():
