@@ -812,6 +812,7 @@ class HomeAssistant:
     def updateChargeAtHome(self):
         for v in self.carApiVehicles:
             v.refresh_from_home_assistant(self)
+        return True
 
     @property
     def numCarsAtHome(self):

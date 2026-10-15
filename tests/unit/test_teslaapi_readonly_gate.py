@@ -279,7 +279,7 @@ COMMANDS = {
 REFUSED_RETURNS = {
     "set_charging_amps": (False, False),
     "apply_charge_limit": (False, False),
-    "applyChargeLimit": (None, "error"),
+    "applyChargeLimit": ("error", "error"),
     "charge_start": ("error", "error"),
     "charge_stop": ("error", "error"),
     "wake_up": (False, False),
@@ -701,7 +701,7 @@ class TestOwnerCommandRefusedByTesla:
     FLEET_RETURNS = {
         "set_charging_amps": lambda body: body,
         "apply_charge_limit": lambda body: False,
-        "applyChargeLimit": lambda body: None,
+        "applyChargeLimit": lambda body: "success",
         "charge_start": lambda body: "error",
         "charge_stop": lambda body: "error",
         "wake_up": lambda body: False,

@@ -6,10 +6,13 @@
 # provider (local 3, cloud 2, as BLE and TeslaAPI had by priority).
 # Phase 3 removes the facade.
 import logging
+import threading
+import time
 from typing import Any, List, Optional, Tuple
 
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.Capability import (
+    TIER_BILLED,
     READ_CHARGE,
     SET_AMPS,
     SET_CHARGE_LIMIT,
@@ -61,9 +64,17 @@ class VehiclePriority:
         "wakeVehicle": WAKE,
     }
 
+    # A provider reached only because a billed one failed is called at most
+    # this often per car and command: Fleet's own once-a-minute cadence
+    FALLBACK_INTERVAL = 60
+
     def __init__(self, master):
         self.master = master
         self.order = master.providerOrder
+        self._clock = time.monotonic
+        # (provider, capability, VIN or None) -> when the fallback last ran
+        self._fallbackAt = {}
+        self._fallbackLock = threading.Lock()
 
     @property
     def commandPolicy(self):
@@ -210,6 +221,22 @@ class VehiclePriority:
             return (args[0], own) + tuple(args[2:]), kwargs
         return args, dict(kwargs, vehicle=own)
 
+    @staticmethod
+    def _billed(provider, capability) -> bool:
+        cost = provider.cost(capability) if capability else None
+        return cost is not None and cost.tier >= TIER_BILLED
+
+    def _fallbackDue(self, provider, capability, vin) -> bool:
+        # Records the call when it is due; no I/O under the lock
+        key = (provider.name, capability, vin)
+        now = self._clock()
+        with self._fallbackLock:
+            last = self._fallbackAt.get(key)
+            if last is not None and now - last < self.FALLBACK_INTERVAL:
+                return False
+            self._fallbackAt[key] = now
+            return True
+
     def _count(self, kind, name):
         counts = self.master.stats.setdefault(kind, {})
         counts[name] = counts.get(name, 0) + 1
@@ -233,6 +260,13 @@ class VehiclePriority:
                 logger.debug(f"VehiclePriority: No modules available for {name}")
                 return False
 
+            capability = (
+                self.capabilityFor(name, args, kwargs)
+                if name in self.COMMAND_METHODS
+                else None
+            )
+            vin = self.targetVIN(name, args, kwargs) if capability else None
+            billedFailed = False
             for provider, module_ref in walk:
                 module_name = provider.name
                 if not hasattr(module_ref, name):
@@ -247,6 +281,15 @@ class VehiclePriority:
                     )
                     continue
                 callArgs, callKwargs = call
+
+                if billedFailed and not self._fallbackDue(provider, capability, vin):
+                    # A billed provider (Fleet) failed: during its backoff the
+                    # next one (Home Assistant) would otherwise run at its
+                    # own, faster cadence
+                    logger.debug(
+                        f"VehiclePriority: {module_name}.{name}() held to the fallback interval"
+                    )
+                    continue
 
                 max_attempts = provider.attempts()
                 self._count("moduleDispatch", module_name)
@@ -263,8 +306,9 @@ class VehiclePriority:
                             f"VehiclePriority: {module_name}.{name}() raised {type(e).__name__} on attempt {attempt + 1}"
                         )
                         continue
-                    # TeslaAPI returns "success"/"error" strings; treat
-                    # "error" as failure so the fallback works.
+                    # Any truthy return but "error" ends the walk (TeslaAPI
+                    # returns "success", "skipped" or "error"); None, False
+                    # and "error" try the next provider
                     if ret and ret != "error":
                         logger.debug(
                             f"VehiclePriority: {module_name}.{name}() succeeded on attempt {attempt + 1}"
@@ -280,6 +324,8 @@ class VehiclePriority:
                     f"VehiclePriority: {module_name}.{name}() failed after {max_attempts} attempts, trying next provider",
                 )
                 self._count("moduleFailures", module_name)
+                if self._billed(provider, capability):
+                    billedFailed = True
 
             logger.debug(f"VehiclePriority: All providers exhausted for {name}")
             return False
