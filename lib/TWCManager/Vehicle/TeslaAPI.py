@@ -2121,8 +2121,20 @@ class TeslaAPI:
                         continue
                     if result == "unreachable":
                         return Outcome(UNREACHABLE, "token refresh"), None
-                # Refused, or expired with no way to refresh it: retired, so
-                # no later round pays for another 401
+                    if not slot.empty():
+                        # Expired and the refresh failed (a 5xx, no client
+                        # ID): the tokens are kept, as refresh() alone
+                        # clears on a 401, but no later round pays for
+                        # another 401. A successful refresh (setTokens)
+                        # lifts the refusal.
+                        logger.error(
+                            "Tesla %s API token has expired and could not be "
+                            "refreshed (%s); not sending commands with it until "
+                            "it is refreshed or replaced."
+                            % (slot.kind.capitalize(), result)
+                        )
+                        slot.refuse("command")
+                    return Outcome(REFUSED, "401"), None
                 self.commandRefused(slot, 401)
                 return Outcome(REFUSED, "401"), None
             if code == 403:

@@ -163,7 +163,8 @@ def test_an_unrefreshable_expired_token_is_retired(requests_mock):   # M1
     requests_mock.post(re.compile(r".*/command/.*"), status_code=401, text="token expired")
     for _ in range(3):
         p.stopCharging(VIN)
-    assert len(calls(requests_mock, "charge_stop")) == 1 and api.fleetSlot.empty()
+    assert len(calls(requests_mock, "charge_stop")) == 1 and not api.fleetSlot.usable("command")
+    assert api.fleetSlot.refreshToken == "rt" and api.master.tasks == []                 # refused, never cleared or saved
 
 def test_an_ended_need_gets_a_fresh_grace_through_wake_outcome(requests_mock):   # M3/c4
     from tests.unit.reconcile_helpers import Clock
@@ -219,3 +220,39 @@ def test_ha_http_error_without_a_response(requests_mock):   # L4
     ha, reg = make_ha()
     resp = Mock(); resp.raise_for_status = Mock(side_effect=requests.exceptions.HTTPError()); ha._session.post = Mock(return_value=resp)
     assert ha._post_service("switch", "turn_on", {}) == O.Outcome(O.ERROR, "HTTPError")
+
+
+# Fix round 2: a refresh that fails transiently never deletes the tokens (N1)
+
+def _expiring(requests_mock):
+    from tests.unit.teslatokens import FLEET_REFRESH_URL
+    api, reg, p = fleet(requests_mock); api.storeToken(fleet_token(), "refresh-me")
+    requests_mock.post(re.compile(r".*/command/.*"), status_code=401, text="token expired")
+    return api, reg, p, FLEET_REFRESH_URL
+
+def test_a_503_refresh_keeps_the_tokens_and_stops_paying(requests_mock):
+    api, reg, p, url = _expiring(requests_mock); access = api.fleetSlot.accessToken
+    refresh = requests_mock.post(url, status_code=503)
+    assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "401")
+    assert api.fleetSlot.refreshToken == "refresh-me" and api.fleetSlot.accessToken == access
+    for _ in range(3):
+        assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "no command token") and p.wake(VIN).kind == O.REFUSED
+    assert len(calls(requests_mock, "charge_stop")) == 1 and calls(requests_mock, "wake_up") == [] and refresh.call_count == 1
+
+def test_a_later_successful_refresh_restores_commands(requests_mock):
+    from tests.unit.test_teslaapi_refresh import token_response
+    api, reg, p, url = _expiring(requests_mock)
+    requests_mock.post(url, status_code=502); p.stopCharging(VIN); assert not api.fleetSlot.usable("command")
+    requests_mock.post(url, json=token_response(fleet_token(jti="new")))
+    assert api.refreshSlot(api.fleetSlot) == "success" and api.fleetSlot.usable("command")       # the slot's own refresh cycle
+    requests_mock.post(re.compile(r".*/command/.*"), json={"response": {"result": True}})
+    assert p.stopCharging(VIN).kind == O.DONE
+
+def test_an_invalid_grant_clears_the_slot_as_base_did(requests_mock):
+    api, reg, p, url = _expiring(requests_mock)
+    requests_mock.post(url, status_code=401, json={"error": "invalid_grant"})              # refresh() itself clears on a 401
+    assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "401") and api.fleetSlot.empty() and api.fleetSlot.refreshToken == ""
+    assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "no command token") and len(calls(requests_mock, "charge_stop")) == 1
+    api, reg, p, url = _expiring(requests_mock)
+    requests_mock.post(url, status_code=400, json={"error": "invalid_grant"})              # base kept the slot on a 400
+    assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "401") and api.fleetSlot.refreshToken == "refresh-me"
