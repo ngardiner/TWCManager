@@ -88,12 +88,15 @@ class Suppressions:
 
     def conditions(self) -> FrozenSet[str]:
         # The commandPolicy, plus "localStops" when the user chose a
-        # disruptive local stop
+        # disruptive local stop, and "silentStops" for mode 2
         conditions = {self.commandPolicy}
         settings = getattr(self.master, "settings", None) or {}
         try:
-            if int(settings.get("chargeStopMode", 1)) in (2, 3):
+            mode = int(settings.get("chargeStopMode", 1))
+            if mode in (2, 3):
                 conditions.add("localStops")
+            if mode == 2:
+                conditions.add("silentStops")
         except (TypeError, ValueError):
             pass
         return frozenset(conditions)

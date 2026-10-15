@@ -75,8 +75,9 @@ class Gen2TWCProvider(Provider):
             return self.stopMode() in (2, 3) and self.slaveFor(vehicle) is not None
         if capability == START_CHARGING:
             # Mode 2's start is to answer slaves again. It undoes only a stop
-            # this provider delivered, never a BLE or cloud stop
-            if self.stopMode() != 2 or self.slaveFor(vehicle) is None:
+            # this provider delivered, never a BLE or cloud stop. No slave
+            # needed: one ages out about 26 s after we go quiet
+            if self.stopMode() != 2 or self._settings().get("respondToSlaves", 1):
                 return False
             desired = getattr(self.master, "desired", None)
             if desired is None:

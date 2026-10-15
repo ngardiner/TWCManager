@@ -187,9 +187,6 @@ class TeslaBLE:
         # Retry statistics tracking
         self.retry_stats = {}
 
-        # Per-VIN flag: True once car confirmed already in desired charge state
-        self._stopAskingToStartCharging = {}
-
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
         # absent from the environment. By starting one daemon here and passing its
@@ -244,10 +241,10 @@ class TeslaBLE:
 
     def _scheduleBlocksStart(self, vin):
         # Don't override the car's own Scheduled Charging / Departure timer
-        # with a BLE start command (see TeslaAPI.car_api_charge for the
-        # API-side equivalent). Schedule state comes from the TeslaAPI module;
-        # without it (BLE-only installs) we have no schedule data and allow
-        # the command.
+        # with a BLE start command (the reconciler's handsOff is the same
+        # rule for every provider). Schedule state comes from the TeslaAPI
+        # module; without it (BLE-only installs) we have no schedule data and
+        # allow the command.
         if not self.master.config["config"].get("respectVehicleSchedule", True):
             return False
         teslaapi = self.master.getModuleByName("TeslaAPI")
@@ -256,138 +253,6 @@ class TeslaBLE:
         try:
             return teslaapi.vehicleScheduledChargingPending(vin)
         except Exception:
-            return False
-
-    def car_api_charge(self, task):
-        """
-        Enhanced car_api_charge method with proper priority system integration.
-        Returns True on success, False on failure to enable proper fallback.
-
-        Args:
-            task: Dictionary with 'charge' key (True/False) and optional 'vin' key
-        """
-        try:
-            # Validate input task
-            if not task:
-                logger.error("car_api_charge called with empty task")
-                return False
-
-            if not isinstance(task, dict):
-                logger.error(f"car_api_charge expects dict, got {type(task)}")
-                return False
-
-            # Extract charge parameter
-            charge = task.get("charge", None)
-            if charge is None:
-                logger.error("Task missing required 'charge' key")
-                return False
-
-            # When stopping, reset per-VIN "stop asking" flags so the next
-            # start cycle starts fresh (mirrors TeslaAPI.car_api_charge).
-            if not charge:
-                self._stopAskingToStartCharging.clear()
-
-            # If we know the VIN of the vehicle connected to the TWC Slave, we'll send the command
-            # directly to that vehicle
-            vin = task.get("vin", None)
-            if vin:
-                logger.debug(f"BLE command for specific VIN: {vin}, charge: {charge}")
-
-                if charge:
-                    if self._stopAskingToStartCharging.get(vin):
-                        logger.debug(
-                            "BLE: not re-requesting charge start for %s: already in desired state"
-                            % vin
-                        )
-                        return True
-                    if self._scheduleBlocksStart(vin):
-                        logger.info(
-                            f"{vin} is waiting on its in-car charging schedule; not sending BLE start"
-                        )
-                        return True
-                    success = self.startCharging(vin)
-                    logger.info(
-                        f"BLE start charging for {vin}: {'success' if success else 'failed'}"
-                    )
-                    return success
-                else:
-                    success = self.stopCharging(vin)
-                    logger.info(
-                        f"BLE stop charging for {vin}: {'success' if success else 'failed'}"
-                    )
-                    return success
-            else:
-                # If we don't know the VIN, we send to all vehicles
-                # This is not optimal for multi-vehicle installs, but may be necessary when TWC doesn't read VIN
-                logger.debug(f"BLE command for all vehicles, charge: {charge}")
-
-                if not self.master.settings.get("Vehicles"):
-                    logger.error("No vehicles configured for BLE operation")
-                    return False
-
-                targets = self._allVehicleTargets()
-                if not targets:
-                    logger.warning("No vehicle has a usable BLE key")
-                    return False
-
-                success_count = 0
-                attempted_count = 0
-                skipped_count = 0
-
-                for vehicle in targets:
-                    try:
-                        if charge:
-                            if self._stopAskingToStartCharging.get(vehicle):
-                                logger.debug(
-                                    "BLE: not re-requesting charge start for %s: already in desired state"
-                                    % vehicle
-                                )
-                                skipped_count += 1
-                                continue
-                            if self._scheduleBlocksStart(vehicle):
-                                logger.info(
-                                    f"{vehicle} is waiting on its in-car charging schedule; not sending BLE start"
-                                )
-                                skipped_count += 1
-                                continue
-                            attempted_count += 1
-                            vehicle_success = self.startCharging(vehicle)
-                        else:
-                            attempted_count += 1
-                            vehicle_success = self.stopCharging(vehicle)
-
-                        if vehicle_success:
-                            success_count += 1
-                            logger.debug(
-                                f"BLE command successful for vehicle {vehicle}"
-                            )
-                        else:
-                            logger.warning(f"BLE command failed for vehicle {vehicle}")
-
-                    except Exception as e:
-                        logger.error(
-                            f"BLE command exception for vehicle {vehicle}: {e}"
-                        )
-                        continue
-
-                # Consider operation successful if any commands succeeded, or if all
-                # vehicles were skipped (already in desired state, schedule blocking, etc.).
-                # Skipped vehicles = successfully handled by deciding not to re-send.
-                if attempted_count > 0:
-                    # Commands were attempted; succeed only if at least one succeeded
-                    overall_success = success_count > 0
-                    logger.info(
-                        f"BLE command result: {success_count}/{attempted_count} attempted vehicles succeeded"
-                        + (f", {skipped_count} skipped" if skipped_count > 0 else "")
-                    )
-                else:
-                    # All vehicles skipped; that's a successful handling
-                    overall_success = True
-
-                return overall_success
-
-        except Exception as e:
-            logger.error(f"BLE car_api_charge failed with exception: {e}")
             return False
 
     def _is_already_satisfied(self, output):
@@ -805,64 +670,6 @@ class TeslaBLE:
 
         except Exception as e:
             logger.error(f"setChargeRate exception: {e}")
-            return False
-
-    def startCharging(self, vin):
-        try:
-            logger.debug(f"Starting charging for vehicle {vin}")
-
-            # Wake vehicle first - don't fail if wake fails, but log it
-            wake_result = self.wakeVehicle(vin)
-            if not wake_result:
-                logger.warning(
-                    f"Wake command may have failed for {vin}, proceeding with charge start"
-                )
-
-            ret = self.sendCommand(vin, "charging-start")
-            if ret is None:
-                logger.error(f"Failed to send charging-start command to {vin}")
-                return False
-
-            success = self.parseCommandOutput(ret)
-
-            # If the car reported it is already in the desired state, record
-            # that so car_api_charge won't re-send the command next cycle
-            # (mirrors TeslaAPI's stopAskingToStartCharging logic).
-            if success and self._is_already_satisfied(ret):
-                self._stopAskingToStartCharging[vin] = True
-                logger.info(
-                    "BLE: %s already in desired charge state; will not re-request" % vin
-                )
-            logger.info(
-                f"Start charging for {vin}: {'success' if success else 'failed'}"
-            )
-            return success
-
-        except Exception as e:
-            logger.error(f"startCharging exception for {vin}: {e}")
-            return False
-
-    def stopCharging(self, vin):
-        """
-        Stop charging for a specific vehicle with enhanced error handling.
-        Returns True on success, False on failure.
-        """
-        try:
-            logger.debug(f"Stopping charging for vehicle {vin}")
-
-            ret = self.sendCommand(vin, "charging-stop")
-            if ret is None:
-                logger.error(f"Failed to send charging-stop command to {vin}")
-                return False
-
-            success = self.parseCommandOutput(ret)
-            logger.info(
-                f"Stop charging for {vin}: {'success' if success else 'failed'}"
-            )
-            return success
-
-        except Exception as e:
-            logger.error(f"stopCharging exception for {vin}: {e}")
             return False
 
     def scanForVehicles(self):

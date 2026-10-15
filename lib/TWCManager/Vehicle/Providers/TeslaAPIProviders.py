@@ -88,6 +88,15 @@ class _TeslaAPIProvider(Provider):
         return outcome
 
     def stopCharging(self, vin: str) -> Outcome:
+        car = self._car(vin)
+        if (
+            car is not None
+            and self.carapi.commandSlotFor(car) is not None
+            and not car.is_awake(now=self.clock())
+            and car.lastVehicleAwakeKnown
+        ):
+            # As main: an asleep car is not charging; settled, never sent (N2)
+            return Outcome(SATISFIED, "asleep, not charging")
         return self._command(vin, "charge_stop")
 
     def setAmps(self, vin: str, amps: int) -> Outcome:

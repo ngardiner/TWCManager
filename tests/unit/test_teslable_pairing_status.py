@@ -921,23 +921,16 @@ def all_vehicle_ble(statuses):
     ble.wakeVehicle = Mock(return_value=True)
     ble.sendCommand = Mock(return_value="ok")
     ble.parseCommandOutput = Mock(return_value=True)
-    ble.startCharging = Mock(return_value=True)
-    ble.stopCharging = Mock(return_value=True)
     return ble, master
 
 
 def commanded(ble):
     vins = [c.args[0] for c in ble.sendCommand.call_args_list]
     vins += [c.args[0] for c in ble.wakeVehicle.call_args_list]
-    vins += [c.args[0] for c in ble.startCharging.call_args_list]
-    vins += [c.args[0] for c in ble.stopCharging.call_args_list]
     return set(vins)
 
 
 def test_all_vehicle_commands_skip_a_refused_key():  # I2
-    ble, master = all_vehicle_ble({VIN: "refused", VIN2: "paired", VIN3: None})
-    assert ble.car_api_charge({"cmd": "charge", "charge": True}) is True
-    assert commanded(ble) == {VIN2, VIN3}
     ble, master = all_vehicle_ble({VIN: "refused", VIN2: "paired", VIN3: None})
     assert ble.setChargeRate(16) is True
     assert commanded(ble) == {VIN2, VIN3}
@@ -953,13 +946,12 @@ def test_all_vehicle_commands_skip_a_vin_without_a_key():  # I2
 def test_unproven_and_pairing_keys_are_still_commanded():  # I2: upgrade users
     ble, master = all_vehicle_ble({VIN: None, VIN2: "pairing", VIN3: "pairing_failed"})
     ble.updateSettings = Mock()
-    assert ble.car_api_charge({"cmd": "charge", "charge": False}) is True
+    assert ble.setChargeRate(16) is True
     assert commanded(ble) == {VIN, VIN2, VIN3}
 
 
 def test_no_usable_key_fails_the_all_vehicle_command():  # I2
     ble, master = all_vehicle_ble({VIN: "refused"})
-    assert ble.car_api_charge({"cmd": "charge", "charge": True}) is False
     assert ble.setChargeRate(16) is False
     assert commanded(ble) == set()
 

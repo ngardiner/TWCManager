@@ -26,8 +26,10 @@ from ...VehicleCommandQueue import VehicleCommandQueue
 from ..Providers.Capability import (
     NO_INDIVIDUAL_STOP,
     SET_CHARGE_LIMIT,
+    START_CHARGING,
     STOP_CHARGING,
     TIER_BILLED,
+    WAKE,
 )
 from . import Run
 from .Desired import AMPS, CAPABILITY_FOR, CHARGE_LIMIT, CHARGING, FIELD_FOR, Attempt
@@ -133,14 +135,25 @@ def reachedCar(vehicle, field, since, beliefAtSend) -> bool:
 
 
 def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
-    if aspect != CHARGING or desired is not True:
+    if aspect != CHARGING:
         return None
+    config = config or {}
+    battery = vehicle.value("batteryLevel")
+    if desired is False:
+        if battery is not None and battery < config.get("minChargeLevel", -1):
+            # As main: a car below the minimum is never stopped
+            return "battery below minChargeLevel"
+        return None
+    limit = vehicle.value("chargeLimit")
+    if battery and limit and battery >= limit:
+        # As main (#591): the car would refuse the start
+        return "battery at its charge limit"
     if known is not None and known.value in ("Disconnected", "NoPower"):
         return "the car cannot charge (%s)" % known.value
-    if vehicle.value("scheduledChargingPending") is True and (config or {}).get(
+    if vehicle.value("scheduledChargingPending") is True and config.get(
         "respectVehicleSchedule", True
     ):
-        # As car_api_charge: a start would override the car's own schedule
+        # A start would override the car's own schedule (as on main)
         return "scheduled charging is pending (respectVehicleSchedule)"
     return None
 
@@ -469,6 +482,11 @@ class VehicleReconciler(threading.Thread):
             and start.value is True
             and not satisfied(CHARGING, True, k)
             and handsOff(vehicle, CHARGING, True, k, config) is None
+            # A start that would itself spend a cloud wake (not mode 2's) (N1)
+            and any(
+                not p.local and p.declares(WAKE)
+                for p in self.master.providerOrder.candidates(vehicle, START_CHARGING)
+            )
         )
 
     @staticmethod
@@ -484,7 +502,8 @@ class VehicleReconciler(threading.Thread):
         # (c4): every provider that can serve this car is excluded (a paired
         # BLE with its radio down still can: readiness is the claim, M11);
         # both paid sends went to a car that answered; its one re-arm is
-        # used with no blind retry left; or a refusal holds it unsent
+        # used with no blind retry left; a refusal holds it unsent; or the
+        # car's limit could not be read twice, RETRY apart
         able = self.master.providerOrder.candidates(vehicle, SET_CHARGE_LIMIT)
         last = limit.lastOutcome
         return (
@@ -496,6 +515,7 @@ class VehicleReconciler(threading.Thread):
             and not limit.paidRetryDue
             or last is not None
             and last.detail in _REFUSALS
+            or limit.unread >= 2
         )
 
     def _held(self, vehicle):

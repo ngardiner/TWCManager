@@ -59,22 +59,9 @@ class TestTeslaAPIRefusesCommands:
         assert no_error_recorded(owner_api)
         assert vehicle.lastAPIAccessTime == before
 
-    def test_start_and_stop_charge(self, owner_api, any_http):
-        assert owner_api.car_api_charge({"charge": True}) == "error"
-        assert owner_api.car_api_charge({"charge": False}) == "error"
-        assert any_http.call_count == 0
-        assert no_error_recorded(owner_api)
-
     def test_wake(self, owner_api, any_http):
         vehicle = owner_api.getCarApiVehicles()[0]
         assert owner_api.wakeVehicle(vehicle) is False
-        assert any_http.call_count == 0
-        assert no_error_recorded(owner_api)
-
-    def test_car_api_available_skips_wake_loop(self, owner_api, any_http):
-        vehicle = owner_api.getCarApiVehicles()[0]
-        vehicle.lastAPIAccessTime = 0  # asleep as far as we know
-        owner_api.car_api_available(charge=True)
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
@@ -106,7 +93,7 @@ class TestRefusalLogging:
         vehicle = owner_api.getCarApiVehicles()[0]
         owner_api.setChargeRate(10, vehicle)
         owner_api.setChargeRate(12, vehicle)
-        owner_api.car_api_charge({"charge": True})
+        owner_api.wakeVehicle(vehicle)
         assert len(self.refusals(caplog)) == 1
 
         # Fleet token: commands allowed. Fleet slot cleared: logs again, once.
@@ -157,7 +144,7 @@ class TestReadsStillRun:
                 ],
             },
         )
-        assert api.car_api_available() is True
+        assert api.loadVehicleList() is True
         assert listing.call_count == 1
         assert api.getVehicleCount() == 1
 
@@ -217,7 +204,7 @@ class TestVehiclePrioritySkipsReadOnly:
         assert priority.setChargeRate(10) is True
         assert api.setChargeRate.called
 
-    @pytest.mark.parametrize("method", ["car_api_charge", "wakeVehicle"])
+    @pytest.mark.parametrize("method", ["setChargeRate", "wakeVehicle"])
     def test_every_command_method_skips(self, method, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
         setattr(ble, method, Mock(return_value=False))
@@ -248,19 +235,20 @@ COMMANDS = {
     ),
     "charge_start": (
         "/command/charge_start",
-        lambda api, vehicle: api.car_api_charge({"charge": True}),
+        lambda api, vehicle: owner_provider(api).startCharging(vehicle.VIN),
     ),
     "charge_stop": (
         "/command/charge_stop",
-        lambda api, vehicle: api.car_api_charge({"charge": False}),
+        lambda api, vehicle: owner_provider(api).stopCharging(vehicle.VIN),
     ),
     "wake_up": ("/wake_up", lambda api, vehicle: api.wakeVehicle(vehicle)),
 }
 
 
 def owner_provider(api):
-    """The OwnerAPI provider: charge limits go through the reconciler's
-    provider command methods, which send through commandSlotFor."""
+    """The OwnerAPI provider: charge limits, starts and stops go through the
+    reconciler's provider command methods, which send through
+    commandSlotFor."""
     return api.providers()[0]
 
 
@@ -282,8 +270,8 @@ REFUSED_OUTCOME = Refusal("refused")
 REFUSED_RETURNS = {
     "set_charging_amps": (False, False),
     "set_charge_limit": (REFUSED_OUTCOME, REFUSED_OUTCOME),
-    "charge_start": ("error", "error"),
-    "charge_stop": ("error", "error"),
+    "charge_start": (REFUSED_OUTCOME, REFUSED_OUTCOME),
+    "charge_stop": (REFUSED_OUTCOME, REFUSED_OUTCOME),
     "wake_up": (False, False),
 }
 
@@ -332,6 +320,13 @@ VEHICLE_DATA = {
 
 def reply_for(command):
     return ONLINE if command == "wake_up" else ACCEPTED
+
+
+def prime(command, api, vehicle, requests_mock):
+    """A stop first asks the free online state and goes out to an online car."""
+    if command == "charge_stop":
+        for base in (OWNER_URL, FLEET_URL):
+            requests_mock.get(base + "/" + vehicle.VIN, json=ONLINE)
 
 
 def allow_resend(api, vehicle):
@@ -407,6 +402,7 @@ class TestOwnerCommandsForUnsignedVehicles:
     ):
         api, vehicle = owner_car("off")
         suffix, send = COMMANDS[command]
+        prime(command, api, vehicle, requests_mock)
         cmd = requests_mock.post(
             OWNER_URL + "/5YJ3E1EA1KF000001" + suffix, json=reply_for(command)
         )
@@ -416,7 +412,6 @@ class TestOwnerCommandsForUnsignedVehicles:
         send(api, vehicle)
 
         assert cmd.call_count == 1
-        assert requests_mock.call_count == 1
         bearer = cmd.last_request.headers["Authorization"]
         assert bearer == "Bearer " + api.ownerSlot.accessToken
         assert no_error_recorded(api)
@@ -483,13 +478,17 @@ class TestMixedFleet:
         assert no_error_recorded(api)
         assert signed.lastErrorTime == 0
 
-    def test_charge_reaches_only_the_unsigned_car(self, mixed_fleet, requests_mock):
+    def test_stop_reaches_only_the_unsigned_car(self, mixed_fleet, requests_mock):
         api, unsigned, signed = mixed_fleet
+        requests_mock.get(re.compile(r".*/vehicles/5YJ3E1EA1KF00000[12]$"), json=ONLINE)
         stop = requests_mock.post(re.compile(r".*/command/charge_stop"), json=ACCEPTED)
+        provider = owner_provider(api)
 
-        # The signed car is refused, so the call as a whole fails and
-        # VehiclePriority tries the next module.
-        assert api.car_api_charge({"charge": False}) == "error"
+        # The signed car is refused without a request, so the reconciler
+        # tries the next provider for it.
+        assert provider.stopCharging(signed.VIN) == REFUSED_OUTCOME
+        assert stop.call_count == 0
+        assert provider.stopCharging(unsigned.VIN).kind == "done"
         assert stop.call_count == 1
         assert (
             stop.last_request.url
@@ -544,10 +543,6 @@ PRIORITY_CALLS = {
         "/command/set_charging_amps",
         lambda priority, vehicle: priority.setChargeRate(10, vehicle),
     ),
-    "car_api_charge": (
-        "/command/charge_stop",
-        lambda priority, vehicle: priority.car_api_charge({"charge": False}),
-    ),
     "wakeVehicle": (
         "/wake_up",
         lambda priority, vehicle: priority.wakeVehicle(vehicle),
@@ -568,6 +563,7 @@ class TestOwnerCommandRefusedByTesla:
     ):
         api, vehicle = owner_car("off")
         suffix, send = COMMANDS[command]
+        prime(command, api, vehicle, requests_mock)
         first, after = REFUSED_RETURNS[command]
         cmd = requests_mock.post(
             OWNER_URL + "/5YJ3E1EA1KF000001" + suffix, **ALL_REFUSALS[refusal]
@@ -576,7 +572,6 @@ class TestOwnerCommandRefusedByTesla:
         assert send(api, vehicle) == first
 
         assert cmd.call_count == 1
-        assert requests_mock.call_count == 1
         assert vehicle.ownerCommandsRefused is True
         assert no_error_recorded(api)
         assert api.readOnlyFor(vehicle) is True
@@ -584,7 +579,7 @@ class TestOwnerCommandRefusedByTesla:
 
         allow_resend(api, vehicle)
         assert send(api, vehicle) == after
-        assert requests_mock.call_count == 1
+        assert cmd.call_count == 1
         assert no_error_recorded(api)
 
         # Reads still run on the Owner token.
@@ -639,9 +634,7 @@ class TestOwnerCommandRefusedByTesla:
         else:
             assert "Owner API no longer takes commands" in lines[0]
 
-    def test_wake_from_car_api_available_records_no_error(
-        self, owner_car, requests_mock
-    ):
+    def test_wake_from_the_reconciler_records_no_error(self, owner_car, requests_mock):
         api, vehicle = owner_car("off")
         vehicle.lastAPIAccessTime = 0  # not known to be awake
         # A live charge need whose pre-wake hold is long over
@@ -654,7 +647,7 @@ class TestOwnerCommandRefusedByTesla:
             OWNER_URL + "/5YJ3E1EA1KF000001/wake_up", status_code=403, json=VCP_403
         )
 
-        api.car_api_available(charge=True)
+        assert owner_provider(api).wake(vehicle.VIN) == REFUSED_OUTCOME
 
         assert wake.call_count == 1
         assert vehicle.ownerCommandsRefused is True
@@ -702,8 +695,8 @@ class TestOwnerCommandRefusedByTesla:
         "set_charging_amps": lambda body: body,
         # A Fleet refusal is REFUSED (403, 412) or ERROR (410)
         "set_charge_limit": lambda body: Refusal("refused", "error"),
-        "charge_start": lambda body: "error",
-        "charge_stop": lambda body: "error",
+        "charge_start": lambda body: Refusal("refused", "error"),
+        "charge_stop": lambda body: Refusal("refused", "error"),
         "wake_up": lambda body: False,
     }
 
@@ -714,7 +707,10 @@ class TestOwnerCommandRefusedByTesla:
     ):
         api, vehicle = owner_car("off", fleet=fleet_token())
         suffix, send = COMMANDS[command]
+        prime(command, api, vehicle, requests_mock)
         answer = self.FLEET_REFUSALS[refusal]
+        # A stop first asks the free online state; an online car gets it
+        requests_mock.get(OWNER_URL + "/5YJ3E1EA1KF000001", json=ONLINE)
         cmd = requests_mock.post(FLEET_URL + "/5YJ3E1EA1KF000001" + suffix, **answer)
 
         assert send(api, vehicle) == self.FLEET_RETURNS[command](answer["json"])
@@ -822,7 +818,8 @@ class TestVehiclesNotYetListed:
         )
         posts = requests_mock.register_uri("POST", rm.ANY, json={})
 
-        assert api.car_api_charge({"charge": False}) == "error"
+        assert api.loadVehicleList() is True
+        assert owner_provider(api).stopCharging("5YJ3E1EA1KF000001") == REFUSED_OUTCOME
 
         assert listing.call_count == 1
         assert posts.call_count == 0
@@ -844,7 +841,7 @@ class TestPerVehicleRefusalLogging:
         api.setChargeRate(10, vehicle)
         api.setChargeRate(12, vehicle)
         api.wakeVehicle(vehicle)
-        api.car_api_charge({"charge": True})
+        owner_provider(api).startCharging(vehicle.VIN)
 
         lines = self.lines(caplog, "command_signing")
         assert len(lines) == 1
@@ -902,7 +899,7 @@ class TestVehiclePriorityLogsWhy:
     """When every listed car is read-only, VehiclePriority skips TeslaAPI
     without calling it; the skip still logs the per-car reason once."""
 
-    @pytest.mark.parametrize("method", ["setChargeRate", "car_api_charge"])
+    @pytest.mark.parametrize("method", ["setChargeRate"])
     def test_one_line_naming_the_car(self, owner_car, any_http, caplog, method):
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car("required")
@@ -911,9 +908,6 @@ class TestVehiclePriorityLogsWhy:
         setattr(ble, method, Mock(return_value=True))
         calls = {
             "setChargeRate": lambda priority: priority.setChargeRate(10, vehicle),
-            "car_api_charge": lambda priority: priority.car_api_charge(
-                {"charge": True}
-            ),
         }
 
         for _ in range(5):

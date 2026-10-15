@@ -269,11 +269,6 @@ class Policy:
             self.limitOverride = False
             self.fireWebhook("enter")
 
-            # Clear stopAskingToStartCharging so we try charging each car at
-            # least once
-            for vehicle in self.master.vehicleRegistry.attached("TeslaAPI"):
-                vehicle.stopAskingToStartCharging = False
-
         if updateLatch and "latch_period" in policy:
             policy["__latchTime"] = time.time() + policy["latch_period"] * 60
 

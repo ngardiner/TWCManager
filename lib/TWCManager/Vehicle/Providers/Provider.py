@@ -1,12 +1,17 @@
 from typing import Dict, FrozenSet, Optional, Tuple
 
 from ..Reconcile.Outcome import UNSUPPORTED, Outcome
-from .Capability import COMMANDS, STOP_CHARGING, Cost, Declaration
+from .Capability import COMMANDS, START_CHARGING, STOP_CHARGING, Cost, Declaration
 
 # What a cloud provider may not do under each suppression condition: no
-# command under ble_only, and no stop when the user chose a disruptive local
-# stop (chargeStopMode 2/3), which pays nothing
-CLOUD_SUPPRESSED = {"ble_only": COMMANDS, "localStops": frozenset({STOP_CHARGING})}
+# command under ble_only, no stop when the user chose a disruptive local
+# stop (chargeStopMode 2/3), which pays nothing, and under mode 2 no start
+# either: on main a mode-2 start only answered the slaves again
+CLOUD_SUPPRESSED = {
+    "ble_only": COMMANDS,
+    "localStops": frozenset({STOP_CHARGING}),
+    "silentStops": frozenset({START_CHARGING}),
+}
 
 
 def commandMethod(capability) -> str:
