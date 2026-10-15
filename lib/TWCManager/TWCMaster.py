@@ -20,6 +20,7 @@ from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 from TWCManager.Vehicle.Registry import VehicleRegistry
 from TWCManager.Vehicle.Providers import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
+from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits, storeKey
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -120,6 +121,7 @@ class TWCMaster:
         # under it may do I/O, on any thread.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
+        self.heldLimits = HeldLimits(self)
         self.providerOrder = ProviderOrder(self)
         self.providerOrder.register(Gen2TWCProvider(self))
         self.vehicleRegistry.useReadOrder(self.providerOrder.orderReadSources)
@@ -972,17 +974,34 @@ class TWCMaster:
         amps = max(min(newOffer, availableA / self.getRealPowerFactor(availableA)), 0)
         return round(amps, 2)
 
+    def _heldLimitKey(self, ID):
+        # Interim (until Task 10): callers pass a VIN (BLE) or the Tesla API's
+        # numeric vehicle ID. An ID TeslaAPI has listed resolves to its VIN,
+        # adopting any legacy "id:" entry first; otherwise the "id:" entry.
+        key = storeKey(ID)
+        if not key.startswith("id:"):
+            return key
+        carapi = self.getModuleByName("TeslaAPI")
+        try:
+            # No TeslaAPI lock is taken: settingsLock may be held by callers.
+            cars = list(getattr(carapi, "carApiVehicles", None) or [])
+        except TypeError:
+            cars = []
+        for car in cars:
+            vin = getattr(car, "VIN", None)
+            if str(getattr(car, "ID", None)) == str(ID) and vin:
+                self.heldLimits.adoptLegacyId(ID, vin)
+                vinKey = storeKey(vin)
+                if not vinKey.startswith("id:"):
+                    return vinKey
+        return key
+
     def getNormalChargeLimit(self, ID):
-        if "chargeLimits" in self.settings and str(ID) in self.settings["chargeLimits"]:
-            result = self.settings["chargeLimits"][str(ID)]
-            if type(result) is int:
-                result = (result, 0)
-            if result[0] is None:
-                result[0] = 0
-            if result[1] is None:
-                result[1] = 0
-            return (True, result[0], result[1])
-        return (False, None, None)
+        # The legacy tuple: (found, outside, lastApplied), -1 when none held.
+        limit = self.heldLimits._get(self._heldLimitKey(ID))
+        if limit is None:
+            return (False, None, None)
+        return (True, limit.outside, -1 if limit.held is None else limit.held)
 
     def getSlaveByID(self, twcid):
         return self.slaveTWCs[twcid]
@@ -1161,6 +1180,8 @@ class TWCMaster:
                 if key not in self.settings:
                     self.settings[key] = value
             registryBlob = self.settings.get("vehicleRegistry")
+        # Migrates the legacy chargeLimits key; dict work under the lock only
+        self.heldLimits.load()
         # load() tolerates a missing or corrupt blob
         self.vehicleRegistry.load(registryBlob)
 
@@ -1588,17 +1609,7 @@ class TWCMaster:
             logger.warning("Tried to released module %s that was not loaded", module)
 
     def removeNormalChargeLimit(self, ID):
-        with self.settingsLock:
-            if (
-                "chargeLimits" in self.settings
-                and str(ID) in self.settings["chargeLimits"]
-            ):
-                del self.settings["chargeLimits"][str(ID)]
-                changed = True
-            else:
-                changed = False
-        if changed:
-            self.queue_background_task({"cmd": "saveSettings"})
+        self.heldLimits._remove(self._heldLimitKey(ID))
 
     def resetChargeNowAmps(self):
         # Sets chargeNowAmps back to zero, so we follow the green energy
@@ -1640,12 +1651,9 @@ class TWCMaster:
             return False
 
     def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
-        with self.settingsLock:
-            if not "chargeLimits" in self.settings:
-                self.settings["chargeLimits"] = dict()
-
-            self.settings["chargeLimits"][str(ID)] = (outsideLimit, lastApplied)
-        self.queue_background_task({"cmd": "saveSettings"})
+        # The -1/0/None sentinel is stored as held None.
+        held = None if lastApplied in (-1, 0, None) else lastApplied
+        self.heldLimits._set(self._heldLimitKey(ID), outsideLimit, held)
 
     def expireVehicles(self):
         # Forget unclaimed, unasserted vehicles unseen past the forget window

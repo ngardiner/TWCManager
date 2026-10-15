@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import jinja2
 
+from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Control.HTTPControl import (
     ageText,
@@ -37,20 +38,21 @@ def master():
     v.observe("name", "Callandor", "TeslaAPI")
     v.claim("TeslaBLE", True, "paired")
     reg.beginPlugSession("8244")
-    return SimpleNamespace(
+    m = SimpleNamespace(
         vehicleRegistry=reg,
         version="1.4.0",
         modules={},
         settingsLock=threading.RLock(),
         getModuleByName=lambda name: None,
+        queue_background_task=lambda *a, **k: None,
         settings={
             "Vehicles": {VIN: {"chargeSessions": 3, "totalkWh": 12}},
             "VehicleGroups": {},
         },
-        getNormalChargeLimit=lambda key: (
-            (True, 90, 80) if key == VIN else (False, None, None)
-        ),
     )
+    m.heldLimits = HeldLimits(m)
+    m.heldLimits.set(VIN, 90, 80)
+    return m
 
 
 def render(m, error=""):
@@ -65,14 +67,17 @@ def render(m, error=""):
     )
 
 
-def test_held_limit_falls_back_to_api_numeric_id():
+def test_held_limit_reads_the_vin_store_after_adoption():
     m = master()
-    v2 = m.vehicleRegistry.getOrCreate("5YJ3E1EA1KF000002", "TeslaAPI")
-    v2.attach("TeslaAPI", SimpleNamespace(ID=42))
-    m.getNormalChargeLimit = lambda key: (
-        (True, 85, -1) if key == 42 else (False, None, None)
-    )
+    vin2 = "5YJ3E1EA1KF000002"
+    v2 = m.vehicleRegistry.getOrCreate(vin2, "TeslaAPI")
+    m.settings["heldLimits"]["id:42"] = {"outside": 85, "held": None}
+    # a legacy numeric-ID entry shows once TeslaAPI's listing adopts it
+    assert heldLimitText(m, v2) == "—"
+    m.heldLimits.adoptLegacyId(42, vin2)
     assert heldLimitText(m, v2) == "85% (restored)"
+    assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "90% (holding 80%)"
+    m.heldLimits.remove(VIN)
     assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "—"
 
 
