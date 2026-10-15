@@ -77,16 +77,31 @@ def test_note_outcome_bookkeeping():
     assert r.settledAt == 190.0 and s.free(VIN).failingSince is None and s.settled(VIN, CHARGE_LIMIT)
 
 def test_a_failed_paid_wake_sets_no_retry():
-    s = DesiredStore(); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT); a = attempt("FleetAPI"); r.inFlight = a
+    s = DesiredStore(); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT); a = attempt("FleetAPI")._replace(since=s.get(VIN, CHARGE_LIMIT).at); r.inFlight = a
     s.noteOutcome(VIN, CHARGE_LIMIT, a, O.Outcome(O.UNREACHABLE, "wake asleep"), 100.0, paid=True, freeProvider=False)
     assert r.paidAt == 100.0 and r.paidRetryDue is False
 
 def test_a_new_desire_resets_the_per_desire_stamps():
     s = DesiredStore(); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
     r.lastFreeAt, r.paidAt, r.paidRetryDue, r.settledAt, r.lastSentAt = 1.0, 2.0, True, 3.0, 4.0
+    r.paidSends, r.paidSaw, r.lastOutcome, r.lastOutcomeAt = 1, 90, O.Outcome(O.UNREACHABLE, "wake held"), 5.0
     assert s.set(VIN, CHARGE_LIMIT, 50, "heartbeat") is False and r.paidAt == 2.0          # unchanged: nothing reset
     s.set(VIN, CHARGE_LIMIT, 60, "policy")
     assert (r.lastFreeAt, r.paidAt, r.paidRetryDue, r.settledAt, r.lastSentAt) == (0, None, False, None, 4.0)
+    assert (r.paidSends, r.paidSaw, r.lastOutcome, r.lastOutcomeAt) == (0, None, None, 0)   # the NOT_SENT hold is the old desire's (I1)
+
+def test_a_superseded_attempt_feeds_the_free_channel_but_never_the_new_desire():   # C1
+    s = DesiredStore(clock=Clock(1000.0)); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
+    a = attempt("FleetAPI"); r.inFlight = a; s.set(VIN, CHARGE_LIMIT, 60, "policy")
+    assert s.noteOutcome(VIN, CHARGE_LIMIT, a, O.Outcome(O.DONE), 1001.0, paid=True, freeProvider=False)
+    assert r.inFlight is None and (r.settledAt, r.paidAt, r.paidSends, r.lastOutcome, r.lastSentAt) == (None, None, 0, None, 0) and not s.settled(VIN, CHARGE_LIMIT)
+    b = attempt("TeslaBLE"); r.inFlight = b
+    s.noteOutcome(VIN, CHARGE_LIMIT, b, O.Outcome(O.UNREACHABLE, "no reply"), 1002.0, paid=False, freeProvider=True)
+    assert s.free(VIN).failingSince == 1002.0 and r.lastFreeAt == 0
+    r.inFlight = b; s.noteOutcome(VIN, CHARGE_LIMIT, b, O.Outcome(O.UNSUPPORTED, "range"), 1003.0, paid=False, freeProvider=True)
+    assert r.excluded == {}                                                                  # value-dependent: not the new value's
+    r.inFlight = b; s.noteOutcome(VIN, CHARGE_LIMIT, b, O.Outcome(O.REFUSED, "key"), 1004.0, paid=False, freeProvider=True)
+    assert r.excluded == {"TeslaBLE": O.REFUSED}
 
 def test_a_raising_change_callback_is_dropped_and_others_still_run():
     s = DesiredStore(); seen = []

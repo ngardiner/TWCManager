@@ -111,8 +111,11 @@ class AttemptRecord:
         # The last request any provider sent, and the last a free one sent
         self.lastSentAt: float = 0
         self.lastFreeAt: float = 0
-        # The paid or disruptive request for the current desire
+        # The paid or disruptive requests for the current desire, the last
+        # one's stamp and the value believed when it was planned
+        self.paidSends = 0
         self.paidAt: Optional[float] = None
+        self.paidSaw: Any = None
         # That request failed and its one blind retry is unused
         self.paidRetryDue: bool = False
         self.settledAt: Optional[float] = None
@@ -123,7 +126,12 @@ class AttemptRecord:
         # refusal does not
         self.excluded = {p: k for p, k in self.excluded.items() if k != UNSUPPORTED}
         self.lastFreeAt = 0
+        # The NOT_SENT hold belongs to the desire it came from (I1)
+        self.lastOutcome = None
+        self.lastOutcomeAt = 0
+        self.paidSends = 0
         self.paidAt = None
+        self.paidSaw = None
         self.paidRetryDue = False
         self.settledAt = None
 
@@ -340,10 +348,19 @@ class DesiredStore:
             if outcome.detail in LANE_DETAILS:
                 # The attempt never ran
                 return True
-            record.lastOutcome = outcome
-            record.lastOutcomeAt = now
-            record.lastProvider = attempt.provider
-            if not isNotSent(outcome):
+            want = state.desired.get(aspect)
+            # Only an attempt made for the current desire settles it or
+            # spends its budget (C1); any attempt feeds the free channel
+            current = (
+                want is not None
+                and want.value == attempt.value
+                and attempt.since >= want.at
+            )
+            if current:
+                record.lastOutcome = outcome
+                record.lastOutcomeAt = now
+                record.lastProvider = attempt.provider
+            if current and not isNotSent(outcome):
                 record.lastSentAt = now
                 if freeProvider:
                     record.lastFreeAt = now
@@ -351,12 +368,13 @@ class DesiredStore:
                     # One blind retry, after the desire's first paid request
                     # failed; never after a failed wake
                     record.paidRetryDue = (
-                        record.paidAt is None
+                        record.paidSends == 0
                         and outcome.kind in RETRYABLE
                         and not outcome.detail.startswith("wake ")
                     )
+                    record.paidSends += 1
                     record.paidAt = now
-            if outcome.kind in SETTLED:
+            if current and outcome.kind in SETTLED:
                 record.settledAt = now
             if not freeProvider:
                 pass
@@ -371,7 +389,8 @@ class DesiredStore:
                 or outcome.kind == REFUSED
             ):
                 state.free.failure(now)
-            if outcome.kind in EXCLUDING:
+            if outcome.kind == REFUSED or (current and outcome.kind in EXCLUDING):
+                # UNSUPPORTED can depend on the value: a superseded one's not
                 record.exclude(attempt.provider, outcome.kind)
             return True
 
