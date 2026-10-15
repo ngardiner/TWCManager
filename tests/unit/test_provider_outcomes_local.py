@@ -24,14 +24,6 @@ def test_ble_key_refusal_is_refused_and_the_claim_follows_the_pairing_window():
     ble._claimUnproven(v); ble._setBleStatus(VIN, "pairing", pairingSent=__import__("time").time())
     assert p.startCharging(VIN) == O.Outcome(O.ERROR, "pairing") and "TeslaBLE" in reg.get(VIN).claims    # inside the window: not a refusal of the key; retryable
 
-def test_ble_probe_is_one_non_waking_body_controller_query_that_proves_nothing():
-    ble, reg, master = make(); (p,) = ble.providers(); v = reg.getOrCreate(VIN, "t"); ble._claimUnproven(v)
-    ble._run_command_with_timeout = Mock(return_value=(b"", b"ok", 0)); ble.sendPrivateKey = Mock(return_value=True); ble._execute_with_retry = Mock(side_effect=AssertionError("no retry wrapper"))
-    master.settings.setdefault("Vehicles", {})[VIN] = {"privKey": "k"}
-    assert p.probe(VIN).kind == O.DONE and ble._run_command_with_timeout.call_args.args[0][-1] == "body-controller-state"
-    assert reg.get(VIN).claims["TeslaBLE"].status == "unproven"                                           # no proof from a VCSEC answer
-    ble._run_command_with_timeout = Mock(return_value=(None, None, None)); assert p.probe(VIN).kind == O.UNREACHABLE
-
 def test_ble_schedule_block_is_satisfied_without_a_command():
     ble, reg, master = make(); (p,) = ble.providers(); ble._scheduleBlocksStart = lambda vin: True; ble.sendCommand = Mock()
     assert p.startCharging(VIN) == O.Outcome(O.SATISFIED, "scheduled") and ble.sendCommand.call_count == 0
@@ -82,11 +74,11 @@ def _wire(ble, stderr, rc):
     ble._run_command_with_timeout = Mock(return_value=(b"", stderr, rc)); ble.maxRetries = 0
 
 
-def test_a_failing_command_or_probe_logs_no_raw_output_at_info_or_above():
+def test_a_failing_command_logs_no_raw_output_at_info_or_above():
     ble, reg, master = make(); (p,) = ble.providers(); _wire(ble, b"SECRET-MARKER connection failed", 1)
     h = _Records(); bleModule.logger.addHandler(h); level = bleModule.logger.level; bleModule.logger.setLevel(logging.DEBUG)
     try:
-        assert p.stopCharging(VIN) == O.Outcome(O.UNREACHABLE, "no reply") and p.probe(VIN) == O.Outcome(O.UNREACHABLE, "no reply")
+        assert p.stopCharging(VIN) == O.Outcome(O.UNREACHABLE, "no reply")
     finally:
         bleModule.logger.removeHandler(h); bleModule.logger.setLevel(level)
     loud = [r.getMessage() for r in h.records if r.levelno >= logging.INFO]
@@ -100,27 +92,23 @@ def test_key_refusal_inside_the_pairing_window_is_a_retryable_error_and_keeps_th
     ble, reg, master = make(); (p,) = ble.providers(); v = reg.getOrCreate(VIN, "t"); ble._claimUnproven(v)
     ble._setBleStatus(VIN, "pairing", pairingSent=time.time()); _wire(ble, REFUSAL, 1)
     assert p.setChargeLimit(VIN, 80) == O.Outcome(O.ERROR, "pairing") and "TeslaBLE" in reg.get(VIN).claims
-    assert p.probe(VIN) == O.Outcome(O.ERROR, "pairing")
 
 
 def test_key_refusal_outside_the_pairing_window_is_refused_and_drops_the_claim():
     ble, reg, master = make(); (p,) = ble.providers(); ble._setBleStatus(VIN, "paired"); _wire(ble, REFUSAL, 1)
     assert p.setChargeLimit(VIN, 80) == O.Outcome(O.REFUSED, "key") and "TeslaBLE" not in reg.get(VIN).claims
-    assert p.probe(VIN) == O.Outcome(O.REFUSED, "key")
 
 
-def test_an_answered_probe_closes_an_open_circuit_breaker():
+def test_an_open_breaker_half_opens_after_recovery_and_a_successful_command_closes_it():
     ble, reg, master = make(); (p,) = ble.providers(); v = reg.getOrCreate(VIN, "t"); ble._claimUnproven(v)
     for _ in range(ble.circuit_breaker.failure_threshold):
         ble.circuit_breaker.record_failure(VIN)
     _wire(ble, b"ok", 0); assert ble.circuit_breaker.is_open(VIN)
-    assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply") and ble._run_command_with_timeout.call_count == 0
-    assert p.probe(VIN).kind == O.DONE and not ble.circuit_breaker.is_open(VIN)
-    assert p.setAmps(VIN, 10).kind == O.DONE and ble._run_command_with_timeout.call_count == 2
-    _wire(ble, b"", None); ble._run_command_with_timeout = Mock(return_value=(None, None, None))
-    for _ in range(ble.circuit_breaker.failure_threshold + 1):
-        p.probe(VIN)
-    assert not ble.circuit_breaker.is_open(VIN)                                                           # a failed probe records no failure
+    assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply") and ble._run_command_with_timeout.call_count == 0   # open: nothing sent
+    ble.circuit_breaker.failure_times[VIN] -= ble.circuit_breaker.recovery_timeout + 1                                   # recovery passed: half-open
+    assert not ble.circuit_breaker.is_open(VIN) and ble.circuit_breaker.failures[VIN] >= ble.circuit_breaker.failure_threshold
+    assert p.setAmps(VIN, 10).kind == O.DONE and ble._run_command_with_timeout.call_count == 1 and ble.circuit_breaker.failures[VIN] == 0
+    ble.circuit_breaker.record_failure(VIN); assert not ble.circuit_breaker.is_open(VIN)                                 # closed: one failure no longer trips it
 
 
 def test_bare_twcslave_has_no_stop_requested():

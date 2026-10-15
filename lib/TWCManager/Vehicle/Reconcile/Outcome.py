@@ -1,9 +1,9 @@
 # The outcome vocabulary every vehicle command reports in.
 #
 # Provider return contract: every Provider command method (setChargeLimit,
-# startCharging, stopCharging, setAmps, wake, probe) returns an Outcome,
+# startCharging, stopCharging, setAmps, wake) returns an Outcome,
 # never None, True, "success" or a dict. A raised exception is converted by
-# the lane to Outcome(ERROR, <exception type name>). An Outcome's detail is
+# the worker to Outcome(ERROR, <exception type name>). An Outcome's detail is
 # a short reason or status code ("401", "timeout", "complete"), never a
 # response body or a token.
 from typing import NamedTuple

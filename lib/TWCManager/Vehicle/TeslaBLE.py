@@ -498,25 +498,6 @@ class TeslaBLE:
             output = self.sendCommand(vin, command, args)
         return self._classify(vin, output)
 
-    def probe(self, vin):
-        """One non-waking reachability check: tesla-control's VCSEC
-        body-controller-state query, answered while infotainment sleeps and
-        without an authenticated session. One shot (no retry backoff),
-        bounded by commandTimeout under _bleLock; an answer is not key
-        proof."""
-        vin = str(vin).upper()
-        self._keyRefusal.refused = False
-        output = self._sendCommand_internal(
-            vin, "body-controller-state", noteProof=False
-        )
-        outcome = self._classify(vin, output)
-        if output is not None and outcome.kind != REFUSED:
-            # The channel is demonstrably up: close an open breaker so the
-            # command the probe clears the way for is sent. A failed probe
-            # records nothing
-            self.circuit_breaker.record_success(vin)
-        return outcome
-
     def _classify(self, vin, output):
         if getattr(self._keyRefusal, "refused", False):
             if self._inPairingWindow(vin):
@@ -627,11 +608,10 @@ class TeslaBLE:
         return self._execute_with_retry(self._sendCommand_internal, vin, command, args)
 
     @_serialized
-    def _sendCommand_internal(self, vin, command, args=None, noteProof=True):
+    def _sendCommand_internal(self, vin, command, args=None):
         """
         Internal sendCommand implementation (called by retry wrapper).
-        Returns command output string or None on failure. noteProof False:
-        an answer does not count as proof of the key (probe).
+        Returns command output string or None on failure.
         """
         self._keyRefusal.refused = False
         try:
@@ -707,8 +687,7 @@ class TeslaBLE:
                         f"BLE command '{command}' already satisfied: {output[:200]}"
                     )
                     # The car executed and answered a signed command.
-                    if noteProof:
-                        self._safeNote(self._noteBleProof, vin)
+                    self._safeNote(self._noteBleProof, vin)
                     return output
 
                 # The -debug output carries session detail: DEBUG only
@@ -727,8 +706,7 @@ class TeslaBLE:
                 if len(output) > 200
                 else output
             )
-            if noteProof:
-                self._safeNote(self._noteBleProof, vin)
+            self._safeNote(self._noteBleProof, vin)
             return output or "ok"
 
         except Exception as e:

@@ -2,16 +2,21 @@
 #
 # Vehicle commands (especially over BLE) can take minutes when they retry.
 # The main loop must keep servicing the TWC serial link, so callers put()
-# commands here and return immediately. The worker runs one command at a
-# time against the vehicle module (normally VehiclePriority), which keeps
-# its synchronous BLE -> Fleet API fallback.
+# commands here and return immediately. The worker runs one entry at a time.
 #
-# Pending commands coalesce per (cmd, vin): a later command for the same
-# vehicle (or the same vehicle-less "all cars" target) replaces the pending
-# one. Stop-charging commands run before anything else. cancel() lets the
-# master drop pending entries that a newer decision has made moot.
+# Pending entries coalesce per key: a later entry with the same key replaces
+# the pending one. High entries (stops) run before anything else. remove()
+# lets a caller drop pending entries that a newer decision has made moot. At
+# shutdown, close() drops the rest and waitDrained() lets the stops finish.
+#
+# Two kinds of instance: the legacy one (run=None) dispatches command dicts
+# to the vehicle module (normally VehiclePriority) until Task 13; the
+# attempt workers (Vehicle/Reconcile/Run.py) pass their own run, key, isHigh,
+# report and lost. Every entry such an instance accepts is reported exactly
+# once, through report or lost. Callbacks never run under _cond.
 import collections
 import threading
+import time
 import traceback
 
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -40,6 +45,8 @@ def _setAmps(module, task):
 
 
 class VehicleCommandQueue:
+    MAX_PENDING = 64
+
     _DISPATCH = {
         "charge": lambda module, task: module.car_api_charge(task),
         "applyChargeLimit": lambda module, task: module.applyChargeLimit(
@@ -51,14 +58,37 @@ class VehicleCommandQueue:
         "setAmps": lambda module, task: _setAmps(module, task),
     }
 
-    def __init__(self, resolve_module):
+    def __init__(
+        self,
+        resolve_module=None,
+        *,
+        name="VehicleCommandQueue",
+        run=None,
+        key=None,
+        isHigh=None,
+        report=None,
+        lost=None,
+        inline=False,
+    ):
         self._resolve_module = resolve_module
+        self.name = name
+        self._legacy = run is None
+        self._runEntry = self._execute if run is None else run
+        self._keyOf = key or self._key
+        self._isHigh = isHigh or self._is_high_priority
+        self._report = report
+        self._lost = lost
+        self.inline = inline
         self._cond = threading.Condition()
         self._high = collections.OrderedDict()
         self._low = collections.OrderedDict()
         self._busy = False
+        self._running = None
         self._draining = False
         self._thread = None
+        # The worker thread is between start() and its exit
+        self._live = False
+        self._overflowWarned = False
 
     @staticmethod
     def _key(task):
@@ -74,78 +104,202 @@ class VehicleCommandQueue:
         return task["cmd"] == "charge" and "charge" in task and not task["charge"]
 
     def start(self):
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(
-            target=self._run, name="VehicleCommandQueue", daemon=True
-        )
+        with self._cond:
+            if self._thread is not None or self.inline or self._draining:
+                return
+            self._thread = threading.Thread(
+                target=self._run, name=self.name, daemon=True
+            )
+            self._live = True
         self._thread.start()
 
-    def put(self, task, callback=None):
+    # --- reporting (never under _cond) ---
+
+    def _lose(self, losers):
+        for entry, detail in losers:
+            if self._lost is None:
+                logger.debug("%s: %s vehicle command dropped", self.name, detail)
+                continue
+            try:
+                self._lost(entry, detail)
+            except Exception as e:
+                logger.warning(
+                    "%s lost callback raised %s", self.name, type(e).__name__
+                )
+
+    def _deliver(self, entry, callback, result):
+        for fn, args in ((callback, (result,)), (self._report, (entry, result))):
+            if fn is None:
+                continue
+            try:
+                fn(*args)
+            except Exception as e:
+                logger.error("%s callback raised %s", self.name, type(e).__name__)
+
+    # --- the queue ---
+
+    def put(self, entry, callback=None) -> bool:
+        if self._legacy and not (isinstance(entry, dict) and "cmd" in entry):
+            logger.error("Dropping malformed vehicle command: %r", entry)
+            return False
         try:
-            if not isinstance(task, dict) or "cmd" not in task:
-                logger.error("Dropping malformed vehicle command: %r", task)
-                return
-            key = self._key(task)
-            high = self._is_high_priority(task)
-            with self._cond:
-                if self._draining and not high:
-                    logger.debug("Shutting down; dropping vehicle command %r", task)
-                    return
+            key, high = self._keyOf(entry), bool(self._isHigh(entry))
+        except Exception as e:
+            logger.error("Failed to queue vehicle command: %s", type(e).__name__)
+            return False
+        losers, accepted, warn = [], True, False
+        with self._cond:
+            if self._draining and not (high and (self.inline or self._live)):
+                # Shutting down: only a stop a worker can still run is taken
+                losers.append((entry, "dropped"))
+                accepted = False
+            elif self.inline:
+                self._running, self._busy = entry, True
+            else:
                 table, other = (
                     (self._high, self._low) if high else (self._low, self._high)
                 )
-                other.pop(key, None)
-                table[key] = (task, callback)
-                self._cond.notify_all()
-        except Exception:
-            logger.error("Failed to queue vehicle command: %s", traceback.format_exc())
+                for t in (other, table):
+                    if key in t:
+                        losers.append((t[key][0], "replaced"))
+                        if t is other:
+                            del t[key]
+                if (
+                    key not in table
+                    and len(self._high) + len(self._low) >= self.MAX_PENDING
+                ):
+                    warn = not self._overflowWarned
+                    self._overflowWarned = True
+                    if self._low:
+                        losers.append((self._low.popitem(last=False)[1][0], "dropped"))
+                    else:
+                        # A queue full of stops keeps them: the newcomer loses
+                        losers.append((entry, "dropped"))
+                        accepted = False
+                if accepted:
+                    # A replacement keeps its place in the queue
+                    table[key] = (entry, callback)
+                    self._cond.notify_all()
+        if warn:
+            logger.warning(
+                "%s is full (%d pending): dropping the oldest commands",
+                self.name,
+                self.MAX_PENDING,
+            )
+        self._lose(losers)
+        if accepted and self.inline:
+            self._runOne(entry, callback)
+        return accepted
 
-    def cancel(self, cmd, match):
-        # Drop pending (not running) entries for `cmd` whose task satisfies
-        # `match`. Returns how many were removed. The running entry is left
-        # alone: it may already be talking to the car.
-        removed = 0
+    def remove(self, match) -> int:
+        # Pending (not running) entries for which match is true. The running
+        # entry is left alone: it may already be talking to the car.
+        losers = []
         with self._cond:
             for table in (self._high, self._low):
-                doomed = [
-                    key
-                    for key, (task, _) in table.items()
-                    if task["cmd"] == cmd and match(task)
-                ]
-                for key in doomed:
-                    del table[key]
-                    removed += 1
-        if removed:
-            logger.debug("Cancelled %d pending %s command(s)", removed, cmd)
-        return removed
+                for key in [k for k, (e, _) in table.items() if match(e)]:
+                    losers.append((table.pop(key)[0], "cancelled"))
+        if losers:
+            logger.debug("%s: cancelled %d pending command(s)", self.name, len(losers))
+        self._lose(losers)
+        return len(losers)
 
-    def drain_high_priority(self, timeout):
+    def cancel(self, cmd, match):
+        # Legacy: until Task 13
+        return self.remove(lambda task: task["cmd"] == cmd and match(task))
+
+    def pending(self) -> int:
+        with self._cond:
+            return len(self._high) + len(self._low)
+
+    @property
+    def busy(self) -> bool:
+        with self._cond:
+            return self._busy
+
+    def _entries(self):
+        # Test-only snapshot, high then low
+        with self._cond:
+            return [e for e, _ in list(self._high.values()) + list(self._low.values())]
+
+    def summary(self) -> dict:
+        with self._cond:
+            running = self._running
+            if running is not None and hasattr(running, "_asdict"):
+                running = running._asdict()
+            return {
+                "pending": len(self._high) + len(self._low),
+                "busy": self._busy,
+                "running": running,
+                "started": self._thread is not None,
+                "closed": self._draining,
+            }
+
+    # --- shutdown ---
+
+    def close(self) -> None:
+        # No new non-high entries; every pending non-high entry is dropped
         with self._cond:
             self._draining = True
-            if self._low:
-                logger.info(
-                    "Shutting down; dropping %d pending vehicle command(s)",
-                    len(self._low),
-                )
-                self._low.clear()
-            done = self._cond.wait_for(
-                lambda: not self._high and not self._busy, timeout
+            losers = [(e, "dropped") for e, _ in self._low.values()]
+            self._low.clear()
+            self._cond.notify_all()
+        if losers:
+            logger.info(
+                "%s: shutting down; dropping %d pending vehicle command(s)",
+                self.name,
+                len(losers),
             )
-            if not done:
+        self._lose(losers)
+
+    def waitDrained(self, deadline) -> bool:
+        # deadline is a time.monotonic stamp. Waits for the pending high
+        # entries and the running one; on timeout, what has not started
+        # never will
+        with self._cond:
+            if self._thread is None and not self.inline:
+                # Never started (startup died first): nothing will run them
+                done = False
+            else:
+                done = self._cond.wait_for(
+                    lambda: not self._high and not self._busy,
+                    max(0.0, deadline - time.monotonic()),
+                )
+            losers = []
+            if not done and (self._lost is not None or self._thread is None):
+                losers = [(e, "dropped") for e, _ in self._high.values()]
+                self._high.clear()
+            elif not done:
                 logger.warning(
                     "Shutting down with vehicle commands still pending: %r",
                     [task for task, _ in self._high.values()],
                 )
-            return done
+        if losers:
+            logger.info(
+                "%s: drain timed out with %d stop(s) pending", self.name, len(losers)
+            )
+        self._lose(losers)
+        return done
+
+    def drain_high_priority(self, timeout):
+        self.close()
+        return self.waitDrained(time.monotonic() + timeout)
+
+    # --- running ---
 
     def _next(self):
         with self._cond:
-            self._cond.wait_for(lambda: self._high or self._low)
+            self._cond.wait_for(lambda: self._high or self._low or self._draining)
+            if not self._high and not self._low:
+                # Drained: nothing left to run
+                return None
             table = self._high if self._high else self._low
-            _, entry = table.popitem(last=False)
-            self._busy = True
-            return entry
+            _, (entry, callback) = table.popitem(last=False)
+            self._running, self._busy = entry, True
+            if not self._high and not self._low:
+                # The backlog has cleared: the next overflow warns again
+                self._overflowWarned = False
+            return entry, callback
 
     def _execute(self, task):
         try:
@@ -165,26 +319,36 @@ class VehicleCommandQueue:
             )
             return False
 
+    def _runOne(self, entry, callback):
+        # The callback and report run before busy clears, so a drain that
+        # sees the queue idle has seen every report
+        try:
+            try:
+                result = self._runEntry(entry)
+            except BaseException as e:
+                logger.error("%s: run raised %s", self.name, type(e).__name__)
+                self._deliver(entry, None, e)
+                if not isinstance(e, Exception):
+                    raise
+            else:
+                self._deliver(entry, callback, result)
+        finally:
+            # Clear even on BaseException so waitDrained and waiters aren't
+            # left blocked on a dead worker. Inline callers may overlap: busy
+            # shows the latest one running
+            with self._cond:
+                if self._running is entry:
+                    self._running = None
+                self._busy = self._running is not None
+                self._cond.notify_all()
+
     def _run(self):
         try:
             while True:
-                task, callback = self._next()
-                try:
-                    result = self._execute(task)
-                    if callback is not None:
-                        try:
-                            callback(result)
-                        except Exception:
-                            logger.error(
-                                "Vehicle command callback failed: %s",
-                                traceback.format_exc(),
-                            )
-                finally:
-                    # Clear even on BaseException so drain_high_priority and
-                    # waiters aren't left blocked on a dead worker.
-                    with self._cond:
-                        self._busy = False
-                        self._cond.notify_all()
+                item = self._next()
+                if item is None:
+                    return
+                self._runOne(*item)
         except BaseException:
             logger.error(
                 "Vehicle command worker thread %s exiting: %s",
@@ -192,3 +356,7 @@ class VehicleCommandQueue:
                 traceback.format_exc(),
             )
             raise
+        finally:
+            with self._cond:
+                self._live = False
+                self._cond.notify_all()

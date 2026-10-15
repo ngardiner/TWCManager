@@ -164,10 +164,10 @@ class ProviderOrder:
 
     def debugCommand(self, command: str, vin: str, parameters: str) -> bool:
         """The debug page's /api/sendTeslaAPICommand: one one-shot attempt on
-        a lane, through the first provider able to carry it. One provider per
+        a worker, through the first provider able to carry it. One provider per
         command, no fall-through and no retry: a user-initiated command is
         never sent twice. Returns True when an attempt was submitted; the
-        lane logs its outcome at INFO."""
+        worker logs its outcome at INFO."""
         vehicle = self.master.vehicleRegistry.get(vin)
         if vehicle is None:
             return False
@@ -189,9 +189,9 @@ class ProviderOrder:
             capability = WAKE
         else:
             return False
-        lanes = getattr(self.master, "lanes", None)
-        if lanes is None:
-            logger.debug("Debug %s for %s: no lanes", command, vin)
+        workers = getattr(self.master, "workers", None)
+        if workers is None:
+            logger.debug("Debug %s for %s: no workers", command, vin)
             return False
         # Readiness only for a rate (localRule False): the TWC cannot lift
         # the car's own current limit (#660). A TWC provider (no module) is
@@ -220,7 +220,7 @@ class ProviderOrder:
             restore=False,
             since=time.time(),
         )
-        return bool(lanes.submit(attempt))
+        return bool(workers.submit(attempt))
 
 
 def _succeeded(result) -> bool:

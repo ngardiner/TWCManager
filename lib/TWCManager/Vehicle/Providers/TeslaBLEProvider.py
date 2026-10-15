@@ -36,6 +36,7 @@ class TeslaBLEProvider(Provider):
     name = "TeslaBLE"
     rank = 2
     local = True
+    worker = "ble"
 
     def __init__(self, ble, master):
         self.ble = ble
@@ -61,11 +62,8 @@ class TeslaBLEProvider(Provider):
         return (1, vehicleMaxAmps(vehicle, configConfig or {}))
 
     # Command methods: one tesla-control command each, classified by
-    # TeslaBLE.commandOutcome. No pre-wake: the lane wakes first when the
+    # TeslaBLE.commandOutcome. No pre-wake: the worker wakes first when the
     # attempt says so.
-
-    def probe(self, vin: str) -> Outcome:
-        return self.ble.probe(vin)
 
     def setChargeLimit(self, vin: str, limit: int) -> Outcome:
         return self.ble.commandOutcome(vin, "charging-set-limit", int(limit))

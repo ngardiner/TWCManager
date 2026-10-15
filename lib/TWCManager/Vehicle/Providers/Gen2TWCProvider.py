@@ -28,6 +28,7 @@ class Gen2TWCProvider(Provider):
     name = "Gen2TWC"
     rank = 0
     local = True
+    worker = "local"
     module = None
 
     def __init__(self, master):
