@@ -18,7 +18,7 @@ SCOPES = {
 SCOPE_LABELS = {
     "read": "vehicle data",
     "command": "charge commands",
-    "energy": "Powerwall Storm Watch",
+    "energy": "Powerwall Storm Watch and Gen3 Wall Connector VINs",
 }
 SOURCES = ("synced", "pasted", "login")
 PAUSE_SECONDS = 3600

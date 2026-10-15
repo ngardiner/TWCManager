@@ -24,7 +24,11 @@ The fetch runs on the background thread only (``refreshVitals``, queued by
 ``Gen3TWCs.allEVSEs`` when the cache is stale); every property reads the
 cache, so the serial loop never waits on HTTP.  Vitals carry no VIN: a
 connect begins an anonymous plug session in the vehicle registry, and
-``_correlate`` names the car when the evidence allows.
+``_correlate`` names the car when the evidence allows.  The energy site's
+live_status may name it (``cloudVin``, set by the controller's
+WallConnectorVinReader), matched by the unit's DIN: the ``din`` device key,
+else ``<part_number>--<serial_number>`` from ``GET /api/1/version``
+(unverified on hardware).
 
 Protocol references (no code copied):
   - Klangen82/tesla-wall-connector-control (vitals API format)
@@ -90,6 +94,8 @@ class Gen3TWC(EVSEInstance):
         self.lastTarget: float = 0.0
         # Set by the energy-site reader when the cloud names the car here
         self.cloudVin: Optional[str] = None
+        # The /api/1/version answer; {} once fetched without a part number
+        self._version: Optional[dict] = None
 
     # ------------------------------------------------------------------
     # Vitals: the cache, and the background-thread fetch
@@ -140,6 +146,42 @@ class Gen3TWC(EVSEInstance):
         self.controller.noteVitals(self, rising)
         return True
 
+    @property
+    def din(self) -> Optional[str]:
+        """The unit's DIN as the energy site lists it: the ``din`` device
+        key, else ``<part_number>--<serial_number>`` from the version
+        (an unverified guess at the format), else None."""
+        configured = self.device_cfg.get("din")
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip()
+        version = self._version or {}
+        part, serial = version.get("part_number"), version.get("serial_number")
+        if part and serial:
+            return f"{part}--{serial}"
+        return None
+
+    def refreshVersion(self) -> bool:
+        """Fetch ``/api/1/version`` once.  Background thread only; a failure
+        leaves ``_version`` None, so the next vitals retry it."""
+        try:
+            import urllib.request
+            import json
+
+            url = f"http://{self._ip}/api/1/version"
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                data = json.loads(resp.read().decode())
+            if not isinstance(data, dict):
+                raise ValueError("version is not an object")
+        except Exception as exc:
+            logger.debug("Gen3TWC %s version fetch failed: %s", self._ip, exc)
+            return False
+        part, serial = data.get("part_number"), data.get("serial_number")
+        if isinstance(part, str) and part and isinstance(serial, str) and serial:
+            self._version = {"part_number": part, "serial_number": serial}
+        else:
+            self._version = {}
+        return True
+
     def _registry(self):
         return getattr(self.master, "vehicleRegistry", None)
 
@@ -148,9 +190,14 @@ class Gen3TWC(EVSEInstance):
         if registry is None:
             return
         if rising:
-            registry.beginPlugSession(self.pointId)
-            self._correlate()
+            current = registry.vehicleAt(self.pointId)
+            # A retried edge whose earlier attempt already named the car
+            # (and then raised) must not open a second, orphan session
+            if current is None or current.isAnonymous:
+                registry.beginPlugSession(self.pointId)
+                self._correlate()
         elif falling:
+            self.cloudVin = None
             # Before the session ends, while the car is still at the point:
             # this unit's own pluggedIn=True would otherwise keep it a fresh
             # correlation candidate for the next car
