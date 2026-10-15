@@ -1,7 +1,8 @@
 # tests/unit/test_carapivehicle_registry.py
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 from tests.unit.teslatokens import FakeMaster, fleet_token, new_api
+from TWCManager.Vehicle.Reconcile.Outcome import DONE, Outcome
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 VIN = "5YJ3E1EA1KF000001"
@@ -136,7 +137,7 @@ def test_debug_interface_resolves_by_vin():
     api, reg = api_with_registry()
     api.storeToken(fleet_token())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    api.wakeVehicle = Mock(return_value=True)
+    api.wakeOutcome = Mock(return_value=Outcome(DONE))
     master = api.master
     master.providerOrder = ProviderOrder(master)
     for p in api.providers():
@@ -144,7 +145,7 @@ def test_debug_interface_resolves_by_vin():
     master.lanes = Lanes(master, inline=True)
     # True: a one-shot attempt was submitted (inline here, so it has run)
     assert master.providerOrder.debugCommand("wakeVehicle", VIN, "{}") is True
-    api.wakeVehicle.assert_called_once_with(api.getCarApiVehicles()[0])
+    api.wakeOutcome.assert_called_once_with(api.getCarApiVehicles()[0], now=ANY)
     assert (
         master.providerOrder.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}")
         is False

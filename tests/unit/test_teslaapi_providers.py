@@ -6,6 +6,7 @@ import pytest
 from requests_mock import ANY
 
 from TWCManager.Vehicle.Providers import Capability as C
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.test_carapivehicle_registry import api_with_registry, VIN
 from tests.unit.teslatokens import fleet_token, owner_token
 
@@ -79,14 +80,16 @@ def test_fleet_commands_resolve_the_car_by_vin():
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.getCarApiVehicles()[0]
     owner, fleet = api.providers()
-    api.setChargeRate = Mock(return_value=True)
-    api.wakeVehicle = Mock(return_value=True)
-    assert fleet.setAmps(VIN, 10) is True
-    api.setChargeRate.assert_called_once_with(10, vehicle=car)
-    assert fleet.wake(VIN) is True
-    api.wakeVehicle.assert_called_once_with(car)
-    assert fleet.setAmps("5YJ3E1EA1KF000009", 10) is False
-    assert fleet.wake("5YJ3E1EA1KF000009") is False
+    api.command = Mock(return_value=O.Outcome(O.DONE))
+    api.wakeOutcome = Mock(return_value=O.Outcome(O.DONE))
+    fleet.clock = lambda: 1000.0
+    assert fleet.setAmps(VIN, 10) == O.Outcome(O.DONE)
+    api.command.assert_called_once_with(car, "set_charging_amps", {"charging_amps": 10})
+    assert fleet.wake(VIN) == O.Outcome(O.DONE)
+    api.wakeOutcome.assert_called_once_with(car, now=1000.0)
+    assert fleet.setAmps("5YJ3E1EA1KF000009", 10) == O.Outcome(O.UNSUPPORTED, "not listed")
+    assert fleet.wake("5YJ3E1EA1KF000009") == O.Outcome(O.UNSUPPORTED, "not listed")
+    assert owner.setAmps(VIN, 10).kind == O.UNSUPPORTED    # Owner declares no commands
 
 
 def test_read_source_passes_its_slot_to_the_car():
