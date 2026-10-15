@@ -13,6 +13,8 @@ class ReadSource:
     name: str = ""
     order: int = 0
     fields: FrozenSet[str] = frozenset()
+    # The name of the owning provider; "" = unowned
+    provider: str = ""
 
     def canRead(self, vehicle) -> bool:
         return True
