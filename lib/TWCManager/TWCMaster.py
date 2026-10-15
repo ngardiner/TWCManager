@@ -515,10 +515,10 @@ class TWCMaster:
     def distributeEVSEPower(self) -> None:
         """Centralized watt-based power distribution across charging points.
 
-        Replaces the per-slave fair-share amps calculation in send_master_heartbeat
-        with a controller-agnostic algorithm that allocates per charging point:
-        a TWC and the car it serves are one point, budgeted once.  After this
-        method runs:
+        Replaces the per-slave fair-share amps calculation in
+        receive_slave_heartbeat with a controller-agnostic algorithm that
+        allocates per charging point: a TWC and the car it serves are one
+        point, budgeted once.  After this method runs:
         - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it
           (and applies chargeRateControl for the car on it).
         - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
@@ -618,11 +618,13 @@ class TWCMaster:
             point.setTargetPower(offer)
             offers.append((point.ID, offer))
 
-        logger.debug(
-            "distributeEVSEPower: %d W over %s",
-            available_watts,
-            ", ".join("%s=%d W" % (pid, watts) for pid, watts in offers) or "no points",
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "distributeEVSEPower: %d W over %s",
+                available_watts,
+                ", ".join("%s=%d W" % (pid, watts) for pid, watts in offers)
+                or "no points",
+            )
 
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]

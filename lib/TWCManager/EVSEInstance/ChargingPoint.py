@@ -176,10 +176,16 @@ def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]
     Endpoints sharing a vehicleKey form one point keyed by it; an endpoint
     with no vehicleKey is its own point keyed by its ID. Points keep the
     order of their first endpoint.
+
+    A point holds at most one local endpoint: every local member gets the
+    whole target, so a second TWC claiming the same car (a stale lastVIN)
+    is its own point keyed by its ID and budgeted separately.
     """
     groups = {}
     for e in endpoints:
         key = e.vehicleKey
         key = e.ID if key is None else _groupKey(key)
+        if e.isLocal and any(m.isLocal for m in groups.get(key, ())):
+            key = e.ID
         groups.setdefault(key, []).append(e)
     return [ChargingPoint(master, key, members) for key, members in groups.items()]

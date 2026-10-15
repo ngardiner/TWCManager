@@ -23,6 +23,11 @@ def test_grouping_is_by_vehicle_key_and_merge_count_may_be_one():
     assert pts[0].endpoints == [twc, car] and pts[0].isLocal and pts[0].currentVIN == VIN and pts[0].vehicleKey == VIN
     assert pts[1].endpoints == [idle] and pts[1].vehicleKey == "Gen2TWC-8245"
 
+def test_a_point_holds_at_most_one_local_endpoint():                               # review I1
+    t1 = ep("Gen2TWC-8244", VIN, local=True); t2 = ep("Gen2TWC-8245", VIN.lower(), local=True); car = ep("Vehicle-" + VIN, VIN)
+    pts = groupEndpoints(Mock(), [t1, t2, car])
+    assert [(p.ID, p.endpoints) for p in pts] == [("Point-" + VIN, [t1, car]), ("Point-Gen2TWC-8245", [t2])]
+
 def test_point_limits_and_occupancy():
     p = ChargingPoint(Mock(), VIN, [ep("a", VIN, local=True, minW=1440, maxW=7680, occupied=True), ep("b", VIN, minW=1200, maxW=3840, ro=True)])
     assert (p.minPower, p.maxPower, p.isReadOnly, p.occupied) == (1440, 3840, False, True)
@@ -179,3 +184,41 @@ def test_gen2_at_00_with_a_sleeping_car_is_two_points_as_before_task_10():      
     assert s.vehicleKey is None and [p.ID for p in m.chargingPoints()] == ["Point-Gen2TWC-8244", "Point-" + VIN]
     m.distributeEVSEPower()
     assert [a["vin"] for a in setAmps(m)] == [VIN] and s._evseTargetAmps == 6
+
+# Fix round 1 (review I1): a stale Gen2 lastVIN must not put two TWCs in one point
+
+def twcs(m): return [s for s in m.getSlaveTWCs()]
+
+def pointsHolding(m, vin): return [p for p in m.chargingPoints() if any(e.ID == "Vehicle-" + vin for e in p.endpoints)]
+
+def test_two_twcs_claiming_one_car_stay_separate_points_within_budget():
+    for staleState, servingVin in ((0x01, True), (0x03, False)):
+        m = real(); car(m, VIN, "Charging"); budget(m, 40)
+        s1 = m.newSlave(b"\x82\x44", 80); s1.lastVIN = VIN; s1.reportedState = 0x01; s1.reportedAmpsMax = 32   # stale: car A left, something else plugged in
+        s2 = m.newSlave(b"\x82\x45", 80); s2.reportedState = staleState; s2.reportedAmpsMax = 32
+        if servingVin: s2.currentVIN = VIN
+        else: s2.lastVIN = VIN                                                      # both TWCs report the same stale lastVIN
+        assert s1.vehicleKey == s2.vehicleKey == VIN
+        assert sorted(p.ID for p in m.chargingPoints()) == ["Point-" + VIN, "Point-Gen2TWC-8245"]
+        assert len(pointsHolding(m, VIN)) == 1
+        for _ in range(3): m.distributeEVSEPower()
+        assert s1._evseTargetAmps + s2._evseTargetAmps <= 40 and setAmps(m) == []
+
+def test_twc_offers_never_exceed_the_budget_or_wiring_across_point_shapes():
+    def serving(s, vin): s.currentVIN = vin; s.reportedState = 0x01; s.reportedAmpsMax = 32
+    def stopped(s, vin): s.lastVIN = vin; s.reportedState = 0x03
+    def stale(s, vin): s.lastVIN = vin; s.reportedState = 0x01; s.reportedAmpsMax = 32      # car left; something else plugged in
+    def idle(s, vin): pass
+    shapes = [((serving, VIN), (stopped, VIN2.lower()), (stale, VIN)),                       # two cars on two TWCs, one stale lastVIN
+              ((stale, VIN), (serving, VIN), (idle, None)),
+              ((stale, VIN2), (stale, VIN2), (stale, VIN2)),
+              ((serving, VIN), (serving, VIN2), (idle, None))]
+    for shape in shapes:
+        for amps in (5, 6, 12, 20, 40, 64, 80, 100):
+            m = real(); car(m, VIN, "Charging"); car(m, VIN2, "Stopped"); budget(m, amps)
+            for i, (make, vin) in enumerate(shape): make(m.newSlave(bytes([0x82, 0x44 + i]), 80), vin)
+            for _ in range(2): m.distributeEVSEPower()
+            offers = [s._evseTargetAmps for s in twcs(m)]
+            assert sum(offers) <= min(amps, CONFIG["config"]["wiringMaxAmpsAllTWCs"]) + 1e-9, (shape, amps, offers)
+            claimed = {v.upper() for _, v in shape if v}                                   # a car on no TWC still queues its own amps
+            assert not [a for a in setAmps(m) if a["vin"] in claimed] and all(len(pointsHolding(m, v)) <= 1 for v in (VIN, VIN2))
