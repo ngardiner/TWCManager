@@ -103,13 +103,28 @@ def test_read_source_passes_its_slot_to_the_car():
     car.update_vehicle_data.assert_called_once_with(slot=api.ownerSlot)
 
 
-def test_a_paused_slot_sends_nothing():
+def test_a_paused_slot_sends_nothing(requests_mock):
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.getCarApiVehicles()[0]
     api.storeToken(owner_token())
     api.ownerSlot.pause()
+    anything = requests_mock.register_uri(
+        ANY, ANY, json={"response": {"state": "online"}}
+    )
     assert car.get_car_api(VIN, checkReady=False, slot=api.ownerSlot) == (False, None)
+    assert anything.call_count == 0
+
+
+def test_a_data_only_fleet_token_reads_but_never_commands():
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    v = reg.get(VIN)
+    owner, fleet = api.providers()
+    api.storeToken(fleet_token(scp=["openid", "vehicle_device_data"]))
+    assert fleet.available(C.READ_CHARGE) is True and fleet.ready(v, C.READ_CHARGE)
+    assert fleet.available(C.SET_AMPS) is False and fleet.available(C.WAKE) is False
+    assert fleet.ready(v, C.SET_AMPS) is False and v.tier == "observed"
 
 
 VEHICLE_DATA = {
@@ -176,3 +191,41 @@ def test_fleet_reads_when_owner_holds_no_token(requests_mock):
     data = requests_mock.get(base + "/vehicle_data", json=VEHICLE_DATA)
     assert car.update_charge() is True and car.batteryLevel == 61
     assert (online.call_count, data.call_count) == (1, 1)
+
+
+def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
+    # Owner vehicle_data refused (403): the slot pauses for an hour and the
+    # Fleet source reads in the same cascade (one poll earlier than
+    # slotFor("read") would have). Fleet reuses the Owner's online check from
+    # this cascade (the per-car 2-minute awake cache), so its vehicle_data is
+    # not preceded by a Fleet vehicles/{vin}. While paused, the Owner slot is
+    # not tried again.
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    car = api.getCarApiVehicles()[0]
+    api.storeToken(fleet_token())
+    api.storeToken(owner_token())
+    car.statusDeferral = 0
+    car.lastVehicleAwakeTime = 0
+    car.lastAPIAccessTime = 0
+    api.is_location_home = Mock(return_value=True)
+    api.is_far_from_home = Mock(return_value=False)
+    api.master.queue_background_task = Mock()
+    base = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
+    fleetOnline = requests_mock.get(base, json={"response": {"state": "online"}})
+    fleetData = requests_mock.get(base + "/vehicle_data", json=VEHICLE_DATA)
+    ownerOnline = requests_mock.get(
+        OWNER_VEHICLE, json={"response": {"state": "online", "vin": VIN}}
+    )
+    ownerData = requests_mock.get(
+        OWNER_VEHICLE + "/vehicle_data", status_code=403, text="refused"
+    )
+    assert car.update_charge() is True and car.batteryLevel == 61
+    assert (ownerOnline.call_count, ownerData.call_count) == (1, 1)
+    assert (fleetOnline.call_count, fleetData.call_count) == (0, 1)
+    assert not api.ownerSlot.usable("read")
+    # Next poll that must read (maxAge 0): Fleet alone reads
+    car.statusDeferral = 0
+    assert car.update_location(0) is True
+    assert (ownerOnline.call_count, ownerData.call_count) == (1, 1)
+    assert fleetData.call_count == 2
