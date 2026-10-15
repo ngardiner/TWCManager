@@ -20,7 +20,6 @@ def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
         cwd=REPO,
     ).stdout.split()
     assert sorted(out) == [
-        "lib/TWCManager/EVSEController/TeslaAPIController.py",
         "lib/TWCManager/Vehicle/HomeAssistant.py",
         "lib/TWCManager/Vehicle/TeslaAPI.py",
     ]

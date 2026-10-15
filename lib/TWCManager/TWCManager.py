@@ -782,23 +782,24 @@ logger.info(
 # install has no vehicle modules and registers nothing new.
 registerProviders(master)
 
-# Auto-register TeslaAPIController when TeslaAPI is available.
+# Auto-register VehicleEndpoints when TeslaAPI is available.
 # This enables the centralized watt-based power distribution across both
-# Gen2 TWC slaves and Tesla API vehicles (Phase 4, ported from #483).
+# Gen2 TWC slaves and at-home vehicles (Phase 4, ported from #483). BLE-only
+# and HomeAssistant-only installs keep the per-slave path.
 if master.getModuleByName("TeslaAPI") is not None:
     try:
-        from TWCManager.EVSEController.TeslaAPIController import TeslaAPIController
+        from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 
         master.registerModule(
             {
-                "name": "TeslaAPIController",
-                "ref": TeslaAPIController(master),
+                "name": "VehicleEndpoints",
+                "ref": VehicleEndpoints(master),
                 "type": "EVSEController",
             }
         )
-        logger.info("Registered TeslaAPIController EVSEController")
+        logger.info("Registered VehicleEndpoints EVSEController")
     except Exception as _e:
-        logger.warning("Could not register TeslaAPIController: %s", _e)
+        logger.warning("Could not register VehicleEndpoints: %s", _e)
 
 # Auto-register Gen3TWCs controller when enabled in config.
 # Starts a Neurio Modbus RTU server on the configured serial port so that

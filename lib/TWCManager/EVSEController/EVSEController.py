@@ -15,7 +15,7 @@ class EVSEController(abc.ABC):
     a common communication path or access method. Concrete implementations:
 
     - Gen2TWCs: TWC Gen2 slaves connected over RS485 serial
-    - TeslaAPIController: vehicles accessible via the Tesla Fleet API
+    - VehicleEndpoints: at-home vehicles whose charge rate a provider sets
     """
 
     name: str = ""

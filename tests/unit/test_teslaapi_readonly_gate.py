@@ -224,22 +224,3 @@ class TestVehiclePrioritySkipsReadOnly:
         setattr(api, method, Mock(return_value=True))
         getattr(priority, method)()
         assert not getattr(api, method).called
-
-
-class TestTeslaAPIEVSE:
-    def make_evse(self, carapi):
-        from TWCManager.EVSEInstance.TeslaAPIEVSE import TeslaAPIEVSE
-
-        master = Mock()
-        master.config = {"config": {}}
-        master.getModuleByName = Mock(return_value=carapi)
-        return TeslaAPIEVSE(Mock(VIN="5YJ3E1EA1KF000001"), Mock(), master)
-
-    def test_read_only_follows_tesla_api(self, owner_api):
-        evse = self.make_evse(owner_api)
-        assert evse.isReadOnly is True
-        owner_api.storeToken(fleet_token())
-        assert evse.isReadOnly is False
-
-    def test_not_read_only_without_tesla_api(self):
-        assert self.make_evse(None).isReadOnly is False

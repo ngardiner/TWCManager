@@ -2,7 +2,7 @@
 Deduplicating proxy that merges multiple EVSEInstance views of the same vehicle.
 
 When a vehicle is both plugged into a Gen2 TWC (visible as a Gen2TWC EVSE) and
-reachable via the Tesla Fleet API (visible as a TeslaAPIEVSE), the power
+reachable through a vehicle provider (visible as a VehicleEndpoint), the power
 distribution algorithm would see two separate EVSEs for one car and try to
 allocate power twice.  MergedEVSE solves this by combining them into a single
 logical EVSE that routes control commands to the appropriate underlying instance
