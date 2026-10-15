@@ -81,7 +81,7 @@ def _registry():
     v.attach("TeslaAPI", object())
     # No name, no location, but cloud-listed
     reg.getOrCreate("5YJ3E1EA1KF000002", "TeslaAPI").attach("TeslaAPI", object())
-    # Known only by VIN (e.g. a BLE claim): apiDebugInterface cannot reach it
+    # Known only by VIN (e.g. a BLE claim): the debug page lists cloud cars only
     reg.getOrCreate("5YJ3E1EA1KF000003", "TeslaBLE")
     reg.beginPlugSession("AB")  # anonymous anon:AB
     return reg
@@ -164,19 +164,23 @@ def _post(h, body):
 
 
 def test_send_teslaapi_command_takes_a_vin():
-    api = Mock()
-    api.apiDebugInterface.return_value = True
-    h = _handler(_master(VehicleRegistry({}), teslaapi=api))
+    master = _master(VehicleRegistry({}))
+    master.providerOrder.debugCommand.return_value = True
+    h = _handler(master)
     request = _post(
         h,
         {"commandName": "wakeVehicle", "parameters": "{}", "vehicleVIN": VIN},
     )
-    api.apiDebugInterface.assert_called_once_with("wakeVehicle", VIN, "{}")
+    master.providerOrder.debugCommand.assert_called_once_with("wakeVehicle", VIN, "{}")
     request.send_response.assert_called_with(200)
 
 
 def test_send_teslaapi_command_without_teslaapi_is_400():
-    h = _handler(_master(VehicleRegistry({}), teslaapi=None))
+    # No TeslaAPI is no longer a 400 by itself (BLE can wake); a command
+    # the order cannot carry is
+    master = _master(VehicleRegistry({}), teslaapi=None)
+    master.providerOrder.debugCommand.return_value = False
+    h = _handler(master)
     request = _post(
         h,
         {"commandName": "wakeVehicle", "parameters": "{}", "vehicleVIN": VIN},

@@ -43,7 +43,7 @@
           <td>
             {{ optionList(
               [
-                [1, "Tesla API"],
+                [1, "Vehicle command (BLE or API)"],
                 [2, "Stop Responding to Slaves"],
                 [3, "Send Stop Command"],
               ],
@@ -114,9 +114,9 @@
           <td>
             {{ optionList(
               [
-                [1, "Use TWC Exclusively to control Charge Rate"],
-                [2, "Use Tesla API Exclusively to control Charge Rate"],
-                [3, "Use TWC >= 6A + Tesla API < 6A to control Charge Rate"],
+                [1, "Use TWC exclusively to control charge rate"],
+                [2, "Use a vehicle command (BLE or API) exclusively to control charge rate"],
+                [3, "Use TWC >= 6A + vehicle command (BLE or API) < 6A"],
               ],
               {
                 "name": "chargeRateControl",
@@ -135,9 +135,9 @@
             {% else %}
             {{ optionList(
               [
-                ["prefer_ble", "Prefer BLE, fall back to Tesla API"],
-                ["ble_only", "BLE only - never send billed API commands"],
-                ["api_only", "Tesla API only - never use BLE"],
+                ["prefer_ble", "Prefer local (BLE), fall back to cloud"],
+                ["ble_only", "Local only - never send billed cloud commands"],
+                ["api_only", "Cloud only - never use BLE"],
               ],
               {
                 "name": "commandPolicy",

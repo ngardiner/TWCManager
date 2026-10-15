@@ -8,10 +8,10 @@ Allows you to select which theme you'd like to use for the TWCManager interface.
 
 ## Stop Charging Method
 
-This option, which defaults to using the Tesla API, allows you to specify how you would like TWCManager to stop a car from charging. The following options exist, and each has some information to help you decide on which approach to use:
+This option, which defaults to a vehicle command, allows you to specify how you would like TWCManager to stop a car from charging. The following options exist, and each has some information to help you decide on which approach to use:
 
-   * Tesla API
-      * This method will use the Tesla API to send a stop charging message to vehicles which are detected as being "at home".
+   * Vehicle command (BLE or API)
+      * This method sends a stop charging command to vehicles which are detected as being "at home", over BLE where available and the Tesla API otherwise (see Vehicle Command Policy below).
       * This method is only effective for Tesla vehicles. Any non-Tesla vehicles are not visible via the Tesla API and will not be stopped, even if the available power falls below the minimum power per TWC.
       * For those vehicles, they will continue to charge, but at the minimum power per TWC rate.
    * Stop Responding to Slaves
@@ -53,6 +53,29 @@ This setting is the default, and specifies that any vehicle which requests to st
    * Vehicles can only charge if explicitly allowed
 
 This setting specifies that any vehicle which requests to start charging will be blocked, unless it has been added to the Allow Charging group.
+
+### Vehicle Command Policy
+
+Vehicle commands (start and stop charging, set the charge rate, set the charge limit, wake) walk a fixed order of providers: the TWC itself, then BLE, then the cloud, with billed providers (the Fleet API, then Home Assistant) last. The first provider that succeeds wins. The Vehicle Command Policy suppresses providers in that order:
+
+   * `prefer_ble` - Prefer local (BLE), fall back to cloud. Nothing is suppressed. This is the default.
+   * `ble_only` - Local only - never send billed cloud commands. Every non-local provider (the Fleet API and Home Assistant) is suppressed for commands; cloud reads still run.
+   * `api_only` - Cloud only - never use BLE. TeslaBLE is suppressed for every operation, reads as well as commands.
+
+Setting `commandPolicy` under `vehicle` in config.json hard-sets the policy and disables this control.
+
+#### providerSuppressions
+
+For finer control than the policy, the `providerSuppressions` setting (in settings.json, or under `vehicle` in config.json, which wins for a provider named in both) lists, per provider, the operations it may not perform:
+
+```json
+"providerSuppressions": {
+  "FleetAPI": ["setAmps", "wake"],
+  "HomeAssistant": ["*"]
+}
+```
+
+Provider names are `Gen2TWC`, `TeslaBLE`, `OwnerAPI`, `FleetAPI` and `HomeAssistant`. Capability names are the reads `readList`, `readOnline`, `readCharge`, `readLocation`, `readPlug`, `readVin`, `readAmps` and `wallConnectorVins`, and the commands `setChargeLimit`, `startCharging`, `stopCharging`, `setAmps` and `wake`; `"*"` suppresses every operation. Suppressing `readCharge` also takes the provider out of vehicle reads. Unknown names are ignored. The suppressions apply on top of the Vehicle Command Policy.
 
 ### Consumption Offsets
 

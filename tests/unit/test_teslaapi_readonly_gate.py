@@ -2,7 +2,8 @@
 Read-only command gate.
 
 While TeslaAPI holds no usable Fleet API token (readOnly), e.g. only an
-Owner API token, no vehicle command may reach Tesla: VehiclePriority skips TeslaAPI for command methods, and
+Owner API token, no vehicle command may reach Tesla: the provider order keeps
+FleetAPI out of every command walk, and
 TeslaAPI's own command entry points refuse without an HTTP call and without
 recording an API error (which would back off reads too). Reads still run.
 """
@@ -162,38 +163,54 @@ class TestReadsStillRun:
 
 
 class TestVehiclePrioritySkipsReadOnly:
+    # The facade walks the provider order: an Owner-only TeslaAPI has no
+    # command slot, so FleetAPIProvider.available() keeps every broadcast
+    # command away from it; reads still go through the Owner slot.
     def make(self, api_read_only):
+        from tests.unit.test_carapivehicle_registry import api_with_registry
+        from TWCManager.Vehicle.Providers import Capability as C
+        from TWCManager.Vehicle.Providers.Order import ProviderOrder
+        from TWCManager.Vehicle.Providers.Provider import Provider
         from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+
+        api, reg = api_with_registry()
+        api.storeToken(owner_token() if api_read_only else fleet_token())
+        assert api.readOnly is api_read_only
+        api.setChargeRate = Mock(return_value=True)
+        api.updateChargeAtHome = Mock(return_value=True)
+        ble = Mock()
+        ble.setChargeRate = Mock(return_value=False)
+        ble.updateChargeAtHome = Mock(return_value=False)
+
+        class BLE(Provider):
+            name, rank, local, module = "TeslaBLE", 2, True, ble
+
+            def declarations(self):
+                return {c: C.Declaration(C.LOCAL) for c in C.COMMANDS}
 
         master = Mock()
         master.stats = {"moduleSuccess": {}, "moduleFailures": {}}
         master.config = {}
         master.settings = {}
-        ble = Mock()
-        ble.setChargeRate = Mock(return_value=False)
-        ble.updateChargeAtHome = Mock(return_value=False)
-        api = Mock()
-        api.readOnly = api_read_only
-        api.setChargeRate = Mock(return_value=True)
-        api.updateChargeAtHome = Mock(return_value=True)
-        master.getModuleByPriority = Mock(
-            side_effect=[("TeslaBLE", ble, 20), ("TeslaAPI", api, 10), ("", None, 0)]
-        )
+        master.vehicleRegistry = reg
+        master.providerOrder = ProviderOrder(master)
+        for p in [BLE()] + api.providers():
+            master.providerOrder.register(p)
         return VehiclePriority(master), master, ble, api
 
-    def test_read_only_api_skipped_for_commands(self):
+    def test_read_only_api_skipped_for_commands(self, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
         assert priority.setChargeRate(10) is False
         assert ble.setChargeRate.called
         assert not api.setChargeRate.called
-        assert "TeslaAPI" not in master.stats["moduleFailures"]
+        assert "FleetAPI" not in master.stats["moduleFailures"]
 
-    def test_read_only_api_used_for_reads(self):
+    def test_read_only_api_used_for_reads(self, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
         assert priority.updateChargeAtHome() is True
         assert api.updateChargeAtHome.called
 
-    def test_writable_api_used_for_commands(self):
+    def test_writable_api_used_for_commands(self, no_threads):
         priority, master, ble, api = self.make(api_read_only=False)
         assert priority.setChargeRate(10) is True
         assert api.setChargeRate.called
@@ -201,7 +218,7 @@ class TestVehiclePrioritySkipsReadOnly:
     @pytest.mark.parametrize(
         "method", ["car_api_charge", "applyChargeLimit", "wakeVehicle"]
     )
-    def test_every_command_method_skips(self, method):
+    def test_every_command_method_skips(self, method, no_threads):
         priority, master, ble, api = self.make(api_read_only=True)
         setattr(ble, method, Mock(return_value=False))
         setattr(api, method, Mock(return_value=True))
