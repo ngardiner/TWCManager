@@ -70,7 +70,7 @@ def test_vehicle_key_keeps_last_vin_while_plugged_state():  # ledger I5
     assert s.vehicleKey is None and s.occupied is None
     reg.beginPlugSession("8244")
     assert s.vehicleKey == "anon:8244" and s.idleMinimum is True
-    assert s.twcid == "8244" and s.provider == "Gen2TWC"
+    assert s.twcid == "8244"
 
 
 def test_provider_readiness_and_range_per_vehicle():

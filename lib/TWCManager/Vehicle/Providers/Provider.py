@@ -14,8 +14,6 @@ class Provider:
     sharedControl: bool = False
     # The legacy Vehicle module the facade calls; None for no module
     module = None
-    # A ReadSource, or None
-    readSource = None
     # The registry attachment holding the legacy module's own vehicle
     # object, when that module takes its own type (HomeAssistant's HaVehicle)
     # rather than the TeslaAPI vehicle the callers pass; None to pass through

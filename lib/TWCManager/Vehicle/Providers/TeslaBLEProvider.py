@@ -40,7 +40,6 @@ class TeslaBLEProvider(Provider):
         self.ble = ble
         self.master = master
         self.module = ble
-        self.readSource = ble.readSource
 
     def declarations(self):
         return {capability: Declaration(LOCAL) for capability in CAPABILITIES}
