@@ -174,3 +174,64 @@ def test_disabled_home_assistant_gets_no_broadcast():
     ha.car_api_charge = Mock(return_value="success"); ha.updateChargeAtHome = Mock(return_value=True)
     assert vp.car_api_charge({"charge": True}) is False and ha.car_api_charge.call_count == 0
     assert vp.updateChargeAtHome() is False and ha.updateChargeAtHome.call_count == 0
+
+
+# Fix round 2
+
+def _fleetUnloaded(withBle):
+    # TeslaAPI holds a Fleet token but has not listed its vehicles yet; the
+    # registry vehicle came from the TWC, so it has no TeslaAPI attachment
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.teslatokens import fleet_token
+    api, reg = api_with_registry(); api.storeToken(fleet_token())
+    api.car_api_charge = Mock(return_value="success"); api.applyChargeLimit = Mock(return_value="success")
+    m, vp = make(); m.vehicleRegistry = reg
+    ble = mod(car_api_charge=False, applyChargeLimit=False)
+    for p in ([P("TeslaBLE", 2, True, ble)] if withBle else []) + api.providers():
+        m.providerOrder.register(p)
+    reg.getOrCreate(VIN, "TWC")
+    assert api.getVehicleCount() == 0
+    return m, vp, api, ble
+
+def test_failed_ble_stop_falls_back_to_fleet_before_the_list_loads():      # C1
+    m, vp, api, ble = _fleetUnloaded(withBle=True)
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success"
+    assert ble.car_api_charge.call_count == 3 and api.car_api_charge.call_count == 1
+    assert vp.applyChargeLimit(limit=80, vin=VIN) == "success" and api.applyChargeLimit.call_count == 1
+
+def test_fleet_only_targeted_commands_work_from_boot():                      # C1
+    m, vp, api, ble = _fleetUnloaded(withBle=False)
+    api.car_api_charge.return_value = "error"
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) is False and api.car_api_charge.call_count == 2
+    assert m.stats["moduleFailures"] == {"FleetAPI": 1}
+
+def test_loaded_list_without_the_car_still_skips_fleet():
+    m, vp, api, ble = _fleetUnloaded(withBle=False)
+    api.addVehicle({"id": 2, "vin": "5YJ3E1EA1KF000009", "display_name": "Other"})
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) is False and api.car_api_charge.call_count == 0
+
+def _haCars(*vins):
+    m, vp, ha, reg = _haMaster()
+    cars = []
+    for vin in vins:
+        hv = Mock(vin=vin, has_charge_switch=True, has_charge_limit_number=True); cars.append(hv)
+        reg.getOrCreate(vin, "t").attach("HomeAssistant", hv)
+    ha.carApiVehicles = cars
+    ha.car_api_charge = Mock(return_value="success"); ha.applyChargeLimit = Mock(return_value="success")
+    fleet = mod(car_api_charge="error", applyChargeLimit="error")
+    m.providerOrder.register(P("FleetAPI", 5, False, fleet, caps={c: C.Declaration(C.FLEET_COMMAND) for c in C.COMMANDS}))
+    return m, vp, ha, fleet
+
+def test_targeted_command_never_reaches_home_assistant_holding_other_cars():  # I1
+    # HA's legacy car_api_charge/applyChargeLimit act on every HA car
+    m, vp, ha, fleet = _haCars(VIN, "5YJ3E1EA1KF000009")
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) is False and fleet.car_api_charge.call_count == 2
+    assert vp.applyChargeLimit(limit=80, vin=VIN) is False
+    assert ha.car_api_charge.call_count == 0 and ha.applyChargeLimit.call_count == 0
+    assert vp.car_api_charge({"charge": False}) == "success"        # a broadcast means every car
+
+def test_targeted_command_reaches_home_assistant_holding_only_that_car():
+    # Its one car is the target (HA is ready only for attached VINs), as
+    # on an HA-only install today
+    m, vp, ha, fleet = _haCars(VIN)
+    assert vp.car_api_charge({"charge": False, "vin": VIN}) == "success" and ha.car_api_charge.call_count == 1

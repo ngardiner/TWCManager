@@ -112,7 +112,8 @@ class VehiclePriority:
     @staticmethod
     def targetAmps(name, args, kwargs) -> Optional[float]:
         # The rate a setChargeRate asks for. Provider selection does not use
-        # it: setChargeRate walks every ready provider (see modulesFor)
+        # it: setChargeRate walks every ready provider (see modulesFor).
+        # Remove with the facade in Phase 3.
         if name != "setChargeRate":
             return None
         value = args[0] if args else kwargs.get("charge_rate")
@@ -133,17 +134,19 @@ class VehiclePriority:
             capability = self.capabilityFor(name, args, kwargs)
             vin = self.targetVIN(name, args, kwargs)
             vehicle = self.master.vehicleRegistry.get(vin) if vin else None
-            if vehicle is not None and name == "setChargeRate":
-                # Readiness only: the TWC cannot lift the car's own current
-                # limit (#660), so the local-amps rule that keeps Fleet off
-                # a rate the TWC covers applies to setAmps, not here
+            if vehicle is not None:
+                # setChargeRate: readiness only. The TWC cannot lift the
+                # car's own current limit (#660), so the local-amps rule
+                # that keeps Fleet off a rate the TWC covers applies to
+                # setAmps, not here
+                ready = self.order.candidates(
+                    vehicle, capability, localRule=name != "setChargeRate"
+                )
                 providers = [
                     p
                     for p in self.order.ordered(capability)
-                    if self.order._ready(p, vehicle, capability)
+                    if p in ready or self._listUnloaded(p)
                 ]
-            elif vehicle is not None:
-                providers = self.order.candidates(vehicle, capability)
             else:
                 providers = self.order.ordered(capability)
         else:
@@ -166,6 +169,21 @@ class VehiclePriority:
         return walk
 
     @staticmethod
+    def _listUnloaded(provider) -> bool:
+        # FleetAPI is ready only for a car on TeslaAPI's vehicle list, but
+        # only TeslaAPI's own command methods load that list. Until it is
+        # loaded, a targeted command keeps Fleet (ordered() has already
+        # checked it can command), and TeslaAPI loads the list and finds the
+        # car itself, as before the provider order.
+        if provider.name != "FleetAPI":
+            return False
+        try:
+            return provider.module.getVehicleCount() == 0
+        except Exception as e:
+            logger.debug(f"{provider.name} getVehicleCount() raised {type(e).__name__}")
+            return False
+
+    @staticmethod
     def _available(provider, capability) -> bool:
         try:
             return bool(provider.available(capability))
@@ -177,7 +195,11 @@ class VehiclePriority:
         # The call's arguments for this provider's module, or None to skip
         # it. A module that takes its own vehicle type (HomeAssistant) gets
         # its own vehicle, looked up by VIN, never the TeslaAPI one.
-        if name != "setChargeRate" or not provider.vehicleAttachment:
+        if not provider.vehicleAttachment:
+            return args, kwargs
+        if name in ("car_api_charge", "applyChargeLimit"):
+            return self._ownVehicleOnly(provider, name, args, kwargs)
+        if name != "setChargeRate":
             return args, kwargs
         positional = len(args) > 1
         vehicle = args[1] if positional else kwargs.get("vehicle")
@@ -191,6 +213,26 @@ class VehiclePriority:
         if positional:
             return (args[0], own) + tuple(args[2:]), kwargs
         return args, dict(kwargs, vehicle=own)
+
+    def _ownVehicleOnly(self, provider, name, args, kwargs):
+        # HomeAssistant's legacy car_api_charge and applyChargeLimit ignore
+        # the VIN and act on every HA car. A targeted call reaches HA only
+        # when the target is HA's one car; a broadcast means every car.
+        # Until Phase 3.
+        vin = self.targetVIN(name, args, kwargs)
+        if vin is None:
+            return args, kwargs
+        registered = self.master.vehicleRegistry.get(vin)
+        own = registered.attachment(provider.vehicleAttachment) if registered else None
+        try:
+            count = provider.module.getVehicleCount()
+        except Exception as e:
+            logger.debug(f"{provider.name} getVehicleCount() raised {type(e).__name__}")
+            return None
+        # The attachment is HA's own vehicle, so with one car it is the target
+        if own is None or count != 1:
+            return None
+        return args, kwargs
 
     def _count(self, kind, name):
         counts = self.master.stats.setdefault(kind, {})

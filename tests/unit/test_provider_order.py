@@ -133,3 +133,13 @@ def test_debug_command_tries_each_provider_once():
     o = order(m, b, f)
     assert o.debugCommand("wakeVehicle", VIN, "{}") is False and b.calls == [("wake", VIN)] and f.calls == [("wake", VIN)]
     assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 3}') is False and b.calls[1:] == [("setAmps", VIN, 3)]   # BLE covers 3 A: Fleet stays off
+
+def test_debug_set_charge_rate_reaches_fleet_past_a_covering_twc():         # M1
+    # As the facade's setChargeRate: the TWC cannot lift the car's own limit
+    m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); f = fleet(); f._result = False
+    t = twc(); t.module = None                      # as Gen2TWCProvider: dispatch never drives it
+    o = order(m, t, f)
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 16}') is False and f.calls == [("setAmps", VIN, 16)]
+    f._result = True
+    assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 16}') is True
+    assert o.dispatch(m.vehicleRegistry.get(VIN), C.SET_AMPS, lambda p: p.setAmps(VIN, 16), amps=16) is False   # setAmps keeps the rule
