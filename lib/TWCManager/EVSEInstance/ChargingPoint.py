@@ -65,7 +65,9 @@ class ChargingPoint(EVSEInstance):
 
     @property
     def wantsToCharge(self) -> bool:
-        return any(e.wantsToCharge for e in self.endpoints)
+        # The TWC's own report decides when there is one: the registry's
+        # chargingState can be stale for a car that has finished
+        return any(e.wantsToCharge for e in self._preferLocal())
 
     @property
     def occupied(self):
