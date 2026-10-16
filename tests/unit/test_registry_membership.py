@@ -285,3 +285,12 @@ def test_load_drops_a_persisted_malformed_key_without_raising():  # I4
     r = VehicleRegistry({})
     r.load({"vehicles": {"STATUS": {"lastSeen": 1.0}, VIN: {"lastSeen": 1.0}}})
     assert [v.key for v in r.vehicles()] == [VIN]
+
+
+def test_a_listed_car_is_never_expired():  # F8: the listing's keepsAlive claims
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    assert not reg.get(VIN).userAsserted
+    assert reg.expire(reg.now() + 10**9) == [] and reg.get(VIN) is not None
