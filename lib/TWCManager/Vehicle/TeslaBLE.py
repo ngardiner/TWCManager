@@ -381,7 +381,7 @@ class TeslaBLE:
             return success
 
         except Exception as e:
-            logger.error(f"peerWithVehicle exception for {vin}: {e}")
+            logger.error(f"peerWithVehicle exception for {vin}: {type(e).__name__}")
             success = False
             return False
         finally:
@@ -515,7 +515,7 @@ class TeslaBLE:
             return output or "ok"
 
         except Exception as e:
-            logger.error(f"sendCommand exception: {e}")
+            logger.error(f"sendCommand exception: {type(e).__name__}")
             return None
         finally:
             # Always ensure pipe is closed after command
@@ -587,7 +587,7 @@ class TeslaBLE:
             return success
 
         except Exception as e:
-            logger.error(f"wakeVehicle exception for {vin}: {e}")
+            logger.error(f"wakeVehicle exception for {vin}: {type(e).__name__}")
             return False
 
     def _extract_enum_value(self, val):
@@ -833,7 +833,7 @@ class TeslaBLE:
                 return None, None, None
 
         except Exception as e:
-            logger.error(f"Error running command: {e}")
+            logger.error(f"Error running command: {type(e).__name__}")
             return None, None, None
 
     def _cleanup_stale_pipe(self):
@@ -903,7 +903,7 @@ class TeslaBLE:
             logger.debug(f"Public key sent for vehicle {vin}")
             return True
         except Exception as e:
-            logger.error(f"Error sending public key for {vin}: {e}")
+            logger.error(f"Error sending public key for {vin}: {type(e).__name__}")
             return False
         # NOTE: Do NOT close pipe here - it needs to stay open for tesla-control to read
 
@@ -930,7 +930,7 @@ class TeslaBLE:
             logger.debug(f"Private key sent for vehicle {vin}")
             return True
         except Exception as e:
-            logger.error(f"Error sending private key for {vin}: {e}")
+            logger.error(f"Error sending private key for {vin}: {type(e).__name__}")
             return False
         # NOTE: Do NOT close pipe here - it needs to stay open for tesla-control to read
 

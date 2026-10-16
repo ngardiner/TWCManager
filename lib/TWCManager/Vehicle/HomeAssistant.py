@@ -23,6 +23,7 @@ import json
 import re
 import threading
 from typing import Dict, List, Optional
+from urllib.parse import urlsplit
 
 import requests
 import websockets
@@ -215,7 +216,9 @@ class HomeAssistant:
         self.carApiVehicles: List[HaVehicle] = []
         self._rest_lock = threading.Lock()
 
-        logger.info("HomeAssistant vehicle module initialising, URL=%s", self.url)
+        # The host only: a URL can carry userinfo or a query token (M8)
+        host = urlsplit(self.url).hostname
+        logger.info("HomeAssistant vehicle module initialising, host=%s", host)
 
         # Test connectivity before attempting discovery
         try:
@@ -225,7 +228,7 @@ class HomeAssistant:
         except requests.exceptions.ConnectionError:
             logger.error(
                 "Cannot connect to Home Assistant at %s. Check URL and network connectivity.",
-                self.url,
+                host,
             )
             self._enabled = False
             return
@@ -243,14 +246,19 @@ class HomeAssistant:
             self._enabled = False
             return
         except Exception as e:
-            logger.error("Failed to verify HomeAssistant connectivity: %s", str(e))
+            logger.error(
+                "Failed to verify HomeAssistant connectivity: %s", type(e).__name__
+            )
             self._enabled = False
             return
 
         try:
             self._discover_vehicles()
-        except Exception:
-            logger.exception("Failed to discover Tesla vehicles via Home Assistant")
+        except Exception as e:
+            logger.error(
+                "Failed to discover Tesla vehicles via Home Assistant: %s",
+                type(e).__name__,
+            )
 
         if not self.carApiVehicles:
             logger.warning("No Tesla vehicles discovered in Home Assistant.")
@@ -321,11 +329,12 @@ class HomeAssistant:
         except asyncio.TimeoutError:
             logger.error(
                 "Timeout connecting to Home Assistant WebSocket at %s. Check URL and network connectivity.",
-                self.ws_url,
+                urlsplit(self.ws_url).hostname,
             )
         except Exception as e:
             logger.error(
-                "Failed to discover vehicles via Home Assistant WebSocket: %s", str(e)
+                "Failed to discover vehicles via Home Assistant WebSocket: %s",
+                type(e).__name__,
             )
 
     @staticmethod
@@ -497,10 +506,14 @@ class HomeAssistant:
                 return None
             except requests.exceptions.ConnectionError as exc:
                 self.connectionFailures += 1
-                logger.warning("HA: failed reading state %s: %s", entity_id, exc)
+                logger.warning(
+                    "HA: failed reading state %s: %s", entity_id, type(exc).__name__
+                )
                 return None
             except Exception as exc:
-                logger.warning("HA: failed reading state %s: %s", entity_id, exc)
+                logger.warning(
+                    "HA: failed reading state %s: %s", entity_id, type(exc).__name__
+                )
                 return None
 
     def _post_service(self, domain: str, service: str, data: dict) -> Outcome:
