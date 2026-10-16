@@ -1,7 +1,7 @@
 # The Gen2 TWC as a provider: the slave serving a vehicle sets its amps
-# locally. Its stop is
-# disruptive (it stops answering every slave, or stops the TWC itself), so it is
-# declared at the very-high-cost tier and only chargeStopMode selects it.
+# locally. Its stop is disruptive (it stops answering every slave, or stops the
+# TWC itself), so it is declared at the very-high-cost tier and only
+# chargeStopMode selects it.
 # Command methods never touch RS-485: a stop is published for the serial
 # thread's heartbeat (slave.stopRequested), a target likewise.
 from typing import Optional, Tuple
@@ -17,6 +17,7 @@ from .Capability import (
 from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
 from ..Registry.VIN import isWellFormedVIN
 from .Provider import Provider
+
 
 class Gen2TWCProvider(Provider):
     name = "Gen2TWC"

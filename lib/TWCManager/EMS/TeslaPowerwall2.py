@@ -303,7 +303,9 @@ class TeslaPowerwall2:
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
                     except Exception as e:
-                        status = getattr(getattr(e, "response", None), "status_code", None)
+                        status = getattr(
+                            getattr(e, "response", None), "status_code", None
+                        )
                         if status == 403 and slot.kind == "fleet":
                             slot.reportScopeRefused("energy", refused=True)
                         else:

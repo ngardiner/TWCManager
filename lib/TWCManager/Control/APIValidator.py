@@ -44,4 +44,3 @@ class APIValidator:
             return True, float_val, None
         except (ValueError, TypeError):
             return False, None, "Value must be a number"
-
