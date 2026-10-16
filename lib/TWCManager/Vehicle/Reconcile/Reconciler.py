@@ -61,9 +61,10 @@ logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
 # The longest a pass waits for a wake
 TICK = 1.0
-# How long the free channel must have failed before a paid provider is used,
-# and the gap before the same aspect is tried again: CarApiVehicle's 300 s
-# limit gap and the 60 s start/stop gate (one table, two names)
+# Two knobs that share their values today (CarApiVehicle's 300 s limit gap
+# and the 60 s start/stop gate): PAID_AFTER, how long the free channel must
+# have failed before a paid provider is used; RETRY, the gap before the same
+# aspect is tried again. Split the table to tune one alone
 PAID_AFTER = RETRY = {CHARGE_LIMIT: 300.0, CHARGING: 60.0, AMPS: 60.0}
 # A restore to a car that is not answering is retried hourly
 RESTORE_RETRY = 3600.0
@@ -330,7 +331,9 @@ class VehicleReconciler(threading.Thread):
         ):
             # No paid send reached the car: a reading shows it awake, or a
             # start will wake it. At most two more sends, once per desire, each
-            # with the normal wake and read (N1, I2)
+            # with the normal wake and read (N1, I2). Written without the
+            # store's lock: a newDesire() racing it can inherit rearmed and
+            # lose a retry, never gain a paid send (final review M6)
             rec.paidSends = 0
             rec.rearmed = True
             rec.paidRetryDue = False
