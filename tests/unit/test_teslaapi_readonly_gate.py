@@ -52,7 +52,10 @@ class TestFleetProviderRefusesCommands:
     def test_no_command_token_sends_nothing(self, owner_api, any_http, call):
         fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
         args = (self.VIN, 10) if call == "setAmps" else (self.VIN,)
+        car = owner_api.getCarApiVehicles()[0]
+        before = car.lastAPIAccessTime
         assert getattr(fleet, call)(*args) == Outcome(REFUSED, "no command token")
+        assert car.lastAPIAccessTime == before
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
@@ -65,6 +68,48 @@ class TestFleetProviderRefusesCommands:
         fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
         assert fleet.setAmps(self.VIN, 10) == Outcome(DONE)
         assert cmd.call_count == 1
+
+
+class TestRefusalHint:
+    # The INFO hint an Owner-only install gets, once per Fleet slot change
+    # (12b review I3); no HTTP call, no API error
+    def refusals(self, caplog):
+        return [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO and "read-only" in r.getMessage()
+        ]
+
+    def fleet(self, api):
+        return [p for p in api.providers() if p.name == "FleetAPI"][0]
+
+    def test_logged_once_per_state_change(self, owner_api, any_http, caplog):
+        from TWCManager.Vehicle.Providers import Capability as C
+
+        caplog.set_level(logging.INFO)
+        f = self.fleet(owner_api)
+        assert not f.available(C.SET_AMPS) and not f.available(C.WAKE)
+        assert not f.available(C.STOP_CHARGING)
+        assert len(self.refusals(caplog)) == 1
+        owner_api.storeToken(fleet_token())
+        assert f.available(C.SET_AMPS) and len(self.refusals(caplog)) == 1
+        owner_api.fleetSlot.clear()
+        f.available(C.SET_AMPS)
+        f.available(C.SET_AMPS)
+        assert len(self.refusals(caplog)) == 2
+        assert any_http.call_count == 0 and no_error_recorded(owner_api)
+
+    def test_resync_of_owner_token_does_not_log_again(
+        self, owner_api, any_http, caplog
+    ):
+        from TWCManager.Vehicle.Providers import Capability as C
+
+        caplog.set_level(logging.INFO)
+        f = self.fleet(owner_api)
+        f.available(C.SET_AMPS)
+        owner_api.storeToken(owner_token(jti="rotated"))
+        f.available(C.SET_AMPS)
+        assert len(self.refusals(caplog)) == 1
 
 
 class TestReadsStillRun:
