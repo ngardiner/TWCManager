@@ -31,6 +31,7 @@ from .Outcome import (
     isNotSent,
     isOutcome,
 )
+from .Belief import uncompleted
 from .Rules import VEHICLE_SOURCES_EXCLUDED, satisfied
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
@@ -167,6 +168,8 @@ def runAttempt(reconciler, attempt) -> Outcome:
         believed = (
             vehicle.believed(field, exclude=VEHICLE_SOURCES_EXCLUDED) if field else None
         )
+        if aspect == CHARGING:
+            believed = uncompleted(vehicle, believed)
         if read and satisfied(aspect, attempt.value, believed):
             return Outcome(SATISFIED, "read")
         value, early = reconciler.beforeWrite(vehicle, attempt, provider, believed)
