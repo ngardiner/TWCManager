@@ -18,7 +18,8 @@ def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
         # list (registry.attached() is the list), and "id:" keys are not written
         ["git", "grep", "-lE",
          r"carApiVehicles|getCarApiVehicles|CarApiVehicle|RegistryField|getVehicleByVIN"
-         r"|lastVehicleAwake|_liveVehicle|startswith\(\"id:\"\)",
+         r"|lastVehicleAwake|_liveVehicle|startswith\(\"id:\"\)"
+         r"|\.VIN\b([^ ]|$)",  # a car object's .VIN (not "from .VIN import")
          "--", "lib/TWCManager", "html", "tests/integration", "tests/API"],
         capture_output=True,
         text=True,

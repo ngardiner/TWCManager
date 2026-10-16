@@ -329,3 +329,27 @@ def test_update_vehicle_data_has_a_single_caller():
         and not line.startswith("lib/TWCManager/Vehicle/Providers/TeslaAPIProviders.py")
     ]
     assert out and rest == []
+
+
+def test_an_incomplete_vehicle_data_answer_logs_what_is_missing(caplog):
+    import logging
+
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    v = reg.get(VIN)
+    answers = [
+        ({"charge_state": {}}, "drive_state missing from API response"),
+        ({"drive_state": {}}, "charge_state missing from API response"),
+        (
+            {"drive_state": {"latitude": 1.0}, "charge_state": {}},
+            "latitude/longitude missing from drive_state",
+        ),
+    ]
+    for response, missing in answers:
+        api.get_car_api = Mock(return_value=(True, response))
+        caplog.clear()
+        assert api.update_vehicle_data(v) is False
+        assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+            (logging.ERROR, "update_vehicle_data: %s for %s" % (missing, VIN))
+        ]
+    assert v.value("lat") == 1.0 and v.latest("lon") is None  # lat first

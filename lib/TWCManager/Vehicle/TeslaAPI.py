@@ -28,7 +28,6 @@ from TWCManager.Vehicle.Reconcile.Outcome import (
     Outcome,
 )
 from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE, TELEMETRY_SOURCES
-from TWCManager.Vehicle.Registry.Vehicle import Vehicle
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 
@@ -136,16 +135,12 @@ class TeslaAPI:
     lastChargeCheck = 0
     chargeUpdateInterval = 1800
     vehicleListLock = RLock()
-    enabled = True
     config = None
     master = None
-    __email = None
     errorCount = 0
     maxLoginRetries = 10
     params = None
-    __password = None
     fleetRefreshURL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"
-    __resp = None
     session = None
 
     # Transient errors are ones that usually disappear if we retry the car API
@@ -1569,7 +1564,7 @@ class TeslaAPI:
                 # Car is known to be asleep - trust the sync source and avoid
                 # Fleet API calls that cost money just to confirm it's still asleep.
                 return False
-            if age is not None and age <= Vehicle.SYNC_TIMEOUT / 4:
+            if age is not None and age <= vehicle.SYNC_TIMEOUT / 4:
                 # Fresh data and car is not asleep - trust it.
                 return obs.value in ("online", "charging", "updating", "driving")
             # Stale data but car was last known active - fall through to API check
@@ -1738,32 +1733,17 @@ class TeslaAPI:
         result, response = self.get_car_api(vehicle, path, slot=slot)
 
         if result:
+            # What is missing, should the step after it raise
+            missing = "drive_state missing from API response"
             try:
                 drive = response["drive_state"]
-            except (KeyError, TypeError):
-                logger.error(
-                    "update_vehicle_data: drive_state missing from API response for %s"
-                    % vehicle.vin
-                )
-                return False
-
-            try:
+                missing = "charge_state missing from API response"
                 charge = response["charge_state"]
-            except (KeyError, TypeError):
-                logger.error(
-                    "update_vehicle_data: charge_state missing from API response for %s"
-                    % vehicle.vin
-                )
-                return False
-
-            try:
+                missing = "latitude/longitude missing from drive_state"
                 vehicle.observe("lat", drive["latitude"], "TeslaAPI")
                 vehicle.observe("lon", drive["longitude"], "TeslaAPI")
             except (KeyError, TypeError):
-                logger.error(
-                    "update_vehicle_data: latitude/longitude missing from drive_state for %s"
-                    % vehicle.vin
-                )
+                logger.error("update_vehicle_data: %s for %s" % (missing, vehicle.vin))
                 return False
             lat, lon = vehicle.value("lat", 10000), vehicle.value("lon", 10000)
 
