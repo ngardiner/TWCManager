@@ -81,6 +81,10 @@ def _encode(limit: HeldLimit) -> Dict[str, Any]:
     return {"outside": limit.outside, "held": limit.held}
 
 
+def _vins(store: Dict[Any, Any]) -> FrozenSet[Any]:
+    return frozenset(k for k in store if isWellFormedVIN(str(k)))
+
+
 _MALFORMED = "Dropped a malformed chargeLimits entry for %s while migrating"
 _UNHELD = (
     "Kept the normal limit but not the out-of-range held limit of the "
@@ -143,11 +147,7 @@ class HeldLimits:
             settings = self.master.settings
             legacy, store = settings.get(self.LEGACY_KEY), settings.get(self.KEY)
             store = store if isinstance(store, dict) else {}
-            loaded = (
-                self._loadedVins
-                if final
-                else frozenset(k for k in store if isWellFormedVIN(str(k)))
-            )
+            loaded = self._loadedVins if final else _vins(store)
             if not isinstance(legacy, dict):
                 if not final:
                     self._loadedVins = loaded
@@ -190,9 +190,7 @@ class HeldLimits:
                 del settings[self.LEGACY_KEY]
             changed = keep != legacy
             if not final:
-                self._loadedVins = frozenset(
-                    k for k in store if isWellFormedVIN(str(k))
-                )
+                self._loadedVins = _vins(store)
         for args in warnings:
             logger.warning(*args)
         for args in infos:  # either way one saved normal limit is discarded
