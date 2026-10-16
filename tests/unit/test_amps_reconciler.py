@@ -3,6 +3,8 @@
 # (slim Task 12b)
 import time
 
+import pytest
+
 from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
 from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint
 from TWCManager.Vehicle.Reconcile import Outcome as O
@@ -98,10 +100,12 @@ def test_user_changed_amps_are_resent_on_the_next_reading_under_mode_2():   # as
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); b = prov(m, "TeslaBLE"); pt, s = point(m, v, 2); pt.setTargetPower(20 * 240); r.pass_()
     c.t += 61; v.observe("chargeCurrentRequest", 16, "TeslaAPI"); assert r.pass_() == 1 and b.calls[-1] == ("setAmps", VIN, 20)
 
-def test_user_changed_amps_after_a_lift_are_left_alone():                  # main's once-per-session raise
-    m, r, v, c = setup(ble(O.Outcome(O.DONE))); b = prov(m, "TeslaBLE"); pt, s = point(m, v, 1); pt.setTargetPower(10 * 240); r.pass_(); r.pass_()
-    assert cmds(b) == ["setAmps"]
-    c.t += 61; v.observe("chargeCurrentRequest", 16, "TeslaAPI"); pt.setTargetPower(10 * 240)   # TeslaMate never publishes it (pre-flight L11)
+@pytest.mark.parametrize("mode", [1, 3])
+def test_user_changed_amps_after_a_lift_are_left_alone(mode):              # main's once-per-session raise
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); b = prov(m, "TeslaBLE"); v.observe("chargeCurrentRequest", 6, "TeslaBLE")
+    pt, s = point(m, v, mode); pt.setTargetPower(10 * 240); r.pass_(); r.pass_()
+    assert cmds(b) == ["setAmps"] and b.calls[-1] == ("setAmps", VIN, 32)
+    c.t += 61; v.observe("chargeCurrentRequest", 16, "TeslaAPI"); pt.setTargetPower(20 * 240)   # above the user's 16; TeslaMate never publishes it (pre-flight L11)
     assert r.pass_() == 0 and cmds(b) == ["setAmps"]
 
 def test_failed_paid_rate_retries_once_then_waits_for_a_new_value():        # paid counted
@@ -133,3 +137,19 @@ def test_an_anonymous_twc_rates_the_cars_main_s_broadcast_reached(): # as main's
     for i in range(3600): s._queueChargeRate(10 + i % 2); r.pass_(); c.t += 1
     assert {x[1] for x in f.calls} == {VIN} and len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)   # never the away car, nor a named one; no wake
     s._requestVehicleRateRaise(); assert m.desired.get(VIN, AMPS).lift and s.vehicleRateRaised
+
+# Fix round 1 (12b review I1, M4)
+
+def test_mode_3_lift_goes_once_per_range_entry_even_when_the_car_clamps_it():   # I1, paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); pt, s = point(m, v, 3)
+    for _ in range(240):                                                     # an hour of readings every 15 s: the car clamps at 24
+        v.observe("chargeCurrentRequest", 24, "TeslaAPI"); pt.setTargetPower(30 * 240); r.pass_(); c.t += 15
+    assert f.calls == [("setAmps", VIN, 32)]
+    pt.setTargetPower(5 * 240); r.pass_(); assert f.calls[-1] == ("setAmps", VIN, 5) and not s.vehicleRateRaised   # below the floor: the car carries
+    c.t += 15; pt.setTargetPower(30 * 240); r.pass_()
+    assert f.calls[-1] == ("setAmps", VIN, 32) and len(f.calls) == 3          # back in range: exactly one more lift
+
+def test_a_floor_rate_is_withdrawn_when_the_twc_carries_again():         # M4
+    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE))); v.observe("chargeCurrentRequest", 32, "TeslaBLE"); pt, s = point(m, v, 3)
+    pt.setTargetPower(4 * 240); r.pass_(); assert m.desired.get(VIN, AMPS).value == 4    # undelivered
+    pt.setTargetPower(10 * 240); assert m.desired.get(VIN, AMPS) is None                 # the TWC carries; the car is not left chasing 4 A

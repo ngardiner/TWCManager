@@ -173,21 +173,22 @@ class ChargingPoint(EVSEInstance):
         if twc and (not car or amps >= floor):
             local.setTargetPower(watts)
             for e in cars:
-                if car:
-                    # Mode 3 in range: only a car that would cap below the
-                    # offer (undershoot is safe; an unknown is left alone)
-                    k = e.requestedAmps()
-                    lift = k is not None and k < int(amps)
-                else:
-                    # Mode 1: once per plug session
-                    lift = not local.vehicleRateRaised
-                if lift:
+                # The TWC carries: the car keeps no rate of ours (M4)
+                e.setTargetPower(0)
+                k = e.requestedAmps()
+                # Once per session; in mode 3 only for a car that would cap
+                # below the offer (undershoot is safe; unknown is left alone)
+                if not local.vehicleRateRaised and (
+                    not car or k is not None and k < int(amps)
+                ):
                     self.master.desired.set(
                         e.vehicleKey, AMPS, local.wiringMaxAmps, "lift", lift=True
                     )
-            if not car:
-                local.vehicleRateRaised = True
+                    local.vehicleRateRaised = True
             return
+        if twc:
+            # Below the floor: the next return to range may lift again
+            local._resetVehicleRateRaised()
         # The car carries: the TWC offers its maximum (mode 2) or holds the
         # heartbeat's handoff floor (mode 3 below range)
         local.setTargetPower(local.convertAmpsToWatts(floor) if twc else local.maxPower)
