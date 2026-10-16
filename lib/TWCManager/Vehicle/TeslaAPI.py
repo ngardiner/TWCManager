@@ -112,8 +112,7 @@ class TeslaAPI:
     # One slot per token type; built in __init__.
     ownerSlot = None
     fleetSlot = None
-    # The state (Fleet slot change, each car's signing) when the read-only
-    # hint was last logged
+    # fleetSlot.changes when the read-only hint was last logged
     refusalLoggedAt = None
     refreshClientID = ""
     # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
@@ -1302,22 +1301,18 @@ class TeslaAPI:
             return ("fleet", "NA")
         return ("unknown", None)
 
-    def _signingState(self):
-        return frozenset(
-            (vehicle.vin, car.commandSigning, car.ownerCommandsRefused)
-            for vehicle, car in self.registry.attached("TeslaAPI")
-        )
-
     def noteReadOnly(self):
-        # The INFO hint, once per Fleet slot change or change in what Tesla
-        # says of the cars' signing: no HTTP call, no API error (an error
-        # would start the backoff that also blocks reads). An Owner token
-        # resync is not a change. With an Owner token each car says why
-        # instead (refuseCommandFor)
-        state = (self.fleetSlot.changes, self._signingState())
-        if not self.readOnly or self.ownerTokenHeld() or state == self.refusalLoggedAt:
+        # The INFO hint when no token can command any car, once per Fleet
+        # slot change: no HTTP call, no API error (an error would start the
+        # backoff that also blocks reads). With an Owner token each car says
+        # why instead (refuseCommandFor)
+        if (
+            not self.readOnly
+            or self.ownerTokenHeld()
+            or self.fleetSlot.changes == self.refusalLoggedAt
+        ):
             return
-        self.refusalLoggedAt = state
+        self.refusalLoggedAt = self.fleetSlot.changes
         logger.info(
             "Tesla API is read-only (no usable Fleet API token); not sending "
             "vehicle commands. Commands need a Fleet API token or the "
@@ -1349,7 +1344,6 @@ class TeslaAPI:
         if car.refusalLoggedAt == state:
             return True
         car.refusalLoggedAt = state
-        signing = car.commandSigning
         if "command" in self.ownerSlot.refusedPurposes:
             why = (
                 "Tesla refused commands with the Owner API token (it no longer "
@@ -1361,20 +1355,15 @@ class TeslaAPI:
                 "Tesla refused an Owner API command for it although it "
                 "reported command_signing: off."
             )
-        elif signing == "required":
+        elif car.commandSigning == "required":
             why = (
                 "Tesla reports %s requires signed commands (command_signing: "
                 "required)." % vehicle.name
             )
-        elif signing is None:
-            why = (
-                "Tesla did not report command_signing for it, so it is "
-                "treated as read-only."
-            )
         else:
             why = (
-                "Tesla reports command_signing: %s for it, a value TWCManager "
-                "does not know, so it is treated as read-only." % str(signing)[:40]
+                "Tesla did not report command_signing: off for it, so it is "
+                "treated as read-only."
             )
         logger.info(
             "Tesla API is read-only for %s; not sending %s or any other vehicle "
