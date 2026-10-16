@@ -83,10 +83,19 @@ class VehiclePriority:
         as a failure. When only some cars are read-only, the module refuses
         those itself and returns failure, so the next module is tried too.
         Compared with `is True` so a module without the attribute, or a
-        Mock in tests, is never skipped."""
+        Mock in tests, is never skipped.
+
+        On a skip, the module's own refuseCommandIfReadOnly logs why (per
+        car, once per state change); otherwise the only line would be this
+        class's INFO2 skip. Looked up on the class, so a Mock or a module
+        without the method is not called."""
         if method_name not in self.COMMAND_METHODS:
             return False
-        return getattr(module_ref, "readOnly", False) is True
+        if getattr(module_ref, "readOnly", False) is not True:
+            return False
+        if callable(getattr(type(module_ref), "refuseCommandIfReadOnly", None)):
+            module_ref.refuseCommandIfReadOnly(method_name)
+        return True
 
     def _calculate_retries(self, priority):
         """Calculate number of retries based on priority level.
