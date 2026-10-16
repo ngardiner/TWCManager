@@ -25,8 +25,7 @@ def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
 
 def test_get_last_vehicle_uses_registry_attachment():
     reg = VehicleRegistry({})
-    car = object()
-    reg.getOrCreate(VIN, "TeslaAPI").attach("TeslaAPI", car)
+    reg.getOrCreate(VIN, "TeslaAPI").attach("TeslaAPI", object())
     m = Mock()
     m.vehicleRegistry = reg
     m.getModuleByName = Mock(return_value=None)
@@ -45,7 +44,7 @@ def test_get_last_vehicle_uses_registry_attachment():
     )
     s.currentVIN = ""
     s.lastVIN = VIN
-    assert s.getLastVehicle() is car
+    assert s.getLastVehicle() is reg.get(VIN)
     s.lastVIN = "5YJ3E1EA1KF000009"
     assert s.getLastVehicle() is None
     # A lookup never creates a vehicle
@@ -196,3 +195,109 @@ def test_unset_home_location_twice_is_not_an_error():  # M5
     assert "homeLat" not in master.settings and "homeLon" not in master.settings
     request = _home(h, {"unset": ["x"]}, None)  # a second click
     request.send_response.assert_called_with(302)
+
+
+def _listed_car_slave():
+    # A real CarApiVehicle listed by a real TeslaAPI, on one TWC's lastVIN
+    from tests.unit.test_carapivehicle_registry import api_with_registry
+
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    m = Mock()
+    m.vehicleRegistry = reg
+    m.getModuleByName = Mock(return_value=None)
+    s = TWCSlave(
+        bytearray(b"AB"),
+        80,
+        {
+            "config": {
+                "wiringMaxAmpsPerTWC": 6,
+                "useFlexAmpsToStartCharge": False,
+                "startStopDelay": 60,
+                "fakeMaster": False,
+            }
+        },
+        m,
+    )
+    s.currentVIN = ""
+    s.lastVIN = VIN
+    return api, reg, s
+
+
+def test_get_slave_twcs_reports_the_listed_cars_fields_and_legacy_defaults():
+    api, reg, s = _listed_car_slave()
+    s.getCurrentChargerLoad = lambda: 0
+    master = _master(reg)
+    master.getSlaveTWCs = Mock(return_value=[s])
+    handler = _handler(master)
+
+    def get():
+        request = Mock()
+        request.url = urllib.parse.urlparse("/api/getSlaveTWCs")
+        handler.do_API_GET.__func__(request)
+        body = request.wfile.write.call_args[0][0]
+        return json.loads(body.decode("utf-8"))["4142"]
+
+    row = get()
+    assert (
+        row["lastAtHome"],
+        row["lastBatterySOC"],
+        row["lastChargeLimit"],
+        row["lastTimeToFullCharge"],
+    ) == (False, 10000, -1, 0.0)
+    v = reg.get(VIN)
+    v.observe("batteryLevel", 61, "TeslaAPI")
+    v.observe("chargeLimit", 80, "TeslaAPI")
+    v.observe("timeToFullCharge", 1.5, "TeslaAPI")
+    v.attachment("TeslaAPI").atHome = True
+    row = get()
+    assert (
+        row["lastAtHome"],
+        row["lastBatterySOC"],
+        row["lastChargeLimit"],
+        row["lastTimeToFullCharge"],
+    ) == (True, 61, 80, 1.5)
+
+
+def _flex_master(slave):
+    from TWCManager.TWCMaster import TWCMaster
+
+    m = TWCMaster(
+        "AB",
+        {
+            "config": {
+                "debugOutputToFile": False,
+                "subtractChargerLoad": False,
+                "treatGenerationAsGridDelivery": False,
+                "wiringMaxAmpsAllTWCs": 32,
+                "minAmpsPerTWC": 6,
+                "maxAmpsAllowedFromGrid": None,
+            }
+        },
+    )
+    m.getModuleByName = Mock(return_value=None)
+    m.slaveTWCs = {"AB": slave}
+    m.slaveTWCRoundRobin = [slave]
+    slave.voltsPhaseA = slave.voltsPhaseB = slave.voltsPhaseC = 0
+    m.settings.update(
+        {
+            "scheduledAmpsStartHour": 20,
+            "scheduledAmpsEndHour": 7,
+            "scheduledAmpsFlexStart": True,
+            # > 0, else hoursForFullCharge divides by zero
+            "scheduledAmpsMax": 32,
+            "scheduledAmpsBatterySize": 100,
+        }
+    )
+    return m
+
+
+def test_flex_start_reads_the_listed_cars_limit_and_battery():
+    api, reg, s = _listed_car_slave()
+    m = _flex_master(s)
+    # No observations: the legacy -1 / 10000 defaults
+    assert m.getScheduledAmpsTimeFlex() == (1308.96, 7, 0x7F)
+    v = reg.get(VIN)
+    v.observe("chargeLimit", 80, "TeslaAPI")
+    v.observe("batteryLevel", 40, "TeslaAPI")
+    assert m.getScheduledAmpsTimeFlex() == (1.54, 7, 0x7F)

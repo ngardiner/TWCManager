@@ -1297,7 +1297,6 @@ class TWCSlave:
         reg = self.master.vehicleRegistry
         for vin in (self.currentVIN, self.lastVIN):
             v = reg.get(vin) if vin else None
-            car = v.attachment("TeslaAPI") if v else None
-            if car:
-                return car
+            if v is not None and v.attachment("TeslaAPI") is not None:
+                return v
         return None

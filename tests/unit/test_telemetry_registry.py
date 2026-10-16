@@ -269,15 +269,15 @@ def test_sleeping_car_on_healthy_feed_stays_telemetry_sourced(teslamate):  # rul
     # Reported hours ago; TeslaMate has had nothing to say since.
     v.observe("state", "asleep", "TeslaMateVehicle", at=0.0)
     v.observe("pluggedIn", True, "TeslaMateVehicle", at=0.0)
-    assert car.syncSource == "TeslaMateVehicle"
-    assert VehicleEndpoints._telemetryPluggedIn(car) is True
+    assert v.syncSource == "TeslaMateVehicle"
+    assert VehicleEndpoints._telemetryPluggedIn(v) is True
     assert car.is_awake() is False and not car.get_car_api.called
     tm.noteHealthy("7", "false")  # TeslaMate stopped polling
-    assert car.syncSource == "TeslaAPI"
-    assert VehicleEndpoints._telemetryPluggedIn(car) is False
+    assert v.syncSource == "TeslaAPI"
+    assert VehicleEndpoints._telemetryPluggedIn(v) is False
     tm.noteHealthy("7", "true")
     tm.mqttDisconnect(None, None, None, 7)  # broker gone
-    assert car.syncSource == "TeslaAPI"
+    assert v.syncSource == "TeslaAPI"
 
 
 def test_telemetry_writes_carry_the_feed_source(teslamate):  # ruling 4

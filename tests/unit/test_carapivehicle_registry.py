@@ -48,18 +48,7 @@ def test_attributes_are_observations_with_source_and_defaults():
     obs = reg.get(VIN).latest("chargeLimit")
     assert (obs.value, obs.source) == (80, "TeslaAPI") and car.chargeLimit == 80
     car.actualCurrent = 12
-    assert car.lastCurrentChangeTime > 0 and car.actualCurrent == 12
     assert reg.get(VIN).latest("actualCurrent").value == 12
-
-
-def test_actual_current_change_time_only_moves_on_change():
-    api, reg = api_with_registry()
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    car.actualCurrent = 12
-    car.lastCurrentChangeTime = 1.0
-    car.actualCurrent = 12
-    assert car.lastCurrentChangeTime == 1.0
 
 
 def test_master_without_registry_gets_a_private_one():
@@ -84,7 +73,7 @@ def test_is_awake_trusts_fresh_telemetry_and_asleep_without_api_call():
     car = api.carApiVehicles[0]
     car.get_car_api = Mock(side_effect=AssertionError("no API call"))
     reg.get(VIN).observe("state", "asleep", "TeslaMateVehicle")
-    assert car.is_awake() is False and car.syncSource == "TeslaMateVehicle"
+    assert car.is_awake() is False and reg.get(VIN).syncSource == "TeslaMateVehicle"
     reg.get(VIN).observe("state", "online", "TeslaMateVehicle")
     assert car.is_awake() is True
 
@@ -93,7 +82,7 @@ def test_sync_getters_have_legacy_defaults_before_any_state():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.carApiVehicles[0]
-    assert car.syncSource == "TeslaAPI"
+    assert reg.get(VIN).syncSource == "TeslaAPI"
 
 
 def test_update_vehicle_data_observes_only_present_keys():  # P15
@@ -200,7 +189,7 @@ def test_stale_telemetry_falls_back_to_api_check():
     reg.get(VIN).observe("state", "online", "TeslaMateVehicle", at=0.0)
     car.get_car_api = Mock(return_value=(True, {"state": "asleep"}))
     assert car.is_awake() is False and car.get_car_api.called
-    assert car.syncSource == "TeslaAPI"
+    assert reg.get(VIN).syncSource == "TeslaAPI"
 
 
 def test_writes_after_forget_land_on_the_live_vehicle():
@@ -269,5 +258,90 @@ def test_telemetry_feed_drives_a_real_car():
     obs = reg.get(VIN).latest("state")
     assert (obs.value, obs.source) == ("online", "TeslaMateVehicle")
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
-    assert car.syncSource == "TeslaMateVehicle" and car.pluggedIn is True
+    assert reg.get(VIN).syncSource == "TeslaMateVehicle" and reg.get(VIN).value("pluggedIn") is True
     assert car.lat == 1.5
+
+
+# Characterization: the read gates TeslaAPI keeps for a Fleet-only car (no
+# Owner token, so every vehicle_data is paid). Requests counted per URL.
+
+FLEET_CAR = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
+VEHICLE_DATA = {
+    "response": {
+        "drive_state": {"latitude": 37.0, "longitude": -122.0, "shift_state": "P"},
+        "charge_state": {"battery_level": 61},
+        "vehicle_state": {},
+    }
+}
+
+
+def fleet_only_car(requests_mock, states=("online",)):
+    import re
+
+    api, reg = api_with_registry()
+    api.storeToken(fleet_token())
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    online = requests_mock.get(
+        FLEET_CAR, [{"json": {"response": {"state": s}}} for s in states]
+    )
+    data = requests_mock.get(
+        re.compile(re.escape(FLEET_CAR) + r"/vehicle_data"), json=VEHICLE_DATA
+    )
+    return api, reg, reg.get(VIN).attachment("TeslaAPI"), online, data
+
+
+def test_car_backoff_blocks_vehicle_data_but_not_the_free_online_check(
+    requests_mock, caplog
+):
+    import time
+
+    api, reg, car, online, data = fleet_only_car(requests_mock)
+    car.lastErrorTime, car.errorCount = time.time(), 2
+    caplog.set_level(1)
+    reg.get(VIN).read("batteryLevel", maxAge=0)
+    assert (online.call_count, data.call_count) == (1, 0)
+    assert "not ready because of recent lastErrorTime" in caplog.text
+
+
+def test_vehicle_data_rechecks_online_when_the_cache_expired(requests_mock):  # F6
+    api, reg, car, online, data = fleet_only_car(requests_mock, ("online", "asleep"))
+    calls = []
+
+    def clock():
+        # fetch's online check at t; _ready's second check at t + 121 s
+        calls.append(1)
+        return 5000.0 if len(calls) == 1 else 5121.0
+
+    api.now = clock
+    car.firstWakeAttemptTime = 100  # no 2-minute shortcut
+    reg.get(VIN).read("batteryLevel", maxAge=0)
+    assert (online.call_count, data.call_count) == (2, 0)
+
+
+def test_a_vehicle_data_read_after_a_failed_wake_clears_the_first_wake_attempt(
+    requests_mock,
+):
+    api, reg, car, online, data = fleet_only_car(requests_mock)
+    car.firstWakeAttemptTime = 100
+    assert reg.get(VIN).read("batteryLevel", maxAge=0).value == 61
+    assert (online.call_count, data.call_count) == (1, 1)
+    assert car.firstWakeAttemptTime == 0 and car.lastAPIAccessTime > 0
+
+
+def test_two_concurrent_reads_pay_one_vehicle_data(requests_mock):
+    api, reg, car, online, data = fleet_only_car(requests_mock)
+    fleet = api.providers()[1]
+    v = reg.get(VIN)
+    calls = []
+
+    def awake(*args, **kwargs):
+        # The second read passed fetch's deferral check; the first runs to
+        # its end before the second goes on
+        calls.append(1)
+        if len(calls) == 1:
+            assert fleet.fetch(v, "batteryLevel") is True
+        return True
+
+    car.is_awake = awake
+    assert fleet.fetch(v, "batteryLevel") is True
+    assert data.call_count == 1

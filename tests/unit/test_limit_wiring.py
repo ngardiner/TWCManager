@@ -212,7 +212,7 @@ def test_live_telemetry_places_a_departing_car_for_free(requests_mock):   # main
     m, r, car = fleetCarOffItsPoint(requests_mock, home=True)                                     # awake: a paid read would go out, and say home
     v = m.vehicleRegistry.get(VIN); v.observe("state", "online", "TeslaMateVehicle"); placeAt(m, v, AWAY)
     onDeparture(m); d = m.desired.get(VIN, CHARGE_LIMIT)
-    assert car.syncSource == "TeslaMateVehicle" and d.restore and d.value == 90 and requests_mock.call_count == 0
+    assert v.syncSource == "TeslaMateVehicle" and d.restore and d.value == 90 and requests_mock.call_count == 0
 
 def test_a_policy_change_while_the_car_is_away_sends_nothing(requests_mock):  # C1, paid counted
     m, r, car = fleetCarOffItsPoint(requests_mock, home=False)
@@ -328,6 +328,13 @@ def test_a_held_car_with_no_position_or_ble_is_present_for_a_cloud_provider(requ
     m.setPolicyLimit(70, transition=True); assert m.desired.get(VIN, CHARGE_LIMIT).value == 70 and requests_mock.call_count == 0
     m, r, v, car = restarted(requests_mock, position=None, held=False, claim=False); m.settings["commandPolicy"] = "prefer_ble"
     assert presentVehicles(m, C.SET_CHARGE_LIMIT) == []                                           # holding nothing: absent
+
+def test_a_listed_car_not_yet_located_is_in_the_broadcast(requests_mock):   # main's "or not yet located" (Targets.broadcastVehicles)
+    m, r, v, car = restarted(requests_mock, position=None, held=False, claim=False); m.settings["commandPolicy"] = "prefer_ble"
+    assert car.atHome is False and v.value("lat", 10000) == 10000 and not v.value("twcVin")
+    assert broadcastVehicles(m, C.START_CHARGING) == [v]                                          # neither at home nor located: still reached
+    placeAt(m, v, AWAY); assert broadcastVehicles(m, C.START_CHARGING) == []                      # located away: not reached
+    assert requests_mock.call_count == 0
 
 def test_an_away_fix_older_than_our_last_limit_write_is_no_departure(requests_mock):   # review M1
     m, r, v, car = restarted(requests_mock, position=AWAY); c = m.vehicleRegistry._clock
