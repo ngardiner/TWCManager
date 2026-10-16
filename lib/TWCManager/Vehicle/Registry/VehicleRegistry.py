@@ -1,6 +1,6 @@
 # The registry of vehicles: membership, forgetting, persistence and the
-# read-source and liveness tables. Registry and vehicle locks are leaves:
-# nothing here calls a source, a claim callable or does I/O while holding one.
+# liveness table. Registry and vehicle locks are leaves: nothing here calls a
+# provider, a claim callable or does I/O while holding one.
 import logging
 import math
 import threading
@@ -8,7 +8,6 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .Fields import NOT_TRACKED
-from .ReadSource import ReadSource
 from .Vehicle import Vehicle
 from .VIN import isWellFormedVIN
 
@@ -44,8 +43,8 @@ class VehicleRegistry:
         self._clock = clock
         self._lock = threading.RLock()
         self._vehicles: Dict[str, Vehicle] = {}
-        self._sources: List[ReadSource] = []
-        self._readOrder: Optional[Callable[[List[ReadSource]], List[ReadSource]]] = None
+        # The ProviderOrder a stale read cascades through; None never fetches
+        self.providerOrder = None
         self._liveness: Dict[str, Callable[[Optional[Vehicle]], Optional[float]]] = {}
         # Per point: {"candidate": vin, "attempts": int, "rejected": bool}.
         self._pending: Dict[str, dict] = {}
@@ -261,32 +260,7 @@ class VehicleRegistry:
             return attributed[0]
         return self.get(ANON_PREFIX + pointId)
 
-    # Read sources and liveness
-
-    def registerReadSource(self, source: ReadSource) -> None:
-        with self._lock:
-            if source not in self._sources:
-                self._sources.append(source)
-
-    def useReadOrder(
-        self, fn: Optional[Callable[[List[ReadSource]], List[ReadSource]]]
-    ) -> None:
-        # fn orders the registration-ordered sources; None restores the
-        # (order, index) sort
-        with self._lock:
-            self._readOrder = fn
-
-    def readSources(self) -> List[ReadSource]:
-        with self._lock:
-            registered = list(self._sources)
-            fn = self._readOrder
-        if fn is not None:
-            return fn(registered)
-        indexed = list(enumerate(registered))
-        return [
-            s
-            for _, s in sorted(indexed, key=lambda p: (getattr(p[1], "order", 0), p[0]))
-        ]
+    # Liveness
 
     def registerLiveness(
         self, source: str, liveAt: Callable[[Optional[Vehicle]], Optional[float]]

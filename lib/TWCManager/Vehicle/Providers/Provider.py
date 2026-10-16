@@ -44,6 +44,9 @@ class Provider:
     # Suppression condition ("ble_only", "api_only", "localStops") to the
     # capabilities it suppresses here; None for the locality rule
     SUPPRESSED: Optional[Dict[str, FrozenSet[str]]] = None
+    # The registry fields fetch can read; empty for a provider that reads
+    # nothing on demand
+    FIELDS: FrozenSet[str] = frozenset()
 
     # The vin argument of the command methods is the vehicle's registry key: a
     # VIN, or an anon:... key that only local providers can serve.
@@ -64,6 +67,12 @@ class Provider:
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
         return None
+
+    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+        # Reads field (and whatever comes with it) into the registry; True
+        # when the provider now vouches for vehicle.latest(field). Does I/O:
+        # called with no lock held. Never wakes the car unless allowWake.
+        return False
 
     def covers(self, vehicle, amps) -> bool:
         span = self.ampsRange(vehicle)

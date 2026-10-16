@@ -36,7 +36,8 @@ def test_telemetry_provider_is_passive_free_and_ready_while_live():
 
 def test_home_assistant_provider_follows_entities():
     ha, reg = make_ha(); (p,) = ha.providers(); v = reg.getOrCreate(VIN, "t")
-    assert (p.name, p.rank, p.cost(C.SET_AMPS), ha.readSource.provider) == ("HomeAssistant", 6, C.HA_BILLED, "HomeAssistant")
+    assert (p.name, p.rank, p.cost(C.SET_AMPS), p.cost(C.READ_CHARGE)) == ("HomeAssistant", 6, C.HA_BILLED, C.HA_BILLED)
+    assert p.FIELDS == {"batteryLevel", "chargeLimit", "availableCurrent", "chargingState", "lat", "lon"}
     assert p.ready(v, C.SET_AMPS) is False
     hv = Mock(has_charge_switch=True, has_charge_current_number=False, has_charge_limit_number=True); v.attach("HomeAssistant", hv)
     assert p.ready(v, C.START_CHARGING) and p.ready(v, C.SET_CHARGE_LIMIT) and not p.ready(v, C.SET_AMPS) and not p.declares(C.WAKE)
@@ -73,17 +74,16 @@ def test_ble_only_drops_home_assistant_commands_but_not_its_reads():
     m, ha = _haMaster({"commandPolicy": "ble_only"})
     for cap in (C.SET_AMPS, C.START_CHARGING, C.STOP_CHARGING, C.SET_CHARGE_LIMIT):
         assert "HomeAssistant" not in [p.name for p in m.providerOrder.ordered(cap)]
-    assert ha.readSource in m.providerOrder.orderReadSources([ha.readSource])
+    assert "HomeAssistant" in [p.name for p in m.providerOrder.ordered(C.READ_CHARGE)]
 
-def test_home_assistant_reads_after_the_fleet_read_source():
+def test_home_assistant_reads_after_the_fleet_provider():
     # No reorder and no new paid path: HA read last before, and still does
     m, ha = _haMaster({})
-    fleetSource = Mock(provider="FleetAPI", order=1); ownerSource = Mock(provider="OwnerAPI", order=1)
-    assert m.providerOrder.orderReadSources([ha.readSource, fleetSource, ownerSource]) == [ownerSource, fleetSource, ha.readSource]
+    assert [p.name for p in m.providerOrder.ordered(C.READ_CHARGE)] == ["TeslaBLE", "OwnerAPI", "FleetAPI", "HomeAssistant"]
 
 
-# The Task 5 carry-forward: under api_only the BLE read source is dropped only
-# once registerProviders has put TeslaBLE in the order
+# The Task 5 carry-forward: BLE reads only once registerProviders has put
+# TeslaBLE in the order, which under api_only suppresses it
 
 def _bleMaster(policy):
     config = dict(CONFIG, config=dict(CONFIG["config"], teslaControlPath="/bin/true"), vehicle={"teslaBLE": {"enabled": True}})
@@ -97,17 +97,17 @@ def _bleMaster(policy):
     v = m.vehicleRegistry.getOrCreate(VIN, "test"); v.claim("TeslaBLE", True)
     return m, ble, v
 
-def test_api_only_without_registered_providers_still_reads_over_ble():
-    # Why startup must call registerProviders: the read source no longer
-    # checks commandPolicy itself
-    m, ble, v = _bleMaster("api_only")
+@pytest.mark.parametrize("policy", [None, "api_only"])
+def test_nothing_reads_over_ble_before_register_providers(policy):
+    # Reads walk the provider order: no provider, no read
+    m, ble, v = _bleMaster(policy)
     v.read("batteryLevel", maxAge=0)
-    ble.get_charge_state.assert_called()
+    ble.get_charge_state.assert_not_called()
 
 def test_api_only_after_register_providers_never_reads_over_ble():
     m, ble, v = _bleMaster("api_only")
     assert registerProviders(m) == ["Gen2TWC", "TeslaBLE"]
-    assert ble.readSource not in m.vehicleRegistry.readSources()
+    assert "TeslaBLE" not in [p.name for p in m.providerOrder.ordered(C.READ_CHARGE)]
     v.read("batteryLevel", maxAge=0)
     ble.get_charge_state.assert_not_called()
 
@@ -115,7 +115,7 @@ def test_api_only_after_register_providers_never_reads_over_ble():
 def test_other_policies_keep_reading_over_ble(policy):
     m, ble, v = _bleMaster(policy)
     registerProviders(m)
-    assert m.vehicleRegistry.readSources()[0] is ble.readSource
+    assert m.providerOrder.ordered(C.READ_CHARGE)[0].module is ble
     assert v.read("batteryLevel", maxAge=0).value == 50
     ble.get_charge_state.assert_called_once_with(VIN)
 

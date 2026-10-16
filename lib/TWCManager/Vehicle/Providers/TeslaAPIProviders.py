@@ -10,12 +10,14 @@ from typing import Dict, Optional, Tuple
 from ..Reconcile.Outcome import SATISFIED, SETTLED, UNSUPPORTED, Outcome
 
 from .Capability import (
+    CHARGE_FIELDS,
     CLOUD_FREE,
     COMMANDS,
     FLEET_COMMAND,
     FLEET_DATA,
     FLEET_WAKE,
     OWNER_COMMAND,
+    LOCATION_FIELDS,
     READ_CHARGE,
     READ_LIST,
     READ_LOCATION,
@@ -44,23 +46,37 @@ TESLA_COMMAND = {
 
 
 class _TeslaAPIProvider(Provider):
-    # One token slot of the TeslaAPI module. The command methods are shared:
-    # TeslaAPI.command and wakeOutcome send through the slot that may
-    # command the car (commandSlotFor), and ready() says which provider that
-    # is, so each car's command goes out once
-    local = False
-    SUPPRESSED = CLOUD_SUPPRESSED
+    # One token slot of the TeslaAPI module
+    FIELDS = CHARGE_FIELDS | LOCATION_FIELDS
+    slotName = "ownerSlot"
 
     def __init__(self, carapi):
         self.carapi = carapi
         self.module = carapi
+
+    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+        # Never wakes, whatever allowWake says: a cloud wake is never worth a
+        # read. update_vehicle_data observes as "TeslaAPI" for either slot
+        car = vehicle.attachment("TeslaAPI")
+        if car is None:
+            return False
+        if time.time() < car.statusDeferral:
+            # As update_vehicle_data: a deferred car reports its stored
+            # values without a request
+            return True
+        slot = getattr(self.carapi, self.slotName)
+        # Free online check (vehicles/{vin}) before a paid vehicle_data
+        return bool(car.is_awake(slot=slot) and car.update_vehicle_data(slot=slot))
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
         if vehicle is None:
             return None
         return (1, vehicleMaxAmps(vehicle, self.carapi.master.config["config"]))
 
-    # Command methods: one request each (set_charging_amps below 5 A
+    # Command methods, shared by both slots: TeslaAPI.command and
+    # wakeOutcome send through the slot that may command the car
+    # (commandSlotFor), and ready() says which provider that is, so each
+    # car's command goes out once. One request each (set_charging_amps below 5 A
     # excepted, as TeslaPy #42), classified by TeslaAPI.command. No pre-wake:
     # the lane wakes first when the attempt says so.
 
@@ -118,10 +134,10 @@ class _TeslaAPIProvider(Provider):
 
 class OwnerAPIProvider(_TeslaAPIProvider):
     # Commands only a car Tesla lists with command_signing "off": free, but
-    # paced as Fleet (OWNER_COMMAND). The inherited command methods answer
-    # UNSUPPORTED; the legacy module sends through commandSlotFor
+    # paced as Fleet (OWNER_COMMAND)
     name = "OwnerAPI"
     rank = 4
+    local = False
     DECLARATIONS = {
         READ_LIST: Declaration(CLOUD_FREE),
         READ_ONLINE: Declaration(CLOUD_FREE),
@@ -134,6 +150,7 @@ class OwnerAPIProvider(_TeslaAPIProvider):
         WAKE: Declaration(OWNER_COMMAND),
         READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
     }
+    SUPPRESSED = CLOUD_SUPPRESSED
 
     def ready(self, vehicle, capability) -> bool:
         if capability == READ_WALL_CONNECTOR_VINS:
@@ -167,7 +184,9 @@ class OwnerAPIProvider(_TeslaAPIProvider):
 
 class FleetAPIProvider(_TeslaAPIProvider):
     name = "FleetAPI"
+    slotName = "fleetSlot"
     rank = 5
+    local = False
     DECLARATIONS = {
         READ_LIST: Declaration(CLOUD_FREE),
         READ_ONLINE: Declaration(CLOUD_FREE),
@@ -180,6 +199,7 @@ class FleetAPIProvider(_TeslaAPIProvider):
         WAKE: Declaration(FLEET_WAKE),
         READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
     }
+    SUPPRESSED = CLOUD_SUPPRESSED
 
     def ready(self, vehicle, capability) -> bool:
         if capability == READ_WALL_CONNECTOR_VINS:

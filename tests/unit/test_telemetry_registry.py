@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.unit.teslatokens import FakeMaster, new_api, owner_token
+from tests.unit.teslatokens import FakeMaster, new_api, owner_token, wire_reads
 from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Telemetry import TelmetryBase
@@ -192,8 +192,9 @@ def teslamate(monkeypatch):
     api = new_api(master=master)
     api.carApiVehicles = []
     master.modules["TeslaAPI"] = api
+    wire_reads(master.vehicleRegistry, *api.providers())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    # The Owner API token TeslaMate syncs: the cloud read source can read.
+    # The Owner API token TeslaMate syncs: the Owner provider can read.
     api.storeToken(owner_token(), "", "synced")
     car = api.getCarApiVehicles()[0]
     # A cloud call returns nothing usable; tests assert it is never made.
