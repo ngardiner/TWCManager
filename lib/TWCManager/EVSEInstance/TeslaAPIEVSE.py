@@ -45,10 +45,14 @@ class TeslaAPIEVSE(EVSEInstance):
 
     @property
     def isReadOnly(self) -> bool:
-        # An Owner API token can read the vehicle but not command it, so the
-        # distributor must not budget power for it.
+        # A car TeslaAPI can read but not command (no token can command it:
+        # e.g. an Owner API token for a car that needs signed commands), so
+        # the distributor must not budget power for it.
         carapi = self.master.getModuleByName("TeslaAPI")
-        return carapi is not None and getattr(carapi, "readOnly", False) is True
+        if carapi is None:
+            return False
+        readOnlyFor = getattr(carapi, "readOnlyFor", None)
+        return callable(readOnlyFor) and readOnlyFor(self.vehicle) is True
 
     @property
     def isLocal(self) -> bool:
