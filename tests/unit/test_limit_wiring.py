@@ -168,7 +168,7 @@ def fleetCarOffItsPoint(requests_mock, home):
     # unplugged; the paid read places it at home or away
     m, r, v, c = setup(clock=False); api = new_api(master=m); api.storeToken(fleet_token())
     for p in api.providers(): m.providerOrder.register(p)
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); car = api.getCarApiVehicles()[0]
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); car = api.carApiVehicles[0]
     m.settings.update(homeLat=HOME[0], homeLon=HOME[1]); at = HOME if home else AWAY
     v.observe("twcVin", "8244", "TWC"); v.observe("twcVin", None, "TWC", seen=False)
     m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaAPI")
@@ -217,8 +217,8 @@ def test_a_limit_recorded_while_an_id_waits_keeps_the_legacy_normal(caplog):  # 
 def test_a_failed_boot_list_load_recovers_without_an_arrival(requests_mock):  # I2
     master = FakeMaster(); master.vehicleRegistry = VehicleRegistry({}); api = new_api(master=master); api.storeToken(fleet_token())
     requests_mock.get(FLEET_NA_URL, [{"status_code": 500, "text": "{}"}, {"text": listing((1, VIN))}])
-    api.updateChargeAtHome(); assert api.getVehicleCount() == 0 and api.listPending()   # the boot checkCharge failed
-    api.loadList(); assert api.getVehicleCount() == 1 and not api.listPending()      # the periodic retry
+    api.updateChargeAtHome(); assert len(api.carApiVehicles) == 0 and api.listPending()   # the boot checkCharge failed
+    api.loadList(); assert len(api.carApiVehicles) == 1 and not api.listPending()      # the periodic retry
     assert [q.method for q in requests_mock.request_history] == ["GET", "GET"]
     source = (REPO / "lib/TWCManager/TWCManager.py").read_text()
     tick = source[source.index("master.lastTeslaTokenRefreshCheck = time.time()"):]
@@ -241,7 +241,7 @@ def restarted(requests_mock, position=HOME, held=True, claim=True):
     for field, value in (("chargeLimit", 50), ("chargingState", "Complete"), ("batteryLevel", 51)): v.observe(field, value, "TeslaMateVehicle")
     from requests_mock import ANY
     requests_mock.register_uri(ANY, ANY, json={"response": {"state": "asleep"}})   # any request is counted, none fails
-    return m, r, v, api.getCarApiVehicles()[0]
+    return m, r, v, api.carApiVehicles[0]
 
 def paidCalls(requests_mock):
     return [q.url for q in requests_mock.request_history if re.search(r"vehicle_data|wake_up|/command/", q.url)]

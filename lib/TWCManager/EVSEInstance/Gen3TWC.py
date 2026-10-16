@@ -423,12 +423,3 @@ class Gen3TWC(EVSEInstance):
         """
         self.lastTarget = watts
         self.controller.setUnitTarget(self.ID, watts)
-
-    def startCharging(self) -> None:
-        """Restore the last target (or the minimum) as this unit's target."""
-        self.controller.setUnitTarget(self.ID, self.lastTarget or self.minPower)
-
-    def stopCharging(self) -> None:
-        """Zero this unit's target.  Through the shared value this stops the
-        unit only when no sibling holds a target."""
-        self.controller.setUnitTarget(self.ID, 0)

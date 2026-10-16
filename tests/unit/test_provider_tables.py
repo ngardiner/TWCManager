@@ -148,7 +148,7 @@ def test_a_403_on_wake_refuses_wakes_only(requests_mock, monkeypatch):     # pai
     from tests.unit.reconcile_helpers import Clock
     monkeypatch.setattr(T.time, "sleep", Mock())
     clk = Clock(1000.0); api, reg = api_with_registry(); api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"}); api.storeToken(fleet_token())
-    api.master.config = {"config": {}}; p = api.providers()[1]; p.clock = clk; api.now = clk; api.wakeDelayMins = 0; car = api.getCarApiVehicles()[0]
+    api.master.config = {"config": {}}; p = api.providers()[1]; p.clock = clk; api.now = clk; api.wakeDelayMins = 0; car = api.carApiVehicles[0]
     requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
     requests_mock.post(re.compile(r".*/wake_up$"), status_code=403, json={})
     requests_mock.post(re.compile(r".*/command/.*"), json={"response": {"result": True}})

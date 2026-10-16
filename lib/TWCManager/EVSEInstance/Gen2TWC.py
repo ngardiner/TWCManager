@@ -210,12 +210,7 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         return ["Gen2TWCs"]
 
     # ------------------------------------------------------------------
-    # EVSEInstance: control
-    #
-    # setTargetPower / startCharging / stopCharging are stubs in Phase 2.
-    # The full watt-based implementation arrives in Phase 4 when the
-    # centralized power distribution loop replaces the per-slave heartbeat
-    # amps calculation.
+    # EVSEInstance: control (start and stop are the heartbeat's)
     # ------------------------------------------------------------------
 
     def setTargetPower(self, watts: float) -> None:
@@ -228,9 +223,3 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         amps = self.convertWattsToAmps(watts, self.currentVoltage)
         self._evseTargetAmps = amps
         self.lastAmpsDesired = amps  # kept for compatibility / logging
-
-    def startCharging(self) -> None:
-        """Charging start is managed by the RS485 heartbeat cycle."""
-
-    def stopCharging(self) -> None:
-        """Charging stop is managed by the RS485 heartbeat cycle."""
