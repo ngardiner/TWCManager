@@ -111,6 +111,9 @@ class AttemptRecord:
         self.paidRetryDue: bool = False
         # The desire's one re-arm of its paid sends is used
         self.rearmed = False
+        # The provider whose wake the car did not answer on the last paid
+        # send: the command never went (Reconciler's WAKE_CHECK)
+        self.wakeCheckBy: Optional[str] = None
         self.settledAt: Optional[float] = None
         self.pendingSave: Any = None
         # Sends that found the current value unreadable (a limit's c4 backstop)
@@ -132,6 +135,7 @@ class AttemptRecord:
         self.paidSaw = None
         self.paidRetryDue = False
         self.rearmed = False
+        self.wakeCheckBy = None
         self.settledAt = None
         self.unread = 0
         self.clearedValue = None
@@ -323,9 +327,9 @@ class DesiredStore:
             record = state.records.get(aspect) if state else None
             if record is None or record.inFlight is not attempt:
                 return False
-            record.inFlight = None
             if outcome.detail in QUEUE_DETAILS:
                 # The attempt never ran
+                record.inFlight = None
                 return True
             want = state.desired.get(aspect)
             # Only an attempt made for the current desire settles it or
@@ -352,13 +356,15 @@ class DesiredStore:
                 else:
                     # One blind retry, after the desire's first paid request
                     # failed; never after a failed wake
+                    retry = outcome.kind in RETRYABLE
+                    failedWake = retry and outcome.detail.startswith("wake ")
                     record.paidRetryDue = (
-                        record.paidSends == 0
-                        and outcome.kind in RETRYABLE
-                        and not outcome.detail.startswith("wake ")
+                        record.paidSends == 0 and retry and not failedWake
                     )
+                    record.wakeCheckBy = attempt.provider if failedWake else None
                     record.paidSends += 1
-                    record.paidReached |= outcome.kind != UNREACHABLE
+                    # A failed wake (an HTTP error too) never reached the car
+                    record.paidReached |= outcome.kind != UNREACHABLE and not failedWake
                     record.paidAt = now
             if current and outcome.kind in SETTLED:
                 record.settledAt = now
@@ -378,6 +384,8 @@ class DesiredStore:
             if outcome.kind == REFUSED or (current and outcome.kind in EXCLUDING):
                 # UNSUPPORTED can depend on the value: a superseded one's not
                 record.exclude(attempt.provider, outcome.kind)
+            # Last: plan reads the record without the lock once this is None
+            record.inFlight = None
             return True
 
     def forget(self, key) -> bool:
