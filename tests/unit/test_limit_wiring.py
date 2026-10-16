@@ -92,11 +92,11 @@ def listing(*cars):
     return json.dumps({"count": len(cars), "response": [{"id": i, "vin": v, "display_name": None} for i, v in cars]})
 
 def test_legacy_ids_resolve_once_from_the_first_vehicle_list(requests_mock, caplog):
-    api, m = legacyApi({"chargeLimits": {VIN: [80, -1], "11": [90, 50], "22": 85, "33": [70, 60]},
-                        "heldLimits": {"id:44": {"outside": 75, "held": None}, VIN4: {"outside": 66, "held": None}}},
+    api, m = legacyApi({"chargeLimits": {VIN: [80, -1], "11": [90, 50], "22": 85, "33": [70, 60], "44": 75},
+                        "heldLimits": {VIN4: {"outside": 66, "held": None}}},
                        owner_token(), fleet_token())
     assert m.heldLimits.get(VIN) == HeldLimit(80, None)                       # VIN keys at load
-    assert m.settings["chargeLimits"] == {"11": [90, 50], "22": 85, "33": [70, 60]} and m.heldLimits.waiting()
+    assert m.settings["chargeLimits"] == {"11": [90, 50], "22": 85, "33": [70, 60], "44": 75} and m.heldLimits.waiting()
     owner = requests_mock.get(OWNER_API_URL[:-8] + "products", text=listing((11, VIN2), (33, VIN4)))
     fleet = requests_mock.get(FLEET_NA_URL, text=listing((22, VIN3)))           # Owner and Fleet: different accounts
     m.tasks.clear()
