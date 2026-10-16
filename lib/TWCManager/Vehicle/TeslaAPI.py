@@ -2101,6 +2101,14 @@ class CarApiVehicle:
         self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
         return True
 
+    def locate(self):
+        # Free: atHome from the latest position any source observed. None
+        # when the position or home is unknown (never seeds home)
+        if self.lat == 10000 or self.carapi.master.getHomeLatLon()[0] == 10000:
+            return None
+        self.atHome = self.carapi.is_location_home(self.lat, self.lon)
+        return self.atHome
+
     def update_vehicle_data(self, slot=None):
         path = (
             str(self.VIN)
