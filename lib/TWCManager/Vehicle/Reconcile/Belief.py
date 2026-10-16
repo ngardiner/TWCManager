@@ -35,8 +35,21 @@ def _standIn(vehicle):
     return obs._replace(value="Charging" if flowing else "Stopped")
 
 
+def uncompleted(vehicle, obs):
+    # "Complete" read before our last limit write above the battery level
+    # is no longer true: the car can charge again (main's start went out)
+    write = vehicle.lastWrite(FIELD_FOR[CHARGE_LIMIT])
+    soc = vehicle.latest("batteryLevel")
+    if obs is None or obs.value != "Complete" or write is None or soc is None:
+        return obs
+    raised = obs.at <= write.at and soc.value < write.value
+    return obs._replace(value="Stopped") if raised else obs
+
+
 def known(vehicle, aspect):
     obs = vehicle.believed(FIELD_FOR[aspect], exclude=VEHICLE_SOURCES_EXCLUDED)
+    if aspect == CHARGING:
+        obs = uncompleted(vehicle, obs)
     if obs is None and aspect == CHARGING:
         # A car no vehicle source describes (anonymous, non-Tesla): the TWC
         # current stands in. It never adopts
@@ -73,7 +86,9 @@ def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
             # As main: a car below the minimum is never stopped
             return "battery below minChargeLevel"
         return None
-    limit = vehicle.value("chargeLimit")
+    # Our own write counts until a newer reading
+    limit = vehicle.believed("chargeLimit", VEHICLE_SOURCES_EXCLUDED)
+    limit = limit.value if limit is not None else None
     if battery and limit and battery >= limit:
         # As main (#591): the car would refuse the start
         return "battery at its charge limit"

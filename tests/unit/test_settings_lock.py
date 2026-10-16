@@ -109,3 +109,19 @@ def test_load_reads_file_outside_lock_and_assigns_under_it(tmp_path):
     with patch("builtins.open", opener):
         m.loadSettings()
     assert seen == {"open_locked": False} and m.settings["chargeStopMode"] == "2"
+
+
+def test_stop_responding_writes_the_expiry_before_the_zero(tmp_path):
+    # Final review M1: the serial thread reads both without the lock; a 0
+    # with the old, past expiry would be reset to 1 at once
+    class Recording(dict):
+        writes = []
+
+        def __setitem__(self, key, value):
+            self.writes.append(key)
+            super().__setitem__(key, value)
+
+    m = make(tmp_path)
+    m.settings = Recording(m.settings)
+    m.stopRespondingToSlaves()
+    assert m.settings.writes == ["respondToSlavesExpiry", "respondToSlaves"]

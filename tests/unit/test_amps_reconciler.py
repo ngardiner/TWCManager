@@ -60,8 +60,12 @@ def test_mode_3_floor_is_the_heartbeats_handoff_not_a_lower_twc_minimum():
 
 def test_mode_2_car_carries_and_the_twc_offers_its_max():
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); pt, s = point(m, v, 2); pt.setTargetPower(10 * 240)
-    assert s._evseTargetAmps == s.maxOfferAmps and m.desired.get(VIN, AMPS).value == 10
+    assert s._evseTargetAmps == 10 and m.desired.get(VIN, AMPS).value == 10
+    heartbeat(m, s, 10.0); assert s.lastAmpsOffered == 10                                  # unconfirmed: the TWC holds the target (final review I1)
     r.pass_(); assert f.calls == [("setAmps", VIN, 10)]                                    # TWC not an amps path under mode 2: Fleet, no wake, no read first
+    pt.setTargetPower(10 * 240); heartbeat(m, s, 10.0); assert s.lastAmpsOffered == s.wiringMaxAmps   # the car's rate landed: the TWC offers its max
+    c.t += 1; v.observe("chargeCurrentRequest", 32, "TeslaMateVehicle")                    # a newer reading disagrees: hold the target again
+    heartbeat(m, s, 10.0); assert s.lastAmpsOffered == 10
 
 def test_zero_offer_withdraws_the_cars_rate_but_not_a_lift():
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE))); pt, s = point(m, v, 2); pt.setTargetPower(10 * 240)
@@ -72,6 +76,8 @@ def test_twc_only_point_keeps_the_heartbeat_path_under_mode_2():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); pt, s = point(m, v, 2, car=False); pt.setTargetPower(10 * 240)
     assert s._evseTargetAmps == 10 and not s.pointOwnsAmps and m.desired.get(VIN, AMPS) is None   # the heartbeat's mode-2 branch sets the car's amps
     s._queueChargeRate(10); assert m.desired.get(VIN, AMPS).value == 10 and m.desired.get(VIN, AMPS).by == "heartbeat"
+    heartbeat(m, s, 10.0); assert s.lastAmpsOffered == 10                                  # the heartbeat's own rate, unconfirmed: the TWC holds it (I1)
+    r.pass_(); heartbeat(m, s, 10.0); assert s.lastAmpsOffered == s.wiringMaxAmps         # delivered over BLE: the TWC offers its max
 
 def test_heartbeat_does_not_write_amps_for_a_point_with_a_vehicle_member():
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); pt, s = point(m, v, 3); pt.setTargetPower(4 * 240)
