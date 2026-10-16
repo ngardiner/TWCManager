@@ -31,7 +31,7 @@ def test_ble_schedule_block_is_satisfied_without_a_command():
 def test_gen2_stop_and_start_outcomes_and_the_billed_stop_suppression():
     m, s = make_gen2(); m.desired = DesiredStore(); p = m.providerOrder.provider("Gen2TWC"); v = m.vehicleRegistry.getOrCreate(VIN, "t"); s.currentVIN = VIN.lower()
     assert p.stopCharging(VIN.lower()) == O.Outcome(O.UNSUPPORTED, "mode 1") and p.ready(v, C.START_CHARGING) is False
-    m.settings["chargeStopMode"] = "2"; p.summary(v); assert p.ready(v, C.START_CHARGING) is False and m.desired.keys() == []   # a read never creates desired state
+    m.settings["chargeStopMode"] = "2"; assert p.ready(v, C.START_CHARGING) is False and m.desired.keys() == []   # readiness never creates desired state
     m.settings["chargeStopMode"] = "1"
     m.settings["chargeStopMode"] = "2"
     assert p.stopCharging(VIN).kind == O.DONE and m.settings["respondToSlaves"] == 0 and p.ready(v, C.START_CHARGING) is False   # no Gen2 stop recorded yet

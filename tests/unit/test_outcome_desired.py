@@ -47,8 +47,7 @@ def test_clear_if_drops_only_a_matching_value():
 def test_free_channel_is_per_car_and_shared_by_aspects():
     s = DesiredStore(); f = s.free(VIN); f.failure(0.0); f.failure(70.0)
     assert (f.failingSince, f.lastAttemptAt) == (0.0, 70.0) and s.free(VIN) is f and s.free(VIN2) is not f
-    f.success(80.0); assert f.failingSince is None and f.lastAttemptAt == 80.0
-    assert s.summary(VIN)["free"] == {"failingSince": None, "lastAttemptAt": 80.0}
+    f.success(80.0); assert f.failingSince is None and f.lastAttemptAt == 80.0 and s.free(VIN) is f
 
 def test_note_outcome_bookkeeping():
     c = Clock(0.0); s = DesiredStore(clock=c); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
@@ -144,7 +143,7 @@ def test_a_new_desire_drops_unsupported_exclusions_and_keeps_refused():
     r.exclude("Gen2TWC", O.UNSUPPORTED); r.exclude("FleetAPI", O.REFUSED)
     assert r.excluded == {"Gen2TWC": O.UNSUPPORTED, "FleetAPI": O.REFUSED}
     s.set(VIN, AMPS, 4, "distributor"); assert r.excluded == {"FleetAPI": O.REFUSED}
-    assert s.summary(VIN)["records"][AMPS]["excluded"] == {"FleetAPI": O.REFUSED} and s.keys() == [VIN]
+    assert s.record(VIN, AMPS).excluded == {"FleetAPI": O.REFUSED} and s.keys() == [VIN]
 
 def test_a_by_only_change_is_a_no_op():
     s = DesiredStore(); seen = []; s.changed = lambda key, aspect: seen.append(aspect); s.set(VIN, CHARGING, False, "distributor")
