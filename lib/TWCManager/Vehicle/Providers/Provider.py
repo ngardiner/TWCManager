@@ -97,20 +97,6 @@ class Provider:
         # never reaches a provider that cannot command at all
         return True
 
-    def summary(self, vehicle) -> dict:
-        return {
-            "name": self.name,
-            "local": self.local,
-            "capabilities": {
-                capability: {
-                    "tier": declaration.cost.tier,
-                    "price": declaration.cost.price,
-                    "ready": self.ready(vehicle, capability),
-                }
-                for capability, declaration in self.declarations().items()
-            },
-        }
-
 
 def suppressedFor(provider, condition) -> FrozenSet[str]:
     # A provider without a table (a test double, a Mock) gets the locality

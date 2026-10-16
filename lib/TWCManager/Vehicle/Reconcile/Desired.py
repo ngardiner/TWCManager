@@ -88,18 +88,6 @@ class Attempt(NamedTuple):
     force: bool = False
 
 
-def _attemptSummary(attempt: Optional[Attempt]) -> Optional[dict]:
-    if attempt is None:
-        return None
-    return {
-        "capability": attempt.capability,
-        "value": attempt.value,
-        "provider": attempt.provider,
-        "wake": attempt.wake,
-        "since": attempt.since,
-    }
-
-
 class AttemptRecord:
     # Mutated after submit only through DesiredStore.noteOutcome
     def __init__(self):
@@ -151,24 +139,6 @@ class AttemptRecord:
     def exclude(self, provider: str, kind: str) -> None:
         self.excluded[provider] = kind
 
-    def summary(self) -> dict:
-        last = self.lastOutcome
-        return {
-            "inFlight": _attemptSummary(self.inFlight),
-            "lastOutcome": (
-                {"kind": last.kind, "detail": last.detail} if last else None
-            ),
-            "lastOutcomeAt": self.lastOutcomeAt,
-            "lastProvider": self.lastProvider,
-            "excluded": dict(self.excluded),
-            "lastSentAt": self.lastSentAt,
-            "lastFreeAt": self.lastFreeAt,
-            "paidAt": self.paidAt,
-            "paidRetryDue": self.paidRetryDue,
-            "settledAt": self.settledAt,
-        }
-
-
 class FreeChannel:
     # One per car, shared by every aspect and free provider
     def __init__(self):
@@ -185,10 +155,6 @@ class FreeChannel:
             self.failingSince = at
         self.lastAttemptAt = at
 
-    def summary(self) -> dict:
-        return {"failingSince": self.failingSince, "lastAttemptAt": self.lastAttemptAt}
-
-
 class ControlState:
     def __init__(self):
         self.desired: Dict[str, Desired] = {}
@@ -197,17 +163,6 @@ class ControlState:
         # The provider that delivered the last CHARGING False; a start goes
         # back through it
         self.lastStopProvider: Optional[str] = None
-
-
-def _desiredSummary(desired: Desired) -> dict:
-    return {
-        "value": desired.value,
-        "by": desired.by,
-        "at": desired.at,
-        "adopted": desired.adopted,
-        "restore": desired.restore,
-        "lift": desired.lift,
-    }
 
 
 class DesiredStore:
@@ -473,20 +428,3 @@ class DesiredStore:
     def keys(self) -> List[str]:
         with self._lock:
             return list(self._states)
-
-    def summary(self, key) -> dict:
-        with self._lock:
-            state = self._states.get(key)
-            if state is None:
-                return {}
-            return {
-                "desired": {
-                    aspect: _desiredSummary(desired)
-                    for aspect, desired in state.desired.items()
-                },
-                "records": {
-                    aspect: record.summary() for aspect, record in state.records.items()
-                },
-                "free": state.free.summary(),
-                "lastStopProvider": state.lastStopProvider,
-            }

@@ -47,15 +47,6 @@ def test_provider_defaults_and_declarations():
     assert not Provider().covers(None, 10)
 
 
-def test_summary_lists_each_capability():
-    s = Stub().summary(None)
-    assert s["name"] == "Stub" and s["capabilities"][C.WAKE] == {
-        "tier": 2,
-        "price": 0.02,
-        "ready": False,
-    }
-
-
 def test_vehicle_max_amps_falls_back_to_wiring():
     v = VehicleRegistry({}).getOrCreate(VIN, "t")
     assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 40}) == 40
