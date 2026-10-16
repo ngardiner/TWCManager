@@ -1,5 +1,5 @@
-# The Gen2 TWC as a provider: the slave serving a vehicle reads its plug
-# state, VIN and amps passively and sets its amps locally. Its stop is
+# The Gen2 TWC as a provider: the slave serving a vehicle sets its amps
+# locally. Its stop is
 # disruptive (it stops answering every slave, or stops the TWC itself), so it is
 # declared at the very-high-cost tier and only chargeStopMode selects it.
 # Command methods never touch RS-485: a stop is published for the serial
@@ -9,9 +9,6 @@ from typing import Optional, Tuple
 from .Capability import (
     DISRUPTIVE,
     LOCAL,
-    READ_AMPS,
-    READ_PLUG,
-    READ_VIN,
     SET_AMPS,
     START_CHARGING,
     STOP_CHARGING,
@@ -21,9 +18,6 @@ from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
 from ..Registry.VIN import isWellFormedVIN
 from .Provider import Provider
 
-READ_CAPABILITIES = (READ_PLUG, READ_VIN, READ_AMPS)
-
-
 class Gen2TWCProvider(Provider):
     name = "Gen2TWC"
     rank = 0
@@ -31,9 +25,6 @@ class Gen2TWCProvider(Provider):
     worker = "local"
     module = None
     DECLARATIONS = {
-        READ_PLUG: Declaration(LOCAL, passive=True),
-        READ_VIN: Declaration(LOCAL, passive=True),
-        READ_AMPS: Declaration(LOCAL, passive=True),
         SET_AMPS: Declaration(LOCAL),
         START_CHARGING: Declaration(LOCAL),
         STOP_CHARGING: Declaration(DISRUPTIVE),
@@ -65,8 +56,6 @@ class Gen2TWCProvider(Provider):
         return int(self._settings().get("chargeRateControl", 1))
 
     def ready(self, vehicle, capability) -> bool:
-        if capability in READ_CAPABILITIES:
-            return self.slaveFor(vehicle) is not None
         if capability == SET_AMPS:
             # Mode 2 hands the rate to the vehicle
             return self.chargeRateControl() != 2 and self.slaveFor(vehicle) is not None

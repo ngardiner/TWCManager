@@ -17,9 +17,6 @@ from .Capability import (
     FLEET_WAKE,
     LOCATION_FIELDS,
     READ_CHARGE,
-    READ_LIST,
-    READ_LOCATION,
-    READ_ONLINE,
     READ_WALL_CONNECTOR_VINS,
     SET_AMPS,
     SET_CHARGE_LIMIT,
@@ -64,10 +61,7 @@ class OwnerAPIProvider(_TeslaAPIProvider):
     rank = 4
     local = False
     DECLARATIONS = {
-        READ_LIST: Declaration(CLOUD_FREE),
-        READ_ONLINE: Declaration(CLOUD_FREE),
         READ_CHARGE: Declaration(CLOUD_FREE),
-        READ_LOCATION: Declaration(CLOUD_FREE),
         READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
     }
     SUPPRESSED = CLOUD_SUPPRESSED
@@ -93,10 +87,7 @@ class FleetAPIProvider(_TeslaAPIProvider):
     rank = 5
     local = False
     DECLARATIONS = {
-        READ_LIST: Declaration(CLOUD_FREE),
-        READ_ONLINE: Declaration(CLOUD_FREE),
         READ_CHARGE: Declaration(FLEET_DATA),
-        READ_LOCATION: Declaration(FLEET_DATA),
         SET_CHARGE_LIMIT: Declaration(FLEET_COMMAND),
         START_CHARGING: Declaration(FLEET_COMMAND),
         STOP_CHARGING: Declaration(FLEET_COMMAND),

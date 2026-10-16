@@ -9,9 +9,6 @@ from .Capability import (
     LOCAL,
     LOCATION_FIELDS,
     READ_CHARGE,
-    READ_LOCATION,
-    READ_ONLINE,
-    READ_PLUG,
     SET_AMPS,
     SET_CHARGE_LIMIT,
     START_CHARGING,
@@ -24,9 +21,6 @@ from .Provider import Provider, vehicleMaxAmps
 
 CAPABILITIES = (
     READ_CHARGE,
-    READ_LOCATION,
-    READ_PLUG,
-    READ_ONLINE,
     SET_CHARGE_LIMIT,
     START_CHARGING,
     STOP_CHARGING,

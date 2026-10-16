@@ -25,10 +25,7 @@ def test_two_providers_with_honest_costs():
         False,
     )
     assert owner.cost(C.READ_CHARGE) == C.CLOUD_FREE and owner.cost(C.SET_AMPS) is None
-    assert (
-        fleet.cost(C.READ_ONLINE) == C.CLOUD_FREE
-        and fleet.cost(C.READ_CHARGE) == C.FLEET_DATA
-    )
+    assert fleet.cost(C.READ_CHARGE) == C.FLEET_DATA
     assert fleet.cost(C.SET_AMPS) == C.FLEET_COMMAND and fleet.cost(C.WAKE) == C.FLEET_WAKE
     assert fleet.declarations()[C.SET_AMPS] == C.Declaration(C.FLEET_COMMAND)   # pacing is the reconciler's MIN_SEND_GAP
     # no tokens yet

@@ -157,8 +157,6 @@ class Gen3TWCs(EVSEController):
     """EVSEController for Gen3 Tesla Wall Connectors via Neurio Modbus emulation."""
 
     name = "Gen3TWCs"
-    # Every unit reads the one fake-Neurio value
-    sharedControl = True
     # Republish only when the headroom moves by more than this (or the
     # targets change)
     DAMP_AMPS = 1.0

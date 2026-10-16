@@ -7,7 +7,6 @@ from ..Reconcile.Outcome import UNSUPPORTED, Outcome
 from .Capability import (
     HA_BILLED,
     READ_CHARGE,
-    READ_LOCATION,
     SET_AMPS,
     SET_CHARGE_LIMIT,
     START_CHARGING,
@@ -18,7 +17,6 @@ from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
 
 CAPABILITIES = (
     READ_CHARGE,
-    READ_LOCATION,
     SET_CHARGE_LIMIT,
     START_CHARGING,
     STOP_CHARGING,
@@ -36,10 +34,8 @@ class HomeAssistantProvider(Provider):
     name = "HomeAssistant"
     rank = 6
     local = False
-    vehicleAttachment = "HomeAssistant"
     DECLARATIONS = {
         READ_CHARGE: Declaration(HA_BILLED),
-        READ_LOCATION: Declaration(HA_BILLED),
         SET_CHARGE_LIMIT: Declaration(HA_BILLED),
         START_CHARGING: Declaration(HA_BILLED),
         STOP_CHARGING: Declaration(HA_BILLED),
