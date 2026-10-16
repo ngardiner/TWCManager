@@ -1,7 +1,7 @@
 # tests/unit/test_carapivehicle_registry.py
 from unittest.mock import ANY, Mock
 
-from tests.unit.teslatokens import FakeMaster, fleet_token, new_api
+from tests.unit.teslatokens import FakeMaster, fleet_token, new_api, wire_reads
 from TWCManager.Vehicle.Reconcile.Outcome import DONE, Outcome
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
@@ -13,6 +13,7 @@ def api_with_registry():
     master.vehicleRegistry = VehicleRegistry({})
     api = new_api(master=master)
     api.carApiVehicles = []
+    wire_reads(master.vehicleRegistry, *api.providers())
     return api, master.vehicleRegistry
 
 

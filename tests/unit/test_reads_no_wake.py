@@ -1,8 +1,8 @@
 import time
 from unittest.mock import Mock
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
-from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource, TeslaAPIReadSource
-from tests.unit.teslatokens import FakeMaster, new_api, owner_token
+from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
+from tests.unit.teslatokens import FakeMaster, new_api, owner_token, wire_reads
 
 VIN = "5YJ3E1EA1KF000001"
 
@@ -20,7 +20,7 @@ def setup(ble_result, clock=time.time):
     api.carApiVehicles = []
     # The cloud read source reads through the Owner slot
     api.storeToken(owner_token())
-    reg.registerReadSource(TeslaBLEReadSource(ble, master))
+    wire_reads(reg, TeslaBLEProvider(ble, master), *api.providers())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.getCarApiVehicles()[0]
     car.is_awake = Mock(return_value=True)
@@ -204,7 +204,8 @@ def test_null_gps_as_of_is_not_observed():
     assert reg.get(VIN).latest("gpsAsOf") is None and car.batteryLevel == 70
 
 
-def test_teslable_registers_its_read_source(tmp_path):
+def test_teslable_provider_reads_through_the_module(tmp_path):
+    from TWCManager.Vehicle.Providers import Capability as C
     from unittest.mock import patch
     from TWCManager.Vehicle.TeslaBLE import TeslaBLE
 
@@ -216,8 +217,9 @@ def test_teslable_registers_its_read_source(tmp_path):
         TeslaBLE, "_start_dbus_session"
     ):
         ble = TeslaBLE(master)
-    sources = master.vehicleRegistry.readSources()
-    assert [s.name for s in sources] == ["TeslaBLE"] and sources[0].ble is ble
+    (p,) = ble.providers()
+    assert p.ble is ble and p.cost(C.READ_CHARGE) == C.LOCAL
+    assert p.FIELDS == C.CHARGE_FIELDS | C.LOCATION_FIELDS
 
 
 def test_ble_reply_with_no_values_falls_through_to_api():

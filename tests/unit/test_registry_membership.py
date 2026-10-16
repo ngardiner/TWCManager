@@ -199,20 +199,6 @@ def test_raising_liveness_counts_as_not_live():
     assert r.sourceLiveAt("S", r.getOrCreate(VIN, "S")) is None
 
 
-def test_read_sources_sorted_by_order_then_registration():
-    r = VehicleRegistry({})
-
-    def src(name, order):
-        s = Mock()
-        s.name, s.order = name, order
-        return s
-
-    cloud, a, b = src("cloud", 1), src("a", 0), src("b", 0)
-    for s in (cloud, a, b, a):
-        r.registerReadSource(s)
-    assert r.readSources() == [a, b, cloud]
-
-
 def test_find_by_name_and_attached():
     r = VehicleRegistry({})
     v = r.getOrCreate(VIN, "TeslaAPI")

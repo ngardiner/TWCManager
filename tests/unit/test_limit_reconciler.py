@@ -6,7 +6,6 @@ from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
 from TWCManager.Vehicle.Reconcile.Reconciler import MIN_SEND_GAP, PAID_AFTER, PROBE_AFTER, RETRY, VehicleReconciler
 from tests.unit.reconcile_helpers import Clock, ScriptedProvider, inline
 from tests.unit.test_gen2twc_provider import VIN, make as make_master
-from tests.unit.test_reconciler_queues import Src
 
 def setup(*providers, clock=True):
     m, s = make_master(); c = Clock(1000.0) if clock else time.time
@@ -335,13 +334,13 @@ def test_a_satisfied_stop_with_a_stale_feed_pays_once_an_hour():          # I2, 
     assert cmds(f) == ["stopCharging"]
 
 def test_the_blind_retry_and_a_fallback_buy_no_paid_read():                 # I3, paid reads counted
-    m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "500"))); f = prov(m, "FleetAPI"); src = Src("FleetAPI", "FleetAPI", 90)
-    m.vehicleRegistry.registerReadSource(src); v.observe("chargeLimit", 90, "TeslaAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "500"))); f = prov(m, "FleetAPI"); src = f.reads(90, cost=C.FLEET_DATA)
+    v.observe("chargeLimit", 90, "TeslaAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
     for _ in range(12 * 360): c.t += 10; r.pass_()
     assert len(cmds(f)) == 2 and src.fetched == 0                            # 500 then 500: 2 commands, no vehicle_data
-    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); src = Src("FleetAPI", "FleetAPI", 90)
-    m.vehicleRegistry.registerReadSource(src); v.observe("chargeLimit", 90, "TeslaAPI")
+    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); src = f.reads(90, cost=C.FLEET_DATA)
+    v.observe("chargeLimit", 90, "TeslaAPI")
     b = prov(m, "TeslaBLE"); fail = b.setChargeLimit
     def slow(vin, limit): c.t += 20; return fail(vin, limit)                  # BLE takes 20 s to fail
     b.setChargeLimit = slow; m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")

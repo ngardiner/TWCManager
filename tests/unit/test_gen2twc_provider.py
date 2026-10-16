@@ -37,7 +37,7 @@ def test_master_registers_gen2_provider_and_read_order():
     m, s = make()
     assert [p.name for p in m.providerOrder.providers()] == ["Gen2TWC"]
     assert isinstance(m.providerOrder.provider("Gen2TWC"), Gen2TWCProvider)
-    assert m.vehicleRegistry._readOrder is not None
+    assert m.vehicleRegistry.providerOrder is m.providerOrder
 
 
 def test_ranges_follow_the_device_and_wiring():

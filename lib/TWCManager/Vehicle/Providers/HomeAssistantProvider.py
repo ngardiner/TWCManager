@@ -26,6 +26,12 @@ CAPABILITIES = (
 )
 
 
+# What Home Assistant's entities can report
+HA_FIELDS = frozenset(
+    {"batteryLevel", "chargeLimit", "availableCurrent", "chargingState", "lat", "lon"}
+)
+
+
 class HomeAssistantProvider(Provider):
     name = "HomeAssistant"
     rank = 6
@@ -40,6 +46,7 @@ class HomeAssistantProvider(Provider):
         SET_AMPS: Declaration(HA_BILLED),
     }
     SUPPRESSED = CLOUD_SUPPRESSED
+    FIELDS = HA_FIELDS
 
     def __init__(self, ha):
         self.ha = ha
@@ -65,6 +72,14 @@ class HomeAssistantProvider(Provider):
         if capability == SET_CHARGE_LIMIT:
             return bool(hv.has_charge_limit_number)
         return True
+
+    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+        # Never wakes the car. None (unreachable, nothing answered) is a
+        # failed read, never a stale value reported as one
+        seen = vehicle.attachment("HomeAssistant").parse_from_home_assistant(self.ha)
+        for k, v in (seen or {}).items():
+            vehicle.observe(k, v, self.name)
+        return field in (seen or {})
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
         if vehicle is None:
