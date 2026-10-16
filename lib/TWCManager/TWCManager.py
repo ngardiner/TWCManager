@@ -247,13 +247,6 @@ def hex_str(ba: bytearray):
     return " ".join("{:02X}".format(c) for c in ba)
 
 
-def time_now():
-    global config
-    return datetime.datetime.now().strftime(
-        "%H:%M:%S" + (".%f" if config["config"]["displayMilliseconds"] else "")
-    )
-
-
 def unescape_msg(inmsg: bytearray, msgLen):
     # Given a message received on the RS485 network, remove leading and trailing
     # C0 byte, unescape special byte values, and verify its data matches the CRC

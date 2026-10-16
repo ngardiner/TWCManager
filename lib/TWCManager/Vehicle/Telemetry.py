@@ -381,6 +381,3 @@ class TelmetryBase:
             f"'{vehicle_name}' to attach telemetry to; will retry",
         )
         return False
-
-    def updateSettings(self):
-        return True

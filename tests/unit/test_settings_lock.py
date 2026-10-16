@@ -48,8 +48,8 @@ def test_settings_lock_is_reentrant(tmp_path):
     m = make(tmp_path)
     with m.settingsLock:
         with m.settingsLock:
-            m.setSetting("x", 1)
-    assert m.getSetting("x") == 1
+            m.settings["x"] = 1
+    assert m.settings["x"] == 1
 
 
 def test_save_serialises_under_lock_and_writes_outside(tmp_path):
@@ -74,14 +74,6 @@ def test_save_serialises_under_lock_and_writes_outside(tmp_path):
         m.saveSettings()
     assert seen == {"dumps_locked": True, "write_locked": False}
     assert json.load(open(tmp_path / "settings.json"))["chargeStopMode"] == "1"
-
-
-def test_set_setting_takes_the_lock_and_get_does_not(tmp_path):
-    m = make(tmp_path)
-    m.settingsLock = CountingLock()
-    m.setSetting("k", 2)
-    assert m.getSetting("k") == 2
-    assert m.settingsLock.enters == 1  # reads stay unlocked (ruling 3 / P4)
 
 
 def test_off_thread_master_writers_take_the_lock(tmp_path):

@@ -127,7 +127,7 @@ def add_home_vehicle(api):
     """Add vehicle 5YJ3E1EA1KF000001, at home and recently contacted, so ready() is True
     without an HTTP call. Use with the no_threads fixture."""
     api.addVehicle({"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"})
-    vehicle = api.getCarApiVehicles()[-1]
+    vehicle = api.carApiVehicles[-1]
     vehicle.atHome = True
     vehicle.lastAPIAccessTime = time.time()
     return vehicle

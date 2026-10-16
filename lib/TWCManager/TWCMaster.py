@@ -1192,7 +1192,9 @@ class TWCMaster:
         # and to push settings logic out to the individual modules
         mods = self.getModulesByType("Vehicle")
         for mod in mods:
-            mod["ref"].updateSettings()
+            # Optional: only TeslaBLE has settings to re-read
+            if hasattr(mod["ref"], "updateSettings"):
+                mod["ref"].updateSettings()
 
         # If particular details are missing from the Settings dict, create them
         with self.settingsLock:
@@ -1690,28 +1692,6 @@ class TWCMaster:
                 except:
                     pass
 
-    def getSetting(self, key, default=None):
-        """Get a setting value by key.
-
-        Args:
-            key: The setting key to retrieve
-            default: Default value if key doesn't exist
-
-        Returns:
-            The setting value or default if not found
-        """
-        return self.settings.get(key, default)
-
-    def setSetting(self, key, value):
-        """Set a setting value by key.
-
-        Args:
-            key: The setting key to set
-            value: The value to set
-        """
-        with self.settingsLock:
-            self.settings[key] = value
-
     def send_master_linkready1(self):
         logger.log(logging.INFO8, "Send master linkready1")
 
@@ -2038,11 +2018,6 @@ class TWCMaster:
         with self.settingsLock:
             self.settings["respondToSlaves"] = 0
             self.settings["respondToSlavesExpiry"] = time.time() + 60
-
-    def time_now(self):
-        return datetime.now().strftime(
-            "%H:%M:%S" + (".%f" if self.config["config"]["displayMilliseconds"] else "")
-        )
 
     def tokenSyncEnabled(self):
         # TODO: Should not be hardcoded

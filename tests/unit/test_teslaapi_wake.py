@@ -76,7 +76,7 @@ def _api(clock, *tokens):
     for token in tokens:
         a.storeToken(token)
     a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
-    a.getCarApiVehicles()[0].atHome = True
+    a.carApiVehicles[0].atHome = True
     return a
 
 
@@ -124,7 +124,7 @@ def _send_first_wake(api, fleet, clock):
     assert fleet.wake(VIN) == HELD  # deferring wake
     clock.advance(api.wakeDelayMins * 60)
     assert fleet.wake(VIN) == O.Outcome(O.UNREACHABLE, "offline")
-    assert api.getCarApiVehicles()[0].delayNextWakeAttempt == 30 * 60
+    assert api.carApiVehicles[0].delayNextWakeAttempt == 30 * 60
     return clock.now
 
 
@@ -150,7 +150,7 @@ def test_car_online_after_offline_wake_is_noticed(
     api, fleet, clock, car_state, requests_mock
 ):
     _send_first_wake(api, fleet, clock)
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
 
     # The car comes online about 2 minutes after the wake.
     car_state.value = "online"
@@ -187,7 +187,7 @@ def test_car_never_online_checks_free_then_wakes_once_per_hold(
 def test_fresh_telemetry_online_needs_no_request(api, fleet, clock, requests_mock):
     _send_first_wake(api, fleet, clock)
     before = len(requests_mock.request_history)
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
 
     # TeslaMate reports the car online.
     clock.advance(30)
@@ -201,7 +201,7 @@ def test_fresh_telemetry_online_needs_no_request(api, fleet, clock, requests_moc
 def test_fresh_telemetry_asleep_needs_no_request(api, fleet, clock, requests_mock):
     _send_first_wake(api, fleet, clock)
     before = len(requests_mock.request_history)
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
 
     for _ in range(10):
         clock.advance(60)
@@ -233,7 +233,7 @@ def test_telemetry_from_before_wake_is_not_trusted(
     api, fleet, clock, car_state, requests_mock
 ):
     woke = _send_first_wake(api, fleet, clock)
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     # TeslaMate's last word is 'asleep', from before the wake we sent: it
     # can't tell us whether the wake worked.
     _teslamate(car, "asleep", woke - 10)
@@ -252,7 +252,7 @@ def test_stale_telemetry_asleep_does_not_cause_rewakes(
     # one wake_up, but the charge command keeps failing, so every cycle
     # asks again for an hour. Every caller must see the same answer, and the
     # car must not be re-woken at the 30-minute retry.
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     _teslamate(car, "asleep", clock.now - 3600)
     start = clock.now
     woke = None
@@ -268,7 +268,7 @@ def test_stale_telemetry_asleep_does_not_cause_rewakes(
 
 
 def test_fresh_telemetry_newer_than_our_get_is_trusted(api, clock, requests_mock):
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     requests_mock.get(STATE_URL, json={"response": {"state": "online"}})
     assert car.is_awake() is True
     gets = _gets(requests_mock)
@@ -280,7 +280,7 @@ def test_fresh_telemetry_newer_than_our_get_is_trusted(api, clock, requests_mock
 
 
 def test_our_get_newer_than_telemetry_wins(api, clock, car_state, requests_mock):
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     car_state.value = "online"
     assert car.is_awake() is True
     gets = _gets(requests_mock)
@@ -302,7 +302,7 @@ def test_stale_telemetry_asleep_falls_through_to_get(
 ):
     # An hour-old 'asleep' with no GET of our own yet: telemetry is stale,
     # so check the car (free state GET) instead of trusting it.
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     _teslamate(car, "asleep", clock.now - 3600)
     car_state.value = "online"
     assert car.is_awake() is True
