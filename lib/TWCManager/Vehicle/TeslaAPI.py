@@ -1,4 +1,5 @@
 import base64
+import functools
 import hashlib
 import json
 import logging
@@ -1489,28 +1490,18 @@ class TeslaAPI:
         # Force a real fetch; the status deferral would otherwise
         # return cached (possibly stale) coordinates unqueried.
         car.statusDeferral = 0
-        updated = self.update_location(v, 0)
-        if updated and not car.atHome:
-            logger.log(
-                logging.INFO2,
-                "%s was connected to a TWC, so is definitely home.",
-                v.name,
-            )
+        if self.update_location(v, 0) and not car.atHome:
+            say = functools.partial(logger.log, logging.INFO2)
+            say("%s was connected to a TWC, so is definitely home.", v.name)
             gpsAsOf = v.value("gpsAsOf", 0)
             if gpsAsOf and time.time() - gpsAsOf > 600:
                 # The car is home (the TWC reports its VIN), but its GPS fix
                 # is stale - don't move home to wherever the car last had
                 # reception.
-                logger.log(
-                    logging.INFO2,
-                    "Not resetting home location: %s's GPS fix is stale.",
-                    v.name,
-                )
+                say("Not resetting home location: %s's GPS fix is stale.", v.name)
             else:
                 lat, lon = v.value("lat", 10000), v.value("lon", 10000)
-                logger.log(
-                    logging.INFO2, "Resetting home location to (%s, %s)", lat, lon
-                )
+                say("Resetting home location to (%s, %s)", lat, lon)
                 self.master.setHomeLat(lat)
                 self.master.setHomeLon(lon)
                 self.master.queue_background_task({"cmd": "sunrise"})
@@ -1525,14 +1516,9 @@ class TeslaAPI:
     def minBatteryLevelAtHome(self):
         if time.time() - self.lastChargeCheck > self.chargeUpdateInterval:
             self.master.queue_background_task({"cmd": "checkCharge"})
-        return min(
-            [
-                v.value("batteryLevel", 10000)
-                for v, car in self.registry.attached("TeslaAPI")
-                if car.atHome
-            ],
-            default=10000,
-        )
+        attached = self.registry.attached("TeslaAPI")
+        levels = [v.value("batteryLevel", 10000) for v, car in attached if car.atHome]
+        return min(levels or [10000])
 
     # One listed car's reads: vehicle is its registry Vehicle, car its
     # CarApiState. Field reads and writes go through the registry.
