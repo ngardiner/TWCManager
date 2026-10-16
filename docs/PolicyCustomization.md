@@ -55,11 +55,14 @@ A car counts as at home when:
 
 1. a TWC reports it by VIN; else
 2. for a car on your Tesla API account, its latest known position (from any
-   source, including TeslaMate and Fleet Telemetry, which cost nothing) is
-   within `atHomeRadius` of the home location; else, with no usable position,
-3. it was last seen plugged in at home, or TWCManager holds a limit on it (it
-   applied one earlier, including before a restart); else
-4. Home Assistant reports it at home; else
+   source, including TeslaMate and Fleet Telemetry, which cost nothing)
+   decides: at home within `atHomeRadius` of the home location, away
+   otherwise; else
+3. for a car on your Tesla API account, with no usable position: it was last
+   seen plugged in at home, or TWCManager holds a limit on it (it applied one
+   earlier, including before a restart); else
+4. a car Home Assistant tracks counts as at home exactly when Home Assistant
+   says so; else
 5. it has a BLE key paired with TWCManager.
 
 This is re-checked on every policy pass, so after a restart a car that is
