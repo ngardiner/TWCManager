@@ -266,3 +266,12 @@ def test_force_still_never_fetches_without_max_age():
     src = Reader("TeslaBLE", C.LOCAL, {"chargeLimit": 1})
     reg, v = setup(src)
     assert v.read("chargeLimit", None, force=True) is None and src.calls == []
+
+
+def test_a_provider_registered_twice_reads_once():
+    # Re-registering a name replaces the provider, keeping its place
+    old = Reader("OwnerAPI", C.CLOUD_FREE, None)
+    new = Reader("OwnerAPI", C.CLOUD_FREE, None)
+    reg, v = setup(old, Reader("HomeAssistant", C.HA_BILLED, None), new, new)
+    v.read("chargeLimit", maxAge=0)
+    assert old.calls == [] and len(new.calls) == 1
