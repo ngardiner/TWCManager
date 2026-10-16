@@ -3,9 +3,9 @@
 import logging
 import threading
 import time
-from typing import Any, Callable, Collection, Dict, List, Optional, Union
+from typing import Any, Callable, Collection, Dict, List, Optional, Tuple, Union
 
-from .Fields import NOT_TRACKED, FieldStore, Observation
+from .Fields import NOT_TRACKED, TELEMETRY_SOURCES, FieldStore, Observation
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 
@@ -40,6 +40,12 @@ class Claim:
 
 
 class Vehicle:
+    # Telemetry (an external module such as TeslaMate) is the sync source
+    # while its latest "state" observation is younger than this. Age is
+    # liveness-aware: on a connected, healthy feed a car that has sent
+    # nothing for hours (asleep) stays telemetry-sourced.
+    SYNC_TIMEOUT = 60 * 60
+
     def __init__(
         self,
         key: str,
@@ -156,6 +162,21 @@ class Vehicle:
         return self._fields.trusted(
             field, liveAt=self._liveAt(field, obs, exclude), obs=obs
         )
+
+    # Sync state is the latest "state" observation's source and age.
+
+    def telemetryState(self) -> Tuple[Optional[Observation], Optional[float]]:
+        obs = self.latest("state")
+        if obs is None or obs.source not in TELEMETRY_SOURCES:
+            return obs, None
+        return obs, self.age("state")
+
+    @property
+    def syncSource(self) -> str:
+        obs, age = self.telemetryState()
+        if age is not None and age <= self.SYNC_TIMEOUT:
+            return obs.source
+        return "TeslaAPI"
 
     def value(self, field: str, default: Any = None) -> Any:
         obs = self._fields.latest(field)

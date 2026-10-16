@@ -63,7 +63,7 @@ def broadcastVehicles(master, capability) -> List:
     def reached(v):
         api = v.attachment("TeslaAPI")
         home = api is not None and (
-            located(v) or api.atHome or getattr(api, "lat", 0) == 10000
+            located(v) or api.atHome or v.value("lat", 10000) == 10000
         )
         ha = v.attachment("HomeAssistant")
         haHome = ha is not None and ha.at_home and master.getTWCbyVIN(v.vin)
@@ -133,7 +133,7 @@ def _restoreDeparted(master, read) -> None:
             continue
         api = vehicle.attachment("TeslaAPI")
         if read and api is not None and not vehicle.value("twcVin"):
-            if api.syncSource == "TeslaAPI":
+            if vehicle.syncSource == "TeslaAPI":
                 api.update_location(0)
         fix, write = vehicle.latest("lat"), vehicle.lastWrite("chargeLimit")
         # <= on purpose: a retained MQTT position redelivered after our write

@@ -263,3 +263,33 @@ def test_feed_vouch_resolves_own_write_after_feed_lag():
     assert v.trusted("chargeLimit") is None
     c.t = 1000.0 + FEED_LAG + 1
     assert v.trusted("chargeLimit").value == 50
+
+
+class _Untracked:
+    def sourceLiveAt(self, source, vehicle):
+        return NOT_TRACKED
+
+
+def test_sync_source_is_a_fresh_telemetry_state_else_teslaapi():
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=_Untracked(), clock=c)
+    assert v.syncSource == "TeslaAPI"  # no state
+    v.observe("state", "online", "TeslaMateVehicle")
+    assert v.syncSource == "TeslaMateVehicle"
+    c.t += Vehicle.SYNC_TIMEOUT
+    assert v.syncSource == "TeslaMateVehicle"  # <= SYNC_TIMEOUT is fresh
+    c.t += 1  # 3,601 s on an untracked feed
+    assert v.syncSource == "TeslaAPI"
+    v.observe("state", "online", "TeslaAPI")
+    assert v.syncSource == "TeslaAPI"
+    assert Vehicle.SYNC_TIMEOUT == 3600
+
+
+def test_telemetry_state_ages_only_telemetry():
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=_Untracked(), clock=c)
+    assert v.telemetryState() == (None, None)
+    api = v.observe("state", "online", "TeslaAPI", at=900.0)
+    assert v.telemetryState() == (api, None)
+    tm = v.observe("state", "asleep", "FleetTelemetryMQTT", at=950.0)
+    assert v.telemetryState() == (tm, 50.0)

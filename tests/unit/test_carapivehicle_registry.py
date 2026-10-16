@@ -48,18 +48,7 @@ def test_attributes_are_observations_with_source_and_defaults():
     obs = reg.get(VIN).latest("chargeLimit")
     assert (obs.value, obs.source) == (80, "TeslaAPI") and car.chargeLimit == 80
     car.actualCurrent = 12
-    assert car.lastCurrentChangeTime > 0 and car.actualCurrent == 12
     assert reg.get(VIN).latest("actualCurrent").value == 12
-
-
-def test_actual_current_change_time_only_moves_on_change():
-    api, reg = api_with_registry()
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    car.actualCurrent = 12
-    car.lastCurrentChangeTime = 1.0
-    car.actualCurrent = 12
-    assert car.lastCurrentChangeTime == 1.0
 
 
 def test_master_without_registry_gets_a_private_one():
@@ -84,7 +73,7 @@ def test_is_awake_trusts_fresh_telemetry_and_asleep_without_api_call():
     car = api.carApiVehicles[0]
     car.get_car_api = Mock(side_effect=AssertionError("no API call"))
     reg.get(VIN).observe("state", "asleep", "TeslaMateVehicle")
-    assert car.is_awake() is False and car.syncSource == "TeslaMateVehicle"
+    assert car.is_awake() is False and reg.get(VIN).syncSource == "TeslaMateVehicle"
     reg.get(VIN).observe("state", "online", "TeslaMateVehicle")
     assert car.is_awake() is True
 
@@ -93,7 +82,7 @@ def test_sync_getters_have_legacy_defaults_before_any_state():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.carApiVehicles[0]
-    assert car.syncSource == "TeslaAPI"
+    assert reg.get(VIN).syncSource == "TeslaAPI"
 
 
 def test_update_vehicle_data_observes_only_present_keys():  # P15
@@ -177,7 +166,7 @@ def test_stale_telemetry_falls_back_to_api_check():
     reg.get(VIN).observe("state", "online", "TeslaMateVehicle", at=0.0)
     car.get_car_api = Mock(return_value=(True, {"state": "asleep"}))
     assert car.is_awake() is False and car.get_car_api.called
-    assert car.syncSource == "TeslaAPI"
+    assert reg.get(VIN).syncSource == "TeslaAPI"
 
 
 def test_writes_after_forget_land_on_the_live_vehicle():
@@ -246,5 +235,5 @@ def test_telemetry_feed_drives_a_real_car():
     obs = reg.get(VIN).latest("state")
     assert (obs.value, obs.source) == ("online", "TeslaMateVehicle")
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
-    assert car.syncSource == "TeslaMateVehicle" and car.pluggedIn is True
+    assert reg.get(VIN).syncSource == "TeslaMateVehicle" and reg.get(VIN).value("pluggedIn") is True
     assert car.lat == 1.5

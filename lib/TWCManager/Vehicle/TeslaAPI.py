@@ -27,6 +27,7 @@ from TWCManager.Vehicle.Reconcile.Outcome import (
     Outcome,
 )
 from TWCManager.Vehicle.Registry.Fields import TELEMETRY_SOURCES
+from TWCManager.Vehicle.Registry.Vehicle import Vehicle
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 
@@ -1580,16 +1581,9 @@ class CarApiVehicle:
     lon = RegistryField("lon", 10000)
     gpsAsOf = RegistryField("gpsAsOf", 0)
     pluggedIn = RegistryField("pluggedIn", None)
-    _actualCurrent = RegistryField("actualCurrent", 0)
+    actualCurrent = RegistryField("actualCurrent", 0)
 
     atHome = False
-    lastCurrentChangeTime = 0
-
-    # Telemetry (an external module such as TeslaMate) is the sync source
-    # while its latest "state" observation is younger than this. Age is
-    # liveness-aware: on a connected, healthy feed a car that has sent
-    # nothing for hours (asleep) stays telemetry-sourced.
-    syncTimeout = 60 * 60
     _vehicle = None
 
     def __init__(self, json, carapi, config):
@@ -1634,24 +1628,6 @@ class CarApiVehicle:
             vehicle = self.carapi.registry.getOrCreate(self.VIN, "TeslaAPI")
         return self._bind(vehicle)
 
-    # Sync state is the latest "state" observation's source and age.
-
-    def _telemetryState(self):
-        vehicle = self._liveVehicle()
-        if vehicle is None:
-            return None, None
-        obs = vehicle.latest("state")
-        if obs is None or obs.source not in TELEMETRY_SOURCES:
-            return obs, None
-        return obs, vehicle.age("state")
-
-    @property
-    def syncSource(self):
-        obs, age = self._telemetryState()
-        if age is not None and age <= self.syncTimeout:
-            return obs.source
-        return "TeslaAPI"
-
     def ready(self):
         if self.carapi.getCarApiRetryRemaining(self):
             # It's been under carApiErrorRetryMins minutes since the car API
@@ -1688,7 +1664,8 @@ class CarApiVehicle:
     def is_awake(self, slot=None, now=None):
         # now (default: the module's clock) measures the 120 s cache, so a
         # caller on a test clock drives it
-        obs, age = self._telemetryState()
+        vehicle = self._liveVehicle()
+        obs, age = (None, None) if vehicle is None else vehicle.telemetryState()
         if obs is not None and obs.source in TELEMETRY_SOURCES:
             # External sync (e.g. TeslaMate) has provided at least one update.
             if obs.value in ("asleep", "offline"):
@@ -1696,7 +1673,7 @@ class CarApiVehicle:
                 # Fleet API calls that cost money just to confirm it's still asleep.
                 self.lastVehicleAwakeKnown = True
                 return False
-            if age is not None and age <= self.syncTimeout / 4:
+            if age is not None and age <= Vehicle.SYNC_TIMEOUT / 4:
                 # Fresh data and car is not asleep - trust it.
                 self.lastVehicleAwakeKnown = True
                 return obs.value in ("online", "charging", "updating", "driving")
@@ -1937,22 +1914,4 @@ class CarApiVehicle:
         return result
 
     def update_charge(self):
-        current = self._actualCurrent
-        ok = self._readFresh("batteryLevel", self.READ_MAX_AGE) is not None
-        if self._actualCurrent != current:
-            # A read source observes the field directly, bypassing the
-            # actualCurrent setter.
-            self.lastCurrentChangeTime = time.time()
-        return ok
-
-    @property
-    def actualCurrent(self):
-        return self._actualCurrent
-
-    @actualCurrent.setter
-    def actualCurrent(self, value):
-        changed = value != self._actualCurrent
-        # Observed even when unchanged: a repeat reading is still fresh.
-        self._actualCurrent = value
-        if changed:
-            self.lastCurrentChangeTime = time.time()
+        return self._readFresh("batteryLevel", self.READ_MAX_AGE) is not None
