@@ -26,8 +26,10 @@ from ...VehicleCommandQueue import VehicleCommandQueue
 from ..Providers.Capability import (
     NO_INDIVIDUAL_STOP,
     SET_CHARGE_LIMIT,
+    START_CHARGING,
     STOP_CHARGING,
     TIER_BILLED,
+    WAKE,
 )
 from . import Run
 from .Desired import AMPS, CAPABILITY_FOR, CHARGE_LIMIT, CHARGING, FIELD_FOR, Attempt
@@ -480,6 +482,11 @@ class VehicleReconciler(threading.Thread):
             and start.value is True
             and not satisfied(CHARGING, True, k)
             and handsOff(vehicle, CHARGING, True, k, config) is None
+            # A start that would itself spend a cloud wake (not mode 2's) (N1)
+            and any(
+                not p.local and p.declares(WAKE)
+                for p in self.master.providerOrder.candidates(vehicle, START_CHARGING)
+            )
         )
 
     @staticmethod

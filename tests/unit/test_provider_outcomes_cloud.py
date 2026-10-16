@@ -1,3 +1,4 @@
+import pytest
 # tests/unit/test_provider_outcomes_cloud.py
 import re
 from unittest.mock import Mock
@@ -7,6 +8,12 @@ from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.test_carapivehicle_registry import api_with_registry, VIN
 from tests.unit.teslatokens import fleet_token, owner_token
 from tests.unit.test_homeassistant_registry import make_ha
+
+@pytest.fixture(autouse=True)
+def awake_car(request):
+    # The Fleet stop asks the free online check first (Task 12a N2): the car is online
+    if "requests_mock" in request.fixturenames:
+        request.getfixturevalue("requests_mock").get(re.compile(r".*/api/1/vehicles/5YJ3E1EA1KF000001$"), json={"response": {"state": "online"}})
 
 def fleet(requests_mock, status=200, result=True, reason=""):
     api, reg = api_with_registry(); api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"}); api.storeToken(fleet_token())

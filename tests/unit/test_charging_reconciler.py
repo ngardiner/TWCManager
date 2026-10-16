@@ -227,7 +227,7 @@ FLEET_CAR = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
 def calls(requests_mock, part):
     return [q for q in requests_mock.request_history if q.url.split("?")[0].endswith(part)]
 
-def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True):
+def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True, read=True):
     # A Fleet-only car on the TWC: a real TeslaAPI with a Fleet token, the
     # car on its list, every Tesla request mocked
     m, r, v, c = setup(clock=False)
@@ -238,7 +238,8 @@ def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True):
     for p in api.providers(): m.providerOrder.register(p)
     if listed:
         api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); api.getCarApiVehicles()[0].atHome = True
-    onTwc(m, v); v.observe("chargingState", "Stopped", "TeslaAPI")
+    onTwc(m, v)
+    if read: v.observe("chargingState", "Stopped", "TeslaAPI")
     requests_mock.get(FLEET_CAR, json={"response": {"state": state}})
     requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"charge_state": {"charging_state": "Stopped", "charge_limit_soc": 90},
                                                                     "drive_state": {"latitude": 1.0, "longitude": 2.0}, "vehicle_state": {}}})
@@ -356,12 +357,12 @@ def test_a_car_at_its_limit_is_not_started():                               # #5
     v.observe("batteryLevel", 80, "TeslaAPI"); v.observe("chargeLimit", 80, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
     m.startCarsCharging(VIN); r.pass_(); assert f.calls == []
 
-def test_offer_flaps_do_not_multiply_paid_starts():                         # I4, paid counted
+def test_offer_flaps_do_not_multiply_paid_starts():                         # I4 + N3, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "requested"))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
-    for _ in range(30): m.startCarsCharging(VIN); r.pass_(); c.t += 60; m.withdrawStartCharging(VIN); r.pass_(); c.t += 60
-    assert cmds(f) == ["startCharging"]                                                                             # main stopped asking after "requested"
-    v.observe("chargingState", "Stopped", "TeslaAPI"); m.startCarsCharging(VIN); r.pass_()
-    assert cmds(f) == ["startCharging"] * 2                                                                         # a newer reading: asked again once
+    for _ in range(30): m.startCarsCharging(VIN); r.pass_(); c.t += 11; m.withdrawStartCharging(VIN); r.pass_(); c.t += 11
+    assert len(cmds(f)) <= 30 * 22 // 60 + 1                                                                       # main's 60 s gate, not one per flap (30)
+    n = len(cmds(f)); c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert len(cmds(f)) == n + 1                  # N3: kept no longer than 60 s
+    c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert len(cmds(f)) == n + 1                                    # still wanted: settled, no repeat
 
 def test_a_rejected_twc_vin_falls_back_to_the_anonymous_session():          # review M3
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244")
@@ -376,3 +377,32 @@ def test_load_list_logs_why_no_token_is_usable_once_per_reason(caplog):    # rev
     api.restoreSlot(api.fleetSlot, "not-a-jwt-at-all", "", None); api.loadList()
     said = [rec.getMessage() for rec in caplog.records if "No usable Tesla API token" in rec.getMessage()]
     assert len(said) == 2 and "no Tesla API token yet" in said[0] and "token type unknown" in said[1]
+
+# Fix round 2
+
+def test_mode_2_limit_buys_no_wake_for_a_start_the_cloud_cannot_send(requests_mock, monkeypatch):   # N1, paid counted
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+    monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
+    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.getCarApiVehicles()[0]; m.settings["chargeStopMode"] = "2"
+    requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "asleep"}})
+    car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()
+    m.setPolicyLimit(50, transition=True); m.startCarsCharging(VIN)
+    for _ in range(5): r.pass_()
+    assert calls(requests_mock, "wake_up") == [] and [q for q in requests_mock.request_history if q.method == "POST"] == []
+
+def test_the_fan_out_stop_sends_nothing_to_an_asleep_car(requests_mock):  # N2, paid counted
+    VIN2 = "5YJ3E1EA1KF000002"
+    m, r, v, c, api = fleetOnTwc(requests_mock); m.settings["chargeStopMode"] = "1"; anon = m.vehicleRegistry.beginPlugSession("8245")
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); api.getVehicleByVIN(VIN2).atHome = True     # listed, at home, never read
+    requests_mock.get(FLEET_CAR[:-len(VIN)] + VIN2, json={"response": {"state": "asleep"}})
+    m.stopCarsCharging(anon.key); assert m.desired.get(VIN2, CHARGING).value is False
+    for _ in range(5): r.pass_()
+    assert calls(requests_mock, "charge_stop") == [] and calls(requests_mock, "wake_up") == []
+    assert m.desired.record(VIN2, CHARGING).paidSends == 0                                                        # no paid budget spent
+
+def test_a_stale_charging_reading_on_a_car_now_asleep_sends_no_stop(requests_mock):   # N2, paid counted
+    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep", read=False)
+    v.observe("chargingState", "Charging", "TeslaAPI", at=time.time() - 3600)                                     # older than any read window
+    m.stopCarsCharging(VIN)
+    for _ in range(5): r.pass_()
+    assert calls(requests_mock, "charge_stop") == [] and calls(requests_mock, "wake_up") == [] and len(calls(requests_mock, VIN)) == 1   # one free check
