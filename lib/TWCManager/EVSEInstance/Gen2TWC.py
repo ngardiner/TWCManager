@@ -23,6 +23,10 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     # Heartbeat states in which a car is plugged in
     PLUGGED_STATES = (0x01, 0x03, 0x04, 0x05, 0x08, 0x09)
 
+    # Set by ChargingPoint.setTargetPower each pass: the point has a car
+    # member, which owns the car's amps; the heartbeat then writes none
+    pointOwnsAmps = False
+
     def __init__(self, TWCID, maxAmps, config, master):
         # Backing stores for properties that shadow TWCSlave class attributes.
         # These must be initialised before TWCSlave.__init__ runs so that any
@@ -170,6 +174,11 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         if override is None:
             return TWCSlave.minAmpsToOffer(self)
         return max(override, self.minAmpsTWCSupports)
+
+    def layerFloorAmps(self):
+        # Mode 3 hands the rate to the car below this: the heartbeat's
+        # literal 6 A handoff, never below the TWC's own minimum
+        return max(6, self.minAmpsToOffer())
 
     @property
     def minAmps(self) -> float:

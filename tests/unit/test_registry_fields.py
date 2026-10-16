@@ -41,7 +41,7 @@ def test_unknown_field_rejected():
 
 
 def test_constants():
-    assert "chargeLimit" in FIELDS and len(FIELDS) == 18
+    assert "chargeLimit" in FIELDS and "chargeCurrentRequest" in FIELDS and len(FIELDS) == 19
     assert TELEMETRY_SOURCES == {"TeslaMateVehicle", "FleetTelemetryMQTT"}
     assert FEED_LAG == 30.0
 

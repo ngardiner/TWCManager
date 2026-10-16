@@ -80,7 +80,7 @@ def test_ha_outcomes():
     ha._post_service = ha.__class__._post_service.__get__(ha); import requests
     ha._session.post = Mock(side_effect=requests.exceptions.Timeout()); assert p.startCharging(VIN).kind == O.UNREACHABLE
     resp = Mock(status_code=403, text="secret-token"); ha._session.post = Mock(return_value=resp); resp.raise_for_status = Mock(side_effect=requests.exceptions.HTTPError(response=resp))
-    assert p.startCharging(VIN) == O.Outcome(O.REFUSED, "403") and ha._call_service("switch", "turn_on", {}) is False
+    assert p.startCharging(VIN) == O.Outcome(O.REFUSED, "403")
 
 
 # Beyond the brief: the paid-call edges

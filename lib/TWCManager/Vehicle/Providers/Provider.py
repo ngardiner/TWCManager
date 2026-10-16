@@ -87,10 +87,6 @@ class Provider:
     def wake(self, vin: str) -> Outcome:
         return Outcome(UNSUPPORTED, "not implemented")
 
-    def attempts(self) -> int:
-        # Today's BLE 3 / API 2 (VehiclePriority's priority 20 / 10)
-        return 3 if self.local else 2
-
     def limitations(self, vehicle) -> FrozenSet[str]:
         return frozenset()
 

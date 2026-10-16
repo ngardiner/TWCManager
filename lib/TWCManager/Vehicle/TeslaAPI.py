@@ -68,8 +68,6 @@ class TLS13Adapter(HTTPAdapter):
 
 
 class TeslaAPI:
-    # A charge rate the car accepted is not resent for this long (seconds).
-    CHARGE_RATE_RESEND_AFTER = 600
     # The energy-site list (/products) is fetched at most this often (seconds)
     ENERGY_SITES_TTL = 3600
     # Seconds a free energy-site request may take (background thread)
@@ -91,6 +89,8 @@ class TeslaAPI:
     COMMAND_UNREACHABLE_REASONS = ("could_not_wake_buses", "vehicle_unavailable")
     # Seconds between failed wake_up attempts on one car (a wake is $0.02)
     WAKE_RETRY_SECONDS = 30 * 60
+    # fleetSlot.changes when the module-wide read-only line was last logged
+    refusalLoggedAt = None
     regionURL = {
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
@@ -108,8 +108,6 @@ class TeslaAPI:
     # One slot per token type; built in __init__.
     ownerSlot = None
     fleetSlot = None
-    # fleetSlot.changes when a refused command was last logged.
-    refusalLoggedAt = None
     refreshClientID = ""
     # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
     # whether a client secret is configured:
@@ -346,33 +344,6 @@ class TeslaAPI:
                 "for reads for an hour." % (label, code)
             )
             slot.pause()
-        return False
-
-    def slotCommandFailed(self, slot, response, token):
-        # Reacts to a 401 on a vehicle command sent with this slot's access
-        # token (#689). Returns True when the slot now holds a new token,
-        # so the caller should retry once. An expired token is refreshed;
-        # any other 401 means it is dead, so it is cleared and commands
-        # stop using it, letting VehiclePriority move on. Unlike a read, a
-        # 403/410/412 here does not pause the slot.
-        if getattr(response, "status_code", None) != 401:
-            return False
-        with slot.lock:
-            if slot.accessToken != token:
-                # Another thread already refreshed or replaced it.
-                return bool(slot.accessToken)
-            if (
-                "expired" in response.text
-                and slot.source != "synced"
-                and slot.refreshToken
-            ):
-                return self.refreshSlot(slot) == "success"
-            logger.error(
-                "Tesla %s API token was rejected for a vehicle command "
-                "(HTTP 401); removing it." % slot.kind.capitalize()
-            )
-            slot.clear()
-        self.master.queue_background_task({"cmd": "saveSettings"})
         return False
 
     def tokenRoute(self, token):
@@ -1755,124 +1726,6 @@ class TeslaAPI:
         vehicle.firstChargeNeededTime = 0
         vehicle.delayNextWakeAttempt = 0
 
-    def setChargeRate(self, charge_rate, vehicle=None, set_again=False, retried=False):
-        # As a fallback to allow initial implementation of the charge rate functionality for single car installs,
-        # If no vehicle is specified, we take the first returned to us.
-
-        if self.refuseCommandIfReadOnly("set_charging_amps"):
-            return False
-
-        if not vehicle:
-            vehicles = self.getCarApiVehicles()
-            if not vehicles:
-                # Expected until a command or telemetry lists them, and
-                # VehiclePriority calls this every tick: not an error.
-                logger.log(
-                    logging.INFO2, "No Tesla vehicles available to set charge rate"
-                )
-                return False
-            vehicle = vehicles[0]
-
-        if self.refuseCommandFor(vehicle, "set_charging_amps"):
-            return False
-        slot = self.commandSlotFor(vehicle)
-
-        # The Fleet API takes whole amps. The web debug path passes the
-        # rate through from JSON, so it may be a numeric string.
-        try:
-            charge_rate = int(float(charge_rate))
-        except (TypeError, ValueError, OverflowError):
-            logger.error("setChargeRate: invalid charge rate %r", charge_rate)
-            return False
-        # Do not set charge_rate to 0 as this will effectively stop the car from charging all together
-        if charge_rate < 1:
-            charge_rate = 1
-
-        # set_charging_amps is a paid command: don't resend the rate this
-        # car last accepted, unless CHARGE_RATE_RESEND_AFTER has passed (the
-        # rate may have been changed elsewhere). set_again (the low-rate
-        # repeat) always sends.
-        if (
-            not set_again
-            and getattr(vehicle, "lastChargeRateSent", None) == charge_rate
-            and time.monotonic() - getattr(vehicle, "lastChargeRateSentTime", 0)
-            < self.CHARGE_RATE_RESEND_AFTER
-        ):
-            return True
-
-        vehicle.lastAPIAccessTime = time.time()
-
-        url = slot.baseURL + "/"
-        url = url + str(vehicle.VIN) + "/command/set_charging_amps"
-
-        headers = {
-            "accept": "application/json",
-            "Authorization": "Bearer " + slot.accessToken,
-        }
-
-        body = {"charging_amps": charge_rate}
-
-        req = None
-        try:
-            req = requests.post(
-                url, headers=headers, json=body, verify=slot.verifyCert, timeout=10
-            )
-            logger.log(
-                logging.INFO8,
-                f"Car API cmd set_charging_amps {charge_rate}A {str(req)}",
-            )
-            apiResponseDict = json.loads(req.text)
-        except requests.exceptions.RequestException:
-            return False
-        except json.decoder.JSONDecodeError:
-            # Not JSON (e.g. an empty or HTML 403); the refusal check below
-            # still sees the status.
-            apiResponseDict = None
-
-        if slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
-            return False
-        if getattr(req, "status_code", None) == 401:
-            sent = headers["Authorization"].split(" ", 1)[-1]
-            if not retried and self.slotCommandFailed(slot, req, sent):
-                return self.setChargeRate(charge_rate, vehicle, set_again, True)
-            return False
-        if apiResponseDict is None:
-            return False
-
-        accepted = self._chargeRateAccepted(apiResponseDict)
-
-        # Set charge rates < 5 twice, see https://github.com/tdorssers/TeslaPy/pull/42
-        if charge_rate < 5:
-            if set_again:
-                # The caller (the first send) records the rate.
-                return apiResponseDict
-            time.sleep(5)
-            again = self.setChargeRate(charge_rate, vehicle, set_again=True)
-            if accepted and self._chargeRateAccepted(again):
-                self._recordChargeRate(vehicle, charge_rate)
-            return again
-        if accepted:
-            self._recordChargeRate(vehicle, charge_rate)
-        return apiResponseDict
-
-    @staticmethod
-    def _chargeRateAccepted(apiResponseDict):
-        try:
-            return apiResponseDict["response"]["result"] == True
-        except (KeyError, TypeError):
-            return False
-
-    @staticmethod
-    def _recordChargeRate(vehicle, charge_rate):
-        vehicle.lastChargeRateSent = charge_rate
-        vehicle.lastChargeRateSentTime = time.monotonic()
-        # Own-write stamp, so a later read can tell our write from the feed.
-        # Non-creating lookup: a write never revives a forgotten vehicle.
-        live = getattr(vehicle, "_liveVehicle", None)
-        registryVehicle = live() if callable(live) else None
-        if registryVehicle is not None:
-            registryVehicle.noteWrite("availableCurrent", charge_rate, "TeslaAPI")
-
     def updateCarApiLastErrorTime(self, vehicle=None):
         timestamp = time.time()
         logger.log(
@@ -1892,14 +1745,12 @@ class TeslaAPI:
         return True
 
     def updateChargeAtHome(self):
-        # True when this module holds cars to refresh, so VehiclePriority's
-        # walk ends here; False lets another module refresh its own cars
+        # checkCharge: the vehicle list (free), then each car at home
         self.loadList()
         for car in self.carApiVehicles:
             if car.atHome:
                 car.update_charge()
         self.lastChargeCheck = time.time()
-        return bool(self.carApiVehicles)
 
     def vehicleScheduledChargingPending(self, vin=None):
         # True if the named (or any at-home) vehicle reports it is waiting on
@@ -1952,57 +1803,6 @@ class TeslaAPI:
                             self.master.queue_background_task({"cmd": "saveSettings"})
                         car.atHome = True
                 return
-
-    def wakeVehicle(self, vehicle, retried=False):
-        if self.refuseCommandFor(vehicle, "wake_up"):
-            return False
-        slot = self.commandSlotFor(vehicle)
-        if slot is self.fleetSlot and not slot.usable("wake"):
-            # Tesla refused a wake with this token (403); an Owner refusal is
-            # noted per car instead
-            return False
-        apiResponseDict = None
-        vehicle.lastAPIAccessTime = time.time()
-
-        url = slot.baseURL + "/"
-        url = url + str(vehicle.VIN) + "/wake_up"
-
-        headers = {
-            "accept": "application/json",
-            "Authorization": "Bearer " + slot.accessToken,
-        }
-        req = None
-        try:
-            req = requests.post(url, headers=headers, verify=slot.verifyCert)
-            logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
-            req.raise_for_status()
-            if slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
-                # A 2xx carrying the refusal error.
-                return False
-            apiResponseDict = json.loads(req.text)
-        except requests.exceptions.RequestException:
-            if req is None:
-                # The request never went out (e.g. no network).
-                pass
-            elif slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
-                pass
-            elif req.status_code == 401:
-                # Refresh an expired token and try again; clear a dead one.
-                sent = headers["Authorization"].split(" ", 1)[-1]
-                if not retried and self.slotCommandFailed(slot, req, sent):
-                    return self.wakeVehicle(vehicle, True)
-            elif req.status_code == 429:
-                # We're explicitly being told to back off
-                self.errorCount = max(30, self.errorCount)
-                self.updateCarApiLastErrorTime(vehicle)
-            elif req.status_code == 403:
-                # As _paidPost: no wake_up goes to this token again
-                slot.reportScopeRefused("wake", refused=True)
-            return False
-        except json.decoder.JSONDecodeError:
-            return False
-
-        return apiResponseDict
 
     @property
     def numCarsAtHome(self):
@@ -2067,6 +1867,7 @@ class CarApiVehicle:
     chargingState = RegistryField("chargingState", "Unknown")
     availableCurrent = RegistryField("availableCurrent", 0)
     chargeCurrentRequestMax = RegistryField("chargeCurrentRequestMax", None)
+    chargeCurrentRequest = RegistryField("chargeCurrentRequest", None)
     voltage = RegistryField("voltage", 0)
     phases = RegistryField("phases", 0)
     timeToFullCharge = RegistryField("timeToFullCharge", 0.0)
@@ -2078,10 +1879,6 @@ class CarApiVehicle:
     _actualCurrent = RegistryField("actualCurrent", 0)
 
     atHome = False
-    # The last rate set_charging_amps succeeded with, and when (monotonic
-    # clock), so it isn't resent within TeslaAPI.CHARGE_RATE_RESEND_AFTER.
-    lastChargeRateSent = None
-    lastChargeRateSentTime = 0
     lastCurrentChangeTime = 0
 
     # Telemetry (an external module such as TeslaMate) is the sync source
@@ -2443,6 +2240,7 @@ class CarApiVehicle:
                 ("time_to_full_charge", "timeToFullCharge"),
                 ("charger_pilot_current", "availableCurrent"),
                 ("charge_current_request_max", "chargeCurrentRequestMax"),
+                ("charge_current_request", "chargeCurrentRequest"),
                 ("charger_actual_current", "actualCurrent"),
                 ("charger_phases", "phases"),
                 ("charger_voltage", "voltage"),

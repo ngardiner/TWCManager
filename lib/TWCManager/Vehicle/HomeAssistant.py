@@ -566,21 +566,6 @@ class HomeAssistant:
         logger.debug("HA: service call %s.%s succeeded", domain, service)
         return Outcome(DONE)
 
-    def _call_service(self, domain: str, service: str, data: dict) -> bool:
-        # The legacy callers' bool
-        return self._post_service(domain, service, data).kind == DONE
-
-    def _is_vehicle_connected(self, vehicle: HaVehicle) -> bool:
-        """
-        Returns True if Home Assistant vehicle is currently plugged
-        into any TWC in TWCManager.
-        """
-        try:
-            twc = self.master.getTWCbyVIN(vehicle.vin)
-            return twc is not None
-        except Exception:
-            return False
-
     # ------------------------------------------------------------------
     # TeslaAPI-compatible methods
     # ------------------------------------------------------------------
@@ -590,71 +575,6 @@ class HomeAssistant:
 
     def getVehicleCount(self):
         return len(self.carApiVehicles)
-
-    def setChargeRate(
-        self, amps: float, vehicle: Optional[HaVehicle] = None, *args, **kwargs
-    ):
-        if not self.carApiVehicles:
-            logger.debug("No vehicles available for charge rate setting")
-            return False
-
-        vehicle = vehicle or self.carApiVehicles[0]
-
-        if not vehicle.has_charge_current_number:
-            logger.debug("%s: charge_current_number entity not available", vehicle.name)
-            return False
-
-        # Validate and clamp amps to reasonable range
-        try:
-            amps = float(amps)
-        except (ValueError, TypeError):
-            logger.warning("Invalid amps value: %s", amps)
-            return False
-
-        # Clamp to 1-32A range (typical Tesla charger limits)
-        if amps < 1:
-            logger.debug("Amps %.1f below minimum (1A), clamping to 1A", amps)
-            amps = 1
-        elif amps > 32:
-            logger.warning(
-                "Amps %.1f exceeds typical maximum (32A), clamping to 32A", amps
-            )
-            amps = 32
-
-        # Pull latest charge_current_number state
-        vehicle.refresh_from_home_assistant(self)
-
-        if not self._is_vehicle_connected(vehicle):
-            logger.debug("%s not connected; skipping charge rate.", vehicle.name)
-            return True
-
-        # Skip if current value already matches (rounded to 1 decimal)
-        if vehicle.available_current is not None and round(
-            float(vehicle.available_current), 1
-        ) == round(float(amps), 1):
-            logger.info(
-                "Skipping %s: charge current already %.1f A", vehicle.name, amps
-            )
-            return True
-
-        ent = vehicle.entity_ids["charge_current_number"]
-        logger.info("Setting %s charge current to %.1f A", vehicle.name, amps)
-
-        ok = self._call_service(
-            "number",
-            "set_value",
-            {"entity_id": ent, "value": float(amps)},
-        )
-
-        if not ok:
-            logger.warning("Failed to set charge rate for %s", vehicle.name)
-        else:
-            # As TeslaAPI and TeslaBLE: our own write, stamped (never creates).
-            registryVehicle = self.registry.get(str(vehicle.vin).upper())
-            if registryVehicle is not None:
-                registryVehicle.noteWrite("availableCurrent", amps, "HomeAssistant")
-
-        return ok
 
     # ------------------------------------------------------------------
     # Home/Location helpers

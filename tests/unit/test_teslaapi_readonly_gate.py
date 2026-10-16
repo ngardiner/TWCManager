@@ -8,18 +8,21 @@ missing, or a value never seen) is read-only, as is every vehicle when no
 token can command: no vehicle command may reach Tesla. The provider order
 keeps TeslaAPI out of a command walk for a read-only car (OwnerAPI is not
 ready for it) and out of every broadcast while every listed car is
-read-only (neither provider is available), and TeslaAPI's own command entry
-points refuse per vehicle without an HTTP call and without recording an API
-error (which would back off reads too). Reads still run.
+read-only (neither provider is available), and the providers' commands
+refuse per vehicle without an HTTP call and without recording an API error
+(which would back off reads too). Reads still run.
 """
 
 import logging
-import time
 import re
+import time
 from unittest.mock import Mock
 
 import pytest
 import requests_mock as rm
+
+from TWCManager.Vehicle.Providers import Capability as C
+from TWCManager.Vehicle.Reconcile.Outcome import DONE, REFUSED, UNSUPPORTED, Outcome
 
 from tests.unit.teslatokens import (
     FLEET_NA_URL as FLEET_URL,
@@ -50,18 +53,14 @@ def no_error_recorded(api):
     return api.getCarApiLastErrorTime() == 0 and vehicle.lastErrorTime == 0
 
 
-class TestTeslaAPIRefusesCommands:
-    def test_set_charge_rate(self, owner_api, any_http):
-        vehicle = owner_api.getCarApiVehicles()[0]
-        before = vehicle.lastAPIAccessTime
-        assert owner_api.setChargeRate(10, vehicle) is False
-        assert any_http.call_count == 0
-        assert no_error_recorded(owner_api)
-        assert vehicle.lastAPIAccessTime == before
+class TestFleetProviderRefusesCommands:
+    VIN = "5YJ3E1EA1KF000001"
 
-    def test_wake(self, owner_api, any_http):
-        vehicle = owner_api.getCarApiVehicles()[0]
-        assert owner_api.wakeVehicle(vehicle) is False
+    @pytest.mark.parametrize("call", ["setAmps", "wake"])
+    def test_no_command_token_sends_nothing(self, owner_api, any_http, call):
+        fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
+        args = (self.VIN, 10) if call == "setAmps" else (self.VIN,)
+        assert getattr(fleet, call)(*args) == Outcome(REFUSED, "no command token")
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
@@ -71,47 +70,9 @@ class TestTeslaAPIRefusesCommands:
             re.compile(r".*/5YJ3E1EA1KF000001/command/set_charging_amps"),
             json={"response": {"result": True, "reason": ""}},
         )
-        vehicle = owner_api.getCarApiVehicles()[0]
-        assert owner_api.setChargeRate(10, vehicle) == {
-            "response": {"result": True, "reason": ""}
-        }
+        fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
+        assert fleet.setAmps(self.VIN, 10) == Outcome(DONE)
         assert cmd.call_count == 1
-
-
-class TestRefusalLogging:
-    def refusals(self, caplog):
-        return [
-            r
-            for r in caplog.records
-            if r.levelno == logging.INFO
-            and "read-only" in r.getMessage()
-            and "not sending" in r.getMessage()
-        ]
-
-    def test_logged_once_per_state_change(self, owner_api, any_http, caplog):
-        caplog.set_level(logging.INFO)
-        vehicle = owner_api.getCarApiVehicles()[0]
-        owner_api.setChargeRate(10, vehicle)
-        owner_api.setChargeRate(12, vehicle)
-        owner_api.wakeVehicle(vehicle)
-        assert len(self.refusals(caplog)) == 1
-
-        # Fleet token: commands allowed. Fleet slot cleared: logs again, once.
-        owner_api.storeToken(fleet_token())
-        owner_api.fleetSlot.clear()
-        owner_api.setChargeRate(10, vehicle)
-        owner_api.setChargeRate(10, vehicle)
-        assert len(self.refusals(caplog)) == 2
-
-    def test_resync_of_owner_token_does_not_log_again(
-        self, owner_api, any_http, caplog
-    ):
-        caplog.set_level(logging.INFO)
-        vehicle = owner_api.getCarApiVehicles()[0]
-        owner_api.setChargeRate(10, vehicle)
-        owner_api.storeToken(owner_token(jti="rotated"))
-        owner_api.setChargeRate(10, vehicle)
-        assert len(self.refusals(caplog)) == 1
 
 
 class TestReadsStillRun:
@@ -149,68 +110,48 @@ class TestReadsStillRun:
         assert api.getVehicleCount() == 1
 
 
-class TestVehiclePrioritySkipsReadOnly:
-    # The facade walks the provider order: an Owner-only TeslaAPI whose
-    # listed car needs signed commands has no provider available for a
-    # command, so every broadcast command stays away from it; reads still
-    # go through the Owner slot.
-    def make(self, api_read_only):
+class TestCheckChargeRefreshesEachModuleOnce:
+    # checkCharge walks the provider order: each vehicle module with a
+    # provider not suppressed for reads refreshes its cars once
+    def make(self, settings=None):
         from tests.unit.test_carapivehicle_registry import api_with_registry
-        from TWCManager.Vehicle.Providers import Capability as C
+        from TWCManager.TWCMaster import TWCMaster
         from TWCManager.Vehicle.Providers.Order import ProviderOrder
         from TWCManager.Vehicle.Providers.Provider import Provider
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
 
         api, reg = api_with_registry()
-        api.storeToken(owner_token() if api_read_only else fleet_token())
+        api.storeToken(owner_token())
         add_home_vehicle(api, "required")
-        assert api.readOnly is api_read_only
-        api.setChargeRate = Mock(return_value=True)
-        api.updateChargeAtHome = Mock(return_value=True)
+        assert api.readOnly is True
+        api.updateChargeAtHome = Mock()
         ble = Mock()
-        ble.setChargeRate = Mock(return_value=False)
-        ble.updateChargeAtHome = Mock(return_value=False)
 
         class BLE(Provider):
             name, rank, local, module = "TeslaBLE", 2, True, ble
+            SUPPRESSED = {"api_only": C.ALL}
 
             def declarations(self):
-                return {c: C.Declaration(C.LOCAL) for c in C.COMMANDS}
+                return {C.READ_CHARGE: C.Declaration(C.LOCAL)}
 
         master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}}
         master.config = {}
-        master.settings = {}
+        master.settings = settings or {}
         master.vehicleRegistry = reg
         master.providerOrder = ProviderOrder(master)
         for p in [BLE()] + api.providers():
             master.providerOrder.register(p)
-        return VehiclePriority(master), master, ble, api
+        TWCMaster.updateChargeAtHome(master)
+        return ble, api
 
-    def test_read_only_api_skipped_for_commands(self, no_threads):
-        priority, master, ble, api = self.make(api_read_only=True)
-        assert priority.setChargeRate(10) is False
-        assert ble.setChargeRate.called
-        assert not api.setChargeRate.called
-        assert "FleetAPI" not in master.stats["moduleFailures"]
+    def test_read_only_api_still_refreshes_once(self, no_threads):
+        ble, api = self.make()
+        assert api.updateChargeAtHome.call_count == 1
+        assert ble.updateChargeAtHome.call_count == 1
 
-    def test_read_only_api_used_for_reads(self, no_threads):
-        priority, master, ble, api = self.make(api_read_only=True)
-        assert priority.updateChargeAtHome() is True
-        assert api.updateChargeAtHome.called
-
-    def test_writable_api_used_for_commands(self, no_threads):
-        priority, master, ble, api = self.make(api_read_only=False)
-        assert priority.setChargeRate(10) is True
-        assert api.setChargeRate.called
-
-    @pytest.mark.parametrize("method", ["setChargeRate", "wakeVehicle"])
-    def test_every_command_method_skips(self, method, no_threads):
-        priority, master, ble, api = self.make(api_read_only=True)
-        setattr(ble, method, Mock(return_value=False))
-        setattr(api, method, Mock(return_value=True))
-        getattr(priority, method)()
-        assert not getattr(api, method).called
+    def test_api_only_keeps_ble_out(self, no_threads):
+        ble, api = self.make({"commandPolicy": "api_only"})
+        assert api.updateChargeAtHome.call_count == 1
+        assert not ble.updateChargeAtHome.called
 
 
 # What Tesla answers a REST command for a car that needs signed commands.
@@ -223,33 +164,53 @@ VCP_403 = {
 ACCEPTED = {"response": {"result": True, "reason": ""}}
 ONLINE = {"response": {"state": "online"}}
 
+
+def tesla_provider(api):
+    """Either of TeslaAPI's providers: the command methods are shared and
+    send through commandSlotFor, the slot that may command the car."""
+    return api.providers()[0]
+
+
 # Each owner-command path: the endpoint under /5YJ3E1EA1KF000001 and how to send it.
 COMMANDS = {
     "set_charging_amps": (
         "/command/set_charging_amps",
-        lambda api, vehicle: api.setChargeRate(10, vehicle),
+        lambda api, vehicle: tesla_provider(api).setAmps(vehicle.VIN, 10),
     ),
     "set_charge_limit": (
         "/command/set_charge_limit",
-        lambda api, vehicle: owner_provider(api).setChargeLimit(vehicle.VIN, 80),
+        lambda api, vehicle: tesla_provider(api).setChargeLimit(vehicle.VIN, 80),
     ),
     "charge_start": (
         "/command/charge_start",
-        lambda api, vehicle: owner_provider(api).startCharging(vehicle.VIN),
+        lambda api, vehicle: tesla_provider(api).startCharging(vehicle.VIN),
     ),
     "charge_stop": (
         "/command/charge_stop",
-        lambda api, vehicle: owner_provider(api).stopCharging(vehicle.VIN),
+        lambda api, vehicle: tesla_provider(api).stopCharging(vehicle.VIN),
     ),
-    "wake_up": ("/wake_up", lambda api, vehicle: api.wakeVehicle(vehicle)),
+    "wake_up": (
+        "/wake_up",
+        lambda api, vehicle: tesla_provider(api).wake(vehicle.VIN),
+    ),
 }
 
 
-def owner_provider(api):
-    """The OwnerAPI provider: charge limits, starts and stops go through the
-    reconciler's provider command methods, which send through
-    commandSlotFor."""
-    return api.providers()[0]
+def prime(command, api, vehicle, requests_mock, state="asleep"):
+    """A wake first asks the free online state and goes out only for a car
+    not known to be online whose charge need is live and past its grace; a
+    stop asks it too and goes out to an online car."""
+    if command == "charge_stop":
+        for base in (OWNER_URL, FLEET_URL):
+            requests_mock.get(base + "/" + vehicle.VIN, json=ONLINE)
+        return
+    if command != "wake_up":
+        return
+    vehicle.lastAPIAccessTime = 0
+    vehicle.firstChargeNeededTime = 1
+    vehicle.lastChargeNeededTime = time.time()
+    for base in (OWNER_URL, FLEET_URL):
+        requests_mock.get(base + "/" + vehicle.VIN, json={"response": {"state": state}})
 
 
 class Refusal:
@@ -262,18 +223,12 @@ class Refusal:
         return getattr(other, "kind", None) in self.kinds
 
 
-REFUSED_OUTCOME = Refusal("refused")
+REFUSED_OUTCOME = Refusal(REFUSED)
 
 # What each command path returns when Tesla refuses it (and latches the
-# car), then when it is refused locally afterwards. VehiclePriority and the
-# reconciler treat all of these as failure.
-REFUSED_RETURNS = {
-    "set_charging_amps": (False, False),
-    "set_charge_limit": (REFUSED_OUTCOME, REFUSED_OUTCOME),
-    "charge_start": (REFUSED_OUTCOME, REFUSED_OUTCOME),
-    "charge_stop": (REFUSED_OUTCOME, REFUSED_OUTCOME),
-    "wake_up": (False, False),
-}
+# car), then when it is refused locally afterwards. The reconciler treats a
+# REFUSED outcome as excluding the provider.
+REFUSED_RETURNS = {command: (REFUSED_OUTCOME, REFUSED_OUTCOME) for command in COMMANDS}
 
 # Owner API answers that mean the car needs signed commands: HTTP 403 with
 # or without a JSON body, or the Vehicle Command Protocol error.
@@ -322,23 +277,6 @@ def reply_for(command):
     return ONLINE if command == "wake_up" else ACCEPTED
 
 
-def prime(command, api, vehicle, requests_mock):
-    """A stop first asks the free online state and goes out to an online car."""
-    if command == "charge_stop":
-        for base in (OWNER_URL, FLEET_URL):
-            requests_mock.get(base + "/" + vehicle.VIN, json=ONLINE)
-
-
-def allow_resend(api, vehicle):
-    # Clears the once-a-minute and once-applied guards between two sends.
-    api.carApiLastStartOrStopChargeTime = 0
-    api.carApiLastChargeLimitApplyTime = 0
-    vehicle.lastLimitAttemptTime = 0
-    vehicle.stopTryingToApplyLimit = False
-    vehicle.stopAskingToStartCharging = False
-    vehicle.lastChargeRateSent = None
-
-
 @pytest.fixture
 def no_sleep(monkeypatch):
     import TWCManager.Vehicle.TeslaAPI as teslaapi
@@ -370,16 +308,14 @@ def owner_car(no_threads, no_sleep):
     return make
 
 
-def priority_over(api, ble):
-    """VehiclePriority walking the provider order: TeslaAPI's providers, then
-    a mock fallback module ranked after them, as HomeAssistant is."""
-    from TWCManager.Vehicle.Providers import Capability as C
+def order_over(api):
+    """The provider order the reconciler walks: TeslaAPI's providers, then a
+    fallback provider ranked after them, as HomeAssistant is."""
     from TWCManager.Vehicle.Providers.Order import ProviderOrder
     from TWCManager.Vehicle.Providers.Provider import Provider
-    from TWCManager.Vehicle.VehiclePriority import VehiclePriority
 
     class Fallback(Provider):
-        name, rank, local, module = "Fallback", 6, False, ble
+        name, rank, local = "Fallback", 6, False
 
         def declarations(self):
             return {c: C.Declaration(C.HA_BILLED) for c in C.COMMANDS}
@@ -389,10 +325,15 @@ def priority_over(api, ble):
 
     master = api.master
     master.vehicleRegistry = api.registry
-    master.providerOrder = ProviderOrder(master)
+    order = ProviderOrder(master)
     for p in api.providers() + [Fallback()]:
-        master.providerOrder.register(p)
-    return VehiclePriority(master)
+        order.register(p)
+    return order
+
+
+def amps_candidates(api, vehicle):
+    """Who may set this car's amps, in order."""
+    return [p.name for p in order_over(api).candidates(vehicle.vehicle, C.SET_AMPS)]
 
 
 class TestOwnerCommandsForUnsignedVehicles:
@@ -422,14 +363,14 @@ class TestOwnerCommandsForUnsignedVehicles:
         cmd = requests_mock.post(
             OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps", json=ACCEPTED
         )
-        assert api.setChargeRate(10, vehicle) == ACCEPTED
+        assert tesla_provider(api).setAmps(vehicle.VIN, 10) == Outcome(DONE)
         assert cmd.call_count == 1
 
     def test_cleared_owner_slot_blocks(self, owner_car, any_http):
         api, vehicle = owner_car("off")
         api.ownerSlot.clear()
         assert api.readOnlyFor(vehicle) is True
-        assert api.setChargeRate(10, vehicle) is False
+        assert tesla_provider(api).setAmps(vehicle.VIN, 10) == REFUSED_OUTCOME
         assert any_http.call_count == 0
 
 
@@ -444,7 +385,7 @@ class TestRefusedVehicles:
 
         assert api.readOnly is True
         assert api.readOnlyFor(vehicle) is True
-        assert send(api, vehicle) in (False, "error", REFUSED_OUTCOME)
+        assert send(api, vehicle) in (False, REFUSED_OUTCOME)
 
         assert any_http.call_count == 0
         assert no_error_recorded(api)
@@ -466,13 +407,14 @@ class TestMixedFleet:
         amps = requests_mock.post(
             re.compile(r".*/command/set_charging_amps"), json=ACCEPTED
         )
+        provider = tesla_provider(api)
 
         assert api.readOnly is False
         assert api.readOnlyFor(unsigned) is False
         assert api.readOnlyFor(signed) is True
-        assert api.setChargeRate(10, signed) is False
+        assert provider.setAmps(signed.VIN, 10) == REFUSED_OUTCOME
         assert amps.call_count == 0
-        assert api.setChargeRate(10, unsigned) == ACCEPTED
+        assert provider.setAmps(unsigned.VIN, 10) == Outcome(DONE)
         assert amps.call_count == 1
         assert amps.last_request.url.startswith(OWNER_URL + "/5YJ3E1EA1KF000001/")
         assert no_error_recorded(api)
@@ -482,13 +424,13 @@ class TestMixedFleet:
         api, unsigned, signed = mixed_fleet
         requests_mock.get(re.compile(r".*/vehicles/5YJ3E1EA1KF00000[12]$"), json=ONLINE)
         stop = requests_mock.post(re.compile(r".*/command/charge_stop"), json=ACCEPTED)
-        provider = owner_provider(api)
+        provider = tesla_provider(api)
 
         # The signed car is refused without a request, so the reconciler
         # tries the next provider for it.
         assert provider.stopCharging(signed.VIN) == REFUSED_OUTCOME
         assert stop.call_count == 0
-        assert provider.stopCharging(unsigned.VIN).kind == "done"
+        assert provider.stopCharging(unsigned.VIN) == Outcome(DONE)
         assert stop.call_count == 1
         assert (
             stop.last_request.url
@@ -497,32 +439,16 @@ class TestMixedFleet:
         assert signed.lastErrorTime == 0
         assert no_error_recorded(api)
 
-    def test_vehicle_priority_falls_through_for_signed_car(self, mixed_fleet, any_http):
+    def test_order_leaves_out_tesla_api_for_the_signed_car(self, mixed_fleet, any_http):
         api, unsigned, signed = mixed_fleet
-        ble = Mock()
-        ble.setChargeRate = Mock(return_value=True)
-        priority = priority_over(api, ble)
-
-        assert priority.setChargeRate(10, signed) is True
-        ble.setChargeRate.assert_called_with(10, signed)
+        assert amps_candidates(api, signed) == ["Fallback"]
         assert any_http.call_count == 0
         assert no_error_recorded(api)
         assert signed.lastErrorTime == 0
 
-    def test_vehicle_priority_uses_tesla_api_for_unsigned_car(
-        self, mixed_fleet, requests_mock
-    ):
+    def test_order_puts_owner_api_first_for_the_unsigned_car(self, mixed_fleet):
         api, unsigned, signed = mixed_fleet
-        amps = requests_mock.post(
-            OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps", json=ACCEPTED
-        )
-        ble = Mock()
-        ble.setChargeRate = Mock(return_value=True)
-        priority = priority_over(api, ble)
-
-        assert priority.setChargeRate(10, unsigned) == ACCEPTED
-        assert amps.call_count == 1
-        assert not ble.setChargeRate.called
+        assert amps_candidates(api, unsigned) == ["OwnerAPI", "Fallback"]
 
     def test_endpoint_read_only_per_vehicle(self, mixed_fleet):
         from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint
@@ -534,20 +460,6 @@ class TestMixedFleet:
             order.register(p)
         assert VehicleEndpoint(unsigned.vehicle, order, api.master).isReadOnly is False
         assert VehicleEndpoint(signed.vehicle, order, api.master).isReadOnly is True
-
-
-# Each owner-command path as VehiclePriority calls it: the endpoint under
-# /5YJ3E1EA1KF000001 and how to call it.
-PRIORITY_CALLS = {
-    "setChargeRate": (
-        "/command/set_charging_amps",
-        lambda priority, vehicle: priority.setChargeRate(10, vehicle),
-    ),
-    "wakeVehicle": (
-        "/wake_up",
-        lambda priority, vehicle: priority.wakeVehicle(vehicle),
-    ),
-}
 
 
 class TestOwnerCommandRefusedByTesla:
@@ -565,6 +477,7 @@ class TestOwnerCommandRefusedByTesla:
         suffix, send = COMMANDS[command]
         prime(command, api, vehicle, requests_mock)
         first, after = REFUSED_RETURNS[command]
+        prime(command, api, vehicle, requests_mock)
         cmd = requests_mock.post(
             OWNER_URL + "/5YJ3E1EA1KF000001" + suffix, **ALL_REFUSALS[refusal]
         )
@@ -577,13 +490,15 @@ class TestOwnerCommandRefusedByTesla:
         assert api.readOnlyFor(vehicle) is True
         assert api.readOnly is True
 
-        allow_resend(api, vehicle)
         assert send(api, vehicle) == after
         assert cmd.call_count == 1
         assert no_error_recorded(api)
 
-        # Reads still run on the Owner token.
+        # Reads still run on the Owner token (of a car known awake: a read
+        # of an asleep car is never attempted).
         assert api.ownerSlot.usable("read")
+        vehicle.lastAPIAccessTime = time.time()
+        vehicle.firstWakeAttemptTime = 0
         data = requests_mock.get(
             OWNER_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA
         )
@@ -604,7 +519,7 @@ class TestOwnerCommandRefusedByTesla:
             OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps",
             **ALL_REFUSALS[refusal]
         )
-        api.setChargeRate(10, vehicle)
+        tesla_provider(api).setAmps(vehicle.VIN, 10)
 
         warnings = [
             r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
@@ -622,7 +537,7 @@ class TestOwnerCommandRefusedByTesla:
         # The per-car read-only line, logged again on a state change, gives
         # the same cause.
         vehicle.refusalLoggedAt = None
-        api.setChargeRate(12, vehicle)
+        tesla_provider(api).setAmps(vehicle.VIN, 12)
         lines = [
             r.getMessage()
             for r in caplog.records
@@ -647,34 +562,29 @@ class TestOwnerCommandRefusedByTesla:
             OWNER_URL + "/5YJ3E1EA1KF000001/wake_up", status_code=403, json=VCP_403
         )
 
-        assert owner_provider(api).wake(vehicle.VIN) == REFUSED_OUTCOME
+        assert tesla_provider(api).wake(vehicle.VIN) == REFUSED_OUTCOME
 
         assert wake.call_count == 1
         assert vehicle.ownerCommandsRefused is True
         assert no_error_recorded(api)
 
     @pytest.mark.parametrize("refusal", list(ALL_REFUSALS))
-    @pytest.mark.parametrize("method", list(PRIORITY_CALLS))
-    def test_vehicle_priority_falls_through_and_reads_still_work(
-        self, owner_car, requests_mock, method, refusal
+    def test_latched_car_leaves_the_order_and_reads_still_work(
+        self, owner_car, requests_mock, refusal
     ):
         api, vehicle = owner_car("off")
-        suffix, call = PRIORITY_CALLS[method]
         cmd = requests_mock.post(
-            OWNER_URL + "/5YJ3E1EA1KF000001" + suffix, **ALL_REFUSALS[refusal]
+            OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps",
+            **ALL_REFUSALS[refusal]
         )
-        ble = Mock()
-        setattr(ble, method, Mock(return_value=True))
+        assert amps_candidates(api, vehicle) == ["OwnerAPI", "Fallback"]
 
-        assert call(priority_over(api, ble), vehicle) is True
+        assert tesla_provider(api).setAmps(vehicle.VIN, 10) == REFUSED_OUTCOME
         assert cmd.call_count == 1
-        assert getattr(ble, method).call_count == 1
 
-        # Latched: the next command skips TeslaAPI without an HTTP call.
-        allow_resend(api, vehicle)
-        assert call(priority_over(api, ble), vehicle) is True
-        assert requests_mock.call_count == 1
-        assert getattr(ble, method).call_count == 2
+        # Latched: the next walk leaves TeslaAPI out without an HTTP call.
+        assert amps_candidates(api, vehicle) == ["Fallback"]
+        assert cmd.call_count == 1
         assert no_error_recorded(api)
 
         data = requests_mock.get(
@@ -690,15 +600,9 @@ class TestOwnerCommandRefusedByTesla:
         "410": {"status_code": 410, "json": {"response": None, "error": "gone"}},
         "412 fleetapi json": {"status_code": 412, "json": FLEETAPI_ONLY},
     }
-    # What each path returns for those answers, as before the latch.
-    FLEET_RETURNS = {
-        "set_charging_amps": lambda body: body,
-        # A Fleet refusal is REFUSED (403, 412) or ERROR (410)
-        "set_charge_limit": lambda body: Refusal("refused", "error"),
-        "charge_start": lambda body: Refusal("refused", "error"),
-        "charge_stop": lambda body: Refusal("refused", "error"),
-        "wake_up": lambda body: False,
-    }
+    # A Fleet refusal is REFUSED (403, 412) or ERROR (410); a refused wake is
+    # UNREACHABLE, so Fleet still carries commands that need no wake
+    FLEET_REFUSED = Refusal("refused", "error", "unreachable")
 
     @pytest.mark.parametrize("refusal", list(FLEET_REFUSALS))
     @pytest.mark.parametrize("command", list(COMMANDS))
@@ -711,9 +615,10 @@ class TestOwnerCommandRefusedByTesla:
         answer = self.FLEET_REFUSALS[refusal]
         # A stop first asks the free online state; an online car gets it
         requests_mock.get(OWNER_URL + "/5YJ3E1EA1KF000001", json=ONLINE)
+        prime(command, api, vehicle, requests_mock)
         cmd = requests_mock.post(FLEET_URL + "/5YJ3E1EA1KF000001" + suffix, **answer)
 
-        assert send(api, vehicle) == self.FLEET_RETURNS[command](answer["json"])
+        assert send(api, vehicle) == self.FLEET_REFUSED
 
         assert cmd.call_count >= 1
         assert vehicle.ownerCommandsRefused is False
@@ -734,7 +639,7 @@ class TestBothTokens:
         )
 
         assert api.commandSlotFor(vehicle) is api.fleetSlot
-        api.setChargeRate(10, vehicle)
+        tesla_provider(api).setAmps(vehicle.VIN, 10)
 
         assert amps.call_count == 1
         assert amps.last_request.url.startswith(FLEET_URL + "/5YJ3E1EA1KF000001/")
@@ -752,7 +657,7 @@ class TestBothTokens:
         )
 
         assert api.commandSlotFor(vehicle) is api.ownerSlot
-        api.setChargeRate(10, vehicle)
+        tesla_provider(api).setAmps(vehicle.VIN, 10)
         assert amps.last_request.url.startswith(OWNER_URL + "/5YJ3E1EA1KF000001/")
 
     def test_fleet_carries_commands_for_signed_car(self, owner_car):
@@ -763,8 +668,8 @@ class TestBothTokens:
 
 class TestVehiclesNotYetListed:
     """Whether an Owner token can command is only known once the vehicles
-    are listed, and only a command path lists them (unless telemetry does),
-    so TeslaAPI is not read-only while the list is empty."""
+    are listed, and only a read path lists them (unless telemetry does), so
+    TeslaAPI is not read-only while the list is empty."""
 
     def test_owner_only_read_only_once_listed(self, no_threads):
         api = new_api()
@@ -776,30 +681,22 @@ class TestVehiclesNotYetListed:
     def test_no_token_is_read_only_unlisted(self):
         assert new_api().readOnly is True
 
-    def test_set_charge_rate_without_vehicles_logs_no_error(
-        self, no_threads, any_http, caplog
-    ):
-        # VehiclePriority calls setChargeRate every tick while the list is
-        # empty; that is expected, not an error. setChargeRate does not list
-        # the vehicles itself, so it makes no HTTP call.
+    def test_command_without_vehicles_logs_no_error(self, no_threads, any_http, caplog):
+        # The reconciler asks every cycle while the list is empty; that is
+        # expected, not an error, and lists nothing itself.
         caplog.set_level(logging.DEBUG)
         api = new_api()
         api.storeToken(owner_token())
-        ble = Mock()
-        ble.setChargeRate = Mock(return_value=True)
 
         for _ in range(3):
-            assert priority_over(api, ble).setChargeRate(10) is True
+            assert tesla_provider(api).setAmps("5YJ3E1EA1KF000001", 10) == Outcome(
+                UNSUPPORTED, "not listed"
+            )
 
-        assert ble.setChargeRate.call_count == 3
         assert any_http.call_count == 0
         assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
-        lines = [r for r in caplog.records if "No Tesla vehicles" in r.getMessage()]
-        assert lines and all(r.levelno == logging.INFO2 for r in lines)
 
-    def test_command_lists_vehicles_then_refuses_signed_car(
-        self, no_threads, no_sleep, requests_mock
-    ):
+    def test_listing_then_refuses_signed_car(self, no_threads, no_sleep, requests_mock):
         api = new_api()
         api.storeToken(owner_token())
         listing = requests_mock.get(
@@ -819,7 +716,7 @@ class TestVehiclesNotYetListed:
         posts = requests_mock.register_uri("POST", rm.ANY, json={})
 
         assert api.loadVehicleList() is True
-        assert owner_provider(api).stopCharging("5YJ3E1EA1KF000001") == REFUSED_OUTCOME
+        assert tesla_provider(api).stopCharging("5YJ3E1EA1KF000001") == REFUSED_OUTCOME
 
         assert listing.call_count == 1
         assert posts.call_count == 0
@@ -838,10 +735,11 @@ class TestPerVehicleRefusalLogging:
     def test_required_car_logged_once_with_the_fix(self, owner_car, any_http, caplog):
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car("required")
-        api.setChargeRate(10, vehicle)
-        api.setChargeRate(12, vehicle)
-        api.wakeVehicle(vehicle)
-        owner_provider(api).startCharging(vehicle.VIN)
+        provider = tesla_provider(api)
+        provider.setAmps(vehicle.VIN, 10)
+        provider.setAmps(vehicle.VIN, 12)
+        provider.wake(vehicle.VIN)
+        provider.startCharging(vehicle.VIN)
 
         lines = self.lines(caplog, "command_signing")
         assert len(lines) == 1
@@ -856,8 +754,9 @@ class TestPerVehicleRefusalLogging:
     ):
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car(signing)
-        api.setChargeRate(10, vehicle)
-        api.setChargeRate(12, vehicle)
+        provider = tesla_provider(api)
+        provider.setAmps(vehicle.VIN, 10)
+        provider.setAmps(vehicle.VIN, 12)
 
         lines = self.lines(caplog, "command_signing")
         assert len(lines) == 1
@@ -869,9 +768,10 @@ class TestPerVehicleRefusalLogging:
         caplog.set_level(logging.INFO)
         api, unsigned, signed = mixed_fleet
         requests_mock.post(re.compile(r".*/command/set_charging_amps"), json=ACCEPTED)
-        api.setChargeRate(10, signed)
-        api.setChargeRate(10, unsigned)
-        api.setChargeRate(12, signed)
+        provider = tesla_provider(api)
+        provider.setAmps(signed.VIN, 10)
+        provider.setAmps(unsigned.VIN, 10)
+        provider.setAmps(signed.VIN, 12)
 
         lines = self.lines(caplog, "command_signing")
         assert len(lines) == 1
@@ -885,9 +785,10 @@ class TestPerVehicleRefusalLogging:
             status_code=403,
             json=VCP_403,
         )
-        api.setChargeRate(10, vehicle)
-        api.setChargeRate(12, vehicle)
-        api.wakeVehicle(vehicle)
+        provider = tesla_provider(api)
+        provider.setAmps(vehicle.VIN, 10)
+        provider.setAmps(vehicle.VIN, 12)
+        provider.wake(vehicle.VIN)
 
         lines = self.lines(caplog, "Car")
         assert len(lines) == 1
@@ -895,24 +796,17 @@ class TestPerVehicleRefusalLogging:
         assert "TeslaBLE" in lines[0]
 
 
-class TestVehiclePriorityLogsWhy:
-    """When every listed car is read-only, VehiclePriority skips TeslaAPI
-    without calling it; the skip still logs the per-car reason once."""
+class TestOrderLogsWhy:
+    """When every listed car is read-only, the provider order leaves TeslaAPI
+    out without calling it; the walk still logs the per-car reason once."""
 
-    @pytest.mark.parametrize("method", ["setChargeRate"])
-    def test_one_line_naming_the_car(self, owner_car, any_http, caplog, method):
+    def test_one_line_naming_the_car(self, owner_car, any_http, caplog):
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car("required")
         assert api.readOnly is True
-        ble = Mock()
-        setattr(ble, method, Mock(return_value=True))
-        calls = {
-            "setChargeRate": lambda priority: priority.setChargeRate(10, vehicle),
-        }
 
         for _ in range(5):
-            api.carApiLastStartOrStopChargeTime = 0
-            assert calls[method](priority_over(api, ble)) is True
+            assert amps_candidates(api, vehicle) == ["Fallback"]
 
         lines = [
             r.getMessage()
@@ -925,5 +819,4 @@ class TestVehiclePriorityLogsWhy:
         assert "teslaProxy" in lines[0]
         assert "TeslaBLE" in lines[0]
         assert any_http.call_count == 0
-        assert getattr(ble, method).call_count == 5
         assert no_error_recorded(api)

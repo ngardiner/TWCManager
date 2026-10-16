@@ -125,7 +125,7 @@ def test_a_failed_second_list_defers_the_drop(requests_mock):
     requests_mock.get(FLEET_NA_URL, status_code=500, text="{}")
     assert api.loadVehicleList() is True and m.heldLimits.waiting() and "chargeLimits" in m.settings
     requests_mock.get(FLEET_NA_URL, text=listing((11, VIN3)))                  # the next checkCharge retries: free calls only
-    assert api.updateChargeAtHome() is True and m.heldLimits.get(VIN3) == HeldLimit(90, 50) and "chargeLimits" not in m.settings
+    api.updateChargeAtHome(); assert m.heldLimits.get(VIN3) == HeldLimit(90, 50) and "chargeLimits" not in m.settings
     assert [q.method for q in requests_mock.request_history] == ["GET"] * 4
 
 def test_an_unresolved_id_survives_a_restart():
@@ -136,7 +136,7 @@ def test_an_unresolved_id_survives_a_restart():
 def test_vehicle_list_loads_without_any_legacy_command(requests_mock):       # C1, paid counted
     master = FakeMaster(); master.vehicleRegistry = VehicleRegistry({}); api = new_api(master=master); api.storeToken(fleet_token())
     requests_mock.get(FLEET_NA_URL, text=listing((1, VIN)))
-    assert api.updateChargeAtHome() is True and api.updateChargeAtHome() is True
+    api.updateChargeAtHome(); api.updateChargeAtHome()
     calls = [(q.method, q.url) for q in requests_mock.request_history]
     assert calls == [("GET", FLEET_NA_URL)]                                     # one free GET /vehicles; no vehicle_data, no wake_up
     fleetProvider = api.providers()[1]

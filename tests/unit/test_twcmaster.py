@@ -712,7 +712,8 @@ class TestSubtractChargerLoadGetMaxAmps:
 
 
 class TestVehicleCommandRouting:
-    """Vehicle commands go to the VehicleCommandQueue, not the background queue."""
+    """Vehicle commands are desired state for the reconciler; the master has
+    no legacy command queue."""
 
     @pytest.fixture
     def master(self):
@@ -730,56 +731,18 @@ class TestVehicleCommandRouting:
                 }
             },
         )
-        m.vehicleCommandQueue = Mock()
         # The background queue state is class-level; isolate it per test.
         m.backgroundTasksQueue = Mock()
         m.backgroundTasksCmds = {}
         m.backgroundTasksDelayed = []
         return m
 
-    def test_master_creates_unstarted_queue(self):
-        from TWCManager.TWCMaster import TWCMaster
-        from TWCManager.VehicleCommandQueue import VehicleCommandQueue
-
-        m = TWCMaster(
-            "AB",
-            {
-                "config": {
-                    "wiringMaxAmpsAllTWCs": 80,
-                    "maxAmpsAllowedFromGrid": None,
-                }
-            },
-        )
-        assert isinstance(m.vehicleCommandQueue, VehicleCommandQueue)
-        assert m.vehicleCommandQueue._thread is None
-
     def test_other_tasks_stay_on_background_queue(self, master):
         task = {"cmd": "saveSettings"}
         master.queue_background_task(task)
         master.backgroundTasksQueue.put.assert_called_once_with(task)
-        master.vehicleCommandQueue.put.assert_not_called()
-
-    def test_queue_vehicle_command_forwards_callback(self, master):
-        task = {"cmd": "setChargeRate", "amps": 16, "vehicle": None}
-        callback = Mock()
-        master.queue_vehicle_command(task, callback)
-        master.vehicleCommandQueue.put.assert_called_once_with(task, callback)
-
-    @pytest.mark.parametrize(
-        "loaded, expected",
-        [
-            (["VehiclePriority", "HomeAssistant", "TeslaBLE", "TeslaAPI"], "VehiclePriority"),
-            (["HomeAssistant", "TeslaBLE", "TeslaAPI"], "HomeAssistant"),
-            (["TeslaBLE", "TeslaAPI"], "TeslaBLE"),
-            (["TeslaAPI"], "TeslaAPI"),
-            ([], None),
-        ],
-    )
-    def test_resolve_vehicle_command_module(self, master, loaded, expected):
-        modules = {name: Mock(name=name) for name in loaded}
-        master.getModuleByName = Mock(side_effect=lambda n: modules.get(n))
-        resolved = master._resolveVehicleCommandModule()
-        assert resolved is (modules[expected] if expected else None)
+        assert not hasattr(master, "vehicleCommandQueue")
+        assert not hasattr(master, "queue_vehicle_command")
 
 
 class TestChargeStartStopCancelRules:
@@ -826,7 +789,6 @@ class TestChargeStartStopCancelRules:
         master.startCarsCharging(self.V1)
         assert self.wanted(master) == {self.V1: True}
         master.getModuleByName("Policy").clearOverride.assert_called_once_with()
-        assert master.vehicleCommandQueue._high == {} and master.vehicleCommandQueue._low == {}
 
     def test_stop_replaces_the_start_for_that_car_only(self, master):
         master.startCarsCharging(self.V1)

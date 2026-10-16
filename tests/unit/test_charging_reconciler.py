@@ -195,7 +195,8 @@ def test_zero_offer_clears_a_pending_start_and_sends_no_wake():             # Re
 def test_an_offer_starts_the_car_from_the_heartbeat():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = onTwc(m, v); v.observe("chargingState", "Stopped", "TeslaBLE")
     m.setMaxAmpsToDivideAmongSlaves(32); drive(m, s, amps_actual=0.0); drive(m, s, amps_actual=0.0)
-    assert m.desired.get(VIN, CHARGING).value is True and r.pass_() == 1 and cmds(m.providerOrder.provider("TeslaBLE")) == ["startCharging"]
+    assert m.desired.get(VIN, CHARGING).value is True and r.pass_() == 2                # and mode 1's once-per-session lift, as main's raise
+    assert cmds(m.providerOrder.provider("TeslaBLE")) == ["startCharging", "setAmps"]
 
 def test_twc_current_alone_never_restops_a_car_with_vehicle_reads():        # Review Focus 4
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); onTwc(m, v); b = m.providerOrder.provider("TeslaBLE"); v.observe("chargingState", "Charging", "TeslaBLE")
@@ -274,7 +275,7 @@ def test_a_fleet_only_car_is_stopped_once_the_list_loads(requests_mock):    # C1
     requests_mock.get(FLEET_NA_URL, json={"response": [{"id": 1, "vin": VIN, "display_name": "Car"}], "count": 1})
     v.observe("chargingState", "Charging", "TeslaAPI"); m.stopCarsCharging(VIN); r.pass_()
     assert calls(requests_mock, "charge_stop") == [] and m.desired.record(VIN, CHARGING).lastOutcome is None   # not listed: no candidate yet
-    assert api.updateChargeAtHome() is True; r.pass_()
+    api.updateChargeAtHome(); r.pass_()
     assert len(calls(requests_mock, "charge_stop")) == 1 and calls(requests_mock, "wake_up") == []
 
 def test_a_queued_start_is_withdrawn_when_the_offer_drops(requests_mock):   # pre-flight M7, threaded, paid counted
@@ -406,3 +407,22 @@ def test_a_stale_charging_reading_on_a_car_now_asleep_sends_no_stop(requests_moc
     m.stopCarsCharging(VIN)
     for _ in range(5): r.pass_()
     assert calls(requests_mock, "charge_stop") == [] and calls(requests_mock, "wake_up") == [] and len(calls(requests_mock, VIN)) == 1   # one free check
+
+# Carried from the 12a re-review 2 (extra N1 test)
+
+import pytest
+from tests.unit.reconcile_helpers import COMMAND_CAPS
+
+@pytest.mark.parametrize("starter", ["local BLE", "non-local without WAKE"])
+def test_a_start_that_spends_no_cloud_wake_buys_none_for_the_limit(starter):   # N1, paid counted
+    onlyStart = lambda v, cap: cap == C.START_CHARGING
+    if starter == "local BLE":                                                   # pins `not p.local`
+        s = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.UNREACHABLE)], readyFor=onlyStart)
+    else:                                                                        # HomeAssistant-like: pins `declares(WAKE)`
+        caps = {k: d for k, d in COMMAND_CAPS.items() if k != C.WAKE}
+        s = ScriptedProvider("HomeAssistant", 6, False, [O.Outcome(O.UNREACHABLE)], caps=caps, readyFor=onlyStart, tier=C.HA_BILLED)
+    f = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.UNREACHABLE)], tier=C.FLEET_COMMAND, readyFor=lambda v, cap: cap != C.START_CHARGING)
+    m, r, v, c = setup(s, f); m.settings["chargeStopMode"] = "1"
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")   # the limit is unknown
+    for _ in range(6): r.pass_(); c.t += 61
+    assert not any(x[0] == "wake" for x in f.calls)

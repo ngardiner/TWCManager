@@ -100,7 +100,6 @@ def make_order(settings=None, *providers):
     m = Mock()
     m.settings = settings or {}
     m.config = {}
-    m.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
     m.vehicleRegistry = VehicleRegistry({})
     # No reconciler until a test makes one: a plain Mock would take the debug
     # page's one-shots
@@ -117,13 +116,13 @@ class InlineQueue(VehicleCommandQueue):
     def start(self):
         pass
 
-    def put(self, entry, callback=None) -> bool:
+    def put(self, entry) -> bool:
         if self._draining and not self._isHigh(entry):
             self._lose([(entry, "dropped")])
             return False
         with self._cond:
             self._busy = True
-        self._runOne(entry, callback)
+        self._runOne(entry)
         return True
 
     def waitDrained(self, deadline) -> bool:
@@ -149,4 +148,4 @@ def inline(reconciler):
 def entries(q):
     # A queue's pending attempts, stops first
     with q._cond:
-        return [e for e, _ in list(q._high.values()) + list(q._low.values())]
+        return list(q._high.values()) + list(q._low.values())
