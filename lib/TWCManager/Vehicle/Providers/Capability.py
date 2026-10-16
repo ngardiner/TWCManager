@@ -52,6 +52,9 @@ CLOUD_FREE = Cost(TIER_CLOUD_FREE, 0.0)
 FLEET_COMMAND = Cost(TIER_BILLED, 0.001)
 FLEET_DATA = Cost(TIER_BILLED, 0.002)
 FLEET_WAKE = Cost(TIER_BILLED, 0.02)
+# An Owner API command or wake (#659) costs nothing, but stands in for Fleet
+# and Tesla rate-limits it: paced as the billed tier is
+OWNER_COMMAND = Cost(TIER_BILLED, 0.0)
 HA_BILLED = Cost(TIER_BILLED, None)
 DISRUPTIVE = Cost(TIER_DISRUPTIVE, 0.0)
 

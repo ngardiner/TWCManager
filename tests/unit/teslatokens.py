@@ -130,12 +130,18 @@ def no_threads():
     request it need not change."""
 
 
-def add_home_vehicle(api):
-    """Add vehicle 5YJ3E1EA1KF000001, at home and recently contacted, so _ready
-    is True without an HTTP call; returns its registry vehicle. Use with the
-    no_threads fixture."""
-    api.addVehicle({"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"})
-    vehicle = api.registry.get("5YJ3E1EA1KF000001")
+def add_home_vehicle(
+    api, command_signing=None, vin="5YJ3E1EA1KF000001", name="Car", id=1
+):
+    """Add a vehicle (5YJ3E1EA1KF000001 unless vin says otherwise), at home and
+    recently contacted, so _ready is True without an HTTP call; returns its
+    registry vehicle. Its /products entry carries command_signing unless that
+    is None. Use with the no_threads fixture."""
+    listed = {"id": id, "vin": vin, "display_name": name}
+    if command_signing is not None:
+        listed["command_signing"] = command_signing
+    api.addVehicle(listed)
+    vehicle = api.registry.get(vin)
     car = vehicle.attachment("TeslaAPI")
     car.atHome = True
     car.lastAPIAccessTime = time.time()

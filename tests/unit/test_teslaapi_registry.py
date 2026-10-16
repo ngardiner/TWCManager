@@ -133,7 +133,7 @@ def test_debug_interface_resolves_by_vin():
     master.reconciler = inline(VehicleReconciler(master))
     # True: a one-shot attempt was submitted (inline here, so it has run)
     assert master.providerOrder.debugCommand("wakeVehicle", VIN, "{}") is True
-    api.wakeOutcome.assert_called_once_with(reg.get(VIN), now=ANY)
+    api.wakeOutcome.assert_called_once_with(reg.get(VIN), now=ANY, slot=api.fleetSlot)
     assert (
         master.providerOrder.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}")
         is False
