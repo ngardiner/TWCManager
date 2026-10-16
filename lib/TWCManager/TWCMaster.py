@@ -1328,15 +1328,19 @@ class TWCMaster:
                         slaveTWC._resetVehicleRateRaised()
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
-                elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES:
+                elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES or (
+                    slaveTWC.reportedState == 0 and slaveTWC.pluggedCars()[0]
+                ):
                     # A car drawing nothing (asleep after a restart) is still
-                    # plugged in: unidentified, it is an anonymous session
+                    # plugged in: unidentified, it is an anonymous session.
+                    # At 00 (an empty TWC says it too) only if a free source
+                    # shows an at-home car plugged in
                     if slaveTWC.vehicleKey is None:
                         self._plugSession(slaveTWC, True)
                 elif slaveTWC.reportedState == 0 and str(
                     slaveTWC.vehicleKey
                 ).startswith(ANON_PREFIX):
-                    # 00: unplugged, or asleep (an empty TWC says it too)
+                    # 00 and no car known plugged in
                     self._plugSession(slaveTWC, False)
             carsCharging += slaveTWC.isCharging
             for module in self.getModulesByType("Status"):

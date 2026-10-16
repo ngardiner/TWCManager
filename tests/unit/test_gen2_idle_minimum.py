@@ -149,7 +149,7 @@ def chargingAndIdle(feed):
     v = m.vehicleRegistry.getOrCreate(VIN, "TeslaAPI")
     v.attach(
         "TeslaAPI",
-        SimpleNamespace(VIN=VIN, atHome=True, syncSource="TeslaAPI", pluggedIn=None),
+        SimpleNamespace(VIN=VIN, atHome=True, syncSource="TeslaAPI", pluggedIn=None, locate=lambda: None),
     )
     v.observe("chargingState", "Charging", "TeslaAPI")
     idle = idleSlave(m)
@@ -189,7 +189,7 @@ def chargingSlave(m, twcid, vin):
     v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI")
     v.attach(
         "TeslaAPI",
-        SimpleNamespace(VIN=vin, atHome=True, syncSource="TeslaAPI", pluggedIn=None),
+        SimpleNamespace(VIN=vin, atHome=True, syncSource="TeslaAPI", pluggedIn=None, locate=lambda: None),
     )
     v.observe("chargingState", "Charging", "TeslaAPI")
     return s
@@ -234,7 +234,8 @@ def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
     v.attach(
         "TeslaAPI",
         SimpleNamespace(
-            VIN=idle.currentVIN, atHome=True, syncSource="TeslaAPI", pluggedIn=None
+            VIN=idle.currentVIN, atHome=True, syncSource="TeslaAPI", pluggedIn=None,
+            locate=lambda: None,
         ),
     )
     v.observe("chargingState", "Charging", "TeslaAPI")

@@ -17,13 +17,13 @@ from ..Providers.Capability import (
 from .Desired import CHARGE_LIMIT
 
 
-def _located(vehicle) -> Optional[bool]:
+def located(vehicle) -> Optional[bool]:
     # On a point: home (atHome stays as vehicleIsDefinitelyHome set it).
     # Else the Tesla API's home check on the latest position; None if unknown
     if vehicle.value("twcVin"):
         return True
     api = vehicle.attachment("TeslaAPI")
-    return getattr(api, "locate", lambda: None)()
+    return api.locate() if api is not None else None
 
 
 def _present(master, vehicle) -> bool:
@@ -34,11 +34,10 @@ def _present(master, vehicle) -> bool:
         return True
     api = vehicle.attachment("TeslaAPI")
     if api is not None:
-        home = _located(vehicle)
+        home = located(vehicle)
         if home is not None:
             return home
-        held = master.heldLimits.get(vehicle.vin)
-        if api.atHome or held is not None and held.held is not None:
+        if api.atHome or vehicle.vin in master.heldLimits.holding():
             return True
     ha = vehicle.attachment("HomeAssistant")
     if ha is not None:
@@ -64,7 +63,7 @@ def broadcastVehicles(master, capability) -> List:
     def reached(v):
         api = v.attachment("TeslaAPI")
         home = api is not None and (
-            _located(v) or api.atHome or getattr(api, "lat", 0) == 10000
+            located(v) or api.atHome or getattr(api, "lat", 0) == 10000
         )
         ha = v.attachment("HomeAssistant")
         haHome = ha is not None and ha.at_home and master.getTWCbyVIN(v.vin)
@@ -108,12 +107,8 @@ def applyPolicyLimit(master, limit: Optional[int], decision: bool) -> int:
         else:
             master.desired.set(vehicle.key, CHARGE_LIMIT, limit, "policy", decision)
         touched += 1
-    for vin in master.heldLimits.holding():
-        # Departure with no edge: a held car its free position places away
-        # (main located each wasAtHome car on every apply)
-        vehicle = master.vehicleRegistry.get(vin)
-        if vehicle is not None and _located(vehicle) is False:
-            _restore(master, vehicle, decision=True)
+    # Departure with no edge (main located each wasAtHome car on every apply)
+    _restoreDeparted(master, read=False)
     return touched
 
 
@@ -123,17 +118,25 @@ def onArrival(master) -> None:
 
 
 def onDeparture(master) -> None:
-    # Background thread only. A car off its point that the Tesla API knows
-    # is located first, unless live telemetry already has (a paid
-    # vehicle_data that never wakes; only for cars we hold a limit on): an
-    # unplug alone is not a departure
+    # Background thread only: an unplug alone is not a departure
+    _restoreDeparted(master, read=True)
+
+
+def _restoreDeparted(master, read) -> None:
+    # A held car no longer present gets its normal limit back. read: a car
+    # off its point that the Tesla API knows is located first, unless live
+    # telemetry already has (a paid vehicle_data that never wakes). A fix
+    # older than our last limit write cannot show a departure
     for vin in master.heldLimits.holding():
         vehicle = master.vehicleRegistry.get(vin)
         if vehicle is None:
             continue
         api = vehicle.attachment("TeslaAPI")
-        if api is not None and not vehicle.value("twcVin"):
+        if read and api is not None and not vehicle.value("twcVin"):
             if api.syncSource == "TeslaAPI":
                 api.update_location(0)
-        if not _present(master, vehicle):
-            _restore(master, vehicle, decision=True)
+        fix, write = vehicle.latest("lat"), vehicle.lastWrite("chargeLimit")
+        stale = fix is not None and write is not None and fix.at <= write.at
+        if stale or _present(master, vehicle):
+            continue
+        _restore(master, vehicle, decision=True)
