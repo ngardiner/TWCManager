@@ -754,8 +754,35 @@ def test_mode_2_undeliverable_rate_pays_twice(requests_mock):
     pt.setTargetPower(10 * 240)
     passes(r, c, 3600, each=lambda: pt.setTargetPower(10 * 240))
     assert (
-        amps(requests_mock) == [10, 10] and s._evseTargetAmps == s.maxOfferAmps
-    )  # one send, one blind retry; the TWC offers its max
+        amps(requests_mock) == [10, 10] and s._evseTargetAmps == 10
+    )  # one send, one blind retry; the TWC keeps the target (final review I1)
+
+
+# Final review I1: in mode 2 the TWC offers its maximum only once the car's
+# rate is confirmed; a rate that failed twice leaves the TWC at the target
+
+
+def test_mode_2_twc_holds_the_target_until_the_car_rate_lands(requests_mock):
+    for script, confirmed in (
+        ([(500, None, None), (500, None, None), (200, True, "")], False),
+        ([(200, True, "")], True),
+    ):
+        requests_mock.reset_mock()
+        m, r, v, c, pt, s = fleetPoint(requests_mock, 2, script=script)
+        offers = []
+
+        def cycle():
+            pt.setTargetPower(10 * 240)
+            heartbeat(m, s, 10.0)
+            offers.append(s.lastAmpsOffered)
+
+        passes(r, c, 3600, each=cycle)
+        if confirmed:
+            assert amps(requests_mock) == [10] and offers[-1] == s.wiringMaxAmps
+        else:
+            assert (
+                amps(requests_mock) == [10, 10] and max(offers[1:]) <= 10
+            )  # the paid bound holds; the TWC carries the rate (the wiring rule)
 
 
 # Row 23 (slim Task 10 M2): a spent re-arm lets the start go without the limit

@@ -171,11 +171,11 @@ def test_mode_1_budget_below_the_twc_floor_offers_zero_and_no_fleet_send():     
     m.distributeEVSEPower()
     assert s._evseTargetAmps == 0 and setAmps(m) == []
 
-def test_mode_2_named_twc_offers_its_max_and_the_car_carries_the_rate():          # 4 (slim Task 12b)
+def test_mode_2_named_twc_holds_the_target_and_the_car_carries_the_rate():        # 4 (slim Task 12b; final review I1)
     m = real(mode=2); s = m.newSlave(b"\x82\x44", 80); s.currentVIN = VIN; s.reportedAmpsMax = 32; car(m, VIN, "Charging"); budget(m, 20)
     assert m.modules["VehicleEndpoints"]["ref"].allEVSEs[0].provider == "FleetAPI"   # mode 2: the endpoint is writable over Fleet
     m.distributeEVSEPower()
-    assert setAmps(m) == [{"vin": VIN, "amps": 20}] and s._evseTargetAmps == s.maxOfferAmps and s.pointOwnsAmps
+    assert setAmps(m) == [{"vin": VIN, "amps": 20}] and s._evseTargetAmps == 20 and s.pointOwnsAmps
     s.receive_slave_heartbeat(bytearray([0x01, 0x0C, 0x80, 0x03, 0xE8, 0x00, 0x00]))   # charging, 32 A max, 10 A actual
     assert m.desired.get(VIN, AMPS).by == "distributor"                         # one writer: the heartbeat writes no rate
 

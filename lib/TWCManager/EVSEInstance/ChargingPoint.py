@@ -189,9 +189,10 @@ class ChargingPoint(EVSEInstance):
         if twc:
             # Below the floor: the next return to range may lift again
             local._resetVehicleRateRaised()
-        # The car carries: the TWC offers its maximum (mode 2) or holds the
-        # heartbeat's handoff floor (mode 3 below range)
-        local.setTargetPower(local.convertAmpsToWatts(floor) if twc else local.maxPower)
+        # The car carries: the TWC holds the target, never below the
+        # heartbeat's handoff floor; in mode 2 the heartbeat lifts it to its
+        # maximum once the car's rate is confirmed (final review I1)
+        local.setTargetPower(local.convertAmpsToWatts(max(floor, amps)))
         for e in cars:
             e.setTargetPower(watts)
 
