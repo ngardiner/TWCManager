@@ -76,7 +76,11 @@ class HomeAssistantProvider(Provider):
     def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
         # Never wakes the car. None (unreachable, nothing answered) is a
         # failed read, never a stale value reported as one
-        seen = vehicle.attachment("HomeAssistant").parse_from_home_assistant(self.ha)
+        hv = vehicle.attachment("HomeAssistant")
+        if hv is None:
+            # Detached since ready()
+            return False
+        seen = hv.parse_from_home_assistant(self.ha)
         for k, v in (seen or {}).items():
             vehicle.observe(k, v, self.name)
         return field in (seen or {})
