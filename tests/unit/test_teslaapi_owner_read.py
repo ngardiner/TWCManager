@@ -29,7 +29,6 @@ def test_owner_token_lists_vehicles_from_products(requests_mock):
     vehicles = requests_mock.get(OWNER_VEHICLES, status_code=412, json={})
     api = new_api()
     api.storeToken(owner_token())
-    assert api.vehicleListURL(api.ownerSlot) == OWNER_PRODUCTS
     assert api.loadVehicleList() is True
     assert [v.VIN for v in api.getCarApiVehicles()] == ["5YJ3E1EB9LF000001"]
     assert vehicles.call_count == 0
@@ -38,4 +37,5 @@ def test_owner_token_lists_vehicles_from_products(requests_mock):
 def test_fleet_token_keeps_vehicles(requests_mock):
     api = new_api()
     api.storeToken(fleet_token())
-    assert api.vehicleListURL(api.fleetSlot) == NA_VEHICLES
+    listed = requests_mock.get(NA_VEHICLES, json=PRODUCTS)
+    assert api.loadVehicleList() is True and listed.call_count == 1
