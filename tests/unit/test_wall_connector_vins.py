@@ -14,7 +14,7 @@ def live(vin=VIN, din=DIN): return {"response": {"wall_connectors": [{"din": din
 
 def setup(requests_mock, status=200, vin=VIN, din=DIN):
     m, ctl, p = make_gen3(); m.config["vehicle"] = {"teslaAPI": {"enabled": True}}; m.tokenSyncEnabled.return_value = False
-    m.modules = {}; m.settings = {}; m.settingsLock = threading.RLock(); m.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
+    m.modules = {}; m.settings = {}; m.settingsLock = threading.RLock()
     api = new_api(master=m); api.carApiVehicles = []; api.storeToken(owner_token()); reg = m.vehicleRegistry
     requests_mock.get(re.compile(r".*/api/1/products$"), json=PRODUCTS)
     requests_mock.get(re.compile(r".*/energy_sites/7/live_status$"), status_code=status, json=live(vin, din) if status == 200 else {})

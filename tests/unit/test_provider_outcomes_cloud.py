@@ -254,3 +254,47 @@ def test_an_invalid_grant_clears_the_slot_as_base_did(requests_mock):
     api, reg, p, url = _expiring(requests_mock)
     requests_mock.post(url, status_code=400, json={"error": "invalid_grant"})              # base kept the slot on a 400
     assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "401") and api.fleetSlot.refreshToken == "refresh-me"
+
+
+# 12b fix round 1: deleted-test GAPs and PARTIALs
+
+def asleep(requests_mock, monkeypatch, api):
+    # The free online check says asleep and no wake is held: a wake_up goes out
+    import TWCManager.Vehicle.TeslaAPI as T
+    monkeypatch.setattr(T.time, "sleep", Mock()); api.wakeDelayMins = 0
+    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
+    car = api.getCarApiVehicles()[0]; car.delayNextWakeAttempt = 0; return car
+
+def test_paid_posts_time_out_after_ten_seconds(requests_mock, monkeypatch):   # GAP: test_post_has_timeout
+    api, reg, p = fleet(requests_mock); asleep(requests_mock, monkeypatch, api)
+    requests_mock.post(re.compile(r".*/wake_up$"), json={"response": {"state": "online"}})
+    p.setAmps(VIN, 10); p.wake(VIN)
+    assert [r.timeout for r in calls(requests_mock, "set_charging_amps") + calls(requests_mock, "wake_up")] == [10, 10]
+
+@pytest.mark.parametrize("path", ["wake_up", "command/set_charging_amps"])
+def test_a_wake_or_command_that_never_left_is_an_error_and_refreshes_nothing(requests_mock, monkeypatch, path):   # GAPs: wake never sent
+    import requests
+    from tests.unit.teslatokens import FLEET_REFRESH_URL
+    api, reg, p = fleet(requests_mock); asleep(requests_mock, monkeypatch, api)
+    requests_mock.post(re.compile(r".*/%s$" % path), exc=requests.exceptions.ConnectionError)
+    refresh = requests_mock.post(FLEET_REFRESH_URL, json={})
+    outcome = p.wake(VIN) if path == "wake_up" else p.setAmps(VIN, 10)
+    assert outcome == O.Outcome(O.ERROR, "ConnectionError") and not refresh.called and not api.fleetSlot.empty()
+
+def test_a_low_rate_is_done_only_when_both_sends_land(requests_mock, monkeypatch):   # PARTIALs: low rate resend fails / rejected
+    import TWCManager.Vehicle.TeslaAPI as T
+    monkeypatch.setattr(T.time, "sleep", Mock())
+    ok, bad = {"json": {"response": {"result": True}}}, {"json": {"response": {"result": False, "reason": "nope"}}}
+    for responses, kind, sent in (([ok, {"status_code": 500, "json": {}}], O.ERROR, 2), ([ok, bad], O.ERROR, 2), ([bad, ok], O.ERROR, 1)):
+        api, reg, p = fleet(requests_mock); api.master.config = {"config": {}}
+        requests_mock.post(re.compile(r".*/command/.*"), responses)
+        before = len(calls(requests_mock, "set_charging_amps"))
+        assert p.setAmps(VIN, 4).kind == kind and len(calls(requests_mock, "set_charging_amps")) - before == sent   # no second send after an unsettled first
+
+def test_an_expired_token_on_wake_is_refreshed_at_fleet_auth_once(requests_mock, monkeypatch):   # PARTIAL: wake 401
+    from tests.unit.teslatokens import FLEET_REFRESH_URL
+    from tests.unit.test_teslaapi_refresh import AUTH_TOKEN_URL, token_response
+    api, reg, p = fleet(requests_mock); api.storeToken(fleet_token(), "refresh-me"); asleep(requests_mock, monkeypatch, api)
+    requests_mock.post(re.compile(r".*/wake_up$"), [{"status_code": 401, "text": "token expired"}, {"json": {"response": {"state": "online"}}}])
+    fleetAuth = requests_mock.post(FLEET_REFRESH_URL, json=token_response(fleet_token(jti="new"))); owner = requests_mock.post(AUTH_TOKEN_URL, json={})
+    assert p.wake(VIN).kind in O.SETTLED and len(calls(requests_mock, "wake_up")) == 2 and fleetAuth.call_count == 1 and owner.call_count == 0

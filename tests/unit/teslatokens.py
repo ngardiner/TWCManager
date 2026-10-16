@@ -90,7 +90,6 @@ class FakeMaster:
         self.settings = {}
         self.modules = {}
         self.tasks = []
-        self.stats = {"moduleSuccess": {}, "moduleFailures": {}}
 
     def getModuleByName(self, name):
         return self.modules.get(name)

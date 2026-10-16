@@ -119,7 +119,7 @@ def real(mode=1, gen3=False):
     config = dict(CONFIG, config=dict(CONFIG["config"], defaultVoltage=240, numberOfPhases=1, fakeMaster=1))
     if gen3: config["controller.Gen3TWCs"] = {"enabled": True, "devices": [{"ip": "10.0.0.1", "fuseAmps": 48, "phases": 1}]}
     m = TWCMaster("AB", config); m.settings["chargeRateControl"] = mode
-    m.queue_vehicle_command = Mock(); m.queue_background_task = Mock()
+    m.queue_background_task = Mock()
     carapi = Mock(); carapi.enabled.return_value = True; policy = Mock(); policy.policyIsGreen.return_value = False
     modules = {"TeslaAPI": carapi, "Policy": policy}; m.getModuleByName = lambda n: modules.get(n)
     m.registerModule({"name": "VehicleEndpoints", "ref": VehicleEndpoints(m), "type": "EVSEController"})

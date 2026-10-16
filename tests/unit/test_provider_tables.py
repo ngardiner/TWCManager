@@ -20,7 +20,7 @@ class TeslaMateVehicle:                                   # the provider takes i
 
 def master(settings=None):
     m = Mock(); m.settings = dict(settings or {}); m.config = {}
-    m.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}; return m
+    return m
 
 def install(kinds, settings):
     # One real provider per kind, all reading one settings dict, and one car
