@@ -31,14 +31,14 @@ def test_loads_once(no_threads, requests_mock):
     assert api.loadVehicleList() is True
     assert api.loadVehicleList() is True
     assert get.call_count == 1
-    assert [v.VIN for v in api.getCarApiVehicles()] == ["5YJ3E1EA1KF000001"]
+    assert [v.VIN for v in api.carApiVehicles] == ["5YJ3E1EA1KF000001"]
 
 
 def test_failure_returns_false_and_records_error(requests_mock):
     api = new_api()
     requests_mock.get(FLEET_NA_URL, text='{"error": "boom"}')
     assert api.loadVehicleList() is False
-    assert api.getVehicleCount() == 0
+    assert len(api.carApiVehicles) == 0
     assert api.carApiLastErrorTime > 0
 
 

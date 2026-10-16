@@ -41,7 +41,7 @@ def any_http(requests_mock):
 
 
 def no_error_recorded(api):
-    vehicle = api.getCarApiVehicles()[0]
+    vehicle = api.carApiVehicles[0]
     return api.getCarApiLastErrorTime() == 0 and vehicle.lastErrorTime == 0
 
 
@@ -52,7 +52,7 @@ class TestFleetProviderRefusesCommands:
     def test_no_command_token_sends_nothing(self, owner_api, any_http, call):
         fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
         args = (self.VIN, 10) if call == "setAmps" else (self.VIN,)
-        car = owner_api.getCarApiVehicles()[0]
+        car = owner_api.carApiVehicles[0]
         before = car.lastAPIAccessTime
         assert getattr(fleet, call)(*args) == Outcome(REFUSED, "no command token")
         assert car.lastAPIAccessTime == before
@@ -124,7 +124,7 @@ class TestReadsStillRun:
                 }
             },
         )
-        vehicle = owner_api.getCarApiVehicles()[0]
+        vehicle = owner_api.carApiVehicles[0]
         assert vehicle.update_vehicle_data() is True
         assert data.call_count == 1
         assert vehicle.batteryLevel == 55
@@ -142,7 +142,7 @@ class TestReadsStillRun:
         )
         assert api.loadVehicleList() is True
         assert listing.call_count == 1
-        assert api.getVehicleCount() == 1
+        assert len(api.carApiVehicles) == 1
 
 
 class TestCheckChargeRefreshesEachModuleOnce:

@@ -596,6 +596,3 @@ class HomeAssistant:
             if v.at_home and v.battery_level is not None
         ]
         return min(levels) if levels else 10000.0
-
-    def updateSettings(self):
-        return True

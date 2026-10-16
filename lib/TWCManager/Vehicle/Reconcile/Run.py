@@ -19,7 +19,6 @@ from ..Providers.Capability import (
     TIER_DISRUPTIVE,
     WAKE,
 )
-from ..Providers.Provider import commandMethod
 from .Desired import AMPS, CHARGE_LIMIT, CHARGING, FIELD_FOR
 from .Outcome import (
     DONE,
@@ -100,7 +99,8 @@ def workerOf(master, providerName) -> str:
 
 
 def _call(provider, capability, vin, value):
-    method = getattr(provider, commandMethod(capability))
+    # A capability's name is the Provider method's
+    method = getattr(provider, capability)
     if capability in _VALUE_COMMANDS:
         return method(vin, value)
     return method(vin)
@@ -181,7 +181,7 @@ def runAttempt(reconciler, attempt) -> Outcome:
                 return early
         outcome = checked(
             provider,
-            commandMethod(attempt.capability),
+            attempt.capability,
             _call(provider, attempt.capability, vin, value),
         )
     except Exception as e:

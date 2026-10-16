@@ -14,12 +14,6 @@ CLOUD_SUPPRESSED = {
 }
 
 
-def commandMethod(capability) -> str:
-    # The Provider method a worker calls for a capability; the capability
-    # names are the method names
-    return capability
-
-
 class Provider:
     name: str = ""
     # Fixed tie-break inside a cost tier: Gen2TWC 0, Gen3TWC 1, TeslaBLE 2,

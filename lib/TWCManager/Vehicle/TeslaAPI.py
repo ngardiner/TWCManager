@@ -471,7 +471,7 @@ class TeslaAPI:
         # usable for reads. Safe to call from any thread; concurrent callers
         # will not double-add vehicles.
         with self.vehicleListLock:
-            if self.getVehicleCount() > 0:
+            if len(self.carApiVehicles) > 0:
                 return True
             slot = self.slotFor("read")
             if slot is None:
@@ -498,14 +498,14 @@ class TeslaAPI:
     def listPending(self) -> bool:
         # The vehicle list is not loaded, or held limits wait on it
         held = getattr(self.master, "heldLimits", None)
-        return self.getVehicleCount() < 1 or (
+        return len(self.carApiVehicles) < 1 or (
             isinstance(held, HeldLimits) and held.waiting()
         )
 
     def loadList(self):
         # The vehicle list (a free call) loads here, and held limits waiting
         # on it resolve: the cloud providers serve only listed cars (C1)
-        if self.getVehicleCount() > 0:
+        if len(self.carApiVehicles) > 0:
             self.resolveHeldLimits()
         elif not self.getCarApiRetryRemaining():
             self.refreshTokenIfNeeded()
@@ -780,17 +780,10 @@ class TeslaAPI:
         # Returns the vehicle object identified by the given VIN
         if not isinstance(vin, str):
             return False
-        for vehicle in self.getCarApiVehicles():
+        for vehicle in self.carApiVehicles:
             if str(vehicle.VIN).upper() == vin.upper():
                 return vehicle
         return False
-
-    def getVehicleCount(self):
-        # Returns the number of currently tracked vehicles
-        return int(len(self.carApiVehicles))
-
-    def getCarApiVehicles(self):
-        return self.carApiVehicles
 
     def resetCarApiLastErrorTime(self, vehicle=None):
         self.carApiLastErrorTime = 0
@@ -1549,9 +1542,6 @@ class TeslaAPI:
             default=10000,
         )
 
-    def updateSettings(self):
-        return True
-
 
 class CarApiVehicle:
     carapi = None
@@ -1567,7 +1557,6 @@ class CarApiVehicle:
 
     errorCount = 0
     lastErrorTime = 0
-    lastVehicleStatusTime = 0
     lastVehicleAwakeTime = 0
     lastVehicleAwakeState = False
     # Whether lastVehicleAwakeState came from an answer (a sync source or
