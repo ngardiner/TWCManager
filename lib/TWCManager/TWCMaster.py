@@ -26,7 +26,8 @@ from TWCManager.Vehicle.Providers.Capability import (
 )
 from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
-from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler, newerReading
+from TWCManager.Vehicle.Reconcile.Belief import newerReading
+from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Reconcile.Targets import (
     applyPolicyLimit,
     broadcastVehicles,
