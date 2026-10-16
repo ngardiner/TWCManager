@@ -66,7 +66,7 @@ Setting `commandPolicy` under `vehicle` in config.json hard-sets the policy and 
 
 #### Who sets a car's charge rate
 
-Every Fleet API command is billed, so the Fleet API never sets a car's charge rate where a local path can: the TWC the car is plugged into, or BLE for a paired car. A car on a TWC gets its rate from the TWC. A BLE-paired car on a mobile connector (or any charger TWCManager does not control) gets its rate over BLE only; before v1.4.0 it got it from the Fleet API. If the BLE command fails, the Fleet API does not step in. To let the Fleet API carry the rate for such a car, use `api_only`. Charge Rate Control modes 2 and 3 are unchanged.
+Every Fleet API command is billed, so the Fleet API never sets a car's charge rate where a local path can: the TWC the car is plugged into, or BLE for a paired car. A car on a TWC gets its rate from the TWC. A BLE-paired car on a mobile connector (or any charger TWCManager does not control) gets its rate over BLE only; before v1.4.0 it got it from the Fleet API. If the BLE command fails, the Fleet API does not step in. To let the Fleet API carry the rate for such a car, use `api_only`. Under Charge Rate Control mode 2 (and mode 3 below 6 A), the TWC offers the car's share, not its maximum, until the car's rate is confirmed by a delivered command or a reading; a rate that cannot be delivered leaves the TWC enforcing the share.
 
 #### BLE retries
 

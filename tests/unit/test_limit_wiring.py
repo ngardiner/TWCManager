@@ -254,6 +254,21 @@ def test_a_restart_with_the_car_plugged_in_and_asleep_still_gets_the_policy_limi
     assert b.calls == [("wake", VIN, None), ("setChargeLimit", VIN, 70)]                         # a raise wakes over BLE, then sends
     assert m.heldLimits.get(VIN) == HeldLimit(100, 70)
     assert paidCalls(requests_mock) == [] and requests_mock.call_count == 0                     # presence cost nothing; Fleet/Owner never commanded
+    startAfterRaise(m, r)                                                                        # TeslaMate's "Complete" predates the raise (parity row 26)
+    i = b.calls.index(("startCharging", VIN, None)); assert [x[0] for x in b.calls].count("startCharging") == 1   # once, over BLE
+    assert b.calls[i - 1] == ("wake", VIN, None) and b.calls.index(("setChargeLimit", VIN, 70)) < i  # after the limit, with its wake
+    assert requests_mock.call_count == 0
+
+def startAfterRaise(m, r):
+    # The VIN-less Gen2 at 03 asks for a start; passes past the limit-then-start gap
+    s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; m.setMaxAmpsToDivideAmongSlaves(32); c = m.vehicleRegistry._clock
+    for _ in range(6): heartbeat(m, s, 0.0, state=0x03); c.t += 30; r.pass_()
+
+def test_a_complete_read_after_the_raise_still_satisfies_the_start(requests_mock):   # parity row 26
+    m, r, v, car = restarted(requests_mock); m.setPolicyLimit(70, transition=True); r.pass_()
+    m.vehicleRegistry._clock.t += 1; v.observe("chargingState", "Complete", "TeslaMateVehicle")   # read after our write: really complete
+    startAfterRaise(m, r)
+    assert "startCharging" not in [x[0] for x in prov(m, "TeslaBLE").calls] and requests_mock.call_count == 0
 
 def test_a_held_car_with_no_known_position_is_present(requests_mock):   # main's wasAtHome
     m, r, v, car = restarted(requests_mock, position=None)
@@ -282,7 +297,7 @@ def test_a_vinless_gen2_after_a_restart_is_an_anonymous_plug_session(requests_mo
     for _ in range(3): r.pass_()
     b = prov(m, "TeslaBLE")
     assert b.calls == [("wake", VIN, None), ("setChargeLimit", VIN, 70),                        # the limit first
-                       ("wake", VIN, None), ("setAmps", VIN, s.wiringMaxAmps)]                   # the BLE lift may wake the car, as main's; "Complete" satisfies the start
+                       ("wake", VIN, None), ("setAmps", VIN, s.wiringMaxAmps)]                   # the BLE lift may wake the car, as main's; the start waits out the limit gap
     assert requests_mock.call_count == 0
     v.observe("chargingState", "Disconnected", "TeslaMateVehicle")
     heartbeat(m, s, 0.0, state=0x00)                                                             # 00 and no car known plugged in: the session ends

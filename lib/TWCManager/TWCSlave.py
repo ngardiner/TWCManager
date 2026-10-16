@@ -5,7 +5,8 @@ import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
-from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED
+from TWCManager.Vehicle.Reconcile.Belief import known
+from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED, satisfied
 from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles, located
 from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 
@@ -157,6 +158,16 @@ class TWCSlave:
             d = self.master.desired.get(k, AMPS)
             if d is not None and d.by == "heartbeat":
                 self.master.desired.clearIf(k, AMPS, d.value)
+
+    def _carRateConfirmed(self):
+        # Every car carrying our rate believes it: a read, or a delivered write
+        keys = [self.vehicleKey] if getattr(self, "pointOwnsAmps", False) else []
+        reg, desired = self.master.vehicleRegistry, self.master.desired
+        for k in keys or self._ampsKeys:
+            d, v = desired.get(k, AMPS), reg.get(k)
+            if d is None or v is None or not satisfied(AMPS, d.value, known(v, AMPS)):
+                return False
+        return bool(keys or self._ampsKeys)
 
     def _queueChargeRate(self, amps):
         self._setCarAmps(amps, "heartbeat")
@@ -923,8 +934,7 @@ class TWCSlave:
         elif chargeRateControl == 2 or (
             chargeRateControl == 3 and desiredAmpsOffered < 6
         ):
-            # Control is given to the Tesla API to control Charge Rate
-            # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
+            # The car controls the charge rate
             self.APIcontrol = True
             self._resetVehicleRateRaised()
 
@@ -932,7 +942,12 @@ class TWCSlave:
             # value at most every 15 s and an unchanged one never again
             self._queueChargeRate(desiredAmpsOffered)
 
-            desiredAmpsOffered = self.wiringMaxAmps
+            # Its maximum only once the car's rate is confirmed: a rate that
+            # never lands leaves the TWC at the target (final review I1)
+            if self._carRateConfirmed():
+                desiredAmpsOffered = self.wiringMaxAmps
+            else:
+                desiredAmpsOffered = int(desiredAmpsOffered)
 
         else:
             # TWC is controlling the charge rate here. The car only ever
