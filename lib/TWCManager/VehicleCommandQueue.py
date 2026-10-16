@@ -23,6 +23,14 @@ from TWCManager.Logging.LoggerFactory import LoggerFactory
 logger = LoggerFactory.get_logger("VehicleCommandQueue", "Vehicle")
 
 
+def _frames(e):
+    # A traceback's locations alone: no message, no source text
+    return "\n".join(
+        "  %s:%d in %s" % (f.filename, f.lineno, f.name)
+        for f in traceback.extract_tb(e.__traceback__)
+    )
+
+
 class VehicleCommandQueue:
     MAX_PENDING = 64
 
@@ -63,10 +71,10 @@ class VehicleCommandQueue:
                 self._logFailure("lost callback", e)
 
     def _logFailure(self, what, e):
-        # The type name only at WARNING; the traceback, which may carry
-        # vehicle data, at DEBUG
+        # The type name only, at every level: an exception's text may carry
+        # a token. The DEBUG traceback is its frames alone
         logger.warning("%s %s raised %s", self.name, what, type(e).__name__)
-        logger.debug("%s %s traceback: %s", self.name, what, traceback.format_exc())
+        logger.debug("%s %s traceback:\n%s", self.name, what, _frames(e))
 
     def _deliver(self, entry, result):
         try:
@@ -227,13 +235,15 @@ class VehicleCommandQueue:
                 if entry is None:
                     return
                 self._runOne(entry)
-        except BaseException:
+        except BaseException as e:
+            # Logged, not re-raised: the thread's excepthook would print the
+            # exception's text, which may carry a token
             logger.error(
-                "Vehicle command worker thread %s exiting: %s",
+                "Vehicle command worker thread %s exiting: %s\n%s",
                 threading.current_thread().name,
-                traceback.format_exc(),
+                type(e).__name__,
+                _frames(e),
             )
-            raise
         finally:
             with self._cond:
                 self._live = False
