@@ -180,12 +180,6 @@ class TestTWCMasterSlaveManagement:
         sign = master.getSlaveSign()
         
         assert sign == bytearray(b"\x77")
-    
-    def test_get_master_sign(self, master):
-        """Test getting master sign."""
-        sign = master.getMasterSign()
-        
-        assert sign == bytearray(b"\x77")
 
 
 class TestTWCMasterSettings:

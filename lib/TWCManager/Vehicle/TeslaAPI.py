@@ -738,14 +738,6 @@ class TeslaAPI:
         self._wallConnectorSitesDropped[slot.kind] = set()
         return sites
 
-    def energySites(self, slot=None) -> List[dict]:
-        # The /products entries with an energy_site_id; [] on failure
-        slot = slot or self.slotFor("energy")
-        if slot is None:
-            return []
-        sites = self._fetchEnergySites(slot)
-        return [] if sites is None else list(sites)
-
     def wallConnectorVinsReady(self, slot) -> bool:
         # Cache reads only, no I/O (a provider's ready() asks this). The
         # scope is checked first: usable() would log a missing one, and this
@@ -1402,8 +1394,8 @@ class TeslaAPI:
         # "only available on fleetapi" (the Owner API no longer takes
         # commands). Stops Owner API commands to it until TWCManager
         # restarts, and logs that once. Records no API error, which would
-        # also back off reads; the caller returns its failure, so
-        # VehiclePriority tries the next module.
+        # also back off reads; the caller returns its failure, so the next
+        # provider is tried.
         if req is None:
             return False
         text = str(getattr(req, "text", "") or "")
@@ -1876,12 +1868,6 @@ class CarApiVehicle:
         if age is not None and age <= self.syncTimeout:
             return obs.source
         return "TeslaAPI"
-
-    @property
-    def syncTimestamp(self):
-        vehicle = self._liveVehicle()
-        obs = vehicle.latest("state") if vehicle is not None else None
-        return obs.at if obs is not None else 0
 
     def ready(self):
         if self.carapi.getCarApiRetryRemaining(self):

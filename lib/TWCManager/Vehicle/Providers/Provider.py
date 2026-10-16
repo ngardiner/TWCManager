@@ -23,21 +23,14 @@ def commandMethod(capability) -> str:
 class Provider:
     name: str = ""
     # Fixed tie-break inside a cost tier: Gen2TWC 0, Gen3TWC 1, TeslaBLE 2,
-    # telemetry 3, OwnerAPI 4, FleetAPI 5, HomeAssistant 6, anything else 100
+    # OwnerAPI 4, FleetAPI 5, HomeAssistant 6, anything else 100
     rank: int = 100
     local: bool = False
     # The attempt worker its commands run on: "ble", "cloud", or "local"
     # (no I/O, run inline on the caller's thread)
     worker: str = "cloud"
-    # True when the provider's endpoints share one actuator, as Gen3 units on
-    # one Neurio bus do
-    sharedControl: bool = False
-    # The legacy Vehicle module the facade calls; None for no module
+    # The Vehicle module behind the provider; None for none
     module = None
-    # The registry attachment holding the legacy module's own vehicle
-    # object, when that module takes its own type (HomeAssistant's HaVehicle)
-    # rather than the TeslaAPI vehicle the callers pass; None to pass through
-    vehicleAttachment = None
 
     # What the provider can do, at what cost and how often
     DECLARATIONS: Dict[str, Declaration] = {}
@@ -103,20 +96,6 @@ class Provider:
         # A vehicle-less gate the order applies to every walk, so a broadcast
         # never reaches a provider that cannot command at all
         return True
-
-    def summary(self, vehicle) -> dict:
-        return {
-            "name": self.name,
-            "local": self.local,
-            "capabilities": {
-                capability: {
-                    "tier": declaration.cost.tier,
-                    "price": declaration.cost.price,
-                    "ready": self.ready(vehicle, capability),
-                }
-                for capability, declaration in self.declarations().items()
-            },
-        }
 
 
 def suppressedFor(provider, condition) -> FrozenSet[str]:

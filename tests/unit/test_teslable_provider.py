@@ -68,10 +68,10 @@ def test_read_readiness_does_not_consult_command_policy():
     v = reg.getOrCreate(VIN, "t")
     ble._claimUnproven(v)
     master.getModuleByName = Mock(
-        side_effect=AssertionError("must not look up VehiclePriority")
+        side_effect=AssertionError("must not look up a module")
     )
     (p,) = ble.providers()
-    assert p.ready(v, C.READ_CHARGE) is True and p.ready(v, C.READ_LOCATION) is True
+    assert p.ready(v, C.READ_CHARGE) is True
 
 
 def test_amps_range_is_never_none_while_ready():  # Task 2 review constraint

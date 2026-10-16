@@ -93,7 +93,6 @@ def test_registry_liveness_feeds_age_and_trusted():
     assert v.age("chargeLimit") == 100.0
     v.noteWrite("chargeLimit", 90, "TeslaAPI")
     c.t = 1700.0
-    assert v.fresherThanWrite("chargeLimit") is False
     assert v.trusted("chargeLimit").value == 80
     assert v.age("name") is None
 

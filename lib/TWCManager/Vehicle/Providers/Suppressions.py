@@ -74,10 +74,6 @@ class Suppressions:
             return "prefer_ble"
         return policy
 
-    @property
-    def commandPolicyOverridden(self) -> bool:
-        return bool(self.configPolicy)
-
     def explicit(self) -> Dict[str, FrozenSet[str]]:
         settings = getattr(self.master, "settings", None) or {}
         merged = _parse(settings.get("providerSuppressions"), "settings")
