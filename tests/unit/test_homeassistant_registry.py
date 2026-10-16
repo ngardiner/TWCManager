@@ -217,3 +217,31 @@ def test_fetch_without_an_attachment_reads_nothing():  # 13b M3
     ha, reg = make_ha()
     (p,) = ha.providers()
     assert p.fetch(reg.getOrCreate(VIN, "t"), "batteryLevel") is False
+
+
+def test_ha_logs_name_the_host_never_the_url_or_exception_text(caplog):
+    # Final review M8: a URL can carry userinfo or a query token
+    import logging
+
+    import requests
+
+    secret = "http://user:s3cret@ha.local:8123/?token=t0ken"
+    master = Mock(vehicleRegistry=VehicleRegistry({}))
+    master.config = {
+        "config": {},
+        "vehicle": {
+            "HomeAssistant": {"enabled": True, "url": secret, "longLivedToken": "x" * 40}
+        },
+    }
+    caplog.set_level(logging.DEBUG)
+    for error in (requests.exceptions.ConnectionError(secret), ValueError(secret)):
+        with patch("TWCManager.Vehicle.HomeAssistant.requests.Session") as S:
+            S.return_value.get.side_effect = error
+            HomeAssistant(master)
+    ha, reg = make_ha()
+    ha._session = Mock()
+    ha._session.get.side_effect = requests.exceptions.ConnectionError(secret)
+    ha.entity_ids = {}
+    ha._get_state("sensor.x")
+    assert "ha.local" in caplog.text
+    assert "s3cret" not in caplog.text and "t0ken" not in caplog.text
