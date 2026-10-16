@@ -136,6 +136,8 @@ def _restoreDeparted(master, read) -> None:
             if api.syncSource == "TeslaAPI":
                 api.update_location(0)
         fix, write = vehicle.latest("lat"), vehicle.lastWrite("chargeLimit")
+        # <= on purpose: a retained MQTT position redelivered after our write
+        # is stamped with that write's time, and is not a new fix
         stale = fix is not None and write is not None and fix.at <= write.at
         if stale or _present(master, vehicle):
             continue
