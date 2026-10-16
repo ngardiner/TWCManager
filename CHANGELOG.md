@@ -92,7 +92,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: Don't resend an unchanged Fleet API charge rate, and time out the request after 10s (#694)
     * (@MikeBishop) - Fix: Refresh Owner API tokens with client_id ownerapi at auth.tesla.com, as 1.3.3 does (#687)
     * (@MikeBishop) - Fix: A rejected pasted refresh token keeps the previous tokens, and a 401 on refresh clears the token type (#687)
-    * (@MikeBishop) - Fix: Allow Owner API commands per vehicle when Tesla reports `command_signing: off`; other vehicles stay read-only. They take the Fleet API's place in the command order and are used only when no Fleet API token can command (#659)
+    * (@MikeBishop) - Fix: Allow Owner API commands per vehicle when Tesla reports `command_signing: off`; other vehicles stay read-only. They sit just ahead of the Fleet API in the command order, so with both tokens such a vehicle's commands go to the free Owner API, and to the Fleet API once Tesla refuses them (#659)
 
 ## v1.3.4 - 2026-04-24
 * Features

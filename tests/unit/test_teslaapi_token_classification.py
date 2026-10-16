@@ -126,8 +126,12 @@ class TestUnknownToken:
         assert api.slotFor("read") is None and api.slotFor("command") is None
         assert api.is_awake(vehicle) is False
         refused = Outcome(REFUSED, "no command token")
-        assert api.wakeOutcome(vehicle) == refused
-        assert api.command(vehicle, "set_charging_amps", {"charging_amps": 10}) == refused
+        for slot in (api.ownerSlot, api.fleetSlot):
+            assert api.wakeOutcome(vehicle, slot=slot) == refused
+            assert (
+                api.command(vehicle, "set_charging_amps", {"charging_amps": 10}, slot=slot)
+                == refused
+            )
 
         assert any_call.call_count == 0
         assert api.getCarApiLastErrorTime() == 0
