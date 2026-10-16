@@ -227,3 +227,32 @@ def test_every_path_classifies_status_codes(path, status, requests_mock, caplog)
     assert all(r.timeout == TIMEOUTS[path] for r in hit.request_history)
     for secret in (old, new, REFRESH):
         assert secret not in caplog.text
+
+
+def test_a_wake_answering_online_refreshes_the_online_cache(requests_mock, monkeypatch):
+    # The wake's "online" replaces a cached "asleep" for the next 120 s: the
+    # free check is not asked again
+    import TWCManager.Vehicle.TeslaAPI as T
+    from TWCManager.Vehicle.Reconcile.Outcome import DONE
+    from tests.unit.reconcile_helpers import Clock
+    from tests.unit.teslatokens import add_home_vehicle, new_api
+
+    monkeypatch.setattr(T.time, "sleep", Mock())
+    clk = Clock(5000.0)
+    api = new_api()
+    api.storeToken(fleet_token())
+    api.now, api.wakeDelayMins = clk, 0
+    car = add_home_vehicle(api)
+    check = requests_mock.get(
+        FLEET_NA_URL + "/" + HOME_VIN, json={"response": {"state": "asleep"}}
+    )
+    wake = requests_mock.post(
+        FLEET_NA_URL + "/" + HOME_VIN + "/wake_up",
+        json={"response": {"state": "online"}},
+    )
+    assert car.is_awake() is False and check.call_count == 1
+    clk.t += 100
+    assert api.wakeOutcome(car).kind == DONE and wake.call_count == 1
+    clk.t += 50  # 150 s after the check, 50 s after the wake
+    assert car.is_awake() is True and check.call_count == 1
+    assert wake.last_request.timeout == 10
