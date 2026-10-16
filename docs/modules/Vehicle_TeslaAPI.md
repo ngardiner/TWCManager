@@ -155,9 +155,17 @@ TWCManager decides this per vehicle, so one account can have a vehicle it comman
 a vehicle it only reads. For a read-only vehicle, TeslaAPI sends no command and records
 no API error, and the next vehicle module (such as TeslaBLE) is tried.
 
-If Tesla still refuses an Owner API command (HTTP 403) for a vehicle that reported
-`"off"`, TWCManager treats that vehicle as read-only until it restarts and logs a
-warning. This does not pause reads.
+If Tesla still refuses an Owner API command for a vehicle that reported `"off"`,
+TWCManager treats that vehicle as read-only until it restarts and logs a warning
+naming the cause:
+
+- HTTP 403, or a response naming the Vehicle Command Protocol: the vehicle needs
+  signed commands after all.
+- HTTP 410 or 412, or a response saying the endpoint is "only available on
+  fleetapi": the Owner API no longer takes commands for it.
+
+Either way, reads continue, no API error is recorded (so there is no error backoff),
+and the command falls through to the next vehicle module.
 
 When you also hold a Fleet API token that can send commands, commands go through the
 Fleet API (and the proxy, if set) for every vehicle, as before. The Owner API token
