@@ -10,7 +10,6 @@ import inspect
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Reconcile.Run import entryKey, runAttempt
-from TWCManager.Vehicle.Registry.ReadSource import ReadSource
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 from tests.unit.reconcile_helpers import ScriptedProvider, entries, inline, make_order
 VIN = "5YJ3E1EA1KF000001"
@@ -47,12 +46,6 @@ def submit(r, a):
 def pending(r): return len(entries(r.ble)) + len(entries(r.cloud))
 
 def kinds(reports): return [r[1] for r in reports]
-
-class Src(ReadSource):
-    def __init__(self, name, provider, value, field="chargeLimit"):
-        self.name, self.provider, self.value, self.field, self.fetched = name, provider, value, field, 0; self.fields = frozenset({field})
-    def canRead(self, vehicle): return True
-    def fetch(self, vehicle, field, allowWake): self.fetched += 1; vehicle.observe(self.field, self.value, self.name); return {self.field: self.value}
 
 def test_worker_follows_the_provider_s_worker_attribute():
     b = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.DONE)]); f = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)])
@@ -272,11 +265,13 @@ def test_errors_log_type_names_only_and_warn_once(caplog):
     assert [r[1:] for r in reports] == [(O.ERROR, "bad return dict")] * 2 + [(O.ERROR, "RuntimeError")]
     assert "secret-token" not in caplog.text and len([r for r in caplog.records if "bad return" in r.getMessage() and r.levelno == logging.WARNING]) == 1
 
-def test_read_before_write_uses_only_the_lane_s_own_sources():
-    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, r, reports = setup(p, ScriptedProvider("TeslaBLE", 2, True, []))
-    ble, other = Src("TeslaBLE", "TeslaBLE", 80), Src("TeslaMate", "Unregistered", 70)                   # an unregistered provider counts as cloud
-    m.vehicleRegistry.registerReadSource(ble); m.vehicleRegistry.registerReadSource(other)
-    submit(r, attempt(provider="FleetAPI", maxAge=300)); assert ble.fetched == 0 and other.fetched == 1 and p.calls == [("setChargeLimit", VIN, 80)] and kinds(reports) == [O.DONE]
+def test_read_before_write_uses_only_the_lane_s_own_providers():
+    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)])
+    ble = ScriptedProvider("TeslaBLE", 2, True, []).reads(80)                                          # cheapest, but on the BLE worker
+    custom = ScriptedProvider("Custom", 3, False, [], worker="ble").reads(75)                         # the worker attribute decides, not the name
+    owner = ScriptedProvider("OwnerAPI", 4, False, []).reads(70)
+    m, r, reports = setup(p, ble, custom, owner)
+    submit(r, attempt(provider="FleetAPI", maxAge=300)); assert (ble.fetched, custom.fetched, owner.fetched) == (0, 0, 1) and p.calls == [("setChargeLimit", VIN, 80)] and kinds(reports) == [O.DONE]
 
 def test_satisfied_limit_from_the_provider_is_stamped_and_no_vehicle_is_an_error():
     p = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.SATISFIED, "already")]); m, r, reports = setup(p)
@@ -342,7 +337,7 @@ def test_an_inline_lane_is_busy_while_it_runs():                        # M3
 def test_an_attempt_whose_desire_changed_is_cancelled_before_any_read():   # pre-flight M7
     gate = threading.Event(); f = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); gated(f, gate)
     m, r, reports, done = threaded(f); q = r.cloud
-    src = Src("FleetAPI", "FleetAPI", "Stopped", field="chargingState"); m.vehicleRegistry.registerReadSource(src)
+    src = f.reads("Stopped", field="chargingState")
     m.desired.set(VIN, CHARGING, True, "test")
     try:
         submit(r, one_shot(C.WAKE, "FleetAPI")); assert wait_for(lambda: q._busy)

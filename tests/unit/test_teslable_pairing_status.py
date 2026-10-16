@@ -77,12 +77,10 @@ def test_charge_read_reports_the_cars_own_ac_maximum():
     )
     state = ble.get_charge_state(VIN)
     assert state["availableCurrent"] == 6 and state["chargeCurrentRequestMax"] == 48
-    assert (
-        ble.readSource.fetch(reg.getOrCreate(VIN, "t"), "chargingState", False)[
-            "chargeCurrentRequestMax"
-        ]
-        == 48
-    )
+    (p,) = ble.providers()
+    v = reg.getOrCreate(VIN, "t")
+    p.fetch(v, "chargingState")
+    assert v.value("chargeCurrentRequestMax") == 48
 
 
 def test_update_settings_reclaims_paired_vins():
@@ -320,7 +318,10 @@ def test_new_record_created_for_unknown_vin():
 
 
 def test_claimed_vin_reads_from_ble_first():
+    from tests.unit.teslatokens import wire_reads
+
     ble, reg, master = make()
+    wire_reads(reg, *ble.providers())
     master.getModuleByName = Mock(return_value=None)
     ble.scanForVehicles = Mock()
     ble.updateSettings()

@@ -1,6 +1,5 @@
 # The vocabulary a provider declares itself in: what it can do, what each
-# operation costs, and how often it may be asked. Nothing here imports the
-# Registry package, so ReadSource can stay import-free of providers.
+# operation costs, and how often it may be asked. It imports nothing.
 from typing import NamedTuple, Optional
 
 # Reads
@@ -13,6 +12,24 @@ READ_VIN = "readVin"
 READ_AMPS = "readAmps"
 # An energy-site read: which VIN each Wall Connector on the account reports
 READ_WALL_CONNECTOR_VINS = "wallConnectorVins"
+
+# The registry fields a READ_CHARGE / READ_LOCATION fetch can fill
+CHARGE_FIELDS = frozenset(
+    {
+        "batteryLevel",
+        "chargeLimit",
+        "chargingState",
+        "availableCurrent",
+        "chargeCurrentRequest",
+        "actualCurrent",
+        "voltage",
+        "phases",
+        "scheduledChargingPending",
+        "timeToFullCharge",
+        "chargeCurrentRequestMax",
+    }
+)
+LOCATION_FIELDS = frozenset({"lat", "lon", "gpsAsOf"})
 
 # Commands
 SET_CHARGE_LIMIT = "setChargeLimit"

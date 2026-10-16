@@ -6,7 +6,6 @@ import time
 from typing import Any, Callable, Collection, Dict, List, Optional, Union
 
 from .Fields import NOT_TRACKED, FieldStore, Observation
-from .ReadSource import cascade
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 
@@ -173,13 +172,13 @@ class Vehicle:
         field: str,
         maxAge: Optional[float],
         allowWake: bool = False,
-        sources: Optional[Collection[Any]] = None,
+        providers: Optional[Collection[Any]] = None,
         force: bool = False,
     ) -> Optional[Observation]:
-        # sources (ReadSource objects or names) limits the cascade to those
-        # sources, in registry order. force skips the freshness check: a live
-        # report-on-change feed keeps age() at 0, which a restore must not
-        # trust. maxAge None still never fetches.
+        # providers (Provider objects or names) limits the provider order's
+        # read cascade to those, in cost order. force skips the freshness
+        # check: a live report-on-change feed keeps age() at 0, which a
+        # restore must not trust. maxAge None still never fetches.
         latest = self.latest(field)
         if maxAge is None or self._registry is None:
             return latest
@@ -189,11 +188,9 @@ class Vehicle:
             # not fresh: it may predate the write.
             if age is not None and age <= maxAge and self.trusted(field):
                 return latest
-        order = self._registry.readSources()
-        if sources is not None:
-            order = [s for s in order if s in sources or s.name in sources]
-        # No lock is held here: sources may do I/O.
-        got = cascade(self, order, field, allowWake)
+        order = getattr(self._registry, "providerOrder", None)
+        # No lock is held here: providers may do I/O.
+        got = order.read(self, field, allowWake, providers) if order else None
         return got if got is not None else self.latest(field)
 
     # Claims and tier

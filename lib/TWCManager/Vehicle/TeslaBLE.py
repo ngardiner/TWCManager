@@ -25,7 +25,6 @@ from TWCManager.Vehicle.Reconcile.Outcome import (
     UNREACHABLE,
     Outcome,
 )
-from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource
 from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
@@ -97,8 +96,6 @@ class TeslaBLE:
 
     def __init__(self, master):
         self.registry = VehicleRegistry.forMaster(master)
-        # Set once the binary is found; the provider reads through it
-        self.readSource = None
         self._bleLock = threading.Lock()
         # Last pairing attempt per VIN: transient, for the vehicle page.
         self._pairingAttempts = {}
@@ -173,10 +170,6 @@ class TeslaBLE:
             return
         else:
             logger.info(f"tesla-control binary found at: {self.binaryPath}")
-
-        # Reads cascade BLE first (local and free), then the cloud.
-        self.readSource = TeslaBLEReadSource(self, master)
-        self.registry.registerReadSource(self.readSource)
 
     def providers(self):
         return [TeslaBLEProvider(self, self.master)]

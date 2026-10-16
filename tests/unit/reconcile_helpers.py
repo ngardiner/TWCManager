@@ -72,6 +72,19 @@ class ScriptedProvider(Provider):
     def ampsRange(self, vehicle):
         return self._amps
 
+    def reads(self, value, field="chargeLimit", cost=None):
+        # Makes the provider fetch field as value (READ_CHARGE, at its own
+        # locality's free tier unless cost says otherwise), counting fetches
+        cost = cost or (C.LOCAL if self.local else C.CLOUD_FREE)
+        self._caps = dict(self._caps, **{C.READ_CHARGE: C.Declaration(cost)})
+        self.FIELDS, self.readValue, self.fetched = frozenset({field}), value, 0
+        return self
+
+    def fetch(self, vehicle, field, allowWake=False):
+        self.fetched += 1
+        vehicle.observe(field, self.readValue, self.name)
+        return True
+
     def _next(self, method, vin, value) -> Outcome:
         self.calls.append((method, vin, value))
         if not self.outcomes:
@@ -104,7 +117,7 @@ def make_order(settings=None, *providers):
     # No reconciler until a test makes one: a plain Mock would take the debug
     # page's one-shots
     del m.reconciler
-    o = ProviderOrder(m)
+    o = m.vehicleRegistry.providerOrder = ProviderOrder(m)
     for p in providers:
         o.register(p)
     return m, o

@@ -5,18 +5,13 @@
 import json
 import logging
 import time
-from typing import List, Optional
+from typing import Collection, List, Optional
 
-from ..Registry.ReadSource import ReadSource
-from .Capability import READ_CHARGE, READS, SET_AMPS, TIER_BILLED, WAKE
+from .Capability import READ_CHARGE, SET_AMPS, TIER_BILLED, WAKE
 from .Provider import Provider
 from .Suppressions import Suppressions
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Providers")
-
-# Where a read source with no registered provider sorts
-UNKNOWN_TIER = 9
-UNKNOWN_RANK = 999
 
 
 class ProviderOrder:
@@ -109,22 +104,34 @@ class ProviderOrder:
                 found = [p for p in found if p.cost(capability).tier < TIER_BILLED]
         return found
 
-    def orderReadSources(self, sources: List[ReadSource]) -> List[ReadSource]:
-        keyed = []
-        for index, source in enumerate(sources):
-            p = self.provider(getattr(source, "provider", ""))
-            if p is None:
-                tier, rank = UNKNOWN_TIER, UNKNOWN_RANK
-            else:
-                if self.suppressions.suppressed(p, READ_CHARGE):
-                    continue
-                tier = min(
-                    (d.cost.tier for c, d in p.declarations().items() if c in READS),
-                    default=UNKNOWN_TIER,
-                )
-                rank = p.rank
-            keyed.append(((tier, rank, getattr(source, "order", 0), index), source))
-        return [s for _, s in sorted(keyed, key=lambda e: e[0])]
+    def read(
+        self,
+        vehicle,
+        field: str,
+        allowWake: bool = False,
+        providers: Optional[Collection] = None,
+    ):
+        """The registry's read cascade: the providers that fetch field,
+        cheapest first; providers (objects or names) limits it to those.
+        Readiness is asked just before each fetch, since one fetch can change
+        the next one's: a refused Owner read hands reads to Fleet. A raising
+        fetch counts as failed and logs only its exception type. Called with
+        no lock held: fetches do I/O."""
+        for p in self.ordered(READ_CHARGE):
+            if field not in p.FIELDS:
+                continue
+            if providers is not None and p not in providers and p.name not in providers:
+                continue
+            if not self._ready(p, vehicle, READ_CHARGE):
+                continue
+            try:
+                fetched = p.fetch(vehicle, field, allowWake)
+            except Exception as e:
+                logger.debug("%s read of %s raised %s", p.name, field, type(e).__name__)
+                continue
+            if fetched and vehicle.latest(field) is not None:
+                return vehicle.latest(field)
+        return None
 
     def debugCommand(self, command: str, vin: str, parameters: str) -> bool:
         """The debug page's /api/sendTeslaAPICommand: one one-shot attempt
@@ -191,7 +198,7 @@ def registerProviders(master) -> List[str]:
     # Called from TWCManager.py after the module-load loop
     for mod in master.getModulesByType("Vehicle"):
         # One module's failure must not stop the others, or startup. Visible:
-        # a skipped TeslaBLE leaves its read source unsuppressed under api_only
+        # a skipped module neither reads nor commands
         try:
             for provider in getattr(mod["ref"], "providers", lambda: [])():
                 master.providerOrder.register(provider)

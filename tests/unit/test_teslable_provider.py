@@ -63,14 +63,15 @@ def test_commands_call_the_module_by_vin():
     ble.sendCommand.assert_called_once_with(VIN, "wake")
 
 
-def test_read_source_no_longer_consults_command_policy():
+def test_read_readiness_does_not_consult_command_policy():
     ble, reg, master = make()
     v = reg.getOrCreate(VIN, "t")
     ble._claimUnproven(v)
     master.getModuleByName = Mock(
         side_effect=AssertionError("must not look up VehiclePriority")
     )
-    assert ble.readSource.canRead(v) is True and ble.readSource.provider == "TeslaBLE"
+    (p,) = ble.providers()
+    assert p.ready(v, C.READ_CHARGE) is True and p.ready(v, C.READ_LOCATION) is True
 
 
 def test_amps_range_is_never_none_while_ready():  # Task 2 review constraint
@@ -88,11 +89,11 @@ def test_amps_range_is_never_none_while_ready():  # Task 2 review constraint
     assert p.ampsRange(v) == (1, 32)
 
 
-def test_read_source_orders_at_the_local_tier():
+def test_reads_order_at_the_local_tier():
     ble, reg, master = make()
     master.settings = {}
     o = ProviderOrder(master)
     for p in ble.providers():
         o.register(p)
-    other = Mock(provider="", order=0)
-    assert o.orderReadSources([other, ble.readSource]) == [ble.readSource, other]
+    (p,) = o.ordered(C.READ_CHARGE)
+    assert p.name == "TeslaBLE" and p.cost(C.READ_CHARGE) == C.LOCAL
