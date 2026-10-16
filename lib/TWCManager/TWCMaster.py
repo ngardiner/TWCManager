@@ -16,11 +16,14 @@ import requests
 import bisect
 import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 from TWCManager.Vehicle.Registry import VehicleRegistry
 from TWCManager.Vehicle.Providers import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
-from TWCManager.Vehicle.Providers.Capability import START_CHARGING, STOP_CHARGING
+from TWCManager.Vehicle.Providers.Capability import (
+    READ_CHARGE,
+    START_CHARGING,
+    STOP_CHARGING,
+)
 from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler, newerReading
@@ -82,7 +85,6 @@ class TWCMaster:
     )
     slaveTWCs = {}
     slaveTWCRoundRobin = []
-    stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
     stopTimeout = datetime.max
     spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
@@ -112,10 +114,6 @@ class TWCMaster:
         self.modules = {}
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
-        self.stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
-        self.vehicleCommandQueue = VehicleCommandQueue(
-            self._resolveVehicleCommandModule
-        )
         # Guards mutation of self.settings from non-serial threads; saves
         # serialise under it and write the file outside it. Lock order:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
@@ -186,16 +184,6 @@ class TWCMaster:
             )
         except ValueError as e:
             logger.debug("Exception in advanceHistorySnap: " + str(e))
-
-    def calculateModulePriority(self, type, name):
-        # Currently implements a static priority for Vehicle modules, can be dynamic in future
-        if type == "Vehicle":
-            if name == "TeslaBLE":
-                return 20
-            if name == "TeslaAPI":
-                return 10
-        else:
-            return 0
 
     def cancelStopCarsCharging(self, vin=None):
         # Drops a stop not yet delivered: the desire and any queued attempt.
@@ -501,42 +489,32 @@ class TWCMaster:
         # If no enabled() method, assume module is usable
         return ref
 
-    def getModuleByPriority(self, type, priority):
-        # Takes a priority, finds the next lowest priority module
-        # Returns this module and associated priority
-
-        modules_matched = self.getModulesByType(type)
-        high_pri = 0
-        high_ref = None
-        high_name = ""
-
-        for module in modules_matched:
+    def updateChargeAtHome(self):
+        # checkCharge: each vehicle module with a provider not suppressed
+        # for reads refreshes its cars at home, once (TeslaAPI's also loads
+        # its vehicle list)
+        order, seen = self.providerOrder, set()
+        for p in order.providers():
+            module = p.module
             if (
-                module["priority"]
-                and module["priority"] < priority
-                and module["priority"] > high_pri
+                module is None
+                or id(module) in seen
+                or order.suppressions.suppressed(p, READ_CHARGE)
+                or not p.available(READ_CHARGE)
             ):
-                high_pri = module["priority"]
-                high_ref = module["ref"]
-                high_name = module["name"]
-
-        self.stats["moduleDispatch"][high_name] = (
-            self.stats["moduleDispatch"].get(high_name, 0) + 1
-        )
-        return high_name, high_ref, high_pri
+                continue
+            seen.add(id(module))
+            try:
+                getattr(module, "updateChargeAtHome", lambda: None)()
+            except Exception as e:
+                logger.warning("%s charge refresh raised %s", p.name, type(e).__name__)
 
     def getModulesByType(self, type):
         matched = []
         for module in self.modules:
             modinfo = self.modules[module]
             if modinfo["type"] == type:
-                matched.append(
-                    {
-                        "name": module,
-                        "ref": modinfo["ref"],
-                        "priority": modinfo["priority"],
-                    }
-                )
+                matched.append({"name": module, "ref": modinfo["ref"]})
         return matched
 
     def getAllEVSEs(self) -> list:
@@ -1398,20 +1376,6 @@ class TWCMaster:
         # Queue the task to be handled by background_tasks_thread.
         self.backgroundTasksQueue.put(task)
 
-    def queue_vehicle_command(self, task, callback=None):
-        # Hand a vehicle command to the vehicle command worker. Returns
-        # immediately; callback(result) runs on the worker when done.
-        self.vehicleCommandQueue.put(task, callback)
-
-    def _resolveVehicleCommandModule(self):
-        # Preference order: VehiclePriority (priority/fallback proxy), then
-        # HomeAssistant, TeslaBLE, TeslaAPI.
-        for name in ("VehiclePriority", "HomeAssistant", "TeslaBLE", "TeslaAPI"):
-            module = self.getModuleByName(name)
-            if module:
-                return module
-        return None
-
     def registerModule(self, module):
         # This function is used during module instantiation to either reference a
         # previously loaded module, or to instantiate a module for the first time
@@ -1439,12 +1403,6 @@ class TWCMaster:
                         "ref": module["ref"],
                         "type": module["type"],
                     }
-                    # Assign a module priority where a module meets certain criteria
-                    # The intention of this is to allow us to prioritise local vehicle control
-                    # over API control going forward, with a uniform interface to do os
-                    self.modules[module["name"]]["priority"] = (
-                        self.calculateModulePriority(module["type"], module["name"])
-                    )
             else:
                 logger.log(
                     logging.INFO7,

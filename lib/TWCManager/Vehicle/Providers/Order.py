@@ -5,9 +5,8 @@
 import json
 import logging
 import time
-from typing import Any, Callable, List, Optional
+from typing import List, Optional
 
-from ..Reconcile.Outcome import SETTLED, isOutcome
 from ..Registry.ReadSource import ReadSource
 from .Capability import READ_CHARGE, READS, SET_AMPS, TIER_BILLED, WAKE
 from .Provider import Provider
@@ -85,10 +84,9 @@ class ProviderOrder:
         amps: Optional[float] = None,
         localRule: bool = True,
     ) -> List[Provider]:
-        # localRule False: readiness only. A vehicle-rate change (the
-        # facade's setChargeRate, the debug page) must reach the car even
-        # where the TWC covers the rate, since the TWC cannot lift the car's
-        # own current limit (#660)
+        # localRule False: readiness only. A lift or the debug page's rate
+        # must reach the car even where the TWC covers the rate, since the
+        # TWC cannot lift the car's own current limit (#660)
         found = [
             p for p in self.ordered(capability) if self._ready(p, vehicle, capability)
         ]
@@ -126,41 +124,6 @@ class ProviderOrder:
                 rank = p.rank
             keyed.append(((tier, rank, getattr(source, "order", 0), index), source))
         return [s for _, s in sorted(keyed, key=lambda e: e[0])]
-
-    def _count(self, kind, name) -> None:
-        stats = getattr(self.master, "stats", None)
-        if isinstance(stats, dict):
-            counts = stats.setdefault(kind, {})
-            counts[name] = counts.get(name, 0) + 1
-
-    def dispatch(
-        self,
-        vehicle,
-        capability,
-        call: Callable[[Provider], Any],
-        amps=None,
-        attempts: Optional[int] = None,
-        localRule: bool = True,
-    ) -> Any:
-        # attempts overrides each provider's own count (the debug API: one)
-        for p in self.candidates(vehicle, capability, amps, localRule):
-            if p.module is None:
-                # The TWC providers: a dispatched command runs off the main
-                # loop and must not write a TWC target; the distributor owns it
-                continue
-            for _ in range(attempts or p.attempts()):
-                try:
-                    result = call(p)
-                except Exception as e:
-                    logger.debug(
-                        "%s %s raised %s", p.name, capability, type(e).__name__
-                    )
-                    continue
-                if _succeeded(result):
-                    self._count("moduleSuccess", p.name)
-                    return result
-            self._count("moduleFailures", p.name)
-        return False
 
     def debugCommand(self, command: str, vin: str, parameters: str) -> bool:
         """The debug page's /api/sendTeslaAPICommand: one one-shot attempt
@@ -221,14 +184,6 @@ class ProviderOrder:
             since=time.time(),
         )
         return bool(reconciler.submit(attempt))
-
-
-def _succeeded(result) -> bool:
-    # An Outcome is always truthy: read its kind. A legacy return keeps
-    # today's truthiness rule until the facade goes
-    if isOutcome(result):
-        return result.kind in SETTLED
-    return bool(result) and result != "error"
 
 
 def registerProviders(master) -> List[str]:

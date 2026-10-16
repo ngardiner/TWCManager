@@ -50,13 +50,6 @@ def test_mode_3_stop_is_sent_by_the_heartbeat_not_the_caller():
     drive(m, s, amps_actual=12.0)                                                                         # the serial thread's own heartbeat
     m.sendStopCommand.assert_called_once_with(s.TWCID); assert not s.stopRequested
 
-def test_dispatch_reads_outcomes_until_the_facade_goes():
-    m, s = make_gen2(); v = m.vehicleRegistry.getOrCreate(VIN, "t")
-    a = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.UNREACHABLE)]); b = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)], tier=C.FLEET_COMMAND)
-    m.providerOrder.register(a); m.providerOrder.register(b)
-    assert m.providerOrder.dispatch(v, C.SET_AMPS, lambda p: p.setAmps(VIN, 10), amps=10, localRule=False).kind == O.DONE and len(a.calls) == 3 and len(b.calls) == 1
-
-
 # --- Fix round 1 ---
 import logging
 from TWCManager.Vehicle import TeslaBLE as bleModule

@@ -14,6 +14,8 @@ import logging
 import pytest
 import requests_mock as rm
 
+from TWCManager.Vehicle.Reconcile.Outcome import REFUSED, Outcome
+
 from tests.unit.teslatokens import (
     add_home_vehicle,
     fleet_token,
@@ -123,8 +125,9 @@ class TestUnknownToken:
 
         assert api.slotFor("read") is None and api.slotFor("command") is None
         assert vehicle.is_awake() is False
-        assert api.wakeVehicle(vehicle) is False
-        assert api.setChargeRate(10, vehicle) is False
+        refused = Outcome(REFUSED, "no command token")
+        assert api.wakeOutcome(vehicle) == refused
+        assert api.command(vehicle, "set_charging_amps", {"charging_amps": 10}) == refused
 
         assert any_call.call_count == 0
         assert api.getCarApiLastErrorTime() == 0
