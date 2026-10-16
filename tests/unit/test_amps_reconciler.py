@@ -58,6 +58,10 @@ def test_mode_3_floor_is_the_heartbeats_handoff_not_a_lower_twc_minimum():
     pt.setTargetPower(5.5 * 240)                                                           # below 6 A: the car carries, the TWC holds 6, never 5
     assert s._evseTargetAmps == 6 and m.desired.get(VIN, AMPS).value == 5
 
+def test_mode_2_twc_target_never_drops_below_the_floor():
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); pt, s = point(m, v, 2); pt.setTargetPower(5 * 240)
+    assert s._evseTargetAmps == 6 and m.desired.get(VIN, AMPS).value == 5               # the car carries 5 A; the TWC is never handed a sub-minimum (zeroing) offer
+
 def test_mode_2_car_carries_and_the_twc_offers_its_max():
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); pt, s = point(m, v, 2); pt.setTargetPower(10 * 240)
     assert s._evseTargetAmps == 10 and m.desired.get(VIN, AMPS).value == 10

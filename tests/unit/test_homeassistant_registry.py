@@ -238,6 +238,13 @@ def test_ha_logs_name_the_host_never_the_url_or_exception_text(caplog):
         with patch("TWCManager.Vehicle.HomeAssistant.requests.Session") as S:
             S.return_value.get.side_effect = error
             HomeAssistant(master)
+    with patch("TWCManager.Vehicle.HomeAssistant.requests.Session") as S, patch.object(
+        HomeAssistant,
+        "_discover_vehicles",
+        side_effect=requests.exceptions.ConnectionError(secret),
+    ):
+        S.return_value.get.return_value = Mock(raise_for_status=Mock())
+        HomeAssistant(master)  # discovery fails after connectivity is verified
     ha, reg = make_ha()
     ha._session = Mock()
     ha._session.get.side_effect = requests.exceptions.ConnectionError(secret)

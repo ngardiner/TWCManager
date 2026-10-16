@@ -254,8 +254,11 @@ class HomeAssistant:
 
         try:
             self._discover_vehicles()
-        except Exception:
-            logger.exception("Failed to discover Tesla vehicles via Home Assistant")
+        except Exception as e:
+            logger.error(
+                "Failed to discover Tesla vehicles via Home Assistant: %s",
+                type(e).__name__,
+            )
 
         if not self.carApiVehicles:
             logger.warning("No Tesla vehicles discovered in Home Assistant.")
