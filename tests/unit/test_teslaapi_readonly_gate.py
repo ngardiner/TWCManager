@@ -251,6 +251,29 @@ COMMANDS = {
 }
 
 
+# What each command path returns when Tesla refuses it (and latches the
+# car), then when it is refused locally afterwards. applyChargeLimit returns
+# None after any send it makes; once every car is read-only it refuses at the
+# top with "error". VehiclePriority treats all of these as failure.
+REFUSED_RETURNS = {
+    "set_charging_amps": (False, False),
+    "apply_charge_limit": (False, False),
+    "applyChargeLimit": (None, "error"),
+    "charge_start": ("error", "error"),
+    "charge_stop": ("error", "error"),
+    "wake_up": (False, False),
+}
+
+# Owner API answers that mean the car needs signed commands: HTTP 403 with
+# or without a JSON body, or the Vehicle Command Protocol error.
+SIGNING_REFUSALS = {
+    "403 VCP json": {"status_code": 403, "json": VCP_403},
+    "403 empty": {"status_code": 403, "text": ""},
+    "403 text": {"status_code": 403, "text": "Forbidden"},
+    "403 html": {"status_code": 403, "text": "<html><body>403</body></html>"},
+}
+
+
 def reply_for(command):
     return ONLINE if command == "wake_up" else ACCEPTED
 
@@ -435,15 +458,19 @@ class TestOwnerCommandRefusedByTesla:
     """A car listed with command_signing "off" that still answers an Owner
     API command with 403 "Vehicle Command Protocol required"."""
 
+    @pytest.mark.parametrize("refusal", list(SIGNING_REFUSALS))
     @pytest.mark.parametrize("command", list(COMMANDS))
-    def test_latches_without_error_backoff(self, owner_car, requests_mock, command):
+    def test_latches_without_error_backoff(
+        self, owner_car, requests_mock, command, refusal
+    ):
         api, vehicle = owner_car("off")
         suffix, send = COMMANDS[command]
+        first, after = REFUSED_RETURNS[command]
         cmd = requests_mock.post(
-            OWNER_URL + "/VIN1" + suffix, status_code=403, json=VCP_403
+            OWNER_URL + "/VIN1" + suffix, **SIGNING_REFUSALS[refusal]
         )
 
-        assert send(api, vehicle) in (False, "error", None)
+        assert send(api, vehicle) == first
 
         assert cmd.call_count == 1
         assert vehicle.ownerCommandsRefused is True
@@ -452,7 +479,7 @@ class TestOwnerCommandRefusedByTesla:
         assert api.readOnly is True
 
         allow_resend(api, vehicle)
-        assert send(api, vehicle) in (False, "error", None)
+        assert send(api, vehicle) == after
         assert cmd.call_count == 1
         assert no_error_recorded(api)
 
