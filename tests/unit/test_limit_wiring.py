@@ -5,7 +5,6 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
@@ -19,10 +18,13 @@ from tests.unit.test_gen2twc_provider import make
 from tests.unit.test_limit_reconciler import VIN, ble, prov, setup
 VIN2 = "5YJ3E1EA1KF000002"; VIN3 = "5YJ3E1EA1KF000003"; VIN4 = "5YJ3E1EA1KF000004"
 REPO = Path(__file__).resolve().parents[2]
+HOME = (39.077408, -84.393779)
+AWAY = (40.0, -86.0)
 
 def cars(m):
     reg = m.vehicleRegistry; a = reg.get(VIN); a.observe("twcVin", "8244", "TWC")
-    b = reg.getOrCreate(VIN2, "t"); b.attach("TeslaAPI", SimpleNamespace(atHome=False, ID=2, VIN=VIN2, update_location=lambda minInterval=0: True))
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1]); new_api(master=m).addVehicle({"id": 2, "vin": VIN2, "display_name": None})
+    b = reg.get(VIN2); b.observe("lat", AWAY[0], "TeslaMateVehicle"); b.observe("lon", AWAY[1], "TeslaMateVehicle")   # the API car's position says away
     d = reg.getOrCreate(VIN3, "t"); d.claim("TeslaBLE", True, "paired"); return a, b, d
 
 def test_present_rule_until_phase_5():
@@ -165,16 +167,15 @@ FLEET_CAR = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
 
 def fleetCarOffItsPoint(requests_mock, home):
     # A Fleet-only car we hold at 50 (normal 90), reported by its TWC, then
-    # unplugged; it reads as at home or away
-    from unittest.mock import Mock
+    # unplugged; the paid read places it at home or away
     m, r, v, c = setup(clock=False); api = new_api(master=m); api.storeToken(fleet_token())
     for p in api.providers(): m.providerOrder.register(p)
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); car = api.getCarApiVehicles()[0]
-    api.is_location_home = Mock(return_value=home); api.is_far_from_home = Mock(return_value=False)
-    car.atHome = True; v.observe("twcVin", "8244", "TWC"); v.observe("twcVin", None, "TWC", seen=False)
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1]); at = HOME if home else AWAY
+    v.observe("twcVin", "8244", "TWC"); v.observe("twcVin", None, "TWC", seen=False)
     m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaAPI")
     requests_mock.get(FLEET_CAR, json={"response": {"state": "online"}})
-    requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"drive_state": {"latitude": 1.0, "longitude": 2.0, "shift_state": "D"},
+    requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"drive_state": {"latitude": at[0], "longitude": at[1], "shift_state": "D"},
                                                                     "charge_state": {"charge_limit_soc": 50}, "vehicle_state": {}}})
     requests_mock.post(re.compile(r".*/command/.*"), json={"response": {"result": True, "reason": ""}})
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "online"}})
@@ -219,3 +220,50 @@ def test_a_failed_boot_list_load_recovers_without_an_arrival(requests_mock):  # 
     tick = source[source.index("master.lastTeslaTokenRefreshCheck = time.time()"):]
     assert tick.index("carapi.listPending()") < tick.index('{"cmd": "loadVehicleList"}') < 600
     assert 'task["cmd"] == "loadVehicleList"' in source and "carapi.loadList()" in source
+
+# Restart presence (slim Task 12c): the 2026-10-16 live failure
+
+def restarted(requests_mock, position=HOME, held=True, claim=True):
+    # The live box after a restart: commandPolicy ble_only; a car the Owner and Fleet tokens
+    # list and BLE has paired, held at 50 (normal 100) by the migrated record; asleep at SOC 51
+    # with TeslaMate's retained position. Nothing sets atHome: presence comes from position
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.settings.update(commandPolicy="ble_only", homeLat=HOME[0], homeLon=HOME[1])
+    api = new_api(master=m); api.storeToken(owner_token()); api.storeToken(fleet_token())
+    for p in api.providers(): m.providerOrder.register(p)
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "Callandor"})
+    if claim: v.claim("TeslaBLE", True, "paired")
+    if held: m.heldLimits.set(VIN, 100, 50)
+    if position: v.observe("lat", position[0], "TeslaMateVehicle"); v.observe("lon", position[1], "TeslaMateVehicle")
+    for field, value in (("chargeLimit", 50), ("chargingState", "Complete"), ("batteryLevel", 51)): v.observe(field, value, "TeslaMateVehicle")
+    from requests_mock import ANY
+    requests_mock.register_uri(ANY, ANY, json={"response": {"state": "asleep"}})   # any request is counted, none fails
+    return m, r, v, api.getCarApiVehicles()[0]
+
+def paidCalls(requests_mock):
+    return [q.url for q in requests_mock.request_history if re.search(r"vehicle_data|wake_up|/command/", q.url)]
+
+def test_a_restart_with_the_car_plugged_in_and_asleep_still_gets_the_policy_limit(requests_mock):   # live 2026-10-16, paid counted
+    m, r, v, car = restarted(requests_mock)
+    m.setPolicyLimit(50, transition=True); m.setPolicyLimit(70, transition=True)                 # Non Scheduled, then Scheduled
+    assert m.desired.get(VIN, CHARGE_LIMIT).value == 70 and car.atHome is True                  # located for free: TeslaMate's position
+    r.pass_(); b = prov(m, "TeslaBLE")
+    assert b.calls == [("wake", VIN, None), ("setChargeLimit", VIN, 70)]                         # a raise wakes over BLE, then sends
+    assert m.heldLimits.get(VIN) == HeldLimit(100, 70)
+    assert paidCalls(requests_mock) == [] and requests_mock.call_count == 0                     # presence cost nothing; Fleet/Owner never commanded
+
+def test_a_held_car_with_no_known_position_is_present(requests_mock):   # main's wasAtHome
+    m, r, v, car = restarted(requests_mock, position=None)
+    m.setPolicyLimit(70, transition=True); r.pass_()
+    assert ("setChargeLimit", VIN, 70) in prov(m, "TeslaBLE").calls and requests_mock.call_count == 0
+    m, r, v, car = restarted(requests_mock, position=None, held=False, claim=False)              # nothing says home: absent, nothing woken
+    assert presentVehicles(m, C.SET_CHARGE_LIMIT) == [] and m.setPolicyLimit(70, transition=True) is None
+    assert m.desired.get(VIN, CHARGE_LIMIT) is None
+    v.claim("TeslaBLE", True, "paired"); assert presentVehicles(m, C.SET_CHARGE_LIMIT) == [v]  # the BLE claim still applies
+
+def test_a_held_car_a_free_position_places_away_gets_its_normal_limit_back(requests_mock):   # paid counted
+    m, r, v, car = restarted(requests_mock, position=AWAY)
+    m.setPolicyLimit(70, transition=False)                                                       # any policy pass, no edge
+    d = m.desired.get(VIN, CHARGE_LIMIT); assert d.restore and d.value == 100 and car.atHome is False
+    m.setPolicyLimit(70, transition=False); assert m.desired.get(VIN, CHARGE_LIMIT) == d         # once: the same desire
+    r.pass_(); assert prov(m, "TeslaBLE").calls == [("setChargeLimit", VIN, 100)]               # a restore never wakes
+    assert requests_mock.call_count == 0
