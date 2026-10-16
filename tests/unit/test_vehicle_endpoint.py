@@ -18,8 +18,8 @@ def master(settings=None, *providers, slaves=()):
     carapi = Mock(); carapi.enabled.return_value = True
     m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves); return m
 
-def car(m, vin, atHome=True, syncSource="TeslaAPI", pluggedIn=None):
-    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome, syncSource=syncSource, pluggedIn=pluggedIn, locate=lambda: None)); return v
+def car(m, vin, atHome=True):
+    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome, locate=lambda: None)); return v
 
 def slave(key=None, amps=0.0, state=0x00): return SimpleNamespace(vehicleKey=key, reportedAmpsActual=amps, reportedState=state)
 
@@ -61,7 +61,7 @@ def test_controller_lists_at_home_api_cars_and_keeps_blind_rules():
     ctl = VehicleEndpoints(m)
     assert [e.currentVIN for e in ctl.allEVSEs] == [VIN1] and ctl.allEVSEs[0] is ctl.allEVSEs[0]
     m.getSlaveTWCs = lambda: [slave(amps=5.0)]; assert ctl.allEVSEs == []                                 # blind VIN-less TWC
-    m.getSlaveTWCs = lambda: [slave()]; car(m, VIN2, pluggedIn=True, syncSource="TeslaMateVehicle"); m.vehicleRegistry.get(VIN2).attachment("TeslaAPI").atHome = True
+    m.getSlaveTWCs = lambda: [slave()]; v2 = car(m, VIN2); v2.observe("state", "online", "TeslaMateVehicle"); v2.observe("pluggedIn", True, "TeslaMateVehicle"); m.vehicleRegistry.get(VIN2).attachment("TeslaAPI").atHome = True
     assert [e.currentVIN for e in ctl.allEVSEs] == [VIN1]                                                  # unknown TWC + telemetry plug
     m.getSlaveTWCs = lambda: [slave(key=VIN1)]
     assert sorted(e.currentVIN for e in ctl.allEVSEs) == [VIN1, VIN2]                                      # named TWC: grouping merges, not exclusion

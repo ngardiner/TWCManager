@@ -199,7 +199,7 @@ def test_live_telemetry_places_a_departing_car_for_free(requests_mock):   # main
     m, r, car = fleetCarOffItsPoint(requests_mock, home=True)                                     # awake: a paid read would go out, and say home
     v = m.vehicleRegistry.get(VIN); v.observe("state", "online", "TeslaMateVehicle"); placeAt(m, v, AWAY)
     onDeparture(m); d = m.desired.get(VIN, CHARGE_LIMIT)
-    assert car.syncSource == "TeslaMateVehicle" and d.restore and d.value == 90 and requests_mock.call_count == 0
+    assert v.syncSource == "TeslaMateVehicle" and d.restore and d.value == 90 and requests_mock.call_count == 0
 
 def test_a_policy_change_while_the_car_is_away_sends_nothing(requests_mock):  # C1, paid counted
     m, r, car = fleetCarOffItsPoint(requests_mock, home=False)
