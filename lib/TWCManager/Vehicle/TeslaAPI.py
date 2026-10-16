@@ -104,6 +104,8 @@ class TeslaAPI:
     # One slot per token type; built in __init__.
     ownerSlot = None
     fleetSlot = None
+    # fleetSlot.changes when the read-only hint was last logged
+    refusalLoggedAt = None
     refreshClientID = ""
     # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
     # whether a client secret is configured:
@@ -1219,6 +1221,18 @@ class TeslaAPI:
                     return ("fleet", region)
             return ("fleet", "NA")
         return ("unknown", None)
+
+    def noteReadOnly(self):
+        # The INFO hint, once per Fleet slot change: no HTTP call, no API
+        # error (an error would start the backoff that also blocks reads)
+        if not self.readOnly or self.fleetSlot.changes == self.refusalLoggedAt:
+            return
+        self.refusalLoggedAt = self.fleetSlot.changes
+        logger.info(
+            "Tesla API is read-only (no usable Fleet API token); not sending "
+            "vehicle commands. Commands need a Fleet API token or the "
+            "TeslaBLE module."
+        )
 
     def applySyncedToken(self, accessToken):
         # Entry point for token sync sources (TeslaMate): the access token

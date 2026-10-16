@@ -105,7 +105,10 @@ class FleetAPIProvider(Provider):
         # The broadcast gate: an Owner-only install never sends a
         # vehicle-less command here, as today's read-only refusal skips it
         if capability in COMMANDS:
-            return self.carapi.fleetSlot.usable("command")
+            usable = self.carapi.fleetSlot.usable("command")
+            if not usable:
+                self.carapi.noteReadOnly()
+            return usable
         if capability == READ_WALL_CONNECTOR_VINS:
             return self.carapi.wallConnectorVinsReady(self.carapi.fleetSlot)
         return self.carapi.fleetSlot.usable("read")
