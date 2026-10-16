@@ -43,6 +43,8 @@ NOT_SENT = LANE_DETAILS | {
     "no command token",
     "not listed",
     "online check failed",
+    # A stop to a car the free online check found asleep: not charging
+    "asleep, not charging",
     "read",
     # The worker found no vehicle or no provider to run the attempt on
     "no vehicle",

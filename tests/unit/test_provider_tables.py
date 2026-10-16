@@ -178,6 +178,12 @@ def test_a_403_on_the_legacy_wake_refuses_wakes_only(requests_mock):        # Ta
     assert not api.fleetSlot.usable("wake") and api.fleetSlot.usable("command")
     assert api.wakeVehicle(car) is False and len(calls(requests_mock, "wake_up")) == 1                # never sent again to the refused token
 
+@pytest.fixture(autouse=True)
+def awake_car(request):
+    # The Fleet stop asks the free online check first (Task 12a N2): the car is online
+    if "requests_mock" in request.fixturenames:
+        request.getfixturevalue("requests_mock").get(re.compile(r".*/api/1/vehicles/5YJ3E1EA1KF000001$"), json={"response": {"state": "online"}})
+
 def test_a_command_403_still_refuses_commands(requests_mock):
     api, reg = api_with_registry(); api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"}); api.storeToken(fleet_token())
     requests_mock.post(re.compile(r".*/command/.*"), status_code=403, json={}); p = api.providers()[1]

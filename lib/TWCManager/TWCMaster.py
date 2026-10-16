@@ -229,10 +229,11 @@ class TWCMaster:
     def _wantCharging(self, vin, value):
         capability = START_CHARGING if value else STOP_CHARGING
         for v in self._chargeTargets(vin, capability):
-            # The same value withdrawn earlier keeps its record unless the
-            # car has reported since its last send
+            # The same value withdrawn earlier keeps its record inside main's
+            # 60 s gate, unless the car has reported since its last send
             rec = self.desired.record(v.key, CHARGING)
             keep = rec.lastSentAt > 0 and not newerReading(v, CHARGING, rec.lastSentAt)
+            keep = keep and self.desired._clock() - rec.lastSentAt < 60
             self.desired.set(v.key, CHARGING, value, "distributor", keep=keep)
 
     def checkForUpdates(self):
