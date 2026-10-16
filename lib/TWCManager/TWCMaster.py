@@ -17,7 +17,7 @@ import bisect
 import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Registry import VehicleRegistry
-from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
+from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
 from TWCManager.Vehicle.Providers import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 from TWCManager.Vehicle.Providers.Capability import (
@@ -1323,9 +1323,7 @@ class TWCMaster:
                     # shows an at-home car plugged in
                     if slaveTWC.vehicleKey is None:
                         self._plugSession(slaveTWC, True)
-                elif slaveTWC.reportedState == 0 and str(
-                    slaveTWC.vehicleKey
-                ).startswith(ANON_PREFIX):
+                elif slaveTWC.reportedState == 0 and isAnonKey(slaveTWC.vehicleKey):
                     # 00 and no car known plugged in
                     self._plugSession(slaveTWC, False)
             carsCharging += slaveTWC.isCharging
