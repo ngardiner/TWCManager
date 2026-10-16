@@ -72,7 +72,10 @@ The home location is set from the first fresh position a Tesla API vehicle
 read returns (a billed `vehicle_data` call on the Fleet API) or that Home
 Assistant reports. Until it is set, no position can place a car at home or
 away, so presence relies on steps 1 and 3-5: a car TWCManager holds a limit
-on, or a car with a BLE key, still gets the policy's limit.
+on, or a car with a BLE key, still gets the policy's limit. You can also set
+the home location yourself: the web interface can learn it from a vehicle's
+current position, or set `homeLat` and `homeLon` with the
+[setSetting API](modules/control_HTTP_API/setSetting.md).
 
 Acceptable values are 50-100; -1 means not to apply a limit / restore the car's
 original limit.
