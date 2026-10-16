@@ -83,7 +83,6 @@ modules_available = [
     "Interface.RS485",
     "Interface.TCP",
     "Policy.Policy",
-    "Vehicle.VehiclePriority",
     "Vehicle.TeslaAPI",
     "Vehicle.TeslaBLE",
     "Vehicle.TeslaMateVehicle",
@@ -297,21 +296,8 @@ def unescape_msg(inmsg: bytearray, msgLen):
     return msg
 
 
-def get_vehicle_module():
-    carHass = master.getModuleByName("HomeAssistant")
-    if carHass:
-        return carHass
-
-    carapi = master.getModuleByName("TeslaAPI")
-    if carapi:
-        return carapi
-
-    logger.error("No vehicle module enabled")
-    return None
-
-
 def shutdownTimeouts(now, shutdownDeadline):
-    # The deadline both vehicle drains share: at most 60 s, and at least 20 s
+    # The vehicle drain's deadline: at most 60 s, and at least 20 s
     # before the shutdown deadline is left for saveSettings (held limits)
     return min(shutdownDeadline - 20, now + 60)
 
@@ -320,19 +306,15 @@ def background_tasks_thread(master):
     while True:
         try:
             task = master.getBackgroundTask()
-            vehicleModule = master.getModuleByName("VehiclePriority")
-            if not vehicleModule:
-                # Fallback to direct API if VehiclePriority not available
-                vehicleModule = get_vehicle_module()
 
             if "cmd" in task:
                 if task["cmd"] == "checkArrival":
                     onArrival(master)
                     # A free vehicle list load; refreshes cars at home, as
                     # an arrival always has
-                    vehicleModule.updateChargeAtHome()
+                    master.updateChargeAtHome()
                 elif task["cmd"] == "checkCharge":
-                    vehicleModule.updateChargeAtHome()
+                    master.updateChargeAtHome()
                 elif task["cmd"] == "loadVehicleList":
                     carapi = master.getModuleByName("TeslaAPI")
                     if carapi:
@@ -839,9 +821,8 @@ backgroundTasksThread.daemon = True
 backgroundTasksThread.start()
 
 # Vehicle commands (charge start/stop, charge limit, charge rate) run on
-# their own worker so slow BLE retries never block this thread or the
-# background thread.
-master.vehicleCommandQueue.start()
+# the reconciler's own workers so slow BLE retries never block this thread
+# or the background thread.
 master.reconciler.start()
 # The Tesla API vehicle list loads here (a free call), so the cloud
 # providers can carry commands before any arrival
@@ -2062,9 +2043,6 @@ master.queue_background_task({"cmd": "saveSettings"})
 master.reconciler.stop()
 vehicleDeadline = shutdownTimeouts(time.time(), shutdownDeadline)
 master.reconciler.drain(max(0, vehicleDeadline - time.time()))
-master.vehicleCommandQueue.drain_high_priority(
-    timeout=max(0, vehicleDeadline - time.time())
-)
 
 # Wait for the background tasks thread to finish its queued tasks, but only
 # until the shutdown deadline: a task blocked on the BLE lock must not hold

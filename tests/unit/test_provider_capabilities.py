@@ -40,7 +40,7 @@ def test_provider_defaults_and_declarations():
     assert p.cost(C.WAKE) == C.FLEET_WAKE and p.cost(C.READ_CHARGE) is None
     assert p.declarations()[C.WAKE] == C.Declaration(C.FLEET_WAKE) and not p.declarations()[C.WAKE].passive
     assert p.ready(None, C.SET_AMPS) is False
-    assert p.attempts() == 3 and Provider().attempts() == 2
+    assert not hasattr(Provider, "attempts")                      # retries are the reconciler's
     assert p.limitations(None) == frozenset()
     assert Provider().available(C.WAKE) is True
     assert p.covers(None, 6) and p.covers(None, 32) and not p.covers(None, 4)

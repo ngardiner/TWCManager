@@ -165,32 +165,6 @@ class TestFleetRefreshUnchanged:
             "scope": "offline_access",
         }
 
-    def test_wake_401_refreshes_a_fleet_token_at_fleet_auth(self, requests_mock):
-        # wakeVehicle refuses before any request for an Owner token, so its
-        # 401 refresh only ever sees Fleet tokens.
-        fleet = requests_mock.post(
-            FLEET_REFRESH_URL, json=token_response(fleet_token())
-        )
-        owner = requests_mock.post(AUTH_TOKEN_URL, json={})
-        api = new_api()
-        api.storeToken(fleet_token(), OPAQUE_REFRESH)
-        wake = api.fleetSlot.baseURL + "/VIN1/wake_up"
-        requests_mock.post(
-            wake,
-            [
-                {"status_code": 401, "text": "token expired"},
-                {"json": {"response": {"state": "online"}}},
-            ],
-        )
-
-        class Vehicle:
-            VIN = "VIN1"
-
-        assert api.wakeVehicle(Vehicle()) == {"response": {"state": "online"}}
-        assert fleet.call_count == 1
-        assert owner.call_count == 0
-
-
 class TestPastedRefreshToken:
     def test_owner_refresh_token_alone_gets_owner_refresh(self, requests_mock):
         new_access = owner_token()
@@ -312,24 +286,6 @@ class TestPastedRefreshToken:
 
         assert fleet.call_count == 0
         assert owner.call_count == 1
-
-
-class TestWakeNeverSent:
-    def test_connection_error_does_not_crash(self, requests_mock):
-        # The wake request never went out, so there is no response.
-        api = new_api()
-        api.storeToken(fleet_token())
-        requests_mock.post(
-            api.fleetSlot.baseURL + "/VIN1/wake_up",
-            exc=requests.exceptions.ConnectionError,
-        )
-        refresh = requests_mock.post(FLEET_REFRESH_URL, json={})
-
-        class Vehicle:
-            VIN = "VIN1"
-
-        assert api.wakeVehicle(Vehicle()) is False
-        assert refresh.called is False
 
 
 class TestRefreshTokenPastedAlone:

@@ -95,7 +95,7 @@ class Gen2TWCProvider(Provider):
             # (TWCSlave.send_master_heartbeat), and the TWC never offers
             # below its own minimum; below the floor the next provider
             # carries the target
-            return (max(6, slave.minAmpsToOffer()), slave.maxOfferAmps)
+            return (slave.layerFloorAmps(), slave.maxOfferAmps)
         return (slave.minAmps, slave.maxOfferAmps)
 
     def setAmps(self, vin: str, amps: int) -> Outcome:

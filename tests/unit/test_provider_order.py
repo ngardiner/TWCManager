@@ -13,7 +13,7 @@ VIN = "5YJ3E1EA1KF000001"
 class P(Provider):
     def __init__(self, name, rank, local, caps, ready=True, amps=None, readTier=None):
         self.name, self.rank, self.local, self._caps, self._ready, self._amps = name, rank, local, caps, ready, amps
-        self.calls = []; self.module = Mock()          # dispatch skips module-less (TWC) providers
+        self.calls = []; self.module = Mock()          # the debug page skips module-less (TWC) providers
         if readTier is not None:
             self.readSource = ReadSource(); self.readSource.name = name; self.readSource.provider = name
             self._caps = dict(self._caps, **{C.READ_CHARGE: C.Declaration(C.Cost(readTier))})
@@ -34,7 +34,6 @@ def ha(ready=True):   return P("HomeAssistant", 6, False, {C.SET_AMPS: C.Declara
 
 def master(settings=None, config=None):
     m = Mock(); m.settings = settings or {}; m.config = config or {}
-    m.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
     m.vehicleRegistry = VehicleRegistry({}); return m
 
 def order(m, *providers):
@@ -52,10 +51,6 @@ def test_candidates_require_readiness_and_ordered_requires_availability():
     assert [p.name for p in o.candidates(None, C.SET_AMPS)] == ["FleetAPI"]
     f = fleet(); f.available = lambda cap: cap != C.SET_AMPS
     assert order(master(), f).ordered(C.SET_AMPS) == [] and [p.name for p in order(master(), f).ordered(C.WAKE)] == ["FleetAPI"]
-
-def test_dispatch_skips_providers_without_a_module():
-    t = twc(); t.module = None; o = order(master(), t, fleet())
-    assert o.dispatch(None, C.SET_AMPS, lambda p: p.setAmps(VIN, 10), amps=10) is False and t.calls == []   # TWC path exists, so Fleet is dropped; TWC is never written
 
 def test_default_fleet_amps_rule_uses_target_and_range():      # Review Focus 3
     o = order(master(), twc(), fleet())
@@ -106,18 +101,6 @@ def test_registry_uses_installed_read_order():
     assert [s.name for s in r.readSources()] == ["a", "b"] and r.useReadOrder(None) is None
     assert [s.name for s in r.readSources()] == ["b", "a"]
 
-def test_dispatch_walks_candidates_with_attempts_and_stats():
-    m = master(); b = ble(); b._result = False; f = fleet()
-    o = order(m, b, f)
-    assert o.dispatch(None, C.WAKE, lambda p: p.wake(VIN)) is True
-    assert b.calls == [("wake", VIN)] * 3 and f.calls == [("wake", VIN)]
-    assert m.stats["moduleFailures"] == {"TeslaBLE": 1} and m.stats["moduleSuccess"] == {"FleetAPI": 1}
-
-def test_dispatch_treats_error_and_exceptions_as_failures():
-    b = ble(); b._result = "error"; f = fleet(); f.wake = Mock(side_effect=RuntimeError("secret-token"))
-    o = order(master(), b, f)
-    assert o.dispatch(None, C.WAKE, lambda p: p.wake(VIN)) is False and f.wake.call_count == 2
-
 def workers_master():
     from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
     from tests.unit.reconcile_helpers import inline
@@ -148,10 +131,9 @@ def test_debug_command_tries_each_provider_once():
     assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 3}') is True and b.calls[1:] == [("setAmps", VIN, 3)] and f.calls == []
 
 def test_debug_set_charge_rate_reaches_fleet_past_a_covering_twc():         # M1
-    # As the facade's setChargeRate: the TWC cannot lift the car's own limit
+    # As a lift: the TWC cannot lift the car's own limit
     m = workers_master(); f = fleet(); f._result = O.Outcome(O.DONE)
     t = twc(); t.module = None                      # as Gen2TWCProvider: never written from the HTTP thread
     o = order(m, t, f); m.providerOrder = o
     assert o.debugCommand("setChargeRate", VIN, '{"charge_rate": 16}') is True and f.calls == [("setAmps", VIN, 16)] and t.calls == []
-    f._result = True
-    assert o.dispatch(m.vehicleRegistry.get(VIN), C.SET_AMPS, lambda p: p.setAmps(VIN, 16), amps=16) is False   # setAmps keeps the rule
+    assert o.candidates(m.vehicleRegistry.get(VIN), C.SET_AMPS, amps=16) == [t]           # a distributor rate keeps the rule

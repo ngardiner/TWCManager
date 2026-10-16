@@ -570,108 +570,6 @@ class TeslaBLE:
             # Always ensure pipe is closed after command
             self._ensure_pipe_closed()
 
-    def _stampWrite(self, vin, field, value):
-        """Record a command that just succeeded as our own write. Only an
-        existing registry vehicle is stamped; a write path never creates one.
-        The registry lock is a leaf, so holding _bleLock here is fine."""
-        try:
-            v = self.registry.get(str(vin).upper())
-            if v is not None:
-                v.noteWrite(field, value, "TeslaBLE")
-        except Exception as e:
-            logger.debug(f"Could not stamp {field} write for {vin}: {e}")
-
-    def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
-        """
-        Set charge rate for vehicle(s) with enhanced error handling.
-        Returns True on success, False on failure.
-        """
-        try:
-            if vehicle:
-                # Set charge rate for specific vehicle
-                logger.debug(
-                    f"Setting charge rate {charge_rate}A for vehicle {vehicle}"
-                )
-
-                # Wake vehicle first - don't fail if wake fails, but log it
-                wake_result = self.wakeVehicle(vehicle)
-                if not wake_result:
-                    logger.warning(
-                        f"Wake command may have failed for {vehicle}, proceeding with charge rate"
-                    )
-
-                ret = self.sendCommand(vehicle, "charging-set-amps", charge_rate)
-                if ret is None:
-                    logger.error(
-                        f"Failed to send charging-set-amps command to {vehicle}"
-                    )
-                    return False
-
-                success = self.parseCommandOutput(ret)
-                if success:
-                    self._stampWrite(vehicle, "availableCurrent", charge_rate)
-                logger.info(
-                    f"Set charge rate {charge_rate}A for {vehicle}: {'success' if success else 'failed'}"
-                )
-                return success
-            else:
-                # Set charge rate for all vehicles
-                # This isn't optimal but may be necessary when TWC doesn't know vehicle VIN
-                logger.debug(f"Setting charge rate {charge_rate}A for all vehicles")
-
-                if not self.master.settings.get("Vehicles"):
-                    logger.error("No vehicles configured for charge rate setting")
-                    return False
-
-                targets = self._allVehicleTargets()
-                if not targets:
-                    logger.warning("No vehicle has a usable BLE key")
-                    return False
-
-                success_count = 0
-                total_vehicles = len(targets)
-
-                for vehicle_vin in targets:
-                    try:
-                        # Wake vehicle first - don't fail if wake fails, but log it
-                        wake_result = self.wakeVehicle(vehicle_vin)
-                        if not wake_result:
-                            logger.debug(
-                                f"Wake command may have failed for {vehicle_vin}, proceeding with charge rate"
-                            )
-
-                        ret = self.sendCommand(
-                            vehicle_vin, "charging-set-amps", charge_rate
-                        )
-                        if ret is not None and self.parseCommandOutput(ret):
-                            success_count += 1
-                            self._stampWrite(
-                                vehicle_vin, "availableCurrent", charge_rate
-                            )
-                            logger.debug(
-                                f"Set charge rate successful for vehicle {vehicle_vin}"
-                            )
-                        else:
-                            logger.warning(
-                                f"Set charge rate failed for vehicle {vehicle_vin}"
-                            )
-                    except Exception as e:
-                        logger.error(
-                            f"Set charge rate exception for vehicle {vehicle_vin}: {e}"
-                        )
-                        continue
-
-                # Consider successful if at least one vehicle responded
-                overall_success = success_count > 0
-                logger.info(
-                    f"Set charge rate {charge_rate}A result: {success_count}/{total_vehicles} vehicles responded"
-                )
-                return overall_success
-
-        except Exception as e:
-            logger.error(f"setChargeRate exception: {e}")
-            return False
-
     def scanForVehicles(self):
         # This function allows other modules to prompt us to connect to BLE
         # vehicles.
@@ -817,6 +715,7 @@ class TeslaBLE:
             "chargingState": self._extract_enum_value(cs.get("chargingState")),
             "availableCurrent": cs.get("chargerPilotCurrent"),
             "chargeCurrentRequestMax": cs.get("chargeCurrentRequestMax"),
+            "chargeCurrentRequest": cs.get("chargeCurrentRequest"),
             "actualCurrent": cs.get("chargerActualCurrent"),
             "voltage": cs.get("chargerVoltage"),
             "phases": cs.get("chargerPhases"),
@@ -1691,23 +1590,6 @@ class TeslaBLE:
             logger.info(f"BLE key for {vin} refused; re-pair from the vehicle page")
             self._setBleStatus(vin, "refused")
         return True
-
-    def _allVehicleTargets(self):
-        """VINs an all-vehicle command is sent to: every one with a key the
-        car has not refused. A key with no recorded pairing state (every
-        pre-1.4.0 key) is still tried; a refused key or a VIN without one
-        would only cost a tesla-control timeout per command."""
-        with self.master.settingsLock:
-            entries = list((self.master.settings.get("Vehicles") or {}).items())
-        targets = []
-        for vin, rec in entries:
-            if not isinstance(rec, dict) or "privKey" not in rec:
-                continue
-            ble = rec.get("ble")
-            if isinstance(ble, dict) and ble.get("status") == "refused":
-                continue
-            targets.append(vin)
-        return targets
 
     def _claimKeyedVehicles(self):
         # The one place settings["Vehicles"] feeds the registry: it is the BLE

@@ -25,7 +25,7 @@ class FleetTelemetryMQTT(TelmetryBase):
         "longitude": ["lon", lambda a: float(a)],
         "syncState": ["state", lambda a: a],
         "TimeToFullCharge": ["timeToFullCharge", lambda a: float(a)],
-        "ChargeCurrentRequest": ["availableCurrent", lambda a: int(a)],
+        "ChargeCurrentRequest": ["chargeCurrentRequest", lambda a: int(a)],
         "ChargeAmps": ["actualCurrent", lambda a: float(a)],
         "ChargerPhases": ["phases", lambda a: int(a) if a else 0],
         "ChargerVoltage": ["voltage", lambda a: float(a)],

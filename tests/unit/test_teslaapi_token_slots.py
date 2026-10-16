@@ -13,6 +13,8 @@ import pytest
 import requests
 import requests_mock as rm
 
+from TWCManager.Vehicle.Reconcile.Outcome import DONE, REFUSED, Outcome
+
 from tests.unit.teslatokens import (
     AUTH_TOKEN_URL,
     FLEET_NA_URL,
@@ -133,7 +135,7 @@ def test_commands_use_fleet_only(no_threads, requests_mock):
         FLEET_NA_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps", json=CMD_OK
     )
 
-    assert api.setChargeRate(10, vehicle) == CMD_OK
+    assert api.command(vehicle, "set_charging_amps", {"charging_amps": 10}) == Outcome(DONE)
 
     assert cmd.call_count == 1
     assert cmd.last_request.headers["Authorization"] == "Bearer " + fleet
@@ -153,8 +155,9 @@ def test_command_refused_without_usable_fleet(no_threads, requests_mock, fleet):
     anyCall = requests_mock.register_uri(rm.ANY, rm.ANY, json={})
 
     assert api.readOnly is True
-    assert api.setChargeRate(10, vehicle) is False
-    assert api.wakeVehicle(vehicle) is False
+    refused = Outcome(REFUSED, "no command token")
+    assert api.command(vehicle, "set_charging_amps", {"charging_amps": 10}) == refused
+    assert api.wakeOutcome(vehicle) == refused
 
     assert anyCall.call_count == 0
     assert api.getCarApiLastErrorTime() == 0
