@@ -115,7 +115,9 @@ def test_tables_match_the_declarations_they_replace():
     assert byName["Gen3TWC"].declarations() == {c: D(C.LOCAL) for c in (C.SET_AMPS, C.START_CHARGING, C.STOP_CHARGING)}
     assert byName["TeslaBLE"].declarations() == {c: D(C.LOCAL) for c in (C.READ_CHARGE, C.SET_CHARGE_LIMIT, C.START_CHARGING, C.STOP_CHARGING, C.SET_AMPS, C.WAKE)}
     wcv = D(C.CLOUD_FREE)
-    assert byName["OwnerAPI"].declarations() == dict({C.READ_CHARGE: D(C.CLOUD_FREE), C.READ_WALL_CONNECTOR_VINS: wcv}, **{c: D(C.OWNER_COMMAND) for c in C.COMMANDS})
+    assert byName["OwnerAPI"].declarations() == {C.READ_CHARGE: D(C.CLOUD_FREE),
+        C.SET_CHARGE_LIMIT: D(C.OWNER_COMMAND), C.START_CHARGING: D(C.OWNER_COMMAND), C.STOP_CHARGING: D(C.OWNER_COMMAND), C.SET_AMPS: D(C.OWNER_COMMAND),
+        C.WAKE: D(C.OWNER_COMMAND), C.READ_WALL_CONNECTOR_VINS: wcv}   # #659: unsigned cars only
     assert byName["FleetAPI"].declarations() == {C.READ_CHARGE: D(C.FLEET_DATA),
         C.SET_CHARGE_LIMIT: D(C.FLEET_COMMAND), C.START_CHARGING: D(C.FLEET_COMMAND), C.STOP_CHARGING: D(C.FLEET_COMMAND), C.SET_AMPS: D(C.FLEET_COMMAND),
         C.WAKE: D(C.FLEET_WAKE), C.READ_WALL_CONNECTOR_VINS: wcv}

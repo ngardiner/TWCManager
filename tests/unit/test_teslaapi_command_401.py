@@ -58,7 +58,7 @@ def command(api, name):
         "set_charging_amps": {"charging_amps": 16},
         "set_charge_limit": {"percent": 80},
     }.get(name)
-    return api.command(v, name, body)
+    return api.command(v, name, body, slot=api.fleetSlot)
 
 
 def failed(result):

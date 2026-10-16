@@ -190,6 +190,15 @@ def test_a_not_sent_outcome_is_not_replanned_inside_retry():                # pr
     for _ in range(10): r.pass_()
     assert names(f) == ["wake"]; c.t += RETRY[CHARGING]; r.pass_(); assert names(f) == ["wake", "wake"]
 
+def test_a_not_sent_refusal_lets_the_next_paid_provider_go_at_once():     # H2 with an excluding outcome
+    for detail in ("signing required", "owner commands retired", "no command token"):
+        first = fleet(O.Outcome(O.REFUSED, detail))
+        last = ScriptedProvider("Fallback", 9, False, [O.Outcome(O.DONE)], tier=C.HA_BILLED)
+        m, r, v, c = setup(first, last); v.observe("chargeLimit", 60, "TeslaAPI")
+        m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); r.pass_(); r.pass_()
+        assert cmds(prov(m, "FleetAPI")) == [] and cmds(prov(m, "Fallback")) == ["setChargeLimit"], detail
+        assert m.desired.record(VIN, CHARGE_LIMIT).paidSends == 1             # the refusal spent none
+
 def test_no_resubmit_loop_during_a_30_minute_wake_hold():                   # pre-flight H2, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "wake held"))); f = prov(m, "FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
     m.desired.set(VIN, CHARGING, True, "heartbeat"); submitted = 0

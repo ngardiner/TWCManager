@@ -46,8 +46,9 @@ class VehicleEndpoint(EVSEInstance):
 
     @property
     def isReadOnly(self) -> bool:
-        # No provider can set this car's amps (an Owner-only token, ble_only
-        # without BLE), so the distributor must not budget power for it
+        # No provider can set this car's amps (an Owner-only token on a car
+        # that needs signed commands, ble_only without BLE), so the
+        # distributor must not budget power for it
         return not self._candidates()
 
     @property
