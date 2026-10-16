@@ -760,6 +760,27 @@ class TestVehiclesNotYetListed:
     def test_no_token_is_read_only_unlisted(self):
         assert new_api().readOnly is True
 
+    def test_set_charge_rate_without_vehicles_logs_no_error(
+        self, no_threads, any_http, caplog
+    ):
+        # VehiclePriority calls setChargeRate every tick while the list is
+        # empty; that is expected, not an error. setChargeRate does not list
+        # the vehicles itself, so it makes no HTTP call.
+        caplog.set_level(logging.DEBUG)
+        api = new_api()
+        api.storeToken(owner_token())
+        ble = Mock()
+        ble.setChargeRate = Mock(return_value=True)
+
+        for _ in range(3):
+            assert priority_over(api, ble).setChargeRate(10) is True
+
+        assert ble.setChargeRate.call_count == 3
+        assert any_http.call_count == 0
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        lines = [r for r in caplog.records if "No Tesla vehicles" in r.getMessage()]
+        assert lines and all(r.levelno == logging.INFO2 for r in lines)
+
     def test_command_lists_vehicles_then_refuses_signed_car(
         self, no_threads, no_sleep, requests_mock
     ):

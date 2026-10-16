@@ -1977,7 +1977,11 @@ class TeslaAPI:
         if not vehicle:
             vehicles = self.getCarApiVehicles()
             if not vehicles:
-                logger.error("No Tesla vehicles available to set charge rate")
+                # Expected until a command or telemetry lists them, and
+                # VehiclePriority calls this every tick: not an error.
+                logger.log(
+                    logging.INFO2, "No Tesla vehicles available to set charge rate"
+                )
                 return False
             vehicle = vehicles[0]
 
