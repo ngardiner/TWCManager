@@ -116,7 +116,9 @@ def forgetVehicle(master, vin):
         return "/vehicles"
     if not canForgetVehicle(master, vin):
         return "/vehicleDetail/" + vin
-    master.vehicleRegistry.forget(vin)
+    # Atomic with a listing's attach: a car listed since the check stays
+    if not master.vehicleRegistry.forget(vin, ifUnattached=True):
+        return "/vehicleDetail/" + vin
     with master.settingsLock:
         vehicles = master.settings.get("Vehicles") or {}
         key = _vehicleRecordKey(vehicles, vin)
