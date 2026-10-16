@@ -14,13 +14,25 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 
 def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
     out = subprocess.run(
-        # No module keeps a car list: registry.attached() is the list
-        ["git", "grep", "-lE", r"carApiVehicles|getCarApiVehicles", "--", "lib/TWCManager"],
+        # The dissolved CarApiVehicle's names stay gone: no module keeps a car
+        # list (registry.attached() is the list), and "id:" keys are not written
+        ["git", "grep", "-lE",
+         r"carApiVehicles|getCarApiVehicles|CarApiVehicle|RegistryField|getVehicleByVIN"
+         r"|lastVehicleAwake|_liveVehicle|startswith\(\"id:\"\)",
+         "--", "lib/TWCManager", "html", "tests/integration", "tests/API"],
         capture_output=True,
         text=True,
         cwd=REPO,
     ).stdout.split()
     assert out == []
+    # Forget is atomic: the one caller re-checks "unattached" under the lock
+    forgets = subprocess.run(
+        ["git", "grep", "-n", r"\.forget(", "--", "lib/TWCManager"],
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    ).stdout.splitlines()
+    assert len(forgets) == 1 and "ifUnattached=True" in forgets[0]
 
 
 def test_get_last_vehicle_uses_registry_attachment():

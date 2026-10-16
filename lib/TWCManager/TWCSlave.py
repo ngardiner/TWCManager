@@ -129,7 +129,7 @@ class TWCSlave:
         plugged, cars = self.pluggedCars()
         if plugged:
             return plugged
-        # The first car the Tesla API listed (registry order is list order)
+        # The first car the Tesla API listed (registry (sorted VIN) order)
         listed = [v for v, _ in self.master.vehicleRegistry.attached("TeslaAPI")]
         return listed[:1] if listed and listed[0] in cars else []
 
