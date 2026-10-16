@@ -143,8 +143,11 @@ class HeldLimits:
             settings = self.master.settings
             legacy, store = settings.get(self.LEGACY_KEY), settings.get(self.KEY)
             store = store if isinstance(store, dict) else {}
-            vinsNow = frozenset(k for k in store if isWellFormedVIN(str(k)))
-            loaded = self._loadedVins if final else vinsNow
+            loaded = (
+                self._loadedVins
+                if final
+                else frozenset(k for k in store if isWellFormedVIN(str(k)))
+            )
             if not isinstance(legacy, dict):
                 if not final:
                     self._loadedVins = loaded
@@ -241,4 +244,6 @@ class HeldLimits:
             store = self.master.settings.get(self.KEY)
             items = list(store.items()) if isinstance(store, dict) else []
         limits = [(k, _storedEntry(v)) for k, v in items if isWellFormedVIN(k)]
-        return sorted(k for k, limit in limits if limit and limit.held is not None)
+        return sorted(
+            k for k, limit in limits if limit is not None and limit.held is not None
+        )

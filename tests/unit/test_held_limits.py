@@ -501,3 +501,11 @@ def test_a_resolve_saves_once_and_logs_no_migrated_line(caplog):
     assert m.queue_background_task.call_args_list == [(({"cmd": "saveSettings"},),)]
     assert "Migrated chargeLimits" not in caplog.text
     assert m.heldLimits.get(VIN) == HeldLimit(80, None)
+
+
+def test_a_non_dict_charge_limits_never_waits():  # pre-flight F9
+    m, s = make()
+    m.settings["chargeLimits"] = [["11", 80]]
+    m.heldLimits.load()
+    assert not m.heldLimits.waiting()
+    assert m.settings["chargeLimits"] == [["11", 80]]
