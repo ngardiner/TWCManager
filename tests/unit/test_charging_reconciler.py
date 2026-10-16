@@ -58,7 +58,7 @@ def test_heartbeat_stop_targets_the_anonymous_car():                         # r
 def test_heartbeat_with_no_vehicle_key_decides_nothing():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); v.observe("chargingState", "Stopped", "TeslaBLE")
     m.desired.set(VIN, CHARGING, False, "distributor"); m.setMaxAmpsToDivideAmongSlaves(32)
-    for _ in range(3): drive(m, s, amps_actual=0.0)
+    for _ in range(3): drive(m, s, amps_actual=0.0, state=0x00)                                                              # 00: no car known plugged in (a plugged state is an anonymous session, test_limit_wiring)
     assert s.vehicleKey is None and m.desired.get(VIN, CHARGING).value is False                                            # never a broadcast start or cancel
 
 def test_start_waits_five_seconds_after_a_limit_write_and_wakes():

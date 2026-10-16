@@ -17,6 +17,7 @@ import bisect
 import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Registry import VehicleRegistry
+from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 from TWCManager.Vehicle.Providers import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 from TWCManager.Vehicle.Providers.Capability import (
@@ -1327,6 +1328,16 @@ class TWCMaster:
                         slaveTWC._resetVehicleRateRaised()
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
+                elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES:
+                    # A car drawing nothing (asleep after a restart) is still
+                    # plugged in: unidentified, it is an anonymous session
+                    if slaveTWC.vehicleKey is None:
+                        self._plugSession(slaveTWC, True)
+                elif slaveTWC.reportedState == 0 and str(
+                    slaveTWC.vehicleKey
+                ).startswith(ANON_PREFIX):
+                    # 00: unplugged, or asleep (an empty TWC says it too)
+                    self._plugSession(slaveTWC, False)
             carsCharging += slaveTWC.isCharging
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
