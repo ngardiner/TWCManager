@@ -205,7 +205,7 @@ def test_find_by_name_and_attached():
     v.observe("name", "Callandor", "TeslaAPI")
     v.attach("TeslaAPI", "obj")
     assert r.findByName("Callandor") is v and r.findByName("x") is None
-    assert r.attached("TeslaAPI") == ["obj"] and r.attached("HomeAssistant") == []
+    assert r.attached("TeslaAPI") == [(v, "obj")] and r.attached("HomeAssistant") == []
 
 
 def test_summaries_sorted_by_key():
@@ -294,3 +294,49 @@ def test_a_listed_car_is_never_expired():  # F8: the listing's keepsAlive claims
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     assert not reg.get(VIN).userAsserted
     assert reg.expire(reg.now() + 10**9) == [] and reg.get(VIN) is not None
+
+
+def test_forget_if_unattached_is_atomic():  # F7
+    import threading
+    from unittest.mock import patch
+
+    from TWCManager.Vehicle.Registry.Vehicle import Vehicle
+
+    r = VehicleRegistry({})
+    listed = r.getOrCreate(VIN, "TeslaAPI", attach=("TeslaAPI", "state"))
+    listed.userAsserted = True
+    assert r.forget(VIN, ifUnattached=True) is False and r.get(VIN) is listed
+    seen = r.getOrCreate(VIN2, "TWC")  # not user-asserted
+    assert r.forget(VIN2, ifUnattached=True) is False and r.get(VIN2) is seen
+    assert r.forget("5YJ3E1EA1KF000009", ifUnattached=True) is False
+    seen.userAsserted = True
+    assert r.forget(VIN2, ifUnattached=True) is True and r.get(VIN2) is None
+
+    # A listing holds the registry lock while it attaches: a concurrent
+    # forget waits for the attach and then refuses
+    added = r.addUserAsserted(VIN2)
+    entered, release, result = threading.Event(), threading.Event(), []
+    attach = Vehicle.attach
+
+    def slowAttach(self, name, obj):
+        entered.set()
+        release.wait(5)
+        attach(self, name, obj)
+
+    with patch.object(Vehicle, "attach", slowAttach):
+        lister = threading.Thread(
+            target=r.getOrCreate, args=(VIN2, "TeslaAPI", ("TeslaAPI", "state"))
+        )
+        lister.start()
+        assert entered.wait(5)
+        forgetter = threading.Thread(
+            target=lambda: result.append(r.forget(VIN2, ifUnattached=True))
+        )
+        forgetter.start()
+        forgetter.join(0.2)
+        assert forgetter.is_alive() and result == []  # blocked on the lock
+        release.set()
+        lister.join(5)
+        forgetter.join(5)
+    assert result == [False] and r.get(VIN2) is added
+    assert added.attachment("TeslaAPI") == "state"
