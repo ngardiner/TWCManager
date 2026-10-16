@@ -36,6 +36,7 @@ from . import Run
 from .Desired import AMPS, CAPABILITY_FOR, CHARGE_LIMIT, CHARGING, FIELD_FOR, Attempt
 from .Outcome import (
     ERROR,
+    EXCLUDING,
     QUEUE_DETAILS,
     SATISFIED,
     SETTLED,
@@ -251,9 +252,11 @@ class VehicleReconciler(threading.Thread):
             last is not None
             and isNotSent(last)
             and last.detail not in QUEUE_DETAILS
+            and last.kind not in EXCLUDING
             and now - rec.lastOutcomeAt < RETRY[aspect]
         ):
-            # Wake held, backoff, wake refused: no resubmit loop (H2)
+            # Wake held, backoff, wake refused: no resubmit loop (H2). A
+            # refusal excluded its provider, so the next one goes at once
             return None
         if aspect == CHARGE_LIMIT:
             adopted = self._adoptable(vehicle, d)

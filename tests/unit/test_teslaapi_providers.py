@@ -24,12 +24,15 @@ def test_two_providers_with_honest_costs():
         5,
         False,
     )
-    assert owner.cost(C.READ_CHARGE) == C.CLOUD_FREE and owner.cost(C.SET_AMPS) is None
+    assert owner.cost(C.READ_CHARGE) == C.CLOUD_FREE
+    # Free, but paced as Fleet (#659)
+    assert owner.cost(C.SET_AMPS) == C.OWNER_COMMAND and C.OWNER_COMMAND.price == 0.0
     assert fleet.cost(C.READ_CHARGE) == C.FLEET_DATA
     assert fleet.cost(C.SET_AMPS) == C.FLEET_COMMAND and fleet.cost(C.WAKE) == C.FLEET_WAKE
     assert fleet.declarations()[C.SET_AMPS] == C.Declaration(C.FLEET_COMMAND)   # pacing is the reconciler's MIN_SEND_GAP
     # no tokens yet
     assert fleet.available(C.SET_AMPS) is False and owner.available(C.READ_CHARGE) is True
+    assert owner.available(C.SET_AMPS) is False
     assert owner.FIELDS == fleet.FIELDS == C.CHARGE_FIELDS | C.LOCATION_FIELDS
     assert (owner.module, fleet.module) == (api, api)
 
@@ -70,12 +73,19 @@ def test_fleet_commands_resolve_the_car_by_vin():
     api.wakeOutcome = Mock(return_value=O.Outcome(O.DONE))
     fleet.clock = lambda: 1000.0
     assert fleet.setAmps(VIN, 10) == O.Outcome(O.DONE)
-    api.command.assert_called_once_with(v, "set_charging_amps", {"charging_amps": 10})
+    api.command.assert_called_once_with(
+        v, "set_charging_amps", {"charging_amps": 10}, slot=api.fleetSlot
+    )
     assert fleet.wake(VIN) == O.Outcome(O.DONE)
-    api.wakeOutcome.assert_called_once_with(v, now=1000.0)
+    api.wakeOutcome.assert_called_once_with(v, now=1000.0, slot=api.fleetSlot)
     assert fleet.setAmps("5YJ3E1EA1KF000009", 10) == O.Outcome(O.UNSUPPORTED, "not listed")
     assert fleet.wake("5YJ3E1EA1KF000009") == O.Outcome(O.UNSUPPORTED, "not listed")
-    assert owner.setAmps(VIN, 10).kind == O.UNSUPPORTED    # Owner declares no commands
+    # Each provider sends with its own slot only (#659)
+    api.command.reset_mock()
+    assert owner.setAmps(VIN, 10) == O.Outcome(O.DONE)
+    api.command.assert_called_once_with(
+        v, "set_charging_amps", {"charging_amps": 10}, slot=api.ownerSlot
+    )
 
 
 @pytest.mark.parametrize("which", [0, 1])

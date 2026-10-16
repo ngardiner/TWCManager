@@ -140,9 +140,10 @@ class TeslaTokenSlot:
         return True
 
     def grants(self, purpose):
-        # Whether this kind of token can serve the purpose at all. Read-only
-        # is just a scope the Owner API never grants: it serves reads and
-        # energy, never commands.
+        # Whether this kind of token can serve the purpose for every car.
+        # An Owner token serves reads and energy; it commands only a car
+        # that takes unsigned commands, which TeslaAPI.commandSlotFor
+        # decides per car (#659), so no command purpose is granted here.
         if self.kind == "owner":
             return purpose in ("read", "energy")
         return self.missingScope(purpose) is None
