@@ -139,6 +139,7 @@ class AttemptRecord:
     def exclude(self, provider: str, kind: str) -> None:
         self.excluded[provider] = kind
 
+
 class FreeChannel:
     # One per car, shared by every aspect and free provider
     def __init__(self):
@@ -154,6 +155,7 @@ class FreeChannel:
         if self.failingSince is None:
             self.failingSince = at
         self.lastAttemptAt = at
+
 
 class ControlState:
     def __init__(self):

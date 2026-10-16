@@ -1,6 +1,5 @@
 # The Gen3 TWC as a provider: the unit serving a vehicle sets its amps locally
-# through
-# the controller's shared fake-Neurio value. Every unit reads that one value,
+# through the controller's shared fake-Neurio value. Every unit reads that one value,
 # so a unit cannot be stopped alone while a sibling charges: declared as
 # NO_INDIVIDUAL_STOP whenever more than one unit is occupied. The stop is a
 # zero headroom, a normal local stop (unverified on hardware).
