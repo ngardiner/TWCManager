@@ -135,8 +135,7 @@ def test_pairing_does_not_overlap_command(ble):
     assert ble.blePairingAttempt(VIN)["ok"] is True
 
 
-def test_retry_backoff_sleeps_outside_lock(ble):
-    ble.retryDelay = 0
+def test_quick_retry_sleeps_outside_lock(ble):
     results = iter([(None, None, None), (b"", b"ok", 0)])
     ble._run_command_with_timeout = lambda *a, **k: next(results)
     lock_held_during_sleep = []

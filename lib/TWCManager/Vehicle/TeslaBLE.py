@@ -49,54 +49,6 @@ def _serialized(method):
     return wrapper
 
 
-class BLECircuitBreaker:
-    """Circuit breaker pattern to prevent thrashing on persistent failures."""
-
-    def __init__(self, failure_threshold=5, recovery_timeout=60):
-        self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
-        self.failures = {}  # {vin: count}
-        self.failure_times = {}  # {vin: timestamp}
-
-    def record_failure(self, vin):
-        """Record a failure for a vehicle."""
-        now = time.time()
-        self.failures[vin] = self.failures.get(vin, 0) + 1
-        self.failure_times[vin] = now
-
-    def record_success(self, vin):
-        """Record a success for a vehicle, reset failure count."""
-        self.failures[vin] = 0
-
-    def is_open(self, vin):
-        """Check if circuit is open (stop retrying for this vehicle)."""
-        if vin not in self.failures:
-            return False
-
-        if self.failures[vin] < self.failure_threshold:
-            return False
-
-        # Check if recovery timeout has passed
-        now = time.time()
-        time_since_failure = now - self.failure_times.get(vin, now)
-
-        if time_since_failure > self.recovery_timeout:
-            # Try again (half-open state)
-            return False
-
-        return True
-
-    def get_status(self, vin):
-        """Get circuit breaker status for a vehicle."""
-        if vin not in self.failures:
-            return "closed"  # Normal operation
-
-        if self.is_open(vin):
-            return "open"  # Stop retrying
-
-        return "half-open"  # Trying to recover
-
-
 class TeslaBLE:
     binaryPath = None
     commandTimeout = 5
@@ -114,6 +66,12 @@ class TeslaBLE:
     # After a pairing request reaches the car, the owner has this long to
     # tap the key card; a key refusal inside it is expected, not a refusal.
     PAIRING_WINDOW = 600
+    # Pause before sendCommand's one retry of a transient failure.
+    QUICK_RETRY_DELAY = 2.0
+    # tesla-control's -debug log lines ("<time> [info ] Securing connection...");
+    # only the error line after them classifies a failure.
+    LOG_LINE = re.compile(r"^\S+ \[\w+ ?\] ")
+    TRANSIENT_TEXT = ("connection", "timeout", "deadline exceeded")
     # bluetoothctl listens this long per range scan.
     SCAN_SECONDS = 8
     # A request not served in this long no longer shows as "Scanning...".
@@ -152,9 +110,10 @@ class TeslaBLE:
         # VINs a drain has taken and not finished scanning; same lock.
         self._scanInProgress = set()
         self._scanLock = threading.Lock()
-        # Set by _sendCommand_internal on a key refusal so the retry loop
-        # (same thread) stops: a refused key is refused again on retry.
-        self._keyRefusal = threading.local()
+        # How this thread's last _sendCommand_internal failed: .refused on a
+        # key refusal, .transient on a timeout or connection error (the only
+        # failure sendCommand retries).
+        self._failure = threading.local()
         self.master = master
         try:
             self.config = self.master.config
@@ -169,23 +128,9 @@ class TeslaBLE:
             "TeslaBLE", {}
         )
 
-        # Enhanced configuration parameters
+        # Retry policy is the reconciler's; maxRetries, retryDelay and
+        # circuitBreaker* are no longer read.
         self.commandTimeout = ble_config.get("commandTimeout", 5)
-        self.maxRetries = ble_config.get("maxRetries", 3)
-        self.retryDelay = ble_config.get("retryDelay", 2)
-        self.processGroupManagement = ble_config.get("processGroupManagement", True)
-        self.dockerCompatibility = ble_config.get("dockerCompatibility", True)
-        self.statsReporting = ble_config.get("statsReporting", True)
-
-        # Circuit breaker configuration
-        circuit_breaker_threshold = ble_config.get("circuitBreakerThreshold", 5)
-        circuit_breaker_timeout = ble_config.get("circuitBreakerTimeout", 60)
-        self.circuit_breaker = BLECircuitBreaker(
-            circuit_breaker_threshold, circuit_breaker_timeout
-        )
-
-        # Retry statistics tracking
-        self.retry_stats = {}
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
@@ -196,10 +141,7 @@ class TeslaBLE:
         self._dbus_session_pid = None
         self._start_dbus_session()
 
-        logger.info(
-            f"BLE module initialized with timeout={self.commandTimeout}s, retries={self.maxRetries}, "
-            f"circuit_breaker_threshold={circuit_breaker_threshold}"
-        )
+        logger.info(f"BLE module initialized with timeout={self.commandTimeout}s")
 
         # Clean up any stale pipe file from previous crashes
         self._cleanup_stale_pipe()
@@ -346,12 +288,12 @@ class TeslaBLE:
         return "unknown"
 
     def commandOutcome(self, vin, command, args=None):
-        """One command through sendCommand (with its retries and circuit
-        breaker), classified. Never touches the claim: a key refusal has
+        """One command through sendCommand (with its one quick retry),
+        classified. Never touches the claim: a key refusal has
         already been recorded through _setBleStatus, which keeps the claim
         inside the pairing window and drops it outside."""
         vin = str(vin).upper()
-        self._keyRefusal.refused = False
+        self._failure.refused = False
         if args is None:
             output = self.sendCommand(vin, command)
         else:
@@ -359,7 +301,7 @@ class TeslaBLE:
         return self._classify(vin, output)
 
     def _classify(self, vin, output):
-        if getattr(self._keyRefusal, "refused", False):
+        if getattr(self._failure, "refused", False):
             if self._inPairingWindow(vin):
                 # The owner has not tapped the key card yet: the claim is
                 # kept, and the next try may prove the key
@@ -455,22 +397,26 @@ class TeslaBLE:
             self._safeNote(self._notePairingResult, vin, success, reason)
 
     def sendCommand(self, vin, command, args=None):
-        """
-        Enhanced sendCommand with improved error handling and timeout management.
-        Returns command output string or None on failure.
-        """
+        """Run one tesla-control command: its output, or None on failure.
+
+        A transient failure (timeout, or a connection error) is retried once
+        after QUICK_RETRY_DELAY, outside the BLE lock; anything else is
+        reported at once. All other retry policy is the reconciler's."""
         # Accept either a VIN string or a vehicle object with a .VIN attribute
         if hasattr(vin, "VIN"):
             vin = vin.VIN
-        return self._execute_with_retry(self._sendCommand_internal, vin, command, args)
+        output = self._sendCommand_internal(vin, command, args)
+        if output is None and getattr(self._failure, "transient", False):
+            logger.info(f"BLE command '{command}' to {vin} failed; retrying once")
+            time.sleep(self.QUICK_RETRY_DELAY)
+            output = self._sendCommand_internal(vin, command, args)
+        return output
 
     @_serialized
     def _sendCommand_internal(self, vin, command, args=None):
-        """
-        Internal sendCommand implementation (called by retry wrapper).
-        Returns command output string or None on failure.
-        """
-        self._keyRefusal.refused = False
+        """One tesla-control run. Returns command output string or None on
+        failure, recording in self._failure how it failed."""
+        self._failure.transient = False
         try:
             # Validate inputs
             if not vin or not command:
@@ -522,6 +468,7 @@ class TeslaBLE:
 
             if stdout is None and stderr is None:
                 logger.debug(f"BLE command '{command}' timed out or failed")
+                self._failure.transient = True
                 return None
 
             # Check if process was killed due to timeout
@@ -529,6 +476,7 @@ class TeslaBLE:
                 logger.warning(
                     f"BLE command '{command}' timed out after {self.commandTimeout}s"
                 )
+                self._failure.transient = True
                 return None
             output = stderr.decode("utf-8") if stderr else ""
 
@@ -551,8 +499,18 @@ class TeslaBLE:
                 )
                 logger.debug(f"BLE command '{command}' error output: {output[:200]}")
                 if self._isKeyRefusal(output):
-                    self._keyRefusal.refused = True
+                    self._failure.refused = True
                     self._safeNote(self._noteBleRefusal, vin, output)
+                else:
+                    errors = [
+                        line
+                        for line in output.lower().splitlines()
+                        if line.strip() and not self.LOG_LINE.match(line)
+                    ]
+                    last = errors[-1] if errors else ""
+                    self._failure.transient = any(
+                        t in last for t in self.TRANSIENT_TEXT
+                    )
                 return None
 
             logger.debug(
@@ -739,232 +697,6 @@ class TeslaBLE:
             "gpsAsOf": self._parse_proto_timestamp(ls.get("gpsAsOf")),
         }
 
-    def _is_transient_error(self, output):
-        """Determine if error is transient (should retry) or permanent (fail fast)."""
-        if output is None:
-            return True  # Timeout or communication error - transient
-
-        output_lower = output.lower()
-
-        # Transient error indicators
-        transient_indicators = [
-            "timeout",
-            "timed out",
-            "connection refused",
-            "connection reset",
-            "connection timeout",
-            "device busy",
-            "resource temporarily unavailable",
-            "try again",
-            "retry",
-            "temporarily",
-            "broken pipe",
-            "no such file or directory",
-        ]
-
-        for indicator in transient_indicators:
-            if indicator in output_lower:
-                logger.debug(f"Detected transient error: {indicator}")
-                return True
-
-        return False
-
-    def _is_transient_exception(self, exception):
-        """Determine if exception is transient (should retry) or permanent (fail fast)."""
-        exc_str = str(exception).lower()
-
-        transient_indicators = [
-            "timeout",
-            "timed out",
-            "connection",
-            "broken pipe",
-            "resource temporarily unavailable",
-            "device busy",
-            "try again",
-        ]
-
-        for indicator in transient_indicators:
-            if indicator in exc_str:
-                logger.debug(f"Detected transient exception: {indicator}")
-                return True
-
-        return False
-
-    def _calculate_backoff(self, attempt):
-        """Calculate exponential backoff delay for retry."""
-        # Exponential backoff: 2^attempt * retryDelay
-        delay = (2**attempt) * self.retryDelay
-
-        # Cap at reasonable maximum (30 seconds)
-        max_delay = 30
-        return min(delay, max_delay)
-
-    def _init_retry_stats(self, vin):
-        """Initialize retry statistics for a vehicle."""
-        if vin not in self.retry_stats:
-            self.retry_stats[vin] = {
-                "total_attempts": 0,
-                "successful_retries": 0,
-                "failed_retries": 0,
-                "circuit_breaker_trips": 0,
-                "last_error": None,
-                "last_error_time": None,
-            }
-
-    def _record_retry_attempt(self, vin, success, error=None):
-        """Record a retry attempt for statistics."""
-        self._init_retry_stats(vin)
-        stats = self.retry_stats[vin]
-
-        stats["total_attempts"] += 1
-        if success:
-            stats["successful_retries"] += 1
-        else:
-            stats["failed_retries"] += 1
-
-        if error:
-            stats["last_error"] = error
-            stats["last_error_time"] = time.time()
-
-    def _execute_with_retry(self, func, vin, *args, **kwargs):
-        """
-        Execute a function with retry logic, exponential backoff, and circuit breaker.
-
-        Args:
-            func: Function to execute
-            vin: Vehicle VIN (for circuit breaker tracking)
-            *args, **kwargs: Arguments to pass to func
-
-        Returns:
-            Result from func, or None if all retries exhausted
-        """
-        self._init_retry_stats(vin)
-
-        # Check circuit breaker
-        if self.circuit_breaker.is_open(vin):
-            logger.warning(f"Circuit breaker OPEN for {vin}, skipping retry logic")
-            self.retry_stats[vin]["circuit_breaker_trips"] += 1
-            return None
-
-        for attempt in range(self.maxRetries + 1):
-            try:
-                self._keyRefusal.refused = False
-                result = func(vin, *args, **kwargs)
-
-                if result is None and getattr(self._keyRefusal, "refused", False):
-                    # Not transient: the car refuses this key until re-paired.
-                    logger.debug(f"BLE key refused by {vin}; not retrying")
-                    return None
-
-                if result is not None:
-                    # Success
-                    self.circuit_breaker.record_success(vin)
-                    if attempt > 0:
-                        logger.info(
-                            f"BLE command succeeded on retry attempt {attempt + 1}/{self.maxRetries + 1} for {vin}"
-                        )
-                        self._record_retry_attempt(vin, True)
-                    return result
-
-                # Result is None - check if error is transient
-                if attempt < self.maxRetries:
-                    delay = self._calculate_backoff(attempt)
-                    logger.info(
-                        f"BLE command failed for {vin}, retrying in {delay}s "
-                        f"(attempt {attempt + 1}/{self.maxRetries + 1})"
-                    )
-                    self._record_retry_attempt(vin, False, "transient_error")
-                    time.sleep(delay)
-                else:
-                    # All retries exhausted
-                    self.circuit_breaker.record_failure(vin)
-                    logger.error(
-                        f"BLE command failed for {vin} after {self.maxRetries + 1} attempts"
-                    )
-                    self._record_retry_attempt(vin, False, "max_retries_exceeded")
-                    return None
-
-            except Exception as e:
-                if self._is_transient_exception(e):
-                    if attempt < self.maxRetries:
-                        delay = self._calculate_backoff(attempt)
-                        logger.warning(
-                            f"BLE transient exception for {vin}: {e}, "
-                            f"retrying in {delay}s (attempt {attempt + 1}/{self.maxRetries + 1})"
-                        )
-                        self._record_retry_attempt(
-                            vin, False, f"transient_exception: {str(e)[:50]}"
-                        )
-                        time.sleep(delay)
-                    else:
-                        # All retries exhausted
-                        self.circuit_breaker.record_failure(vin)
-                        logger.error(
-                            f"BLE transient exception for {vin} after {self.maxRetries + 1} attempts: {e}"
-                        )
-                        self._record_retry_attempt(
-                            vin, False, f"exception_max_retries: {str(e)[:50]}"
-                        )
-                        return None
-                else:
-                    # Permanent error - don't retry
-                    logger.error(f"BLE permanent error for {vin}, not retrying: {e}")
-                    self._record_retry_attempt(
-                        vin, False, f"permanent_error: {str(e)[:50]}"
-                    )
-                    return None
-
-        return None
-
-    def _kill_process_group(self, pid, timeout=1.0):
-        """
-        Kill a process and its entire process group gracefully.
-        First tries SIGTERM, then SIGKILL if process doesn't die.
-
-        Args:
-            pid: Process ID to kill
-            timeout: Time to wait between SIGTERM and SIGKILL
-
-        Returns:
-            True if process was killed, False if already dead
-        """
-        try:
-            # Check if process is still alive
-            if os.waitpid(pid, os.WNOHANG)[0] == 0:
-                # Process is still running, try graceful shutdown first
-                try:
-                    # Get process group ID
-                    pgid = os.getpgid(pid)
-
-                    # Try SIGTERM first (graceful)
-                    logger.debug(f"Sending SIGTERM to process group {pgid}")
-                    os.killpg(pgid, signal.SIGTERM)
-
-                    # Wait for graceful shutdown
-                    time.sleep(timeout)
-
-                    # Check if process is still alive
-                    if os.waitpid(pid, os.WNOHANG)[0] == 0:
-                        # Still alive, use SIGKILL (brutal)
-                        logger.warning(
-                            f"Process {pid} didn't respond to SIGTERM, sending SIGKILL"
-                        )
-                        os.killpg(pgid, signal.SIGKILL)
-                        time.sleep(0.1)
-
-                    logger.debug(f"Process group {pgid} terminated")
-                    return True
-                except ProcessLookupError:
-                    # Process already dead
-                    logger.debug(f"Process {pid} already terminated")
-                    return False
-            else:
-                logger.debug(f"Process {pid} already dead")
-                return False
-        except Exception as e:
-            logger.warning(f"Error killing process group: {e}")
-            return False
-
     def _start_dbus_session(self):
         """Start a single persistent D-Bus session daemon for this module instance.
 
@@ -1137,10 +869,6 @@ class TeslaBLE:
                 os.unlink(self.pipeName)
         except Exception as e:
             logger.debug(f"Could not remove pipe file: {e}")
-
-    def closeFile(self):
-        """Close pipe file with proper error handling and state tracking."""
-        self._ensure_pipe_closed()
 
     def openFile(self):
         """Open output file for passing data to tesla-control with error handling."""
