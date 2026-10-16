@@ -288,7 +288,7 @@ def test_load_drops_a_persisted_malformed_key_without_raising():  # I4
 
 
 def test_a_listed_car_is_never_expired():  # F8: the listing's keepsAlive claims
-    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.test_teslaapi_registry import api_with_registry
 
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})

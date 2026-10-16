@@ -110,7 +110,7 @@ class TWCSlave:
         ]
         plugged = []
         for v in cars:
-            if located(v) is False:
+            if located(self.master, v) is False:
                 continue
             obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
             if obs is None:
@@ -130,11 +130,7 @@ class TWCSlave:
         if plugged:
             return plugged
         # The first car the Tesla API listed (registry order is list order)
-        listed = [
-            v
-            for v in self.master.vehicleRegistry.vehicles()
-            if v.attachment("TeslaAPI")
-        ]
+        listed = [v for v, _ in self.master.vehicleRegistry.attached("TeslaAPI")]
         return listed[:1] if listed and listed[0] in cars else []
 
     def _setCarAmps(self, amps, by, lift=False):

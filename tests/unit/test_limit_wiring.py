@@ -112,7 +112,8 @@ def test_legacy_ids_resolve_once_from_the_first_vehicle_list(requests_mock, capl
     assert any("33" in r.getMessage() and "70%" in r.getMessage() and VIN4 in r.getMessage() for r in caplog.records if r.levelno == logging.INFO)   # the discard is logged (M5)
     assert "Car API get vehicles: HTTP 200" in caplog.text                       # the INFO8 lines were captured
     assert not any(t in caplog.text for t in (api.ownerSlot.accessToken, api.fleetSlot.accessToken))
-    api.carApiVehicles = []; api.loadVehicleList(); assert (owner.call_count, fleet.call_count) == (2, 1)   # once: nothing waits, no second list
+    m.vehicleRegistry = VehicleRegistry({}); api = new_api(master=m); api.storeToken(owner_token()); api.storeToken(fleet_token())   # nothing listed: a fresh registry
+    api.loadVehicleList(); assert (owner.call_count, fleet.call_count) == (2, 1)   # once: nothing waits, no second list
 
 def test_an_empty_vehicle_list_drops_nothing(requests_mock):
     api, m = legacyApi({"chargeLimits": {"11": [90, 50]}}, fleet_token())
@@ -168,7 +169,7 @@ def fleetCarOffItsPoint(requests_mock, home):
     # unplugged; the paid read places it at home or away
     m, r, v, c = setup(clock=False); api = new_api(master=m); api.storeToken(fleet_token())
     for p in api.providers(): m.providerOrder.register(p)
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); car = api.carApiVehicles[0]
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); car = api.registry.get(VIN).attachment("TeslaAPI")
     m.settings.update(homeLat=HOME[0], homeLon=HOME[1]); at = HOME if home else AWAY
     v.observe("twcVin", "8244", "TWC"); v.observe("twcVin", None, "TWC", seen=False)
     m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaAPI")
@@ -217,8 +218,8 @@ def test_a_limit_recorded_while_an_id_waits_keeps_the_legacy_normal(caplog):  # 
 def test_a_failed_boot_list_load_recovers_without_an_arrival(requests_mock):  # I2
     master = FakeMaster(); master.vehicleRegistry = VehicleRegistry({}); api = new_api(master=master); api.storeToken(fleet_token())
     requests_mock.get(FLEET_NA_URL, [{"status_code": 500, "text": "{}"}, {"text": listing((1, VIN))}])
-    api.updateChargeAtHome(); assert len(api.carApiVehicles) == 0 and api.listPending()   # the boot checkCharge failed
-    api.loadList(); assert len(api.carApiVehicles) == 1 and not api.listPending()      # the periodic retry
+    api.updateChargeAtHome(); assert len(api.registry.attached("TeslaAPI")) == 0 and api.listPending()   # the boot checkCharge failed
+    api.loadList(); assert len(api.registry.attached("TeslaAPI")) == 1 and not api.listPending()      # the periodic retry
     assert [q.method for q in requests_mock.request_history] == ["GET", "GET"]
     source = (REPO / "lib/TWCManager/TWCManager.py").read_text()
     tick = source[source.index("master.lastTeslaTokenRefreshCheck = time.time()"):]
@@ -232,7 +233,7 @@ def restarted(requests_mock, position=HOME, held=True, claim=True):
     # list and BLE has paired, held at 50 (normal 100) by the migrated record; asleep at SOC 51
     # with TeslaMate's retained position. Nothing sets atHome: presence comes from position
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.settings.update(commandPolicy="ble_only", homeLat=HOME[0], homeLon=HOME[1])
-    api = new_api(master=m); api.storeToken(owner_token()); api.storeToken(fleet_token()); del m.modules["TeslaAPI"]   # not a module record
+    api = new_api(master=m); api.storeToken(owner_token()); api.storeToken(fleet_token())
     for p in api.providers(): m.providerOrder.register(p)
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "Callandor"})
     if claim: v.claim("TeslaBLE", True, "paired")
@@ -241,7 +242,7 @@ def restarted(requests_mock, position=HOME, held=True, claim=True):
     for field, value in (("chargeLimit", 50), ("chargingState", "Complete"), ("batteryLevel", 51)): v.observe(field, value, "TeslaMateVehicle")
     from requests_mock import ANY
     requests_mock.register_uri(ANY, ANY, json={"response": {"state": "asleep"}})   # any request is counted, none fails
-    return m, r, v, api.carApiVehicles[0]
+    return m, r, v, v.attachment("TeslaAPI")
 
 def paidCalls(requests_mock):
     return [q.url for q in requests_mock.request_history if re.search(r"vehicle_data|wake_up|/command/", q.url)]

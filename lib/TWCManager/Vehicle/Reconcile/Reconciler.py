@@ -23,6 +23,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from ...VehicleCommandQueue import VehicleCommandQueue
+from ..Registry.Fields import READ_MAX_AGE
 from ..Providers.Capability import (
     NO_INDIVIDUAL_STOP,
     SET_CHARGE_LIMIT,
@@ -61,7 +62,7 @@ logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
 # The longest a pass waits for a wake
 TICK = 1.0
-# Two knobs that share their values today (CarApiVehicle's 300 s limit gap
+# Two knobs that share their values today (the 300 s limit gap
 # and the 60 s start/stop gate): PAID_AFTER, how long the free channel must
 # have failed before a paid provider is used; RETRY, the gap before the same
 # aspect is tried again. Split the table to tune one alone
@@ -71,8 +72,6 @@ RESTORE_RETRY = 3600.0
 # A free channel failing but untried for this long gets the real command
 # before money is spent
 PROBE_AFTER = 600.0
-# The read before a write accepts a value this old (CarApiVehicle.READ_MAX_AGE)
-READ_MAX_AGE = 300.0
 # A start waits this long after a limit write (today's 5 s sleep)
 LIMIT_THEN_START_GAP = 5.0
 # The least time between two sends of one aspect to one car, by any

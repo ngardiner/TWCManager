@@ -26,7 +26,7 @@ from TWCManager.Vehicle.Reconcile.Outcome import (
     UNREACHABLE,
     Outcome,
 )
-from TWCManager.Vehicle.Registry.Fields import TELEMETRY_SOURCES
+from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE, TELEMETRY_SOURCES
 from TWCManager.Vehicle.Registry.Vehicle import Vehicle
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
@@ -37,25 +37,22 @@ logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 _REFRESHED = Outcome(DONE, "refreshed")
 
 
-class RegistryField:
-    """A CarApiVehicle attribute that is a view onto a registry field: reads
-    return the latest observation's value (or the legacy default), writes
-    record an observation."""
+class CarApiState:
+    """TeslaAPI's own bookkeeping for one car the account lists, attached to
+    the car's registry Vehicle as "TeslaAPI": the attachment is the listing.
+    The car's data is registry fields, never kept here."""
 
-    def __init__(self, field: str, default: Any, source: str = "TeslaAPI"):
-        self.field = field
-        self.default = default
-        self.source = source
-
-    def __get__(self, instance, owner=None):
-        if instance is None:
-            return self
-        vehicle = instance._liveVehicle()
-        obs = vehicle.latest(self.field) if vehicle is not None else None
-        return self.default if obs is None else obs.value
-
-    def __set__(self, instance, value):
-        instance.vehicle.observe(self.field, value, self.source)
+    atHome = False  # home by the latest position (locate, a read)
+    statusDeferral = 0  # until then a read reports stored values
+    errorCount = 0  # the per-car API error backoff
+    lastErrorTime = 0
+    lastAPIAccessTime = 0  # the last answer that proved it awake
+    firstWakeAttemptTime = 0  # the wake hold (wakeOutcome, wakeDue)
+    firstChargeNeededTime = 0
+    lastChargeNeededTime = 0
+    delayNextWakeAttempt = 0
+    online = None  # the free online check: True, False, None (no answer)
+    onlineCheckedAt = 0  # ... reused for 120 s from here
 
 
 class TLS13Adapter(HTTPAdapter):
@@ -137,7 +134,6 @@ class TeslaAPI:
     LEGACY_SYNCED_EXPIRY = 99999 * 99999 * 99999
     lastChargeCheck = 0
     chargeUpdateInterval = 1800
-    carApiVehicles = []
     vehicleListLock = RLock()
     enabled = True
     config = None
@@ -170,8 +166,8 @@ class TeslaAPI:
     def __init__(self, master):
         self.master = master
         # The module's clock for the command and wake paths (wakeDue,
-        # wakeOutcome, CarApiVehicle.is_awake): a test replaces it instead of
-        # the process-wide time.time
+        # wakeOutcome, the online check's cache): a test replaces it instead
+        # of the process-wide time.time
         self.now = time.time
         self.registry = VehicleRegistry.forMaster(master)
         # slot.changes when a skipped sync was last logged, per slot.
@@ -233,14 +229,24 @@ class TeslaAPI:
         return [OwnerAPIProvider(self), FleetAPIProvider(self)]
 
     def addVehicle(self, json):
-        if "vin" in json:
-            try:
-                car = CarApiVehicle(json, self, self.config)
-            except ValueError:
-                # The registry refuses a missing or malformed VIN.
-                logger.debug("Skipping a listed vehicle without a usable VIN")
-                return
-            self.carApiVehicles.append(car)
+        # A listed car joins the registry with this module's record attached
+        if "vin" not in json:
+            return
+        try:
+            vehicle = self.registry.getOrCreate(
+                json["vin"], "TeslaAPI", attach=("TeslaAPI", CarApiState())
+            )
+        except ValueError:
+            # The registry refuses a missing or malformed VIN.
+            logger.debug("Skipping a listed vehicle without a usable VIN")
+            return
+        # The Owner API never commands; the Fleet claim follows the Fleet
+        # slot live, so a token pasted or synced after the listing manages
+        # the car without a re-list
+        vehicle.claim("OwnerAPI", False, "listed")
+        vehicle.claim("FleetAPI", lambda: self.fleetSlot.usable("command"), "listed")
+        # A cloud account listing is a sighting.
+        vehicle.observe("name", json["display_name"] or vehicle.vin, "TeslaAPI")
 
     def refreshTokenTypeKnown(self, token):
         # True when the refresh token's type can be told from the token
@@ -293,7 +299,7 @@ class TeslaAPI:
         purpose,
         body=None,
         timeout=10,
-        vehicle=None,
+        car=None,
         tries=3,
     ):
         # One request with slot's token to path under the API root (where
@@ -325,7 +331,7 @@ class TeslaAPI:
                 "Car API %s %s: HTTP %s" % (method, path, req.status_code),
             )
             outcome = self._classify(
-                slot, req.status_code, purpose, req.text, vehicle, tries > 0
+                slot, req.status_code, purpose, req.text, car, tries > 0
             )
             if outcome is not _REFRESHED:
                 return req, outcome
@@ -333,7 +339,7 @@ class TeslaAPI:
             if tries < 1:
                 return req, Outcome(REFUSED, "401")
 
-    def _classify(self, slot, status, purpose, body, vehicle=None, refresh=True):
+    def _classify(self, slot, status, purpose, body, car=None, refresh=True):
         # What an answer means, acted on: None for an HTTP 200, else an
         # Outcome. purpose is "read", "list" (the vehicle list), "command",
         # "wake" or "energy" (the Wall Connector VIN read). Energy refusals
@@ -416,9 +422,9 @@ class TeslaAPI:
             return Outcome(UNREACHABLE, "408")
         if status == 429:
             # Explicitly told to back off
-            target = vehicle or self
+            target = car or self
             target.errorCount = max(30, target.errorCount)
-            self.updateCarApiLastErrorTime(vehicle)
+            self.updateCarApiLastErrorTime(car)
         return Outcome(ERROR, str(status))
 
     def tokenRoute(self, token):
@@ -466,13 +472,13 @@ class TeslaAPI:
         return self.slotFor("command") is None
 
     def loadVehicleList(self):
-        # Populate carApiVehicles from the vehicle list of the read slot
+        # List the cars (attach their records) from the vehicle list of the read slot
         # (Owner API /products, else the Fleet API vehicle list). Returns True
         # if vehicles are (now) known, False if the fetch failed or no slot is
         # usable for reads. Safe to call from any thread; concurrent callers
         # will not double-add vehicles.
         with self.vehicleListLock:
-            if len(self.carApiVehicles) > 0:
+            if self.registry.attached("TeslaAPI"):
                 return True
             slot = self.slotFor("read")
             if slot is None:
@@ -499,14 +505,14 @@ class TeslaAPI:
     def listPending(self) -> bool:
         # The vehicle list is not loaded, or held limits wait on it
         held = getattr(self.master, "heldLimits", None)
-        return len(self.carApiVehicles) < 1 or (
+        return not self.registry.attached("TeslaAPI") or (
             isinstance(held, HeldLimits) and held.waiting()
         )
 
     def loadList(self):
         # The vehicle list (a free call) loads here, and held limits waiting
         # on it resolve: the cloud providers serve only listed cars (C1)
-        if len(self.carApiVehicles) > 0:
+        if self.registry.attached("TeslaAPI"):
             self.resolveHeldLimits()
         elif not self.getCarApiRetryRemaining():
             self.refreshTokenIfNeeded()
@@ -626,10 +632,10 @@ class TeslaAPI:
     def is_far_from_home(self, lat, lon):
         return not self.is_location_within_radius(lat, lon, 1.4)
 
-    def getCarApiErrorRetryMins(self, vehicle=None):
+    def getCarApiErrorRetryMins(self, car=None):
         errorCount = self.errorCount
-        if vehicle:
-            errorCount = max(vehicle.errorCount, errorCount)
+        if car:
+            errorCount = max(car.errorCount, errorCount)
         errorCount = max(errorCount - 1, 0)
         return min(errorCount, 10)
 
@@ -747,21 +753,21 @@ class TeslaAPI:
             self._energySitesEmpty[slot.kind] = time.time()
         return vins if answered else None
 
-    def getCarApiRetryRemaining(self, vehicle=None, now=None):
+    def getCarApiRetryRemaining(self, car=None, now=None):
         # Calculate the amount of time remaining until the API can be queried
         # again. This is the api backoff time minus the difference between now
         # and the last error time
 
-        # The optional vehicleLast parameter allows passing the last error time
-        # for an individual vehicle, rather than the entire API.
+        # The optional car (a CarApiState) adds that car's last error time
+        # to the entire API's.
         lastError = self.getCarApiLastErrorTime()
-        if vehicle:
-            lastError = max(vehicle.lastErrorTime, lastError)
+        if car:
+            lastError = max(car.lastErrorTime, lastError)
 
         if lastError == 0:
             return 0
         else:
-            backoff = self.getCarApiErrorRetryMins(vehicle) * 60
+            backoff = self.getCarApiErrorRetryMins(car) * 60
             lasterrortime = (time.time() if now is None else now) - lastError
             if lasterrortime >= backoff:
                 return 0
@@ -777,20 +783,11 @@ class TeslaAPI:
                 )
                 return int(backoff - lasterrortime)
 
-    def getVehicleByVIN(self, vin):
-        # Returns the vehicle object identified by the given VIN
-        if not isinstance(vin, str):
-            return False
-        for vehicle in self.carApiVehicles:
-            if str(vehicle.VIN).upper() == vin.upper():
-                return vehicle
-        return False
-
-    def resetCarApiLastErrorTime(self, vehicle=None):
+    def resetCarApiLastErrorTime(self, car=None):
         self.carApiLastErrorTime = 0
-        if vehicle:
-            vehicle.lastErrorTime = 0
-            vehicle.errorCount = 0
+        if car:
+            car.lastErrorTime = 0
+            car.errorCount = 0
         self.errorCount = 0
         return True
 
@@ -1265,10 +1262,11 @@ class TeslaAPI:
 
     def command(self, vehicle, name: str, body: Optional[dict] = None) -> Outcome:
         # One Fleet API command (name, e.g. "set_charge_limit") to vehicle
+        car = vehicle.attachment("TeslaAPI")
         slot = self.slotFor("command")
         if slot is None:
             return Outcome(REFUSED, "no command token")
-        if self.getCarApiRetryRemaining(vehicle, now=self.now()):
+        if self.getCarApiRetryRemaining(car, now=self.now()):
             return Outcome(UNREACHABLE, "backoff")
         outcome, response = self._paidPost(vehicle, slot, "command/" + name, body)
         if outcome is None:
@@ -1285,8 +1283,8 @@ class TeslaAPI:
             else:
                 outcome = Outcome(ERROR, reason or "not accepted")
             if outcome.kind in (DONE, SATISFIED):
-                # The car answered: it is awake (ready() reads this)
-                vehicle.lastAPIAccessTime = self.now()
+                # The car answered: it is awake (_ready reads this)
+                car.lastAPIAccessTime = self.now()
         logger.log(
             logging.INFO8,
             "Car API cmd %s for %s: %s %s"
@@ -1302,10 +1300,10 @@ class TeslaAPI:
         req, outcome = self._request(
             slot,
             "post",
-            "vehicles/%s/%s" % (vehicle.VIN, path),
+            "vehicles/%s/%s" % (vehicle.vin, path),
             purpose,
             body,
-            vehicle=vehicle,
+            car=vehicle.attachment("TeslaAPI"),
         )
         if outcome is not None:
             return outcome, None
@@ -1317,23 +1315,23 @@ class TeslaAPI:
             return Outcome(ERROR, type(e).__name__), None
         return None, response
 
-    def wakeDue(self, vehicle, now=None) -> bool:
-        # Whether the hold schedule lets a wake_up go to vehicle now: not
+    def wakeDue(self, car, now=None) -> bool:
+        # Whether the hold schedule lets a wake_up go to the car now: not
         # during the API error backoff, not until wakeDelayMins after the
         # charge need was first seen (the car may start on the TWC's offer),
         # and not within delayNextWakeAttempt of the last wake_up.
         now = self.now() if now is None else now
-        if self.getCarApiRetryRemaining(vehicle, now=now):
+        if self.getCarApiRetryRemaining(car, now=now):
             return False
         if (
-            vehicle.firstChargeNeededTime
-            and not self._chargeNeedEnded(vehicle, now)
-            and now - vehicle.firstChargeNeededTime < self.wakeDelayMins * 60
+            car.firstChargeNeededTime
+            and not self._chargeNeedEnded(car, now)
+            and now - car.firstChargeNeededTime < self.wakeDelayMins * 60
         ):
             return False
         if (
-            vehicle.delayNextWakeAttempt
-            and now - vehicle.lastAPIAccessTime <= vehicle.delayNextWakeAttempt
+            car.delayNextWakeAttempt
+            and now - car.lastAPIAccessTime <= car.delayNextWakeAttempt
         ):
             return False
         return True
@@ -1343,20 +1341,22 @@ class TeslaAPI:
         # online check (vehicles/{vin}, cached 120 s) says it is not online
         # and wakeDue allows it. One wake_up at most.
         now = self.now() if now is None else now
+        car = vehicle.attachment("TeslaAPI")
         slot = self.slotFor("command")
         if slot is None:
             return Outcome(REFUSED, "no command token")
-        if self.getCarApiRetryRemaining(vehicle, now=now):
+        if self.getCarApiRetryRemaining(car, now=now):
             # Told to back off: not even the free check
             return Outcome(UNREACHABLE, "backoff")
-        self._askChargeNeed(vehicle, now)
+        self._askChargeNeed(car, now)
         # The command slot's account, unless it cannot read; the Owner API
         # answers the same free check
         checkSlot = slot if slot.usable("read") else self.slotFor("read")
-        if vehicle.is_awake(slot=checkSlot, now=now):
-            self._wakeSettled(vehicle)
+        awake = self.onlineState(vehicle, slot=checkSlot, now=now)
+        if awake:
+            self._wakeSettled(car)
             return Outcome(SATISFIED, "online")
-        if not vehicle.lastVehicleAwakeKnown:
+        if awake is None:
             # No free answer (no read token, an error): never wake blind
             return Outcome(UNREACHABLE, "online check failed")
         if not slot.usable("wake"):
@@ -1364,8 +1364,8 @@ class TeslaAPI:
             # the token changes. Checked after the free online check, so an
             # online car still gets its command
             return Outcome(UNREACHABLE, "wake refused")
-        if vehicle.firstChargeNeededTime == 0:
-            vehicle.firstChargeNeededTime = now
+        if car.firstChargeNeededTime == 0:
+            car.firstChargeNeededTime = now
             if self.wakeDelayMins:
                 logger.info(
                     vehicle.name
@@ -1373,11 +1373,11 @@ class TeslaAPI:
                     + str(self.wakeDelayMins)
                     + " minutes"
                 )
-        if not self.wakeDue(vehicle, now):
+        if not self.wakeDue(car, now):
             return Outcome(UNREACHABLE, "wake held")
 
         # The wake hold is measured from here
-        vehicle.lastAPIAccessTime = now
+        car.lastAPIAccessTime = now
         outcome, response = self._paidPost(vehicle, slot, "wake_up", purpose="wake")
         if outcome == Outcome(UNREACHABLE, "wake refused"):
             return outcome
@@ -1388,11 +1388,10 @@ class TeslaAPI:
                 state = "error"
         if state == "online":
             self.resetCarApiLastErrorTime()
-            self._wakeSettled(vehicle)
+            self._wakeSettled(car)
             # The wake's answer replaces the cached "asleep": the read that
             # follows it goes out (C1)
-            vehicle.lastVehicleAwakeState = vehicle.lastVehicleAwakeChecked = True
-            vehicle.lastVehicleAwakeTime = now
+            car.online, car.onlineCheckedAt = True, now
             # A command sent at once after a wake can fail with
             # could_not_wake_buses; let the car settle
             time.sleep(5)
@@ -1400,24 +1399,21 @@ class TeslaAPI:
 
         # Every failed wake waits WAKE_RETRY_SECONDS before the next: rapid
         # retries cost $0.02 each and do not help an asleep or offline car
-        if vehicle.firstWakeAttemptTime == 0:
-            vehicle.firstWakeAttemptTime = now
-        vehicle.delayNextWakeAttempt = self.WAKE_RETRY_SECONDS
+        if car.firstWakeAttemptTime == 0:
+            car.firstWakeAttemptTime = now
+        car.delayNextWakeAttempt = self.WAKE_RETRY_SECONDS
         if state in ("asleep", "waking", "offline"):
             self.resetCarApiLastErrorTime()
             outcome = Outcome(UNREACHABLE, state)
         elif outcome is None:
             # HTTP 200 with an unexpected state
-            self.updateCarApiLastErrorTime(vehicle)
+            self.updateCarApiLastErrorTime(car)
             outcome = Outcome(ERROR, "state")
         logger.info(
             "Car API wake %s failed (%s %s). Will try again in %d seconds."
-            % (vehicle.name, outcome.kind, outcome.detail, vehicle.delayNextWakeAttempt)
+            % (vehicle.name, outcome.kind, outcome.detail, car.delayNextWakeAttempt)
         )
-        if (
-            vehicle.firstWakeAttemptTime > 0
-            and now - vehicle.firstWakeAttemptTime > 60 * 60
-        ):
+        if car.firstWakeAttemptTime > 0 and now - car.firstWakeAttemptTime > 60 * 60:
             # It should never take over an hour to wake a car
             logger.info(
                 "ERROR: We have failed to wake %s (%s) for %.1f hours.\n"
@@ -1425,7 +1421,7 @@ class TeslaAPI:
                 % (
                     vehicle.name,
                     outcome.detail,
-                    (now - vehicle.firstWakeAttemptTime) / 60 / 60,
+                    (now - car.firstWakeAttemptTime) / 60 / 60,
                 )
             )
         return outcome
@@ -1436,23 +1432,23 @@ class TeslaAPI:
     # online check finds the car awake (_wakeSettled); this is the backstop.
     CHARGE_NEED_IDLE_SECONDS = 600
 
-    def _chargeNeedEnded(self, vehicle, now):
-        return now - vehicle.lastChargeNeededTime > self.CHARGE_NEED_IDLE_SECONDS
+    def _chargeNeedEnded(self, car, now):
+        return now - car.lastChargeNeededTime > self.CHARGE_NEED_IDLE_SECONDS
 
-    def _askChargeNeed(self, vehicle, now):
+    def _askChargeNeed(self, car, now):
         # A wake is asked for: a need that ended starts again with its grace
-        if vehicle.firstChargeNeededTime and self._chargeNeedEnded(vehicle, now):
-            vehicle.firstChargeNeededTime = 0
-        vehicle.lastChargeNeededTime = now
+        if car.firstChargeNeededTime and self._chargeNeedEnded(car, now):
+            car.firstChargeNeededTime = 0
+        car.lastChargeNeededTime = now
 
     @staticmethod
-    def _wakeSettled(vehicle):
+    def _wakeSettled(car):
         # The car is online: the next need starts a new hold schedule
-        vehicle.firstWakeAttemptTime = 0
-        vehicle.firstChargeNeededTime = 0
-        vehicle.delayNextWakeAttempt = 0
+        car.firstWakeAttemptTime = 0
+        car.firstChargeNeededTime = 0
+        car.delayNextWakeAttempt = 0
 
-    def updateCarApiLastErrorTime(self, vehicle=None):
+    def updateCarApiLastErrorTime(self, car=None):
         timestamp = time.time()
         logger.log(
             logging.INFO8,
@@ -1461,9 +1457,9 @@ class TeslaAPI:
             + " to "
             + str(timestamp),
         )
-        if vehicle:
-            vehicle.lastErrorTime = timestamp
-            vehicle.errorCount += 1
+        if car:
+            car.lastErrorTime = timestamp
+            car.errorCount += 1
         else:
             self.carApiLastErrorTime = timestamp
             self.errorCount += 1
@@ -1473,176 +1469,89 @@ class TeslaAPI:
     def updateChargeAtHome(self):
         # checkCharge: the vehicle list (free), then each car at home
         self.loadList()
-        for car in self.carApiVehicles:
+        for vehicle, car in self.registry.attached("TeslaAPI"):
             if car.atHome:
-                car.update_charge()
+                self.update_charge(vehicle)
         self.lastChargeCheck = time.time()
 
-    def vehicleScheduledChargingPending(self, vin=None):
-        # True if the named (or any at-home) vehicle reports it is waiting on
-        # its in-car charging schedule (Scheduled Charging / Departure).
-        for vehicle in self.carApiVehicles:
-            if vin and vehicle.VIN != vin:
-                continue
-            if not vin and not vehicle.atHome:
-                continue
-            if vehicle.scheduledChargingPending:
-                return True
-        return False
+    def vehicleScheduledChargingPending(self, vin):
+        # True if the listed vehicle reports it is waiting on its in-car
+        # charging schedule (Scheduled Charging / Departure).
+        v = self.registry.get(vin) if isinstance(vin, str) else None
+        car = v.attachment("TeslaAPI") if v is not None and v.vin == vin else None
+        return bool(car and v.value("scheduledChargingPending", False))
 
     def vehicleIsDefinitelyHome(self, vin):
-        for car in self.carApiVehicles:
-            if car.VIN == vin:
-                if not car.atHome:
-                    # Force a real fetch; the status deferral would otherwise
-                    # return cached (possibly stale) coordinates unqueried.
-                    car.statusDeferral = 0
-                    updated = car.update_location(0)
-                    if updated and not car.atHome:
-
-                        def say(msg, *args):
-                            logger.log(logging.INFO2, msg, *args)
-
-                        say(
-                            "%s was connected to a TWC, so is definitely home.",
-                            car.name,
-                        )
-                        if car.gpsAsOf and time.time() - car.gpsAsOf > 600:
-                            # The car is home (the TWC reports its VIN), but
-                            # its GPS fix is stale - don't move home to
-                            # wherever the car last had reception.
-                            say(
-                                "Not resetting home location: %s's GPS fix is stale.",
-                                car.name,
-                            )
-                        else:
-                            say("Resetting home location to (%s, %s)", car.lat, car.lon)
-                            self.master.setHomeLat(car.lat)
-                            self.master.setHomeLon(car.lon)
-                            self.master.queue_background_task({"cmd": "sunrise"})
-                            self.master.queue_background_task({"cmd": "saveSettings"})
-                        car.atHome = True
-                return
+        v = self.registry.get(vin) if isinstance(vin, str) else None
+        car = v.attachment("TeslaAPI") if v is not None and v.vin == vin else None
+        if car is None or car.atHome:
+            return
+        # Force a real fetch; the status deferral would otherwise
+        # return cached (possibly stale) coordinates unqueried.
+        car.statusDeferral = 0
+        updated = self.update_location(v, 0)
+        if updated and not car.atHome:
+            logger.log(
+                logging.INFO2,
+                "%s was connected to a TWC, so is definitely home.",
+                v.name,
+            )
+            gpsAsOf = v.value("gpsAsOf", 0)
+            if gpsAsOf and time.time() - gpsAsOf > 600:
+                # The car is home (the TWC reports its VIN), but its GPS fix
+                # is stale - don't move home to wherever the car last had
+                # reception.
+                logger.log(
+                    logging.INFO2,
+                    "Not resetting home location: %s's GPS fix is stale.",
+                    v.name,
+                )
+            else:
+                lat, lon = v.value("lat", 10000), v.value("lon", 10000)
+                logger.log(
+                    logging.INFO2, "Resetting home location to (%s, %s)", lat, lon
+                )
+                self.master.setHomeLat(lat)
+                self.master.setHomeLon(lon)
+                self.master.queue_background_task({"cmd": "sunrise"})
+                self.master.queue_background_task({"cmd": "saveSettings"})
+            car.atHome = True
 
     @property
     def numCarsAtHome(self):
-        return len([car for car in self.carApiVehicles if car.atHome])
+        return len([car for _, car in self.registry.attached("TeslaAPI") if car.atHome])
 
     @property
     def minBatteryLevelAtHome(self):
         if time.time() - self.lastChargeCheck > self.chargeUpdateInterval:
             self.master.queue_background_task({"cmd": "checkCharge"})
         return min(
-            [car.batteryLevel for car in self.carApiVehicles if car.atHome],
+            [
+                v.value("batteryLevel", 10000)
+                for v, car in self.registry.attached("TeslaAPI")
+                if car.atHome
+            ],
             default=10000,
         )
 
+    # One listed car's reads: vehicle is its registry Vehicle, car its
+    # CarApiState. Field reads and writes go through the registry.
 
-class CarApiVehicle:
-    carapi = None
-    __config = None
-    debuglevel = 0
-    ID = None
-    VIN = ""
-
-    firstWakeAttemptTime = 0
-    firstChargeNeededTime = 0
-    lastAPIAccessTime = 0
-    delayNextWakeAttempt = 0
-
-    errorCount = 0
-    lastErrorTime = 0
-    lastVehicleAwakeTime = 0
-    lastVehicleAwakeState = False
-    # Whether lastVehicleAwakeState came from an answer (a sync source or
-    # vehicles/{vin}), not a failed check
-    lastVehicleAwakeKnown = False
-    # Whether the cached vehicles/{vin} check (lastVehicleAwakeTime) answered
-    lastVehicleAwakeChecked = False
-    # When a wake was last asked for (TeslaAPI's charge-need lifetime)
-    lastChargeNeededTime = 0
-    statusDeferral = 0
-    # update_charge reuses a charge reading up to this old (seconds).
-    READ_MAX_AGE = 300
-
-    # Per-vehicle fields are views onto the registry Vehicle: reads give the
-    # latest observation (or the legacy default), writes observe.
-    name = RegistryField("name", "")
-    batteryLevel = RegistryField("batteryLevel", 10000)
-    chargeLimit = RegistryField("chargeLimit", -1)
-    chargingState = RegistryField("chargingState", "Unknown")
-    availableCurrent = RegistryField("availableCurrent", 0)
-    chargeCurrentRequest = RegistryField("chargeCurrentRequest", None)
-    voltage = RegistryField("voltage", 0)
-    phases = RegistryField("phases", 0)
-    timeToFullCharge = RegistryField("timeToFullCharge", 0.0)
-    scheduledChargingPending = RegistryField("scheduledChargingPending", False)
-    lat = RegistryField("lat", 10000)
-    lon = RegistryField("lon", 10000)
-    gpsAsOf = RegistryField("gpsAsOf", 0)
-    pluggedIn = RegistryField("pluggedIn", None)
-    actualCurrent = RegistryField("actualCurrent", 0)
-
-    atHome = False
-    _vehicle = None
-
-    def __init__(self, json, carapi, config):
-        self.carapi = carapi
-        self.__config = config
-        self.ID = json["id"]
-        self.VIN = json["vin"]
-        self._bind(carapi.registry.getOrCreate(self.VIN, "TeslaAPI"), listed=True)
-        # A cloud account listing is a sighting.
-        self.name = json["display_name"] or self.VIN or str(self.ID) or "unknown"
-
-    def _bind(self, vehicle, listed=False):
-        # Joins the registry vehicle with both claims. The Owner API never
-        # commands; the Fleet claim follows the Fleet slot live, so a token
-        # pasted or synced after the listing manages the car without a
-        # re-list. A listing attaches this object; a rebind (after a forget)
-        # only takes an empty attachment, so a stale object never displaces a
-        # newer one.
-        if vehicle is not self._vehicle:
-            if listed or vehicle.attachment("TeslaAPI") is None:
-                vehicle.attach("TeslaAPI", self)
-            carapi = self.carapi
-            vehicle.claim("OwnerAPI", False, "listed")
-            vehicle.claim(
-                "FleetAPI", lambda: carapi.fleetSlot.usable("command"), "listed"
-            )
-            self._vehicle = vehicle
-        return vehicle
-
-    def _liveVehicle(self):
-        # The registry's current vehicle for this VIN, or None if it was
-        # forgotten. No side effects: a read is not a sighting.
-        return self.carapi.registry.get(self.VIN)
-
-    @property
-    def vehicle(self):
-        # Resolved on each use, so a forgotten (or re-created) registry
-        # vehicle is never written to. The account still lists this car, so
-        # a write after a forget rejoins it, as the next listing would.
-        vehicle = self._liveVehicle()
-        if vehicle is None:
-            vehicle = self.carapi.registry.getOrCreate(self.VIN, "TeslaAPI")
-        return self._bind(vehicle)
-
-    def ready(self):
-        if self.carapi.getCarApiRetryRemaining(self):
+    def _ready(self, vehicle, car) -> bool:
+        if self.getCarApiRetryRemaining(car):
             # It's been under carApiErrorRetryMins minutes since the car API
             # generated an error on this vehicle. Return that car is not ready.
             logger.log(
                 logging.INFO8,
-                self.name
+                vehicle.name
                 + " not ready because of recent lastErrorTime "
-                + str(self.lastErrorTime),
+                + str(car.lastErrorTime),
             )
             return False
 
         if (
-            self.firstWakeAttemptTime == 0
-            and time.time() - self.lastAPIAccessTime < 2 * 60
+            car.firstWakeAttemptTime == 0
+            and time.time() - car.lastAPIAccessTime < 2 * 60
         ):
             # If it's been less than 2 minutes since we successfully woke this car, it
             # should still be awake.  No need to check.  It returns to sleep state about
@@ -1651,55 +1560,57 @@ class CarApiVehicle:
 
         # This can check whether the car is online; if so, it will likely stay online for
         # two minutes.
-        if self.is_awake():
-            self.firstWakeAttemptTime = 0
+        if self.is_awake(vehicle):
+            car.firstWakeAttemptTime = 0
             return True
 
         logger.log(
             logging.INFO8,
-            self.name + " not ready because it wasn't woken in the last 2 minutes.",
+            vehicle.name + " not ready because it wasn't woken in the last 2 minutes.",
         )
         return False
 
-    def is_awake(self, slot=None, now=None):
-        # now (default: the module's clock) measures the 120 s cache, so a
-        # caller on a test clock drives it
-        vehicle = self._liveVehicle()
-        obs, age = (None, None) if vehicle is None else vehicle.telemetryState()
+    def onlineState(self, vehicle, slot=None, now=None) -> Optional[bool]:
+        # True or False when an answer (a sync source or the free
+        # vehicles/{vin}) says so; None when nothing answered. now (default:
+        # the module's clock) measures the 120 s cache, so a caller on a
+        # test clock drives it
+        car = vehicle.attachment("TeslaAPI")
+        obs, age = vehicle.telemetryState()
         if obs is not None and obs.source in TELEMETRY_SOURCES:
             # External sync (e.g. TeslaMate) has provided at least one update.
             if obs.value in ("asleep", "offline"):
                 # Car is known to be asleep - trust the sync source and avoid
                 # Fleet API calls that cost money just to confirm it's still asleep.
-                self.lastVehicleAwakeKnown = True
                 return False
             if age is not None and age <= Vehicle.SYNC_TIMEOUT / 4:
                 # Fresh data and car is not asleep - trust it.
-                self.lastVehicleAwakeKnown = True
                 return obs.value in ("online", "charging", "updating", "driving")
             # Stale data but car was last known active - fall through to API check
             # in case the sync source dropped while the car was still awake.
-        now = self.carapi.now() if now is None else now
+        now = self.now() if now is None else now
         # Don't check more often than every 2 minutes
-        if now - self.lastVehicleAwakeTime < 120:
-            self.lastVehicleAwakeKnown = self.lastVehicleAwakeChecked
-            return self.lastVehicleAwakeState
+        if now - car.onlineCheckedAt < 120:
+            return car.online
         result, response = self.get_car_api(
-            str(self.VIN), checkReady=False, provesOnline=False, slot=slot
+            vehicle, vehicle.vin, checkReady=False, slot=slot
         )
-        awakeState = bool(result) and response.get("state", "") == "online"
-        self.lastVehicleAwakeState = awakeState
-        self.lastVehicleAwakeChecked = bool(result)
-        self.lastVehicleAwakeKnown = bool(result)
-        self.lastVehicleAwakeTime = now
-        return awakeState
+        car.online = response.get("state", "") == "online" if result else None
+        car.onlineCheckedAt = now
+        return car.online
 
-    def get_car_api(self, path, checkReady=True, provesOnline=True, slot=None):
+    def is_awake(self, vehicle, slot=None, now=None) -> bool:
+        # False for asleep and for no answer alike
+        return bool(self.onlineState(vehicle, slot, now))
+
+    def get_car_api(self, vehicle, path, checkReady=True, slot=None):
         # path is relative to the read slot's base URL, e.g. "<VIN>" or
         # "<VIN>/vehicle_data?endpoints=...". slot (a read source's) overrides
-        # slotFor("read").
+        # slotFor("read"). checkReady: the read needs the car awake (_ready),
+        # and an answer proves it was
+        car = vehicle.attachment("TeslaAPI")
         if slot is None:
-            slot = self.carapi.slotFor("read")
+            slot = self.slotFor("read")
         elif not slot.usable("read"):
             # Cleared or paused since the source chose it
             return False, None
@@ -1707,7 +1618,7 @@ class CarApiVehicle:
             # No usable token
             return False, None
 
-        if checkReady and not self.ready():
+        if checkReady and not self._ready(vehicle, car):
             return False, None
 
         apiResponseDict = {}
@@ -1716,12 +1627,12 @@ class CarApiVehicle:
         sent, refreshed = 0, False
         while sent < 3:
             token = slot.accessToken
-            req, outcome = self.carapi._request(
+            req, outcome = self._request(
                 slot,
                 "get",
                 "vehicles/" + path,
                 "read",
-                vehicle=self,
+                car=car,
                 tries=3 - sent + (not refreshed),
             )
             if outcome is not None:
@@ -1748,14 +1659,12 @@ class CarApiVehicle:
                     continue
             except (KeyError, TypeError):
                 error = (apiResponseDict or {}).get("error", "")
-                if not any(
-                    error.startswith(e) for e in self.carapi.carApiTransientErrors
-                ):
+                if not any(error.startswith(e) for e in self.carApiTransientErrors):
                     logger.info(
                         "ERROR: Can't access vehicle status for %s.  Will try "
-                        "again later." % self.name
+                        "again later." % vehicle.name
                     )
-                    self.carapi.updateCarApiLastErrorTime(self)
+                    self.updateCarApiLastErrorTime(car)
                     return False, None
                 # Transient errors (vehicle unavailable, operation_timedout,
                 # etc.) retry after a short delay, without incrementing
@@ -1763,23 +1672,23 @@ class CarApiVehicle:
                 logger.log(
                     logging.INFO8,
                     "Transient error for %s: %s.  Will retry shortly."
-                    % (self.name, error),
+                    % (vehicle.name, error),
                 )
                 time.sleep(5)
                 continue
-            if provesOnline:
-                self.lastAPIAccessTime = time.time()
+            if checkReady:
+                car.lastAPIAccessTime = time.time()
             return True, response
-        self.carapi.updateCarApiLastErrorTime(self)
+        self.updateCarApiLastErrorTime(car)
         return False, None
 
-    def _readFresh(self, field, maxAge):
+    def _readFresh(self, vehicle, field, maxAge):
         # Reads field through the registry cascade (BLE, then the cloud API;
         # never a wake). Success is a newer observation, one within maxAge,
         # or an API status deferral (which reports stored values unfetched,
         # as update_vehicle_data always has). A stale value handed back after
         # every source failed is a failure.
-        vehicle = self.vehicle
+        car = vehicle.attachment("TeslaAPI")
         before = vehicle.latest(field)
         obs = vehicle.read(field, maxAge=maxAge)
         if obs is None:
@@ -1788,40 +1697,45 @@ class CarApiVehicle:
         # landed during the read without comparing clocks.
         fetched = obs is not before
         if not (
-            fetched or vehicle.age(field) <= maxAge or time.time() < self.statusDeferral
+            fetched or vehicle.age(field) <= maxAge or time.time() < car.statusDeferral
         ):
             return None
         if fetched and obs.source == "TeslaBLE":
             # A BLE reply proves the car awake, as an API reply does in
             # get_car_api.
-            self.lastAPIAccessTime = time.time()
+            car.lastAPIAccessTime = time.time()
         return obs
 
-    def update_location(self, minInterval=0):
+    def update_location(self, vehicle, minInterval=0):
         # minInterval 0 forces a fresh read (vehicleIsDefinitelyHome relies
         # on it).
-        obs = self._readFresh("lat", minInterval)
+        obs = self._readFresh(vehicle, "lat", minInterval)
         if obs is None:
             return False
-        gps = self.vehicle.latest("gpsAsOf")
+        gps = vehicle.latest("gpsAsOf")
         # A fix time from an older read than this position says nothing
         # about it.
         gpsAsOf = gps.value if gps is not None and gps.at >= obs.at else 0
         gpsAge = (time.time() - gpsAsOf) if gpsAsOf else None
-        self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
+        vehicle.attachment("TeslaAPI").atHome = self.is_location_home(
+            vehicle.value("lat", 10000), vehicle.value("lon", 10000), gpsAge
+        )
         return True
 
-    def locate(self):
+    def locate(self, vehicle):
         # Free: atHome from the latest position any source observed. None
         # when the position or home is unknown (never seeds home)
-        if self.lat == 10000 or self.carapi.master.getHomeLatLon()[0] == 10000:
+        lat = vehicle.value("lat", 10000)
+        if lat == 10000 or self.master.getHomeLatLon()[0] == 10000:
             return None
-        self.atHome = self.carapi.is_location_home(self.lat, self.lon)
-        return self.atHome
+        car = vehicle.attachment("TeslaAPI")
+        car.atHome = self.is_location_home(lat, vehicle.value("lon", 10000))
+        return car.atHome
 
-    def update_vehicle_data(self, slot=None):
+    def update_vehicle_data(self, vehicle, slot=None):
+        car = vehicle.attachment("TeslaAPI")
         path = (
-            str(self.VIN)
+            vehicle.vin
             + "/vehicle_data?endpoints="
             + "%3B".join(
                 ["location_data", "charge_state", "drive_state", "vehicle_state"]
@@ -1830,10 +1744,12 @@ class CarApiVehicle:
 
         now = time.time()
 
-        if now < self.statusDeferral:
+        # Not redundant with fetch's check: a second thread that passed it
+        # finds the deferral the first just set, and pays no vehicle_data
+        if now < car.statusDeferral:
             return True
 
-        result, response = self.get_car_api(path, slot=slot)
+        result, response = self.get_car_api(vehicle, path, slot=slot)
 
         if result:
             try:
@@ -1841,7 +1757,7 @@ class CarApiVehicle:
             except (KeyError, TypeError):
                 logger.error(
                     "update_vehicle_data: drive_state missing from API response for %s"
-                    % self.VIN
+                    % vehicle.vin
                 )
                 return False
 
@@ -1850,36 +1766,37 @@ class CarApiVehicle:
             except (KeyError, TypeError):
                 logger.error(
                     "update_vehicle_data: charge_state missing from API response for %s"
-                    % self.VIN
+                    % vehicle.vin
                 )
                 return False
 
             try:
-                self.lat = drive["latitude"]
-                self.lon = drive["longitude"]
+                vehicle.observe("lat", drive["latitude"], "TeslaAPI")
+                vehicle.observe("lon", drive["longitude"], "TeslaAPI")
             except (KeyError, TypeError):
                 logger.error(
                     "update_vehicle_data: latitude/longitude missing from drive_state for %s"
-                    % self.VIN
+                    % vehicle.vin
                 )
                 return False
+            lat, lon = vehicle.value("lat", 10000), vehicle.value("lon", 10000)
 
             # Only keys present in the response are observed: a default or a
             # carried-over value is not a fresh TeslaAPI reading.
             gpsAsOf = drive.get("gps_as_of") or 0
             if gpsAsOf:
-                self.gpsAsOf = gpsAsOf
+                vehicle.observe("gpsAsOf", gpsAsOf, "TeslaAPI")
             gpsAge = (now - gpsAsOf) if gpsAsOf else None
-            self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
+            car.atHome = self.is_location_home(lat, lon, gpsAge)
 
             try:
                 vehicleName = response["vehicle_state"]["vehicle_name"]
             except (KeyError, TypeError):
                 vehicleName = None
             if vehicleName:
-                self.name = vehicleName
+                vehicle.observe("name", vehicleName, "TeslaAPI")
 
-            for key, attr in (
+            for key, field in (
                 ("charge_limit_soc", "chargeLimit"),
                 ("battery_level", "batteryLevel"),
                 ("time_to_full_charge", "timeToFullCharge"),
@@ -1892,26 +1809,26 @@ class CarApiVehicle:
                 ("scheduled_charging_pending", "scheduledChargingPending"),
             ):
                 if key in charge:
-                    setattr(self, attr, charge[key])
+                    vehicle.observe(field, charge[key], "TeslaAPI")
 
-            if not self.atHome:
-                if self.carapi.is_far_from_home(self.lat, self.lon):
+            if not car.atHome:
+                if self.is_far_from_home(lat, lon):
                     # Car is further from home than can be driven in an
                     # hour; no point re-checking sooner than that.
-                    self.statusDeferral = now + 3600
+                    car.statusDeferral = now + 3600
                 elif (
                     drive.get("shift_state") == "P" or drive.get("shift_state") is None
                 ):
                     # Car is not driving, so we can check infrequently. May
                     # be able to sleep.
-                    self.statusDeferral = now + 1800
+                    car.statusDeferral = now + 1800
                 else:
-                    self.statusDeferral = now + 300
+                    car.statusDeferral = now + 300
             else:
                 # Car is at home; need to watch charging
-                self.statusDeferral = now + 300
+                car.statusDeferral = now + 300
 
         return result
 
-    def update_charge(self):
-        return self._readFresh("batteryLevel", self.READ_MAX_AGE) is not None
+    def update_charge(self, vehicle):
+        return self._readFresh(vehicle, "batteryLevel", READ_MAX_AGE) is not None

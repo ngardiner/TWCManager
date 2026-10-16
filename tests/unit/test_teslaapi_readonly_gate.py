@@ -41,8 +41,8 @@ def any_http(requests_mock):
 
 
 def no_error_recorded(api):
-    vehicle = api.carApiVehicles[0]
-    return api.getCarApiLastErrorTime() == 0 and vehicle.lastErrorTime == 0
+    car = api.registry.attached("TeslaAPI")[0][1]
+    return api.getCarApiLastErrorTime() == 0 and car.lastErrorTime == 0
 
 
 class TestFleetProviderRefusesCommands:
@@ -52,7 +52,7 @@ class TestFleetProviderRefusesCommands:
     def test_no_command_token_sends_nothing(self, owner_api, any_http, call):
         fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
         args = (self.VIN, 10) if call == "setAmps" else (self.VIN,)
-        car = owner_api.carApiVehicles[0]
+        car = owner_api.registry.get(self.VIN).attachment("TeslaAPI")
         before = car.lastAPIAccessTime
         assert getattr(fleet, call)(*args) == Outcome(REFUSED, "no command token")
         assert car.lastAPIAccessTime == before
@@ -124,10 +124,10 @@ class TestReadsStillRun:
                 }
             },
         )
-        vehicle = owner_api.carApiVehicles[0]
-        assert vehicle.update_vehicle_data() is True
+        vehicle = owner_api.registry.get("5YJ3E1EA1KF000001")
+        assert owner_api.update_vehicle_data(vehicle) is True
         assert data.call_count == 1
-        assert vehicle.batteryLevel == 55
+        assert vehicle.value("batteryLevel") == 55
 
     def test_vehicle_list_read_uses_owner_api(self, no_threads, requests_mock):
         api = new_api()
@@ -142,14 +142,14 @@ class TestReadsStillRun:
         )
         assert api.loadVehicleList() is True
         assert listing.call_count == 1
-        assert len(api.carApiVehicles) == 1
+        assert len(api.registry.attached("TeslaAPI")) == 1
 
 
 class TestCheckChargeRefreshesEachModuleOnce:
     # checkCharge walks the provider order: each vehicle module with a
     # provider not suppressed for reads refreshes its cars once
     def make(self, settings=None, ha=None):
-        from tests.unit.test_carapivehicle_registry import api_with_registry
+        from tests.unit.test_teslaapi_registry import api_with_registry
         from TWCManager.TWCMaster import TWCMaster
         from TWCManager.Vehicle.Providers import Capability as C
         from TWCManager.Vehicle.Providers.Order import ProviderOrder

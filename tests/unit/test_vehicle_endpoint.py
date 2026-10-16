@@ -7,7 +7,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.test_provider_order import ble, fleet, twc
-from tests.unit.test_carapivehicle_registry import api_with_registry
+from tests.unit.test_teslaapi_registry import api_with_registry
 from tests.unit.teslatokens import fleet_token, owner_token
 VIN1 = "5YJ3E1EA1KF000001"; VIN2 = "5YJ3E1EA1KF000002"
 
@@ -15,11 +15,11 @@ def master(settings=None, *providers, slaves=()):
     m = Mock(); m.settings = settings or {}; m.config = {"config": {"wiringMaxAmpsPerTWC": 32, "defaultVoltage": 240}}
     m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     for p in providers: m.providerOrder.register(p)
-    carapi = Mock(); carapi.enabled.return_value = True
+    carapi = Mock(); carapi.enabled.return_value = True; carapi.locate.return_value = None
     m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves); return m
 
 def car(m, vin, atHome=True):
-    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome, locate=lambda: None)); return v
+    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome)); return v
 
 def slave(key=None, amps=0.0, state=0x00): return SimpleNamespace(vehicleKey=key, reportedAmpsActual=amps, reportedState=state)
 

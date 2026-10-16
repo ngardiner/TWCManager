@@ -107,29 +107,38 @@ class FakeMaster:
 
 
 def new_api(master=None, **config_overrides):
-    """A TeslaAPI registered on a FakeMaster, with no inherited class state."""
+    """A TeslaAPI registered on master (a FakeMaster by default; a real
+    TWCMaster gets a module record)."""
+    from TWCManager.TWCMaster import TWCMaster
     from TWCManager.Vehicle.TeslaAPI import TeslaAPI
 
     master = master or FakeMaster(**config_overrides)
     api = TeslaAPI(master)
-    api.carApiVehicles = []
-    master.modules["TeslaAPI"] = api
+    if isinstance(master, TWCMaster):
+        # A module record, and the real lookup that finds it (make() stubs
+        # the lookup to find nothing)
+        master.modules["TeslaAPI"] = {"ref": api, "type": "Vehicle"}
+        master.__dict__.pop("getModuleByName", None)
+    else:
+        master.modules["TeslaAPI"] = api
     return api
 
 
 @pytest.fixture
 def no_threads():
-    """CarApiVehicle no longer starts a sync-monitoring thread; kept so the
-    tests that request it need not change."""
+    """TeslaAPI starts no sync-monitoring thread; kept so the tests that
+    request it need not change."""
 
 
 def add_home_vehicle(api):
-    """Add vehicle 5YJ3E1EA1KF000001, at home and recently contacted, so ready() is True
-    without an HTTP call. Use with the no_threads fixture."""
+    """Add vehicle 5YJ3E1EA1KF000001, at home and recently contacted, so _ready
+    is True without an HTTP call; returns its registry vehicle. Use with the
+    no_threads fixture."""
     api.addVehicle({"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"})
-    vehicle = api.carApiVehicles[-1]
-    vehicle.atHome = True
-    vehicle.lastAPIAccessTime = time.time()
+    vehicle = api.registry.get("5YJ3E1EA1KF000001")
+    car = vehicle.attachment("TeslaAPI")
+    car.atHome = True
+    car.lastAPIAccessTime = time.time()
     return vehicle
 
 

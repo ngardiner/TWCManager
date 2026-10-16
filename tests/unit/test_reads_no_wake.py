@@ -17,24 +17,28 @@ def setup(ble_result, clock=time.time):
         {"TeslaBLE": ble}
     )
     api = new_api(master=master)
-    api.carApiVehicles = []
     # The cloud read source reads through the Owner slot
     api.storeToken(owner_token())
     wire_reads(reg, TeslaBLEProvider(ble, master), *api.providers())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    car.is_awake = Mock(return_value=True)
-    # The API source writes through descriptors; the stand-in must too.
-    car.update_vehicle_data = Mock(
-        side_effect=lambda slot=None: car.vehicle.observe("batteryLevel", 50, "TeslaAPI")
+    api.is_awake = Mock(return_value=True)
+    # The API source observes into the registry; the stand-in must too.
+    api.update_vehicle_data = Mock(
+        side_effect=lambda vehicle, slot=None: vehicle.observe(
+            "batteryLevel", 50, "TeslaAPI"
+        )
         and True
     )
     reg.get(VIN).claim("TeslaBLE", True, "paired")
-    return car, ble, reg
+    return api, ble, reg
+
+
+def state(reg):
+    return reg.get(VIN).attachment("TeslaAPI")
 
 
 def test_ble_read_fills_fields_and_api_untouched():
-    car, ble, reg = setup(
+    api, ble, reg = setup(
         {
             "batteryLevel": 61,
             "chargeLimit": 80,
@@ -42,34 +46,34 @@ def test_ble_read_fills_fields_and_api_untouched():
             "phases": None,
         }
     )
-    assert car.update_charge() is True
-    assert (car.batteryLevel, reg.get(VIN).latest("chargeLimit").source) == (
+    assert api.update_charge(reg.get(VIN)) is True
+    assert (reg.get(VIN).value("batteryLevel", 10000), reg.get(VIN).latest("chargeLimit").source) == (
         61,
         "TeslaBLE",
     )
     assert reg.get(VIN).latest("phases") is None  # P14: None dropped
-    car.update_vehicle_data.assert_not_called()
+    api.update_vehicle_data.assert_not_called()
     ble.wakeVehicle.assert_not_called()
 
 
 def test_api_source_checks_free_online_state_before_paid_vehicle_data():
-    car, ble, reg = setup(None)
-    car.is_awake = Mock(return_value=False)
-    assert car.update_charge() is False
-    car.update_vehicle_data.assert_not_called()
+    api, ble, reg = setup(None)
+    api.is_awake = Mock(return_value=False)
+    assert api.update_charge(reg.get(VIN)) is False
+    api.update_vehicle_data.assert_not_called()
     ble.wakeVehicle.assert_not_called()
 
 
 def test_status_deferral_counts_as_success_without_fetch():  # P13
-    car, ble, reg = setup(None)
-    car.update_vehicle_data = Mock(return_value=True)  # deferral path: no observe
+    api, ble, reg = setup(None)
+    api.update_vehicle_data = Mock(return_value=True)  # deferral path: no observe
     reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
-    car.statusDeferral = time.time() + 1800
-    assert car.update_charge() is True
+    state(reg).statusDeferral = time.time() + 1800
+    assert api.update_charge(reg.get(VIN)) is True
 
 
 def test_update_location_zero_forces_a_fresh_read():  # P12
-    car, ble, reg = setup(None)
+    api, ble, reg = setup(None)
     reg.get(VIN).observe("lat", 1.0, "TeslaAPI")
     reg.get(VIN).observe("lon", 2.0, "TeslaAPI")
     ble.get_location_state.return_value = {
@@ -78,43 +82,43 @@ def test_update_location_zero_forces_a_fresh_read():  # P12
         "heading": 0,
         "gpsAsOf": 5,
     }
-    car.carapi.is_location_home = Mock(return_value=True)
-    assert car.update_location(0) is True and car.lat == 3.0
+    api.is_location_home = Mock(return_value=True)
+    assert api.update_location(reg.get(VIN), 0) is True and reg.get(VIN).value("lat", 10000) == 3.0
     ble.get_location_state.assert_called_once()
 
 
 def test_ble_failure_falls_to_api_without_waking():  # A6
-    car, ble, reg = setup(None)
-    assert car.update_charge() is True and car.batteryLevel == 50
-    car.update_vehicle_data.assert_called_once()
+    api, ble, reg = setup(None)
+    assert api.update_charge(reg.get(VIN)) is True and reg.get(VIN).value("batteryLevel", 10000) == 50
+    api.update_vehicle_data.assert_called_once()
     ble.wakeVehicle.assert_not_called()
 
 
 def test_all_sources_failing_reports_failure_even_with_stale_value():
-    car, ble, reg = setup(None)
-    car.update_vehicle_data = Mock(return_value=False)
+    api, ble, reg = setup(None)
+    api.update_vehicle_data = Mock(return_value=False)
     reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
-    assert car.update_charge() is False and car.batteryLevel == 40
+    assert api.update_charge(reg.get(VIN)) is False and reg.get(VIN).value("batteryLevel", 10000) == 40
 
 
 def test_unpaired_vin_skips_ble():
-    car, ble, reg = setup({"batteryLevel": 1})
+    api, ble, reg = setup({"batteryLevel": 1})
     reg.get(VIN).dropClaim("TeslaBLE")
-    car.update_charge()
+    api.update_charge(reg.get(VIN))
     ble.get_charge_state.assert_not_called()
-    car.update_vehicle_data.assert_called_once()
+    api.update_vehicle_data.assert_called_once()
 
 
 def test_fresh_observation_skips_both():
-    car, ble, reg = setup({"batteryLevel": 1})
+    api, ble, reg = setup({"batteryLevel": 1})
     reg.get(VIN).observe("batteryLevel", 50, "TeslaMateVehicle")
-    assert car.update_charge() is True
+    assert api.update_charge(reg.get(VIN)) is True
     ble.get_charge_state.assert_not_called()
-    car.update_vehicle_data.assert_not_called()
+    api.update_vehicle_data.assert_not_called()
 
 
 def test_allow_wake_wakes_once_then_retries():
-    car, ble, reg = setup(None)
+    api, ble, reg = setup(None)
     ble.wakeVehicle.return_value = True
     ble.get_charge_state.side_effect = [None, {"batteryLevel": 9}]
     assert reg.get(VIN).read("batteryLevel", maxAge=0, allowWake=True).value == 9
@@ -122,48 +126,48 @@ def test_allow_wake_wakes_once_then_retries():
 
 
 def test_location_read_recomputes_at_home():
-    car, ble, reg = setup(None)
+    api, ble, reg = setup(None)
     ble.get_location_state.return_value = {
         "latitude": 1.0,
         "longitude": 2.0,
         "heading": 0,
         "gpsAsOf": 5,
     }
-    car.carapi.is_location_home = Mock(return_value=True)
+    api.is_location_home = Mock(return_value=True)
     assert (
-        car.update_location() is True
-        and car.atHome is True
-        and (car.lat, car.lon) == (1.0, 2.0)
+        api.update_location(reg.get(VIN)) is True
+        and state(reg).atHome is True
+        and (reg.get(VIN).value("lat", 10000), reg.get(VIN).value("lon", 10000)) == (1.0, 2.0)
     )
 
 
 def test_status_deferral_skips_the_online_check():
-    car, ble, reg = setup(None)
+    api, ble, reg = setup(None)
     reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
-    car.statusDeferral = time.time() + 1800
-    assert car.update_charge() is True
-    car.is_awake.assert_not_called()
-    car.update_vehicle_data.assert_not_called()
+    state(reg).statusDeferral = time.time() + 1800
+    assert api.update_charge(reg.get(VIN)) is True
+    api.is_awake.assert_not_called()
+    api.update_vehicle_data.assert_not_called()
 
 
 def test_ble_read_marks_car_awake_but_cache_hit_does_not():
-    car, ble, reg = setup({"batteryLevel": 61})
-    car.lastAPIAccessTime = 0
-    assert car.update_charge() is True and car.lastAPIAccessTime > 0
-    car.lastAPIAccessTime = 0
-    assert car.update_charge() is True and car.lastAPIAccessTime == 0
+    api, ble, reg = setup({"batteryLevel": 61})
+    state(reg).lastAPIAccessTime = 0
+    assert api.update_charge(reg.get(VIN)) is True and state(reg).lastAPIAccessTime > 0
+    state(reg).lastAPIAccessTime = 0
+    assert api.update_charge(reg.get(VIN)) is True and state(reg).lastAPIAccessTime == 0
     ble.get_charge_state.assert_called_once()
 
 
 def test_ble_read_observes_actual_current():
-    car, ble, reg = setup({"batteryLevel": 61, "actualCurrent": 16})
-    car.update_charge()
-    assert car.actualCurrent == 16
+    api, ble, reg = setup({"batteryLevel": 61, "actualCurrent": 16})
+    api.update_charge(reg.get(VIN))
+    assert reg.get(VIN).value("actualCurrent", 0) == 16
     assert reg.get(VIN).latest("actualCurrent").source == "TeslaBLE"
 
 
 def test_location_ignores_a_fix_time_older_than_the_position():
-    car, ble, reg = setup(None)
+    api, ble, reg = setup(None)
     reg.get(VIN).observe("gpsAsOf", 5, "TeslaAPI", at=1.0)
     ble.get_location_state.return_value = {
         "latitude": 1.0,
@@ -171,24 +175,24 @@ def test_location_ignores_a_fix_time_older_than_the_position():
         "heading": 0,
         "gpsAsOf": None,
     }
-    car.carapi.is_location_home = Mock(return_value=True)
-    assert car.update_location() is True
-    car.carapi.is_location_home.assert_called_once_with(1.0, 2.0, None)
+    api.is_location_home = Mock(return_value=True)
+    assert api.update_location(reg.get(VIN)) is True
+    api.is_location_home.assert_called_once_with(1.0, 2.0, None)
     assert reg.get(VIN).latest("gpsAsOf").value == 5
 
 
 def test_api_source_never_wakes_even_when_allowed():
-    car, ble, reg = setup(None)
-    car.carapi.wakeVehicle = Mock()
+    api, ble, reg = setup(None)
+    api.wakeVehicle = Mock()
     reg.get(VIN).dropClaim("TeslaBLE")
     assert reg.get(VIN).read("batteryLevel", maxAge=0, allowWake=True).value == 50
-    car.carapi.wakeVehicle.assert_not_called()
+    api.wakeVehicle.assert_not_called()
 
 
 def test_null_gps_as_of_is_not_observed():
-    car, ble, reg = setup(None)
-    car.carapi.slotFor = Mock(return_value=Mock())
-    car.get_car_api = Mock(
+    api, ble, reg = setup(None)
+    api.slotFor = Mock(return_value=Mock())
+    api.get_car_api = Mock(
         return_value=(
             True,
             {
@@ -197,10 +201,10 @@ def test_null_gps_as_of_is_not_observed():
             },
         )
     )
-    del car.update_vehicle_data  # use the real method
-    car.carapi.is_location_home = Mock(return_value=True)
-    assert car.update_vehicle_data() is True
-    assert reg.get(VIN).latest("gpsAsOf") is None and car.batteryLevel == 70
+    del api.update_vehicle_data  # use the real method
+    api.is_location_home = Mock(return_value=True)
+    assert api.update_vehicle_data(reg.get(VIN)) is True
+    assert reg.get(VIN).latest("gpsAsOf") is None and reg.get(VIN).value("batteryLevel", 10000) == 70
 
 
 def test_teslable_provider_reads_through_the_module(tmp_path):
@@ -222,7 +226,7 @@ def test_teslable_provider_reads_through_the_module(tmp_path):
 
 
 def test_ble_reply_with_no_values_falls_through_to_api():
-    car, ble, reg = setup(None)
+    api, ble, reg = setup(None)
     reg.get(VIN).observe("lat", 1.0, "TeslaAPI", at=0.0)
     ble.get_location_state.return_value = {
         "latitude": None,
@@ -230,27 +234,27 @@ def test_ble_reply_with_no_values_falls_through_to_api():
         "heading": 90,
         "gpsAsOf": None,
     }
-    car.update_location()
-    car.update_vehicle_data.assert_called_once()
+    api.update_location(reg.get(VIN))
+    api.update_vehicle_data.assert_called_once()
 
 
 def test_ble_read_on_an_injected_clock_marks_car_awake():
     # The registry clock and time.time() must not be compared.
-    car, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
-    car.lastAPIAccessTime = 0
-    assert car.update_charge() is True and car.lastAPIAccessTime > 0
+    api, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
+    state(reg).lastAPIAccessTime = 0
+    assert api.update_charge(reg.get(VIN)) is True and state(reg).lastAPIAccessTime > 0
 
 
 def test_read_stamped_like_the_previous_one_still_counts_as_fetched():
     # A coarse clock can stamp a real read equal to the last one.
-    car, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
+    api, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
     v = reg.get(VIN)
     v.observe("batteryLevel", 40, "TeslaBLE")
     v.noteWrite("batteryLevel", 40, "TeslaAPI")  # equal stamp: not trusted
-    car.lastAPIAccessTime = 0
-    assert car.update_charge() is True and car.batteryLevel == 61
+    state(reg).lastAPIAccessTime = 0
+    assert api.update_charge(reg.get(VIN)) is True and reg.get(VIN).value("batteryLevel", 10000) == 61
     ble.get_charge_state.assert_called_once()
-    assert car.lastAPIAccessTime > 0
+    assert state(reg).lastAPIAccessTime > 0
 
 
 def test_a_status_deferral_ends_the_read_walk_before_home_assistant():  # 13b M1
@@ -260,16 +264,16 @@ def test_a_status_deferral_ends_the_read_walk_before_home_assistant():  # 13b M1
         HomeAssistantProvider,
     )
 
-    car, ble, reg = setup(None)
+    api, ble, reg = setup(None)
     ha = Mock()
     ha.enabled.return_value = True
     hv = Mock()
     reg.get(VIN).attach("HomeAssistant", hv)
     reg.providerOrder.register(HomeAssistantProvider(ha))
-    car.update_vehicle_data = Mock(return_value=True)
+    api.update_vehicle_data = Mock(return_value=True)
     reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
-    car.statusDeferral = time.time() + 1800
-    assert car.update_charge() is True
-    car.is_awake.assert_not_called()
-    car.update_vehicle_data.assert_not_called()
+    state(reg).statusDeferral = time.time() + 1800
+    assert api.update_charge(reg.get(VIN)) is True
+    api.is_awake.assert_not_called()
+    api.update_vehicle_data.assert_not_called()
     hv.parse_from_home_assistant.assert_not_called()

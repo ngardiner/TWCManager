@@ -72,10 +72,10 @@ def test_unidentifiable_car_is_parked_and_never_raises():  # Review Focus 4
 
 
 def test_task9_legacy_sync_names_are_gone():
-    from TWCManager.Vehicle.TeslaAPI import CarApiVehicle
+    from TWCManager.Vehicle.TeslaAPI import CarApiState
 
     assert not any(
-        hasattr(CarApiVehicle, n)
+        hasattr(CarApiState, n)
         for n in ("syncState", "syncLat", "syncLon", "_legacySyncSource")
     )
 
@@ -190,20 +190,17 @@ def teslamate(monkeypatch):
     master = FakeMaster()
     master.vehicleRegistry = VehicleRegistry({})
     api = new_api(master=master)
-    api.carApiVehicles = []
-    master.modules["TeslaAPI"] = api
     wire_reads(master.vehicleRegistry, *api.providers())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     # The Owner API token TeslaMate syncs: the Owner provider can read.
     api.storeToken(owner_token(), "", "synced")
-    car = api.carApiVehicles[0]
     # A cloud call returns nothing usable; tests assert it is never made.
-    car.get_car_api = Mock(return_value=(False, None))
+    api.get_car_api = Mock(return_value=(False, None))
     master.config["vehicle"]["TeslaMate"] = {"enabled": True}
     tm = TeslaMateVehicle(master)
     tm.mqttConnect(Mock(), None, None, 0)
     tm.applyDataToVehicle("7", "display_name", "C")
-    return tm, car, master.vehicleRegistry
+    return tm, api, master.vehicleRegistry
 
 
 def feed(tm, **topics):
@@ -212,58 +209,58 @@ def feed(tm, **topics):
 
 
 def test_healthy_teslamate_car_reads_without_api_calls(teslamate):  # ruling 1
-    tm, car, reg = teslamate
+    tm, api, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0", battery_level="61")
-    assert car.update_location(0) is True  # maxAge 0: the feed vouches for now
-    assert car.update_charge() is True
-    assert not car.get_car_api.called
+    assert api.update_location(reg.get(VIN), 0) is True  # maxAge 0: the feed vouches for now
+    assert api.update_charge(reg.get(VIN)) is True
+    assert not api.get_car_api.called
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
 
 
 def test_feed_vouches_for_a_value_the_api_reobserved(teslamate):  # ruling 3
-    tm, car, reg = teslamate
+    tm, api, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0")
-    car.lat = 37.0  # the cloud saw the same position after the feed
-    car.lon = -122.0
+    reg.get(VIN).observe("lat", 37.0, "TeslaAPI")  # the cloud saw the same position after the feed
+    reg.get(VIN).observe("lon", -122.0, "TeslaAPI")
     assert reg.get(VIN).latest("lat").source == "TeslaAPI"
-    assert car.update_location(0) is True and not car.get_car_api.called
-    car.lat = 38.0  # a different value: the live feed still vouches (C1)
-    assert car.update_location(0) is True and not car.get_car_api.called
+    assert api.update_location(reg.get(VIN), 0) is True and not api.get_car_api.called
+    reg.get(VIN).observe("lat", 38.0, "TeslaAPI")  # a different value: the live feed still vouches (C1)
+    assert api.update_location(reg.get(VIN), 0) is True and not api.get_car_api.called
     tm.mqttDisconnect(None, None, None, 7)  # feed down: the value ages
-    car.update_location(0)
-    assert car.get_car_api.called
+    api.update_location(reg.get(VIN), 0)
+    assert api.get_car_api.called
 
 
 def test_feed_outage_then_recovery_pays_one_cloud_read(teslamate):  # C1
-    tm, car, reg = teslamate
+    tm, api, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0")
     calls = []
 
-    def vehicleData(slot=None):
+    def vehicleData(vehicle, slot=None):
         calls.append(1)
-        car.lat = 37.00000001  # the API's digits differ from TeslaMate's
-        car.lon = -122.0
+        reg.get(VIN).observe("lat", 37.00000001, "TeslaAPI")  # the API's digits differ from TeslaMate's
+        reg.get(VIN).observe("lon", -122.0, "TeslaAPI")
         return True
 
-    car.update_vehicle_data = vehicleData
-    car.is_awake = lambda slot=None: True
+    api.update_vehicle_data = vehicleData
+    api.is_awake = lambda vehicle, slot=None: True
     tm.mqttDisconnect(None, None, None, 7)  # broker blip
-    assert car.update_location(0) is True and len(calls) == 1
+    assert api.update_location(reg.get(VIN), 0) is True and len(calls) == 1
     tm.mqttConnect(Mock(), None, None, 0)  # back; parked car publishes nothing
     for _ in range(5):
-        assert car.update_location(0) is True
+        assert api.update_location(reg.get(VIN), 0) is True
     assert len(calls) == 1
 
 
 def test_sleeping_car_on_healthy_feed_stays_telemetry_sourced(teslamate):  # ruling 2
-    tm, car, reg = teslamate
+    tm, api, reg = teslamate
     v = reg.get(VIN)
     # Reported hours ago; TeslaMate has had nothing to say since.
     v.observe("state", "asleep", "TeslaMateVehicle", at=0.0)
     v.observe("pluggedIn", True, "TeslaMateVehicle", at=0.0)
     assert v.syncSource == "TeslaMateVehicle"
     assert VehicleEndpoints._telemetryPluggedIn(v) is True
-    assert car.is_awake() is False and not car.get_car_api.called
+    assert api.is_awake(v) is False and not api.get_car_api.called
     tm.noteHealthy("7", "false")  # TeslaMate stopped polling
     assert v.syncSource == "TeslaAPI"
     assert VehicleEndpoints._telemetryPluggedIn(v) is False
@@ -273,18 +270,18 @@ def test_sleeping_car_on_healthy_feed_stays_telemetry_sourced(teslamate):  # rul
 
 
 def test_telemetry_writes_carry_the_feed_source(teslamate):  # ruling 4
-    tm, car, reg = teslamate
+    tm, api, reg = teslamate
     feed(tm, charge_limit_soc="80", plugged_in="true", charging_state="Charging")
     v = reg.get(VIN)
     for field in ("chargeLimit", "pluggedIn", "chargingState", "name"):
         assert v.latest(field).source == "TeslaMateVehicle", field
     feed(tm, display_name="Renamed")  # the rename path
     assert (v.name, v.latest("name").source) == ("Renamed", "TeslaMateVehicle")
-    assert car.name == "Renamed"
+    assert reg.get(VIN).name == "Renamed"
 
 
 def test_resumed_line_only_on_reconnect(teslamate, caplog):  # ruling 5
-    tm, car, reg = teslamate
+    tm, api, reg = teslamate
     caplog.set_level(logging.INFO)
     for i in range(5):
         feed(tm, battery_level=str(60 + i), state="online")
@@ -296,7 +293,7 @@ def test_resumed_line_only_on_reconnect(teslamate, caplog):  # ruling 5
 
 
 def test_healthy_topic_is_routed(teslamate):
-    tm, car, reg = teslamate
+    tm, api, reg = teslamate
     msg = Mock(topic="teslamate/cars/7/healthy", payload=b"false")
     tm.mqttMessage(None, None, msg)
     assert tm.healthy["7"] is False
@@ -304,7 +301,7 @@ def test_healthy_topic_is_routed(teslamate):
 
 
 def test_prefixed_teslamate_topic_is_applied(teslamate):
-    tm, car, reg = teslamate
+    tm, api, reg = teslamate
     tm.mqtt_prefix = "home"
     msg = Mock(topic="teslamate/home/cars/7/charge_limit_soc", payload=b"77")
     tm.mqttMessage(None, None, msg)
