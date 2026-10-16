@@ -37,7 +37,6 @@ from TWCManager.Vehicle.Reconcile.Outcome import (
     UNREACHABLE,
     Outcome,
 )
-from TWCManager.Vehicle.Registry.Sources import HomeAssistantReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("V_HASS", "Vehicle")
@@ -192,8 +191,6 @@ class HomeAssistant:
     lastStateRefreshTime = 0
     connectionFailures = 0  # bumped by _get_state on a connection error
     stateRefreshInterval = 30  # Minimum seconds between state refreshes per vehicle
-    # Set once connectivity is verified; the provider reads through it
-    readSource = None
     # A refused service call (401/403) was logged; cleared by a success
     _refusalLogged = False
 
@@ -269,9 +266,6 @@ class HomeAssistant:
             logger.error("Failed to verify HomeAssistant connectivity: %s", str(e))
             self._enabled = False
             return
-
-        self.readSource = HomeAssistantReadSource(self)
-        self.registry.registerReadSource(self.readSource)
 
         try:
             self._discover_vehicles()

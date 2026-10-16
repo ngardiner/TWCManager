@@ -127,7 +127,7 @@ class TWCMaster:
         self.heldLimits = HeldLimits(self)
         self.providerOrder = ProviderOrder(self)
         self.providerOrder.register(Gen2TWCProvider(self))
-        self.vehicleRegistry.useReadOrder(self.providerOrder.orderReadSources)
+        self.vehicleRegistry.providerOrder = self.providerOrder
         # Desired vehicle state, and the reconciler that converges cars on
         # it; all on the registry's time.time clock
         self.desired = DesiredStore()

@@ -9,11 +9,13 @@ from typing import Dict, Optional, Tuple
 from ..Reconcile.Outcome import SATISFIED, SETTLED, UNSUPPORTED, Outcome
 
 from .Capability import (
+    CHARGE_FIELDS,
     CLOUD_FREE,
     COMMANDS,
     FLEET_COMMAND,
     FLEET_DATA,
     FLEET_WAKE,
+    LOCATION_FIELDS,
     READ_CHARGE,
     READ_LIST,
     READ_LOCATION,
@@ -32,7 +34,31 @@ from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
 WALL_CONNECTOR_VINS = Declaration(CLOUD_FREE)
 
 
-class OwnerAPIProvider(Provider):
+class _TeslaAPIProvider(Provider):
+    # One token slot of the TeslaAPI module
+    FIELDS = CHARGE_FIELDS | LOCATION_FIELDS
+    slotName = "ownerSlot"
+
+    def __init__(self, carapi):
+        self.carapi = carapi
+        self.module = carapi
+
+    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+        # Never wakes, whatever allowWake says: a cloud wake is never worth a
+        # read. update_vehicle_data observes as "TeslaAPI" for either slot
+        car = vehicle.attachment("TeslaAPI")
+        if car is None:
+            return False
+        if time.time() < car.statusDeferral:
+            # As update_vehicle_data: a deferred car reports its stored
+            # values without a request
+            return True
+        slot = getattr(self.carapi, self.slotName)
+        # Free online check (vehicles/{vin}) before a paid vehicle_data
+        return bool(car.is_awake(slot=slot) and car.update_vehicle_data(slot=slot))
+
+
+class OwnerAPIProvider(_TeslaAPIProvider):
     # Declares no commands: the inherited command methods answer UNSUPPORTED
     name = "OwnerAPI"
     rank = 4
@@ -45,10 +71,6 @@ class OwnerAPIProvider(Provider):
         READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
     }
     SUPPRESSED = CLOUD_SUPPRESSED
-
-    def __init__(self, carapi):
-        self.carapi = carapi
-        self.module = carapi
 
     def ready(self, vehicle, capability) -> bool:
         if capability == READ_WALL_CONNECTOR_VINS:
@@ -65,8 +87,9 @@ class OwnerAPIProvider(Provider):
         return self.carapi.wallConnectorVins(self.carapi.ownerSlot)
 
 
-class FleetAPIProvider(Provider):
+class FleetAPIProvider(_TeslaAPIProvider):
     name = "FleetAPI"
+    slotName = "fleetSlot"
     rank = 5
     local = False
     DECLARATIONS = {
@@ -82,10 +105,6 @@ class FleetAPIProvider(Provider):
         READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
     }
     SUPPRESSED = CLOUD_SUPPRESSED
-
-    def __init__(self, carapi):
-        self.carapi = carapi
-        self.module = carapi
 
     def ready(self, vehicle, capability) -> bool:
         if capability == READ_WALL_CONNECTOR_VINS:

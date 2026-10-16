@@ -27,7 +27,6 @@ from TWCManager.Vehicle.Reconcile.Outcome import (
     Outcome,
 )
 from TWCManager.Vehicle.Registry.Fields import TELEMETRY_SOURCES
-from TWCManager.Vehicle.Registry.Sources import TeslaAPIReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 
@@ -175,12 +174,6 @@ class TeslaAPI:
         # the process-wide time.time
         self.now = time.time
         self.registry = VehicleRegistry.forMaster(master)
-        # One read source per token slot, Owner first: the Fleet source reads
-        # (paid) only when the Owner slot cannot.
-        self.ownerReadSource = TeslaAPIReadSource(self, "owner")
-        self.fleetReadSource = TeslaAPIReadSource(self, "fleet")
-        self.registry.registerReadSource(self.ownerReadSource)
-        self.registry.registerReadSource(self.fleetReadSource)
         # slot.changes when a skipped sync was last logged, per slot.
         self.syncSkipLoggedAt = {"owner": None, "fleet": None}
         # Energy-site state per slot kind, for the Wall Connector VIN read.

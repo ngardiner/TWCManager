@@ -33,10 +33,7 @@ def test_two_providers_with_honest_costs():
     assert fleet.declarations()[C.SET_AMPS] == C.Declaration(C.FLEET_COMMAND)   # pacing is the reconciler's MIN_SEND_GAP
     # no tokens yet
     assert fleet.available(C.SET_AMPS) is False and owner.available(C.READ_CHARGE) is True
-    assert (api.ownerReadSource.provider, api.fleetReadSource.provider) == (
-        "OwnerAPI",
-        "FleetAPI",
-    )
+    assert owner.FIELDS == fleet.FIELDS == C.CHARGE_FIELDS | C.LOCATION_FIELDS
     assert (owner.module, fleet.module) == (api, api)
 
 
@@ -46,17 +43,9 @@ def test_fleet_reads_only_when_owner_cannot():
     v = reg.get(VIN)
     owner, fleet = api.providers()
     api.storeToken(fleet_token())
-    assert (
-        fleet.ready(v, C.READ_CHARGE)
-        and api.fleetReadSource.canRead(v)
-        and not owner.ready(v, C.READ_CHARGE)
-    )
+    assert fleet.ready(v, C.READ_CHARGE) and not owner.ready(v, C.READ_CHARGE)
     api.storeToken(owner_token())
-    assert (
-        owner.ready(v, C.READ_CHARGE)
-        and not fleet.ready(v, C.READ_CHARGE)
-        and not api.fleetReadSource.canRead(v)
-    )
+    assert owner.ready(v, C.READ_CHARGE) and not fleet.ready(v, C.READ_CHARGE)
     assert fleet.ready(v, C.SET_AMPS) and fleet.ready(v, C.WAKE) and fleet.available(C.WAKE)
 
 
@@ -92,7 +81,8 @@ def test_fleet_commands_resolve_the_car_by_vin():
     assert owner.setAmps(VIN, 10).kind == O.UNSUPPORTED    # Owner declares no commands
 
 
-def test_read_source_passes_its_slot_to_the_car():
+@pytest.mark.parametrize("which", [0, 1])
+def test_each_provider_reads_through_its_own_slot(which):
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.getCarApiVehicles()[0]
@@ -101,9 +91,13 @@ def test_read_source_passes_its_slot_to_the_car():
     car.statusDeferral = 0
     car.is_awake = Mock(return_value=True)
     car.update_vehicle_data = Mock(return_value=True)
-    assert api.ownerReadSource.fetch(v, "chargeLimit", False) == {}
-    car.is_awake.assert_called_once_with(slot=api.ownerSlot)
-    car.update_vehicle_data.assert_called_once_with(slot=api.ownerSlot)
+    slot = (api.ownerSlot, api.fleetSlot)[which]
+    assert api.providers()[which].fetch(v, "chargeLimit", allowWake=True) is True
+    car.is_awake.assert_called_once_with(slot=slot)
+    car.update_vehicle_data.assert_called_once_with(slot=slot)
+    car.is_awake.return_value = False  # asleep: never woken, no paid read
+    assert api.providers()[which].fetch(v, "chargeLimit", allowWake=True) is False
+    assert car.update_vehicle_data.call_count == 1
 
 
 def test_a_paused_slot_sends_nothing(requests_mock):

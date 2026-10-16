@@ -6,7 +6,6 @@ from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Provider import Provider
 from TWCManager.Vehicle.Providers.Suppressions import Suppressions
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from TWCManager.Vehicle.Registry.ReadSource import ReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 VIN = "5YJ3E1EA1KF000001"
 
@@ -15,7 +14,6 @@ class P(Provider):
         self.name, self.rank, self.local, self._caps, self._ready, self._amps = name, rank, local, caps, ready, amps
         self.calls = []; self.module = Mock()          # the debug page skips module-less (TWC) providers
         if readTier is not None:
-            self.readSource = ReadSource(); self.readSource.name = name; self.readSource.provider = name
             self._caps = dict(self._caps, **{C.READ_CHARGE: C.Declaration(C.Cost(readTier))})
     def declarations(self): return self._caps
     def ready(self, vehicle, cap): return self._ready
@@ -63,12 +61,12 @@ def test_default_fleet_amps_rule_uses_target_and_range():      # Review Focus 3
 def test_ble_only_suppresses_remote_commands_not_reads():
     o = order(master({"commandPolicy": "ble_only"}), ble(), fleet(), ha())
     assert [p.name for p in o.ordered(C.SET_AMPS)] == ["TeslaBLE"]
-    assert [s.name for s in o.orderReadSources([p.readSource for p in (ha(), fleet(), ble())])] == ["TeslaBLE", "FleetAPI", "HomeAssistant"]
+    assert [p.name for p in o.ordered(C.READ_CHARGE)] == ["TeslaBLE", "FleetAPI", "HomeAssistant"]
 
 def test_api_only_suppresses_ble_for_everything(caplog):        # Review Focus 1
     m = master({"commandPolicy": "api_only"}); o = order(m, ble(), fleet())
     assert [p.name for p in o.ordered(C.SET_AMPS)] == ["FleetAPI"]
-    assert [s.name for s in o.orderReadSources([ble().readSource, fleet().readSource])] == ["FleetAPI"]
+    assert [p.name for p in o.ordered(C.READ_CHARGE)] == ["FleetAPI"]
     with caplog.at_level(logging.INFO):
         o.suppressions.noticeOnce(); o.suppressions.noticeOnce()
     assert sum("api_only" in r.message for r in caplog.records) == 1
@@ -87,19 +85,9 @@ def test_malformed_suppressions_are_ignored(bad):                 # Review Focus
     o = order(master({"providerSuppressions": bad}), fleet())
     assert [p.name for p in o.ordered(C.SET_AMPS)] == ["FleetAPI"]
 
-def test_read_sources_ordered_by_tier_then_rank_and_unknown_last():
+def test_reads_ordered_by_tier_then_rank():
     o = order(master(), fleet(), owner(), ble())
-    other = ReadSource(); other.name = "X"; other.order = 0
-    got = o.orderReadSources([other, fleet().readSource, owner().readSource, ble().readSource])
-    assert [s.name for s in got] == ["TeslaBLE", "OwnerAPI", "FleetAPI", "X"]
-
-def test_registry_uses_installed_read_order():
-    r = VehicleRegistry({}); a = ReadSource(); a.name = "a"; a.order = 1; b = ReadSource(); b.name = "b"; b.order = 0
-    r.registerReadSource(a); r.registerReadSource(b)
-    assert [s.name for s in r.readSources()] == ["b", "a"]
-    r.useReadOrder(lambda sources: list(sources))                 # registration order, no sort
-    assert [s.name for s in r.readSources()] == ["a", "b"] and r.useReadOrder(None) is None
-    assert [s.name for s in r.readSources()] == ["b", "a"]
+    assert [p.name for p in o.ordered(C.READ_CHARGE)] == ["TeslaBLE", "OwnerAPI", "FleetAPI"]
 
 def workers_master():
     from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler

@@ -93,8 +93,7 @@ def _tagged(outcome, prefix) -> Outcome:
 
 
 def workerOf(master, providerName) -> str:
-    # An unregistered provider counts as cloud. Until the reads move to
-    # the provider order (Task 13b)
+    # An unregistered provider counts as cloud
     provider = master.providerOrder.provider(providerName)
     return "cloud" if provider is None else getattr(provider, "worker", "cloud")
 
@@ -153,18 +152,16 @@ def runAttempt(reconciler, attempt) -> Outcome:
         field = FIELD_FOR[aspect] if aspect is not None else None
         read = field is not None and attempt.maxAge is not None
         if read:
-            # Only the sources on this provider's own worker
+            # Only the providers on this provider's own worker
             worker = getattr(provider, "worker", "cloud")
-            sources = [
-                s
-                for s in master.vehicleRegistry.readSources()
-                if workerOf(master, getattr(s, "provider", "")) == worker
-            ]
             vehicle.read(
                 field,
                 attempt.maxAge,
-                allowWake=False,
-                sources=sources,
+                providers=[
+                    p
+                    for p in master.providerOrder.providers()
+                    if getattr(p, "worker", "cloud") == worker
+                ],
                 force=attempt.force,
             )
         believed = (
