@@ -293,17 +293,18 @@ class TeslaAPI:
         body=None,
         timeout=10,
         vehicle=None,
-        resend=True,
-        retried=False,
+        tries=3,
     ):
         # One request with slot's token to path under the API root (where
         # .../api/1/vehicles lives), bounded by timeout. Returns (response,
         # None) for an HTTP 200, else (response or None, the Outcome
-        # _classify gave). An expired token it refreshed is sent once more
-        # when resend (the caller has a try left for it); retried says the
-        # caller already refreshed once. A transport error is logged and
-        # carried by its type alone, never its text (it can hold the header).
-        for retried in (retried, True):
+        # _classify gave). tries is how many requests and token refreshes
+        # this call may make, one each, refreshing at most once: 3 refreshes
+        # an expired token and sends again, 2 refreshes but leaves the resend
+        # to the caller's next round, 1 never refreshes (a 401 retires the
+        # slot). A transport error is logged and carried by its type alone,
+        # never its text (it can hold the header).
+        while True:
             try:
                 req = getattr(requests, method)(
                     slot.baseURL[: -len("vehicles")] + path,
@@ -317,19 +318,21 @@ class TeslaAPI:
                 )
             except requests.exceptions.RequestException as e:
                 return None, Outcome(ERROR, type(e).__name__)
+            tries -= 1
             logger.log(
                 logging.INFO8,
                 "Car API %s %s: HTTP %s" % (method, path, req.status_code),
             )
             outcome = self._classify(
-                slot, req.status_code, purpose, req.text, vehicle, retried
+                slot, req.status_code, purpose, req.text, vehicle, tries > 0
             )
             if outcome is not _REFRESHED:
                 return req, outcome
-            if not resend:
+            tries = min(tries - 1, 1)
+            if tries < 1:
                 return req, Outcome(REFUSED, "401")
 
-    def _classify(self, slot, status, purpose, body, vehicle=None, retried=False):
+    def _classify(self, slot, status, purpose, body, vehicle=None, refresh=True):
         # What an answer means, acted on: None for an HTTP 200, else an
         # Outcome. purpose is "read", "list" (the vehicle list), "command",
         # "wake" or "energy" (the Wall Connector VIN read). Energy refusals
@@ -351,7 +354,7 @@ class TeslaAPI:
         label = slot.kind.capitalize()
         if status == 401:
             if (
-                not retried
+                refresh
                 and "expired" in body
                 and slot.source != "synced"
                 and slot.refreshToken
@@ -551,7 +554,7 @@ class TeslaAPI:
         # still does, with energy sites that addVehicle skips (no VIN).
         path = "products" if slot.tokenType == "owner" else "vehicles"
         # After a refresh the list is not sent again: the next poll is
-        req, outcome = self._request(slot, "get", path, "list", resend=False)
+        req, outcome = self._request(slot, "get", path, "list", tries=2)
         if outcome is not None:
             return None if outcome.kind == REFUSED else False
         try:
@@ -1759,8 +1762,7 @@ class CarApiVehicle:
                 "vehicles/" + path,
                 "read",
                 vehicle=self,
-                resend=sent < 2,
-                retried=refreshed,
+                tries=3 - sent + (not refreshed),
             )
             if outcome is not None:
                 # Refused, asleep (408), backed off (429) or never sent
