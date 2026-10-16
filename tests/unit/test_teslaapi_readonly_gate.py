@@ -293,6 +293,39 @@ SIGNING_REFUSALS = {
 }
 
 
+# What the Owner API answers once Tesla has stopped taking commands on it.
+FLEETAPI_ONLY = {
+    "response": None,
+    "error": "Endpoint is only available on fleetapi. Visit "
+    "https://developer.tesla.com/docs for more info",
+    "error_description": "",
+}
+
+# Owner API answers that mean it no longer takes commands for the car:
+# HTTP 410 or 412, or the "only available on fleetapi" error, whatever
+# the status.
+RETIRED_REFUSALS = {
+    "410": {"status_code": 410, "text": ""},
+    "412": {"status_code": 412, "text": ""},
+    "412 fleetapi json": {"status_code": 412, "json": FLEETAPI_ONLY},
+    "200 fleetapi json": {"status_code": 200, "json": FLEETAPI_ONLY},
+    "200 fleetapi text": {
+        "status_code": 200,
+        "text": "Endpoint is only available on fleetapi.",
+    },
+}
+
+ALL_REFUSALS = {**SIGNING_REFUSALS, **RETIRED_REFUSALS}
+
+VEHICLE_DATA = {
+    "response": {
+        "drive_state": {"latitude": 37.0, "longitude": -122.0},
+        "charge_state": {"battery_level": 55, "charge_limit_soc": 80},
+        "vehicle_state": {"vehicle_name": "Car"},
+    }
+}
+
+
 def reply_for(command):
     return ONLINE if command == "wake_up" else ACCEPTED
 
@@ -483,11 +516,35 @@ class TestMixedFleet:
         assert TeslaAPIEVSE(signed, Mock(), master).isReadOnly is True
 
 
-class TestOwnerCommandRefusedByTesla:
-    """A car listed with command_signing "off" that still answers an Owner
-    API command with 403 "Vehicle Command Protocol required"."""
+# Each owner-command path as VehiclePriority calls it: the endpoint under
+# /VIN1 and how to call it.
+PRIORITY_CALLS = {
+    "setChargeRate": (
+        "/command/set_charging_amps",
+        lambda priority, vehicle: priority.setChargeRate(10, vehicle),
+    ),
+    "applyChargeLimit": (
+        "/command/set_charge_limit",
+        lambda priority, vehicle: priority.applyChargeLimit(80),
+    ),
+    "car_api_charge": (
+        "/command/charge_stop",
+        lambda priority, vehicle: priority.car_api_charge({"charge": False}),
+    ),
+    "wakeVehicle": (
+        "/wake_up",
+        lambda priority, vehicle: priority.wakeVehicle(vehicle),
+    ),
+}
 
-    @pytest.mark.parametrize("refusal", list(SIGNING_REFUSALS))
+
+class TestOwnerCommandRefusedByTesla:
+    """A car listed with command_signing "off" whose Owner API command Tesla
+    refuses anyway: 403 or "Vehicle Command Protocol required" (needs signed
+    commands), or 410, 412 or "only available on fleetapi" (the Owner API
+    no longer takes commands). Either latches the car read-only."""
+
+    @pytest.mark.parametrize("refusal", list(ALL_REFUSALS))
     @pytest.mark.parametrize("command", list(COMMANDS))
     def test_latches_without_error_backoff(
         self, owner_car, requests_mock, command, refusal
@@ -495,13 +552,12 @@ class TestOwnerCommandRefusedByTesla:
         api, vehicle = owner_car("off")
         suffix, send = COMMANDS[command]
         first, after = REFUSED_RETURNS[command]
-        cmd = requests_mock.post(
-            OWNER_URL + "/VIN1" + suffix, **SIGNING_REFUSALS[refusal]
-        )
+        cmd = requests_mock.post(OWNER_URL + "/VIN1" + suffix, **ALL_REFUSALS[refusal])
 
         assert send(api, vehicle) == first
 
         assert cmd.call_count == 1
+        assert requests_mock.call_count == 1
         assert vehicle.ownerCommandsRefused is True
         assert no_error_recorded(api)
         assert api.readOnlyFor(vehicle) is True
@@ -509,8 +565,57 @@ class TestOwnerCommandRefusedByTesla:
 
         allow_resend(api, vehicle)
         assert send(api, vehicle) == after
-        assert cmd.call_count == 1
+        assert requests_mock.call_count == 1
         assert no_error_recorded(api)
+
+        # Reads still run on the Owner token.
+        assert api.ownerSlot.usable("read")
+        data = requests_mock.get(OWNER_URL + "/VIN1/vehicle_data", json=VEHICLE_DATA)
+        assert vehicle.update_vehicle_data() is True
+        assert data.call_count == 1
+
+    @pytest.mark.parametrize(
+        "refusal,cause",
+        [(name, "signing") for name in SIGNING_REFUSALS]
+        + [(name, "retired") for name in RETIRED_REFUSALS],
+    )
+    def test_warning_names_the_cause(
+        self, owner_car, requests_mock, caplog, refusal, cause
+    ):
+        caplog.set_level(logging.INFO)
+        api, vehicle = owner_car("off")
+        requests_mock.post(
+            OWNER_URL + "/VIN1/command/set_charging_amps", **ALL_REFUSALS[refusal]
+        )
+        api.setChargeRate(10, vehicle)
+
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert len(warnings) == 1
+        assert "Car" in warnings[0]
+        assert "TeslaBLE" in warnings[0]
+        if cause == "signing":
+            assert "needs signed commands" in warnings[0]
+            assert "no longer" not in warnings[0]
+        else:
+            assert "Owner API no longer takes commands" in warnings[0]
+            assert "signed commands" not in warnings[0]
+
+        # The per-car read-only line, logged again on a state change, gives
+        # the same cause.
+        vehicle.refusalLoggedAt = None
+        api.setChargeRate(12, vehicle)
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.INFO and "read-only for Car" in r.getMessage()
+        ]
+        assert len(lines) == 1
+        if cause == "signing":
+            assert "command_signing: off" in lines[0]
+        else:
+            assert "Owner API no longer takes commands" in lines[0]
 
     def test_wake_from_car_api_available_records_no_error(
         self, owner_car, requests_mock
@@ -529,48 +634,65 @@ class TestOwnerCommandRefusedByTesla:
         assert vehicle.ownerCommandsRefused is True
         assert no_error_recorded(api)
 
+    @pytest.mark.parametrize("refusal", list(ALL_REFUSALS))
+    @pytest.mark.parametrize("method", list(PRIORITY_CALLS))
     def test_vehicle_priority_falls_through_and_reads_still_work(
-        self, owner_car, requests_mock
+        self, owner_car, requests_mock, method, refusal
     ):
         api, vehicle = owner_car("off")
-        amps = requests_mock.post(
-            OWNER_URL + "/VIN1/command/set_charging_amps",
-            status_code=403,
-            json=VCP_403,
-        )
+        suffix, call = PRIORITY_CALLS[method]
+        cmd = requests_mock.post(OWNER_URL + "/VIN1" + suffix, **ALL_REFUSALS[refusal])
         ble = Mock()
-        ble.setChargeRate = Mock(return_value=True)
+        setattr(ble, method, Mock(return_value=True))
 
-        assert priority_over(api, ble).setChargeRate(10, vehicle) is True
-        assert amps.call_count == 1
-        assert ble.setChargeRate.call_count == 1
+        assert call(priority_over(api, ble), vehicle) is True
+        assert cmd.call_count == 1
+        assert getattr(ble, method).call_count == 1
 
         # Latched: the next command skips TeslaAPI without an HTTP call.
-        assert priority_over(api, ble).setChargeRate(12, vehicle) is True
-        assert amps.call_count == 1
+        allow_resend(api, vehicle)
+        assert call(priority_over(api, ble), vehicle) is True
+        assert requests_mock.call_count == 1
+        assert getattr(ble, method).call_count == 2
+        assert no_error_recorded(api)
 
-        data = requests_mock.get(
-            OWNER_URL + "/VIN1/vehicle_data",
-            json={
-                "response": {
-                    "drive_state": {"latitude": 37.0, "longitude": -122.0},
-                    "charge_state": {"battery_level": 55, "charge_limit_soc": 80},
-                    "vehicle_state": {"vehicle_name": "Car"},
-                }
-            },
-        )
+        data = requests_mock.get(OWNER_URL + "/VIN1/vehicle_data", json=VEHICLE_DATA)
         assert vehicle.update_vehicle_data() is True
         assert data.call_count == 1
 
-    def test_fleet_403_does_not_latch(self, owner_car, requests_mock):
+    # Fleet API answers to a command keep today's handling: Tesla is
+    # refusing the Fleet token, not the Owner API, so nothing latches.
+    FLEET_REFUSALS = {
+        "403 VCP json": {"status_code": 403, "json": VCP_403},
+        "410": {"status_code": 410, "json": {"response": None, "error": "gone"}},
+        "412 fleetapi json": {"status_code": 412, "json": FLEETAPI_ONLY},
+    }
+    # What each path returns for those answers, as before the latch.
+    FLEET_RETURNS = {
+        "set_charging_amps": lambda body: body,
+        "apply_charge_limit": lambda body: False,
+        "applyChargeLimit": lambda body: None,
+        "charge_start": lambda body: "error",
+        "charge_stop": lambda body: "error",
+        "wake_up": lambda body: False,
+    }
+
+    @pytest.mark.parametrize("refusal", list(FLEET_REFUSALS))
+    @pytest.mark.parametrize("command", list(COMMANDS))
+    def test_fleet_refusal_does_not_latch(
+        self, owner_car, requests_mock, command, refusal
+    ):
         api, vehicle = owner_car("off", fleet=fleet_token())
-        requests_mock.post(
-            FLEET_URL + "/VIN1/command/set_charging_amps",
-            status_code=403,
-            json=VCP_403,
-        )
-        api.setChargeRate(10, vehicle)
+        suffix, send = COMMANDS[command]
+        answer = self.FLEET_REFUSALS[refusal]
+        cmd = requests_mock.post(FLEET_URL + "/VIN1" + suffix, **answer)
+
+        assert send(api, vehicle) == self.FLEET_RETURNS[command](answer["json"])
+
+        assert cmd.call_count >= 1
         assert vehicle.ownerCommandsRefused is False
+        assert api.commandSlotFor(vehicle) is api.fleetSlot
+        assert api.readOnlyFor(vehicle) is False
 
 
 class TestBothTokens:
