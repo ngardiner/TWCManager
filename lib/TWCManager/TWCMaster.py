@@ -380,12 +380,6 @@ class TWCMaster:
             return ("vehicleIsDefinitelyHome", task.get("vin"))
         return task["cmd"]
 
-    def delete_background_task(self, task):
-        key = self._taskKey(task)
-        if key in self.backgroundTasksCmds and self.backgroundTasksCmds[key] == task:
-            del self.backgroundTasksCmds[key]["cmd"]
-            del self.backgroundTasksCmds[key]
-
     def doneBackgroundTask(self, task):
         # Delete task['cmd'] from backgroundTasksCmds such that
         # queue_background_task() can queue another task['cmd'] in the future.
@@ -662,13 +656,6 @@ class TWCMaster:
         else:
             return 0
 
-    def getSendServerTime(self):
-        sendservertime = int(self.settings.get("sendServerTime", 0))
-        if sendservertime > 0:
-            return 1
-        else:
-            return 0
-
     def getScheduledAmpsMax(self):
         schedamps = int(self.settings.get("scheduledAmpsMax", 0))
         if schedamps > 0:
@@ -737,9 +724,6 @@ class TWCMaster:
 
     def getSlaveSign(self):
         return self.slaveSign
-
-    def getMasterSign(self):
-        return self.masterSign
 
     def getStatus(self):
         chargerLoad = float(self.getChargerLoad())
@@ -1906,11 +1890,6 @@ class TWCMaster:
         with self.settingsLock:
             self.settings["hourResumeTrackGreenEnergy"] = hour
 
-    def setkWhDelivered(self, kWh):
-        with self.settingsLock:
-            self.settings["kWhDelivered"] = kWh
-            return True
-
     def setMasterTWCID(self, twcid):
         # This is called when TWCManager is in Slave mode, to track the
         # master's TWCID
@@ -1960,10 +1939,6 @@ class TWCMaster:
     def setNonScheduledAmpsMax(self, amps):
         with self.settingsLock:
             self.settings["nonScheduledAmpsMax"] = amps
-
-    def setSendServerTime(self, val):
-        with self.settingsLock:
-            self.settings["sendServerTime"] = val
 
     def setScheduledAmpsDaysBitmap(self, bitmap):
         with self.settingsLock:
