@@ -1997,6 +1997,7 @@ class TeslaAPI:
 
         body = {"charging_amps": charge_rate}
 
+        req = None
         try:
             req = requests.post(
                 url, headers=headers, json=body, verify=slot.verifyCert, timeout=10
@@ -2009,9 +2010,13 @@ class TeslaAPI:
         except requests.exceptions.RequestException:
             return False
         except json.decoder.JSONDecodeError:
-            return False
+            # Not JSON (e.g. an empty or HTML 403); the refusal check below
+            # still sees the status.
+            apiResponseDict = None
 
         if slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
+            return False
+        if apiResponseDict is None:
             return False
 
         accepted = self._chargeRateAccepted(apiResponseDict)
