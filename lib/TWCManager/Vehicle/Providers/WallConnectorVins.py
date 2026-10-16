@@ -16,14 +16,10 @@ import time
 import traceback
 from typing import Dict
 
-from ..Registry.VehicleRegistry import ANON_PREFIX
+from ..Registry.VehicleRegistry import isAnonKey
 from .Capability import READ_WALL_CONNECTOR_VINS
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Providers")
-
-
-def _anonymous(key) -> bool:
-    return isinstance(key, str) and key.startswith(ANON_PREFIX)
 
 
 class WallConnectorVinReader:
@@ -71,7 +67,7 @@ class WallConnectorVinReader:
 
     def noteDisconnect(self, unit, vin) -> None:
         # vin: the leaving session's VIN, or None when it was anonymous
-        if isinstance(vin, str) and not _anonymous(vin):
+        if isinstance(vin, str) and not isAnonKey(vin):
             self._endedVin[unit.ID] = vin.upper()
         else:
             self._endedVin.pop(unit.ID, None)

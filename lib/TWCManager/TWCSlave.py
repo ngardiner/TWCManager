@@ -8,7 +8,7 @@ from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Reconcile.Belief import known
 from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED, satisfied
 from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles, located
-from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
+from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
 
@@ -143,8 +143,7 @@ class TWCSlave:
         key = self.vehicleKey
         keys = []
         if key is not None and not getattr(self, "pointOwnsAmps", False):
-            anon = key.startswith(ANON_PREFIX)
-            keys = [v.key for v in self._anonCars()] if anon else [key]
+            keys = [v.key for v in self._anonCars()] if isAnonKey(key) else [key]
         # A car that left the set keeps no rate of ours
         self._clearCarAmps([k for k in self._ampsKeys if k not in keys])
         self._ampsKeys = keys

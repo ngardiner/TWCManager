@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 ANON_PREFIX = "anon:"
 
 
+def isAnonKey(key) -> bool:
+    return isinstance(key, str) and key.startswith(ANON_PREFIX)
+
+
+def canonicalKey(key):
+    # VINs compare upper-case; an anonymous key is kept as issued
+    return key.upper() if isinstance(key, str) and not isAnonKey(key) else key
+
+
 def _number(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -66,12 +75,6 @@ class VehicleRegistry:
 
     # Membership
 
-    @staticmethod
-    def _normalise(key: Any) -> Any:
-        if isinstance(key, str) and not key.startswith(ANON_PREFIX):
-            return key.upper()
-        return key
-
     def _getOrCreate(self, vin: str, source: str):
         # The one gate for every provider: only a well-formed VIN becomes a
         # vehicle (anonymous vehicles come from beginPlugSession).
@@ -94,7 +97,7 @@ class VehicleRegistry:
 
     def get(self, key: str) -> Optional[Vehicle]:
         with self._lock:
-            return self._vehicles.get(self._normalise(key))
+            return self._vehicles.get(canonicalKey(key))
 
     def vehicles(self) -> List[Vehicle]:
         with self._lock:
@@ -132,7 +135,7 @@ class VehicleRegistry:
 
     def forget(self, key: str) -> bool:
         with self._lock:
-            removed = self._vehicles.pop(self._normalise(key), None)
+            removed = self._vehicles.pop(canonicalKey(key), None)
         if removed is not None:
             logger.info("Vehicle %s forgotten", removed.key)
             self._removed([removed.key])

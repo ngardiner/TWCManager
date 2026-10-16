@@ -12,7 +12,7 @@ from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
-from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
+from TWCManager.Vehicle.Registry.VehicleRegistry import canonicalKey
 
 
 class ChargingPoint(EVSEInstance):
@@ -197,13 +197,6 @@ class ChargingPoint(EVSEInstance):
             e.setTargetPower(watts)
 
 
-def _groupKey(key):
-    # VINs group case-insensitively; anonymous keys are kept as issued
-    if key.startswith(ANON_PREFIX):
-        return key
-    return key.upper()
-
-
 def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]:
     """Group endpoints that serve the same car into one charging point.
 
@@ -218,7 +211,7 @@ def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]
     groups = {}
     for e in endpoints:
         key = e.vehicleKey
-        key = e.ID if key is None else _groupKey(key)
+        key = e.ID if key is None else canonicalKey(key)
         if e.isLocal and any(m.isLocal for m in groups.get(key, ())):
             key = e.ID
         groups.setdefault(key, []).append(e)
