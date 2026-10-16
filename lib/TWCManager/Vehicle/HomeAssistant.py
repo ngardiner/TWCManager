@@ -213,7 +213,6 @@ class HomeAssistant:
             }
         )
 
-        self.carApiVehicles: List[HaVehicle] = []
         self._rest_lock = threading.Lock()
 
         # The host only: a URL can carry userinfo or a query token (M8)
@@ -260,13 +259,11 @@ class HomeAssistant:
                 type(e).__name__,
             )
 
-        if not self.carApiVehicles:
+        discovered = [hv for _, hv in self.registry.attached("HomeAssistant")]
+        if not discovered:
             logger.warning("No Tesla vehicles discovered in Home Assistant.")
-        else:
-            for v in self.carApiVehicles:
-                logger.info(
-                    "Discovered Tesla: %s (slug=%s, VIN=%s)", v.name, v.slug, v.vin
-                )
+        for v in discovered:
+            logger.info("Discovered Tesla: %s (slug=%s, VIN=%s)", v.name, v.slug, v.vin)
 
     def enabled(self) -> bool:
         return self._enabled
@@ -397,12 +394,12 @@ class HomeAssistant:
 
             hv = HaVehicle(name, vin, d.get("id"), entity_ids)
             try:
-                v = self.registry.getOrCreate(vin, "HomeAssistant")
+                v = self.registry.getOrCreate(
+                    vin, "HomeAssistant", attach=("HomeAssistant", hv)
+                )
             except ValueError:
                 logger.warning("Device '%s' VIN rejected by the registry", name)
                 continue
-            self.carApiVehicles.append(hv)
-            v.attach("HomeAssistant", hv)
             v.observe("name", name, "HomeAssistant")
             v.claim(
                 "HomeAssistant",
@@ -576,21 +573,21 @@ class HomeAssistant:
     # ------------------------------------------------------------------
 
     def updateChargeAtHome(self):
-        for v in self.carApiVehicles:
+        for _, v in self.registry.attached("HomeAssistant"):
             v.refresh_from_home_assistant(self)
         return True
 
     @property
     def numCarsAtHome(self):
         self.updateChargeAtHome()
-        return len([v for v in self.carApiVehicles if v.at_home])
+        return len([v for _, v in self.registry.attached("HomeAssistant") if v.at_home])
 
     @property
     def minBatteryLevelAtHome(self):
         self.updateChargeAtHome()
         levels = [
             v.battery_level
-            for v in self.carApiVehicles
+            for _, v in self.registry.attached("HomeAssistant")
             if v.at_home and v.battery_level is not None
         ]
         return min(levels) if levels else 10000.0
