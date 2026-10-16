@@ -196,19 +196,6 @@ class ChargingPoint(EVSEInstance):
         for e in cars:
             e.setTargetPower(watts)
 
-    def startCharging(self) -> None:
-        for e in self.endpoints:
-            e.startCharging()
-
-    def stopCharging(self) -> None:
-        # No Phase 2 caller. chargeStopMode 1 prefers the car's own stop
-        if int(self.master.settings.get("chargeStopMode", 1)) == 1:
-            targets = [e for e in self.endpoints if not e.isLocal and not e.isReadOnly]
-        else:
-            targets = self.localEndpoints
-        for e in targets or self.endpoints:
-            e.stopCharging()
-
 
 def _groupKey(key):
     # VINs group case-insensitively; anonymous keys are kept as issued

@@ -58,24 +58,23 @@ class Gen3TWCProvider(Provider):
             return frozenset({NO_INDIVIDUAL_STOP})
         return frozenset()
 
-    def setAmps(self, vin: str, amps: int) -> Outcome:
+    def _onUnit(self, vin, act) -> Outcome:
         unit = self._unitForKey(vin)
         if unit is None:
             return Outcome(UNSUPPORTED, "no unit")
-        unit.setTargetPower(unit.convertAmpsToWatts(amps))
+        act(unit)
         return Outcome(DONE)
+
+    def setAmps(self, vin: str, amps: int) -> Outcome:
+        return self._onUnit(vin, lambda u: u.setTargetPower(u.convertAmpsToWatts(amps)))
 
     def stopCharging(self, vin: str) -> Outcome:
-        # A zero headroom: a normal local stop (unverified on hardware)
-        unit = self._unitForKey(vin)
-        if unit is None:
-            return Outcome(UNSUPPORTED, "no unit")
-        unit.stopCharging()
-        return Outcome(DONE)
+        # A zero headroom: a normal local stop (unverified on hardware). The
+        # shared value stops the unit only when no sibling holds a target
+        return self._onUnit(vin, lambda u: u.controller.setUnitTarget(u.ID, 0))
 
     def startCharging(self, vin: str) -> Outcome:
-        unit = self._unitForKey(vin)
-        if unit is None:
-            return Outcome(UNSUPPORTED, "no unit")
-        unit.startCharging()
-        return Outcome(DONE)
+        # The last target (or the minimum) back as the unit's own
+        return self._onUnit(
+            vin, lambda u: u.controller.setUnitTarget(u.ID, u.lastTarget or u.minPower)
+        )
