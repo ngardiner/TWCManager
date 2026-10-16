@@ -42,20 +42,6 @@ class EVSEController(abc.ABC):
         return float("inf")
 
     # ------------------------------------------------------------------
-    # Bulk control — default implementations delegate to instances
-    # ------------------------------------------------------------------
-
-    def startAllCharging(self) -> None:
-        """Start charging on every EVSE managed by this controller."""
-        for evse in self.allEVSEs:
-            evse.startCharging()
-
-    def stopAllCharging(self) -> None:
-        """Stop charging on every EVSE managed by this controller."""
-        for evse in self.allEVSEs:
-            evse.stopCharging()
-
-    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
