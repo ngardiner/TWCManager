@@ -966,3 +966,12 @@ def test_failed_device_lookup_is_range_unknown():  # M3
     ):
         assert ble.scanForVehicleInRange(VIN) is None
     assert ble.rangeStatus(VIN)["inRange"] is None
+
+
+def test_charge_state_maps_the_cars_own_current_request():   # slim Task 12b
+    ble, reg, master = make()
+    ble._fetch_state_json = Mock(
+        return_value={"chargeState": {"chargeCurrentRequest": 16, "chargerPilotCurrent": 32}}
+    )
+    state = ble.get_charge_state(VIN)
+    assert state["chargeCurrentRequest"] == 16 and state["availableCurrent"] == 32

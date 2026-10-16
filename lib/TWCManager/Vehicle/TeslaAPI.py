@@ -1795,6 +1795,7 @@ class CarApiVehicle:
     chargeLimit = RegistryField("chargeLimit", -1)
     chargingState = RegistryField("chargingState", "Unknown")
     availableCurrent = RegistryField("availableCurrent", 0)
+    chargeCurrentRequest = RegistryField("chargeCurrentRequest", None)
     voltage = RegistryField("voltage", 0)
     phases = RegistryField("phases", 0)
     timeToFullCharge = RegistryField("timeToFullCharge", 0.0)
@@ -2163,6 +2164,7 @@ class CarApiVehicle:
                 ("battery_level", "batteryLevel"),
                 ("time_to_full_charge", "timeToFullCharge"),
                 ("charger_pilot_current", "availableCurrent"),
+                ("charge_current_request", "chargeCurrentRequest"),
                 ("charger_actual_current", "actualCurrent"),
                 ("charger_phases", "phases"),
                 ("charger_voltage", "voltage"),

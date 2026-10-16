@@ -24,6 +24,8 @@ FIELDS = (
     "gpsAsOf",
     "actualCurrent",
     "availableCurrent",
+    # The car's own charge-current setting (amps), not the charger's pilot
+    "chargeCurrentRequest",
     "voltage",
     "phases",
     "timeToFullCharge",
