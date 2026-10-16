@@ -43,11 +43,14 @@ def presentVehicles(master, capability) -> List:
 
 def broadcastVehicles(master, capability) -> List:
     # Main's unaddressed car_api_charge: every car on the Tesla API's list at
-    # home (or not yet located), and every VIN BLE knows
+    # home (or not yet located), every VIN BLE knows, and every Home
+    # Assistant car at home that a TWC reports by VIN
     def reached(v):
         api = v.attachment("TeslaAPI")
         home = api is not None and (api.atHome or getattr(api, "lat", 0) == 10000)
-        return home or "TeslaBLE" in v.claims
+        ha = v.attachment("HomeAssistant")
+        haHome = ha is not None and ha.at_home and master.getTWCbyVIN(v.vin)
+        return home or bool(haHome) or "TeslaBLE" in v.claims
 
     order = master.providerOrder
     return [
