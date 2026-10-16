@@ -118,7 +118,7 @@ def test_debug_command_without_a_reconciler_submits_nothing():          # until 
     m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); m.reconciler = None; f = fleet(); o = order(m, f)
     assert o.debugCommand("wakeVehicle", VIN, "{}") is False and f.calls == []
 
-@pytest.mark.parametrize("params", ['{"charge_rate": "inf"}', '{"charge_rate": 1e999}', '{"charge_rate": "-inf"}'])
+@pytest.mark.parametrize("params", ['{"charge_rate": "inf"}', '{"charge_rate": 1e999}', '{"charge_rate": "-inf"}', '{"charge_rate": "lots"}', '{"charge_rate": null}', '{"charge_rate": NaN}'])   # and garbage (12b deleted-test PARTIAL)
 def test_debug_command_refuses_an_infinite_rate(params):
     m = master(); m.vehicleRegistry.getOrCreate(VIN, "t"); f = fleet(); o = order(m, f)
     assert o.debugCommand("setChargeRate", VIN, params) is False and f.calls == []
