@@ -29,6 +29,7 @@ from tests.unit.test_limit_reconciler import VIN, setup
 
 VIN2 = "5YJ3E1EA1KF000002"
 FLEET = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/"
+OWNER = "https://owner-api.teslamotors.com/api/1/vehicles/"
 # Fleet API prices; vehicles/{vin} and the vehicle list are free
 PRICE = {"vehicle_data": 0.002, "wake_up": 0.02, "command": 0.001}
 
@@ -93,6 +94,7 @@ class FleetCar:
         at=HOME,
         wakes=True,
         script=None,
+        api=FLEET,
     ):
         self.vin, self.state, self.wakes = vin, state, wakes
         self.charge = {
@@ -104,7 +106,7 @@ class FleetCar:
             "scheduled_charging_pending": False,
         }
         self.at, self.script = at, list(script or [(200, True, "")])
-        base = FLEET + vin
+        base = api + vin
         requests_mock.get(
             base, json=lambda req, ctx: {"response": {"state": self.state, "vin": vin}}
         )
@@ -170,7 +172,9 @@ def quiet(monkeypatch, requests_mock):
     requests_mock.register_uri(ANY, ANY, status_code=599, json={})
 
 
-def install(fleet=False, owner=False, policy=None, held=None, at=HOME, located=True):
+def install(
+    fleet=False, owner=False, policy=None, held=None, at=HOME, located=True, signing=None
+):
     # A real master, store and reconciler on a test clock; a real TeslaAPI
     # with the given token slots, the car listed and placed by TeslaMate's
     # free position
@@ -188,8 +192,10 @@ def install(fleet=False, owner=False, policy=None, held=None, at=HOME, located=T
             api.storeToken(fleet_token())
         for p in api.providers():
             m.providerOrder.register(p)
-        m.providerOrder.provider("FleetAPI").clock = c
-        api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
+            p.clock = c
+        api.addVehicle(
+            {"id": 1, "vin": VIN, "display_name": "Car", "command_signing": signing}
+        )
     if located:
         placeAt(m, v, at)
     if held:
@@ -496,6 +502,57 @@ def test_ble_only_limits_never_wake_to_lower(requests_mock):
         60,
     ] and requests_mock.call_count == 0
     assert m.heldLimits.get(VIN) == HeldLimit(90, 60)
+
+
+# Row 3b (#659): an Owner token and a car listed command_signing "off" take
+# the Fleet-only paths of rows 4, 9 and 28, request for request, on the free
+# Owner API
+
+
+def path_shape(requests_mock):
+    # Each request's method and path below .../vehicles/, the host dropped
+    return [
+        (q.method, q.url.split("?")[0].split("/api/1/")[-1])
+        for q in requests_mock.request_history
+    ]
+
+
+@pytest.mark.parametrize("scenario", ["raise", "retry", "stop"])
+def test_owner_only_off_car_matches_fleet_only(requests_mock, scenario):
+    shapes = {}
+    for token, base in (("fleet", FLEET), ("owner", OWNER)):
+        requests_mock.reset_mock()
+        tokens = {token: True}
+        if scenario == "raise":
+            m, r, v, c, api = install(signing="off", held=(90, 50), **tokens)
+            FleetCar(requests_mock, limit=50, api=base)
+            v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+            m.setPolicyLimit(80, transition=True)
+            passes(r, c, 3600)
+        elif scenario == "retry":
+            m, r, v, c, api = install(signing="off", **tokens)
+            FleetCar(
+                requests_mock, state="online", limit=90, script=[(500, None, None)],
+                api=base,
+            )
+            v.observe("chargeLimit", 90, "TeslaMateVehicle")
+            m.setPolicyLimit(50, transition=True)
+            each = lambda: m.setPolicyLimit(50, transition=False)
+            passes(r, c, 3600, step=30, each=each)
+        else:
+            m, r, v, c, api = install(signing="off", **tokens)
+            FleetCar(requests_mock, state="online", charging="Charging", api=base)
+            v.observe("chargingState", "Charging", "TeslaMateVehicle")
+            m.stopCarsCharging(VIN)
+            passes(r, c, 600, each=lambda: m.stopCarsCharging(VIN))
+        shapes[token] = path_shape(requests_mock)
+        sent = {"raise": ["set_charge_limit"], "retry": ["set_charge_limit"] * 2}
+        assert commands(requests_mock) == sent.get(scenario, ["charge_stop"])
+        if token == "owner":
+            # Nothing billed, nothing else asked
+            assert paid(requests_mock) == (0, 0, 0)
+            assert counts(requests_mock)["other"] == 0
+    assert shapes["owner"] == shapes["fleet"] and shapes["fleet"]
 
 
 # Row 3: Owner token only (read-only); a policy limit and a stop
