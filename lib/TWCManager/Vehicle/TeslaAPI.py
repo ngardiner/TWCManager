@@ -1826,7 +1826,9 @@ class TeslaAPI:
             return True
         vehicle.refusalLoggedAt = state
         signing = vehicle.commandSigning
-        if vehicle.ownerCommandsRefused:
+        if vehicle.ownerCommandsRetired:
+            why = "Tesla's Owner API no longer takes commands for it."
+        elif vehicle.ownerCommandsRefused:
             why = (
                 "Tesla refused an Owner API command for it although it "
                 "reported command_signing: off."
@@ -1862,33 +1864,54 @@ class TeslaAPI:
         return True
 
     def noteOwnerCommandRefused(self, vehicle, req):
-        # True when Tesla refused an Owner API command for this car (HTTP
-        # 403, or an error naming the Vehicle Command Protocol): the car
-        # needs signed commands after all. Stops Owner API commands to it
-        # until TWCManager restarts, and logs that once. Records no API error, which
-        # would also back off reads; the caller returns its failure, so
+        # True when Tesla refused an Owner API command for this car. Two
+        # causes: HTTP 403 or an error naming the Vehicle Command Protocol
+        # (the car needs signed commands after all), or HTTP 410/412 or
+        # "only available on fleetapi" (the Owner API no longer takes
+        # commands). Stops Owner API commands to it until TWCManager
+        # restarts, and logs that once. Records no API error, which would
+        # also back off reads; the caller returns its failure, so
         # VehiclePriority tries the next module.
         if req is None:
             return False
+        text = str(getattr(req, "text", "") or "")
         try:
-            error = str((json.loads(req.text) or {}).get("error") or "")
+            error = str((json.loads(text) or {}).get("error") or "")
         except (ValueError, AttributeError, TypeError):
             error = ""
-        if req.status_code != 403 and "Vehicle Command Protocol required" not in error:
+        if "Vehicle Command Protocol required" in error:
+            retired = False
+        elif (
+            req.status_code in (410, 412)
+            or "only available on fleetapi" in text.lower()
+        ):
+            retired = True
+        elif req.status_code == 403:
+            retired = False
+        else:
             return False
         vehicle.ownerCommandsRefused = True
+        vehicle.ownerCommandsRetired = retired
         vehicle.refusalLoggedAt = self.refusalState(vehicle)
-        logger.warning(
-            "Tesla refused an Owner API command for "
-            + vehicle.name
-            + " (HTTP "
-            + str(req.status_code)
-            + (": " + error if error else "")
-            + ") although it reported command_signing: off. Not sending it "
-            "further Owner API commands; charge commands need a Fleet API "
-            "token with the Vehicle Command proxy (teslaProxy) or the "
-            "TeslaBLE module."
-        )
+        answer = " (HTTP " + str(req.status_code) + (": " + error if error else "")
+        if retired:
+            logger.warning(
+                "Tesla's Owner API no longer takes commands for "
+                + vehicle.name
+                + answer
+                + "). Not sending it further Owner API commands; charge "
+                "commands need a Fleet API token or the TeslaBLE module."
+            )
+        else:
+            logger.warning(
+                "Tesla refused an Owner API command for "
+                + vehicle.name
+                + answer
+                + ") although it reported command_signing: off; it needs "
+                "signed commands. Not sending it further Owner API commands; "
+                "charge commands need a Fleet API token with the Vehicle "
+                "Command proxy (teslaProxy) or the TeslaBLE module."
+            )
         return True
 
     def applySyncedToken(self, accessToken):
@@ -2033,6 +2056,9 @@ class TeslaAPI:
             req = requests.post(url, headers=headers, verify=slot.verifyCert)
             logger.log(logging.INFO8, "Car API cmd wake_up" + str(req))
             req.raise_for_status()
+            if slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
+                # A 2xx carrying the refusal error.
+                return False
             apiResponseDict = json.loads(req.text)
         except requests.exceptions.RequestException:
             if req is None:
@@ -2097,10 +2123,13 @@ class CarApiVehicle:
     statusDeferral = 0
     # command_signing from Tesla's vehicle list: Owner API commands go only
     # to cars where it is "off". ownerCommandsRefused is set when Tesla
-    # refuses one anyway. refusalLoggedAt is TeslaAPI.refusalState when the
-    # car's read-only line was last logged.
+    # refuses one anyway; ownerCommandsRetired too when the refusal says the
+    # Owner API no longer takes commands (410/412, "only available on
+    # fleetapi") rather than that the car needs signing. refusalLoggedAt is
+    # TeslaAPI.refusalState when the car's read-only line was last logged.
     commandSigning = None
     ownerCommandsRefused = False
+    ownerCommandsRetired = False
     refusalLoggedAt = None
 
     batteryLevel = 10000
@@ -2131,6 +2160,7 @@ class CarApiVehicle:
         self.name = json["display_name"] or self.VIN or str(self.ID) or "unknown"
         self.commandSigning = json.get("command_signing")
         self.ownerCommandsRefused = False
+        self.ownerCommandsRetired = False
 
         # Launch sync monitoring thread
         thread = Thread(target=self.checkSyncNotStale)
