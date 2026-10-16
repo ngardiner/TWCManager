@@ -236,6 +236,14 @@ def test_resolving_keeps_an_existing_vin_entry():
     assert m.heldLimits.get(VIN) == HeldLimit(70, 55)
     assert "chargeLimits" not in m.settings
 
+def test_resolving_replaces_a_malformed_vin_entry():   # slim Task 11 re-review nit
+    m, s = make()
+    m.settings["heldLimits"] = {VIN: {"outside": "x"}}
+    m.settings["chargeLimits"] = {"777": [90, None]}
+    m.heldLimits.load(); m.settings["heldLimits"][VIN] = {"outside": "x"}
+    m.heldLimits.resolveLegacyIds({777: VIN})
+    assert m.heldLimits.get(VIN) == HeldLimit(90, None)
+
 def test_store_works_before_load_and_on_a_bare_master():
     ns = SimpleNamespace(
         settings={}, queue_background_task=Mock(), settingsLock=threading.RLock()

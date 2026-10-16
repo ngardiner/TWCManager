@@ -252,7 +252,7 @@ def test_no_energy_sites_makes_the_capability_not_ready(requests_mock):
 def test_a_failed_products_fetch_is_not_cached_as_empty(requests_mock):
     api, reg, ctl, u = setup(requests_mock)
     requests_mock.get(re.compile(r".*/api/1/products$"), status_code=500, json={})
-    assert api.wallConnectorVins(api.ownerSlot) is None and api.energySites(api.ownerSlot) == []
+    assert api.wallConnectorVins(api.ownerSlot) is None and api._fetchEnergySites(api.ownerSlot) is None
     assert api.wallConnectorVinsReady(api.ownerSlot)
 
 def test_a_site_without_wall_connectors_is_dropped_from_later_polls(requests_mock):

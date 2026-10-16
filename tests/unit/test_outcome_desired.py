@@ -12,8 +12,8 @@ def attempt(provider, aspect=CHARGE_LIMIT, value=50):
 
 def test_outcome_vocabulary():
     assert O.SETTLED | O.RETRYABLE | O.EXCLUDING == O.KINDS and O.isOutcome(O.Outcome(O.DONE)) and not O.isOutcome("done")
-    assert O.Outcome(O.REFUSED, "401").detail == "401" and "cancelled" in O.LANE_DETAILS
-    assert "wake held" in O.NOT_SENT and O.LANE_DETAILS <= O.NOT_SENT
+    assert O.Outcome(O.REFUSED, "401").detail == "401" and "cancelled" in O.QUEUE_DETAILS
+    assert "wake held" in O.NOT_SENT and O.QUEUE_DETAILS <= O.NOT_SENT
     assert O.isNotSent(O.Outcome(O.UNREACHABLE, "wake held")) and O.isNotSent(O.Outcome(O.SATISFIED, "rules: limit unknown"))
     assert not O.isNotSent(O.Outcome(O.ERROR, "500")) and not O.isNotSent(O.Outcome(O.DONE)) and not O.isNotSent(O.Outcome(O.ERROR, "rules"))
 

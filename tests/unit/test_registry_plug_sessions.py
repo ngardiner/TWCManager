@@ -23,7 +23,7 @@ def test_unknown_vin_needs_two_matching_reads_then_merges_anonymous():
     v = r.get(VIN)
     assert v is not None and r.get("anon:8244") is None
     assert v.latest("twcVin").value == "8244" and v.latest("actualCurrent").value == 12
-    assert r.pointFor(VIN) == "8244" and r.vehicleAt("8244") is v
+    assert r.vehicleAt("8244") is v
 
 
 def test_known_vin_confirms_at_once():
@@ -59,7 +59,7 @@ def test_session_end_clears_twc_vin_on_the_car():
     r.beginPlugSession("8244")
     r.observeTwcVin("8244", VIN)
     r.endPlugSession("8244")
-    assert r.get(VIN).latest("twcVin").value is None and r.pointFor(VIN) is None
+    assert r.get(VIN).latest("twcVin").value is None and r.get(VIN).value("twcVin") is None
 
 
 def test_is_pending_tracks_the_unconfirmed_candidate():

@@ -35,7 +35,7 @@ from . import Run
 from .Desired import AMPS, CAPABILITY_FOR, CHARGE_LIMIT, CHARGING, FIELD_FOR, Attempt
 from .Outcome import (
     ERROR,
-    LANE_DETAILS,
+    QUEUE_DETAILS,
     SATISFIED,
     SETTLED,
     UNREACHABLE,
@@ -250,7 +250,7 @@ class VehicleReconciler(threading.Thread):
         if (
             last is not None
             and isNotSent(last)
-            and last.detail not in LANE_DETAILS
+            and last.detail not in QUEUE_DETAILS
             and now - rec.lastOutcomeAt < RETRY[aspect]
         ):
             # Wake held, backoff, wake refused: no resubmit loop (H2)

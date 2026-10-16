@@ -202,13 +202,12 @@ class HeldLimits:
                 vin = listed.get(ident)
                 if vin is None or not isWellFormedVIN(vin):
                     lost.append((ident, limit))
-                elif vin not in store:
+                elif _storedEntry(store.get(vin)) is None:
+                    # Absent or malformed: the legacy entry takes its place
                     store[vin] = _encode(limit)
                 else:
                     own = _storedEntry(store[vin])
-                    kept = vin in self._loadedVins or own is None
-                    if own is None:
-                        own = limit
+                    kept = vin in self._loadedVins
                     if not kept:
                         store[vin] = _encode(HeldLimit(limit.outside, own.held))
                     merged.append((ident, vin, limit, own, kept))
