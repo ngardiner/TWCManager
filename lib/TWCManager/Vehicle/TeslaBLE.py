@@ -68,6 +68,10 @@ class TeslaBLE:
     PAIRING_WINDOW = 600
     # Pause before sendCommand's one retry of a transient failure.
     QUICK_RETRY_DELAY = 2.0
+    # tesla-control's -debug log lines ("<time> [info ] Securing connection...");
+    # only the error line after them classifies a failure.
+    LOG_LINE = re.compile(r"^\S+ \[\w+ ?\] ")
+    TRANSIENT_TEXT = ("connection", "timeout", "deadline exceeded")
     # bluetoothctl listens this long per range scan.
     SCAN_SECONDS = 8
     # A request not served in this long no longer shows as "Scanning...".
@@ -406,7 +410,7 @@ class TeslaBLE:
             vin = vin.VIN
         output = self._sendCommand_internal(vin, command, args)
         if output is None and getattr(self._failure, "transient", False):
-            logger.debug(f"BLE command '{command}' failed transiently; retrying once")
+            logger.info(f"BLE command '{command}' to {vin} failed; retrying once")
             time.sleep(self.QUICK_RETRY_DELAY)
             output = self._sendCommand_internal(vin, command, args)
         return output
@@ -415,7 +419,6 @@ class TeslaBLE:
     def _sendCommand_internal(self, vin, command, args=None):
         """One tesla-control run. Returns command output string or None on
         failure, recording in self._failure how it failed."""
-        self._failure.refused = False
         self._failure.transient = False
         try:
             # Validate inputs
@@ -505,8 +508,15 @@ class TeslaBLE:
                     self._failure.refused = True
                     self._safeNote(self._noteBleRefusal, vin, output)
                 else:
-                    out = output.lower()
-                    self._failure.transient = "connection" in out or "timeout" in out
+                    errors = [
+                        line
+                        for line in output.lower().splitlines()
+                        if line.strip() and not self.LOG_LINE.match(line)
+                    ]
+                    last = errors[-1] if errors else ""
+                    self._failure.transient = any(
+                        t in last for t in self.TRANSIENT_TEXT
+                    )
                 return None
 
             logger.debug(
