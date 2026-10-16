@@ -876,10 +876,13 @@ def test_restart_with_the_car_plugged_in_and_asleep_gets_the_scheduled_limit(
         ("charging-set-limit", 70),
         ("wake", None),
         ("charging-set-amps", 32),
+        ("wake", None),
+        ("charging-start", None),
     ]
     assert m.heldLimits.get(VIN) == HeldLimit(
         100, 70
-    )  # the limit first, then the BLE lift (main's rate broadcast)
+    )  # the limit first, then the BLE lift (main's rate broadcast), then
+    # main's start: TeslaMate's "Complete" predates the raise
     assert (
         requests_mock.call_count == 0
     )  # nothing paid, nothing free: presence came from TeslaMate
