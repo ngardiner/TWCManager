@@ -15,8 +15,10 @@ geofencing, and to issue charge commands.
 > login + tokens give you data and authentication; the proxy or BLE give you control.
 > See [Driving charging](#driving-charging-proxy-or-ble) below.
 
-Tesla retired the legacy Owner API, so cloud access now requires you to register
-your own application with Tesla and complete an OAuth login. If you would rather not
+Tesla retired the legacy Owner API login, so cloud access now generally requires you
+to register your own application with Tesla and complete an OAuth login. An Owner API
+token from another tool (such as TeslaMate) still reads vehicle state, and commands
+only some vehicles; see [Owner API tokens](#owner-api-tokens). If you would rather not
 register an application at all, TeslaBLE controls charging locally over Bluetooth and
 needs no Tesla account.
 
@@ -132,6 +134,62 @@ Without one of these, charge commands fail with
 `403 "Tesla Vehicle Command Protocol required"` and TWCManager logs a clear error and
 stops retrying (it will still read state via the FleetAPI). FleetAPI data + (proxy or
 BLE) control is the intended, complete configuration.
+
+## Owner API tokens
+
+An Owner API token (pasted, or synced from [TeslaMate](Vehicle_TeslaMate.md)) reads
+vehicle state through the Owner API. Whether it can also send charge commands depends
+on the vehicle. Tesla's vehicle list (`/api/1/products`) reports a `command_signing`
+value for each vehicle:
+
+- `"off"`: Tesla accepts Owner API commands for that vehicle, so TWCManager sends
+  charge commands (start/stop, charge limit, charge rate, wake) for it with the Owner
+  API token.
+- `"required"`: the vehicle needs signed commands, and Owner API commands return
+  `403 "Tesla Vehicle Command Protocol required"`. TWCManager treats it as read-only
+  and logs once that its charge commands need a Fleet API token with the Vehicle
+  Command proxy (`teslaProxy`) or the TeslaBLE module.
+- Missing, or any other value: treated as read-only.
+
+TWCManager decides this per vehicle, so one account can have a vehicle it commands and
+a vehicle it only reads. A read-only vehicle gets no command from the Owner API and no
+API error is recorded; the next provider in the command order (such as TeslaBLE or
+Home Assistant) carries its commands.
+
+Owner API commands cost nothing, but they take the Fleet API's place in the command
+order: TWCManager uses them after TeslaBLE has failed for a while, with the same limit
+on repeated sends, and never to set a car's charge rate where a TWC or BLE can.
+
+If Tesla still refuses an Owner API command (HTTP 403, or the "Vehicle Command
+Protocol required" error) for a vehicle that reported `"off"`, TWCManager treats that
+vehicle as read-only until it restarts and logs a warning. This does not pause reads,
+and other vehicles keep their Owner API commands. The next provider in the command
+order can send at once: the refused Owner API command does not count against its
+limit on repeated sends.
+
+If Tesla stops taking Owner API commands altogether (HTTP 410 or 412, or an error
+saying the endpoint is "only available on fleetapi"), TWCManager logs one error and
+sends no further Owner API commands or wakes, for any vehicle, until the Owner API
+token is entered again or synced again from TeslaMate (which tries once more). Reads
+continue with the same token, and no API error is recorded, so the next provider in
+the command order carries the commands.
+
+When you also hold a Fleet API token that can send commands, commands go through the
+Fleet API (and the proxy, if set) for every vehicle, as before. The Owner API token
+carries commands only when no Fleet API token can.
+
+Not yet confirmed:
+
+- Whether `"off"` always means a pre-2021 Model S or X. It has been seen on a 2018
+  Model X.
+- Whether Tesla returns other `command_signing` values, or changes a vehicle's value
+  over time. TWCManager reads the vehicle list once, so it sees a change only after a
+  restart.
+- Whether charge start and stop behave like the charge limit and charge rate commands
+  on `"off"` vehicles. Only the latter two (and wake) have been tried.
+- Whether the Fleet API vehicle list includes `command_signing`. When the vehicles are
+  listed through the Fleet API, a missing value leaves them read-only for Owner API
+  commands.
 
 ## Alternatives to the web login
 
