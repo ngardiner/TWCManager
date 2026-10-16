@@ -8,8 +8,11 @@ commands with a 403. A car marked "required", one with no field and one with
 any other value is read-only on an Owner token: no command may reach Tesla
 for it. The provider order keeps it out of every command walk, and a provider
 asked anyway refuses without an HTTP call and without recording an API error
-(which would back off reads too). Reads still run. The owner_api fixture's
-car has no command_signing, so it is the missing-field case.
+(which would back off reads too). Reads still run. With both tokens the
+provider order decides: OwnerAPI ranks first, so an "off" car's commands go
+to the Owner API until Tesla refuses them, and each provider sends with its
+own token only. The owner_api fixture's car has no command_signing, so it is
+the missing-field case.
 """
 
 import logging
@@ -31,6 +34,7 @@ from tests.unit.teslatokens import (
     new_api,
     no_threads,
     owner_token,
+    wire_reads,
 )
 
 
@@ -331,7 +335,7 @@ class TestOffCarCommandsThroughOwner:
         api = owner_api_with("off")
         vehicle, car = listed(api)
         assert api.readOnly is False
-        assert api.commandSlotFor(vehicle) is api.ownerSlot
+        assert api.canCommand(vehicle, api.ownerSlot)
 
     def test_owner_claim_commands(self, no_threads):
         api = owner_api_with("off")
@@ -347,7 +351,8 @@ class TestOwnerTokenRefusesOtherCars:
         api = owner_api_with(signing)
         vehicle, car = listed(api)
         owner = provider(api, "OwnerAPI")
-        assert api.readOnly is True and api.commandSlotFor(vehicle) is None
+        assert api.readOnly is True
+        assert not api.canCommand(vehicle, api.ownerSlot)
         for cap in C.COMMANDS:
             assert not owner.ready(vehicle, cap)
         assert owner.setAmps(VIN, 10) == Outcome(REFUSED, "no command token")
@@ -361,7 +366,7 @@ class TestOwnerTokenRefusesOtherCars:
     def test_off_must_match_exactly(self, no_threads):
         for signing in ("Off", "OFF", " off", "false", False, 0, ""):
             api = owner_api_with(signing)
-            assert api.commandSlotFor(api.registry.get(VIN)) is None
+            assert not api.canCommand(api.registry.get(VIN), api.ownerSlot)
 
     def infos(self, caplog):
         return [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
@@ -409,7 +414,6 @@ class TestOwnerTokenRefusesOtherCars:
         api = new_api()
         api.storeToken(owner_token())
         assert api.readOnly is False and api.ownerTokenOnly is True
-        assert api.commandSlotFor(None) is None
 
     def test_module_hint_only_when_no_car_can_command(self, no_threads, caplog):
         caplog.set_level(logging.INFO)
@@ -431,8 +435,8 @@ class TestMixedFleet:
         (off, _), (required, requiredCar) = api.registry.attached("TeslaAPI")
         owner = provider(api, "OwnerAPI")
         assert api.readOnly is False
-        assert api.commandSlotFor(off) is api.ownerSlot
-        assert api.commandSlotFor(required) is None
+        assert api.canCommand(off, api.ownerSlot)
+        assert not api.canCommand(required, api.ownerSlot)
         assert owner.ready(off, C.SET_AMPS)
         assert not owner.ready(required, C.SET_AMPS)
         mock_owner_car(requests_mock)
@@ -445,25 +449,48 @@ class TestMixedFleet:
 
 
 class TestBothTokens:
-    def test_off_car_commands_through_fleet(self, no_threads, requests_mock):
-        # Fleet first (#659 decision 3): a working Fleet token sees no change
+    def test_off_car_commands_through_owner(self, no_threads, requests_mock):
+        # The provider order decides (OwnerAPI ranks before FleetAPI in the
+        # same tier): each provider is ready for its own slot only, and
+        # sends with its own token
         api = owner_api_with("off")
         api.storeToken(fleet_token())
         vehicle, car = listed(api)
-        assert api.commandSlotFor(vehicle) is api.fleetSlot
-        assert not provider(api, "OwnerAPI").ready(vehicle, C.SET_AMPS)
-        assert provider(api, "FleetAPI").ready(vehicle, C.SET_AMPS)
+        owner, fleet = provider(api, "OwnerAPI"), provider(api, "FleetAPI")
+        assert owner.available(C.SET_AMPS) and owner.ready(vehicle, C.SET_AMPS)
+        assert fleet.available(C.SET_AMPS) and fleet.ready(vehicle, C.SET_AMPS)
+        order = wire_reads(api.registry, *api.providers())
+        names = [p.name for p in order.candidates(vehicle, C.SET_AMPS)]
+        assert names == ["OwnerAPI", "FleetAPI"]
+        sent = mock_owner_car(requests_mock)
+        assert owner.setAmps(VIN, 10) == Outcome(DONE)
+        assert bearer(sent.last_request) == api.ownerSlot.accessToken
         cmd = requests_mock.post(
             re.compile(re.escape(FLEET_URL + "/" + VIN) + "/command/.*"),
             json={"response": {"result": True, "reason": ""}},
         )
-        assert provider(api, "FleetAPI").setAmps(VIN, 10) == Outcome(DONE)
+        assert fleet.setAmps(VIN, 10) == Outcome(DONE)
         assert bearer(cmd.last_request) == api.fleetSlot.accessToken
-        # The Owner provider never sends while Fleet commands
-        assert provider(api, "OwnerAPI").setAmps(VIN, 10) == Outcome(
-            REFUSED, "no command token"
-        )
-        assert cmd.call_count == 1
+        assert sent.call_count == 1 and cmd.call_count == 1
+
+    @pytest.mark.parametrize("signing", ["required", None, "weird"])
+    def test_other_cars_command_through_fleet_only(
+        self, no_threads, requests_mock, caplog, signing
+    ):
+        caplog.set_level(logging.INFO)
+        api = owner_api_with(signing, name="Model 3")
+        api.storeToken(fleet_token())
+        vehicle, car = listed(api)
+        owner, fleet = provider(api, "OwnerAPI"), provider(api, "FleetAPI")
+        assert not owner.ready(vehicle, C.SET_AMPS)
+        assert not owner.ready(vehicle, C.WAKE)
+        assert fleet.ready(vehicle, C.SET_AMPS)
+        assert owner.setAmps(VIN, 10) == Outcome(REFUSED, "no command token")
+        assert owner.wake(VIN) == Outcome(REFUSED, "no command token")
+        assert requests_mock.call_count == 0
+        # Fleet commands it: not read-only, so no per-car line
+        assert api.readOnly is False
+        assert not [r for r in caplog.records if "read-only" in r.getMessage()]
 
     def test_fleet_token_without_command_scope_leaves_owner(
         self, no_threads, requests_mock
@@ -474,7 +501,8 @@ class TestBothTokens:
         api.storeToken(fleet_token(scp=["openid", "vehicle_device_data"]))
         vehicle, car = listed(api)
         assert not api.fleetSlot.usable("command")
-        assert api.commandSlotFor(vehicle) is api.ownerSlot
+        assert api.canCommand(vehicle, api.ownerSlot)
+        assert not api.canCommand(vehicle, api.fleetSlot)
         assert provider(api, "OwnerAPI").ready(vehicle, C.SET_AMPS)
         sent = mock_owner_car(requests_mock)
         assert provider(api, "OwnerAPI").setAmps(VIN, 10) == Outcome(DONE)
@@ -786,15 +814,73 @@ class TestThroughTheWalk:
         assert last.calls[-1] == ("setChargeLimit", VIN, 60)
         assert no_error_recorded(api)
 
-    def test_both_tokens_go_to_fleet(self, no_threads, requests_mock):
-        m, r, api, last = self.make("off", fleet=True)
-        requests_mock.get(FLEET_URL + "/" + VIN, json={"response": {"state": "online"}})
-        cmd = requests_mock.post(
-            re.compile(re.escape(FLEET_URL + "/" + VIN) + "/command/.*"),
+    def fleet_car(self, requests_mock, vin=VIN):
+        requests_mock.get(FLEET_URL + "/" + vin, json={"response": {"state": "online"}})
+        return requests_mock.post(
+            re.compile(re.escape(FLEET_URL + "/" + vin) + "/command/.*"),
             json={"response": {"result": True, "reason": ""}},
         )
-        mock_owner_car(requests_mock)
+
+    def test_both_tokens_go_to_owner(self, no_threads, requests_mock):
+        # The provider order decides: OwnerAPI ranks first, and nothing is
+        # sent with the Fleet token
+        m, r, api, last = self.make("off", fleet=True)
+        cmd = self.fleet_car(requests_mock)
+        sent = mock_owner_car(requests_mock)
         self.limit(m, r, VIN)
+        assert [q.url for q in posts(requests_mock)] == [
+            OWNER_URL + "/" + VIN + "/command/set_charge_limit"
+        ]
+        assert bearer(sent.last_request) == api.ownerSlot.accessToken
+        assert cmd.call_count == 0 and last.calls == []
+
+    @pytest.mark.parametrize(
+        "status,body",
+        [
+            (403, VCP_403),
+            (200, VCP_403),
+            (410, {"response": None}),
+            (412, FLEETAPI_ONLY),
+            (200, FLEETAPI_ONLY),
+        ],
+    )
+    def test_both_tokens_owner_refusal_hands_to_fleet(
+        self, no_threads, requests_mock, status, body
+    ):
+        # A refused Owner command is not sent and excludes the provider, so
+        # FleetAPI sends on the next pass without waiting RETRY
+        from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT
+
+        m, r, api, last = self.make("off", fleet=True)
+        cmd = self.fleet_car(requests_mock)
+        sent = mock_owner_car(requests_mock, status=status, body=body)
+        m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+        r.pass_()
+        assert sent.call_count == 1 and cmd.call_count == 0
+        r.pass_()
+        assert cmd.call_count == 1
+        assert bearer(cmd.last_request) == api.fleetSlot.accessToken
+        assert sent.call_count == 1 and last.calls == []
+        rec = m.desired.record(VIN, CHARGE_LIMIT)
+        assert rec.paidSends == 1 and rec.lastProvider == "FleetAPI"
+        assert no_error_recorded(api)
+        # Later desires go to Fleet only
+        m.vehicleRegistry.get(VIN).observe("chargeLimit", 50, "TeslaAPI")
+        m.desired.set(VIN, CHARGE_LIMIT, 60, "policy")
+        m.desired.record(VIN, CHARGE_LIMIT).lastSentAt -= 60
+        for _ in range(3):
+            r.pass_()
+        assert sent.call_count == 1 and cmd.call_count == 2
+
+    @pytest.mark.parametrize("signing", ["required", None, "weird"])
+    def test_both_tokens_other_cars_go_to_fleet(
+        self, no_threads, requests_mock, signing
+    ):
+        m, r, api, last = self.make(signing, fleet=True)
+        cmd = self.fleet_car(requests_mock)
+        sent = mock_owner_car(requests_mock)
+        self.limit(m, r, VIN)
+        assert sent.call_count == 0
         assert [q.url for q in posts(requests_mock)] == [
             FLEET_URL + "/" + VIN + "/command/set_charge_limit"
         ]
@@ -807,8 +893,6 @@ class TestVehicleEndpointPerCar:
     # amps on: an "off" car on an Owner token is one, a "required" car not
     def test_is_read_only_per_car(self, no_threads):
         from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint
-
-        from tests.unit.teslatokens import wire_reads
 
         api = owner_api_with("off")
         add_home_vehicle(api, command_signing="required", vin=VIN2, id=2)

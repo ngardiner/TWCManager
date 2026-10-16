@@ -156,9 +156,10 @@ a vehicle it only reads. A read-only vehicle gets no command from the Owner API 
 API error is recorded; the next provider in the command order (such as TeslaBLE or
 Home Assistant) carries its commands.
 
-Owner API commands cost nothing, but they take the Fleet API's place in the command
-order: TWCManager uses them after TeslaBLE has failed for a while, with the same limit
-on repeated sends, and never to set a car's charge rate where a TWC or BLE can.
+Owner API commands cost nothing, but they sit with the Fleet API in the command order,
+just ahead of it: TWCManager uses them after TeslaBLE has failed for a while, with the
+same limit on repeated sends, and never to set a car's charge rate where a TWC or BLE
+can.
 
 If Tesla still refuses an Owner API command (HTTP 403, or the "Vehicle Command
 Protocol required" error) for a vehicle that reported `"off"`, TWCManager treats that
@@ -174,9 +175,12 @@ token is entered again or synced again from TeslaMate (which tries once more). R
 continue with the same token, and no API error is recorded, so the next provider in
 the command order carries the commands.
 
-When you also hold a Fleet API token that can send commands, commands go through the
-Fleet API (and the proxy, if set) for every vehicle, as before. The Owner API token
-carries commands only when no Fleet API token can.
+When you also hold a Fleet API token that can send commands, each command goes to the
+first provider in the command order that can send it. A vehicle Tesla reports as
+`"off"` gets its commands through the Owner API, at no cost; once Tesla refuses them
+(either case above), the Fleet API (and the proxy, if set) sends them, at once. Every
+other vehicle gets its commands through the Fleet API, as before, and is not logged as
+read-only.
 
 Not yet confirmed:
 

@@ -1,10 +1,10 @@
 # The TeslaAPI module's two token slots as two providers. The Owner API reads
 # for free, and commands and wakes only a car Tesla lists with
-# command_signing "off" (#659), and only while no Fleet token can command
-# (commandSlotFor). The Fleet API bills each vehicle_data, command and wake,
-# so it reads only when the Owner slot cannot (slotFor("read")). Neither
-# does I/O to answer ready or available. Both read the energy site's Wall
-# Connector VINs for free, Owner first.
+# command_signing "off" (#659), and ranks first (canCommand). The Fleet API
+# bills each vehicle_data, command and wake, so it reads only when the Owner
+# slot cannot (slotFor("read")). Neither does I/O to answer ready or
+# available. Both read the energy site's Wall Connector VINs for free, Owner
+# first.
 import time
 from typing import Dict, Optional, Tuple
 
@@ -76,8 +76,8 @@ class _TeslaAPIProvider(Provider):
 
     # Command methods: one request each (set_charging_amps below 5 A
     # excepted, as TeslaPy #42), classified by TeslaAPI.command. Each sends
-    # with this provider's slot only, and only when commandSlotFor chooses
-    # it for the car. No pre-wake: the attempt runner wakes first when the
+    # with this provider's slot only, and only when canCommand lets it for
+    # the car. No pre-wake: the attempt runner wakes first when the
     # attempt says so.
 
     # The clock passed to the wake hold; a test may replace it
@@ -110,8 +110,7 @@ class _TeslaAPIProvider(Provider):
         vehicle = self._listed(vin)
         if (
             vehicle is not None
-            and self.carapi.commandSlotFor(vehicle)
-            is getattr(self.carapi, self.slotName)
+            and self.carapi.canCommand(vehicle, getattr(self.carapi, self.slotName))
             and self.carapi.onlineState(vehicle, now=self.clock()) is False
         ):
             # As main: an asleep car is not charging; settled, never sent (N2)
@@ -138,8 +137,8 @@ class _TeslaAPIProvider(Provider):
 
 
 class OwnerAPIProvider(_TeslaAPIProvider):
-    # Commands only a car Tesla lists with command_signing "off", while no
-    # Fleet token commands (#659): free, but paced as Fleet (OWNER_COMMAND)
+    # Commands only a car Tesla lists with command_signing "off" (#659):
+    # free, but paced as Fleet (OWNER_COMMAND)
     name = "OwnerAPI"
     rank = 4
     local = False
@@ -166,15 +165,15 @@ class OwnerAPIProvider(_TeslaAPIProvider):
             # Says once why a car is read-only
             if self.carapi.refuseCommandFor(vehicle, TESLA_COMMAND[capability]):
                 return False
-            return self.carapi.commandSlotFor(vehicle) is self.carapi.ownerSlot
+            return self.carapi.canCommand(vehicle, self.carapi.ownerSlot)
         return self.carapi.ownerSlot.usable("read")
 
     def available(self, capability) -> bool:
         # The broadcast gate for commands: an Owner token that may command
-        # some car, and no Fleet token that commands every car
+        # some car
         if capability in COMMANDS:
             return (
-                self.carapi.ownerTokenOnly
+                self.carapi.ownerTokenHeld()
                 and "command" not in self.carapi.ownerSlot.refusedPurposes
             )
         return True

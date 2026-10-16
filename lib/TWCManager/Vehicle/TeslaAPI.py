@@ -481,7 +481,7 @@ class TeslaAPI:
     def slotFor(self, purpose):
         # The slot a request of this purpose ("read" or "energy") uses, or
         # None when no slot is usable for it. Commands and wakes go to one
-        # car, so commandSlotFor chooses theirs.
+        # car, so each provider asks canCommand for its own slot.
         for slot in (self.ownerSlot, self.fleetSlot):
             if slot.usable(purpose):
                 return slot
@@ -505,15 +505,14 @@ class TeslaAPI:
         # cars can be commanded depends on each car's command_signing
         return not self.fleetSlot.usable("command") and self.ownerTokenHeld()
 
-    def commandSlotFor(self, vehicle):
-        # The slot a command or wake to vehicle (a registry Vehicle, or None
-        # for any car) uses, or None. Fleet first: a working Fleet token
-        # keeps every car on Fleet and the proxy. Otherwise the Owner slot,
-        # for a car that takes unsigned commands. The only command chooser.
-        if self.fleetSlot.usable("command"):
-            return self.fleetSlot
-        car = vehicle.attachment("TeslaAPI") if vehicle is not None else None
-        return self.ownerSlot if self.ownerCommandsAllowed(car) else None
+    def canCommand(self, vehicle, slot):
+        # Whether slot (a provider's own) may send vehicle (a registry
+        # Vehicle) a command or wake: the Owner slot only for a car that
+        # takes unsigned commands, any other while its token commands. The
+        # provider order picks between them; neither sends the other's token
+        if slot is self.ownerSlot:
+            return self.ownerCommandsAllowed(vehicle.attachment("TeslaAPI"))
+        return slot.usable("command")
 
     def ownerTokenHeld(self):
         # True when the Owner slot holds a live Owner API token. A read
@@ -1333,7 +1332,9 @@ class TeslaAPI:
     def refuseCommandFor(self, vehicle, command):
         # True when no slot can send vehicle commands. No HTTP call, no API
         # error, and one INFO line per state change, naming the car and why
-        if self.commandSlotFor(vehicle) is not None:
+        if self.canCommand(vehicle, self.fleetSlot) or self.canCommand(
+            vehicle, self.ownerSlot
+        ):
             return False
         if not self.ownerTokenHeld():
             # No token can command any car: the module-wide line
@@ -1441,16 +1442,13 @@ class TeslaAPI:
     # in between). Nothing here retries a billed request.
 
     def command(
-        self, vehicle, name: str, body: Optional[dict] = None, slot=None
+        self, vehicle, name: str, body: Optional[dict] = None, *, slot
     ) -> Outcome:
-        # One command (name, e.g. "set_charge_limit") to vehicle, with the
-        # slot commandSlotFor chooses. slot is the provider's own: a
-        # provider whose slot is not the chosen one sends nothing
+        # One command (name, e.g. "set_charge_limit") to vehicle with slot,
+        # the provider's own, when canCommand lets it
         car = vehicle.attachment("TeslaAPI")
-        chosen = self.commandSlotFor(vehicle)
-        if chosen is None or slot not in (None, chosen):
+        if not self.canCommand(vehicle, slot):
             return Outcome(REFUSED, "no command token")
-        slot = chosen
         if self.getCarApiRetryRemaining(car, now=self.now()):
             return Outcome(UNREACHABLE, "backoff")
         outcome, response = self._paidPost(vehicle, slot, "command/" + name, body)
@@ -1521,17 +1519,14 @@ class TeslaAPI:
             return False
         return True
 
-    def wakeOutcome(self, vehicle, now=None, slot=None) -> Outcome:
-        # Wakes vehicle with the slot commandSlotFor chooses (slot as for
-        # command), but only after the free online check (vehicles/{vin},
-        # cached 120 s) says it is not online and wakeDue allows it. One
-        # wake_up at most.
+    def wakeOutcome(self, vehicle, now=None, *, slot) -> Outcome:
+        # Wakes vehicle with slot (as for command), but only after the free
+        # online check (vehicles/{vin}, cached 120 s) says it is not online
+        # and wakeDue allows it. One wake_up at most.
         now = self.now() if now is None else now
         car = vehicle.attachment("TeslaAPI")
-        chosen = self.commandSlotFor(vehicle)
-        if chosen is None or slot not in (None, chosen):
+        if not self.canCommand(vehicle, slot):
             return Outcome(REFUSED, "no command token")
-        slot = chosen
         if self.getCarApiRetryRemaining(car, now=now):
             # Told to back off: not even the free check
             return Outcome(UNREACHABLE, "backoff")
@@ -1550,7 +1545,7 @@ class TeslaAPI:
             # Tesla refused a wake with this token (403): no wake_up until
             # the token changes. Checked after the free online check, so an
             # online car still gets its command. An Owner 403 latches the
-            # car instead (commandSlotFor)
+            # car instead (ownerCommandsAllowed)
             return Outcome(UNREACHABLE, "wake refused")
         if car.firstChargeNeededTime == 0:
             car.firstChargeNeededTime = now

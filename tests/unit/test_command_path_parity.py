@@ -596,6 +596,40 @@ def test_owner_only_off_car_matches_fleet_only(requests_mock, scenario):
     assert owner == fleet
 
 
+# Row 3c (Phase 3.5 Task 6): both tokens and a car listed command_signing
+# "off". The provider order decides, and OwnerAPI ranks before FleetAPI: a
+# policy raise on an asleep car and a start go to the free Owner API only
+
+
+def test_both_tokens_off_car_commands_free(requests_mock):
+    m, r, v, c, api = install(owner=True, fleet=True, signing="off", held=(90, 50))
+    car = FleetCar(requests_mock, limit=50, api=OWNER)
+    for field, value in (
+        ("chargeLimit", 50),
+        ("chargingState", "Stopped"),
+        ("batteryLevel", 40),
+    ):
+        v.observe(field, value, "TeslaAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    m.startCarsCharging(VIN)
+    passes(r, c, 3600, each=lambda: m.startCarsCharging(VIN))
+    assert sorted(commands(requests_mock)) == ["charge_start", "set_charge_limit"]
+    assert car.charge["charge_limit_soc"] == 80
+    assert car.charge["charging_state"] == "Charging"
+    assert all("fleet-api" not in q.url for q in requests_mock.request_history)
+    assert paid(requests_mock) == (0, 0, 0) and dollars(requests_mock) == 0
+    assert counts(requests_mock)["other"] == 0
+
+
+@pytest.mark.parametrize("scenario", ["raise", "retry", "asleep", "stop"])
+def test_both_tokens_off_car_matches_owner_only(requests_mock, scenario):
+    # Row 3b's scenarios with a Fleet token added: the same Owner requests
+    # and paid records, and no Fleet request, even when the car never answers
+    owner = off_car_run(requests_mock, scenario, OWNER, owner=True)
+    both = off_car_run(requests_mock, scenario, OWNER, owner=True, fleet=True)
+    assert both == owner
+
+
 # Row 3: Owner token only (read-only); a policy limit and a stop
 
 
