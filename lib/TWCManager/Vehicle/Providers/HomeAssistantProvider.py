@@ -45,11 +45,6 @@ class HomeAssistantProvider(Provider):
         self.ha = ha
         self.module = ha
 
-    def attempts(self) -> int:
-        # HomeAssistant had no VehiclePriority priority: one call, as when it
-        # was the command module itself
-        return 1
-
     def available(self, capability) -> bool:
         # A disabled module gets no broadcast, as getModuleByName skipped it
         return bool(self.ha.enabled())
@@ -110,7 +105,7 @@ class HomeAssistantProvider(Provider):
         return self._call(vin, "charge_switch", "switch", "turn_off")
 
     def setAmps(self, vin: str, amps: int) -> Outcome:
-        # Clamped to 1..32 A (typical Tesla charger limits), as setChargeRate
+        # Clamped to 1..32 A (typical Tesla charger limits)
         value = min(32.0, max(1.0, float(amps)))
         return self._call(
             vin, "charge_current_number", "number", "set_value", {"value": value}

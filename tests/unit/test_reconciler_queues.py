@@ -413,3 +413,38 @@ def test_report_turns_a_raw_base_exception_into_an_error():
     m, r = reconciler(); m.desired.set(VIN, CHARGE_LIMIT, 80, "test"); a = attempt()
     m.desired.record(VIN, CHARGE_LIMIT).inFlight = a
     r.report(a, SystemExit("x")); assert m.desired.record(VIN, CHARGE_LIMIT).lastOutcome == O.Outcome(O.ERROR, "SystemExit")
+
+
+# Slim Task 12b: moved from test_own_write_stamps.py and test_vehicle_command_queue.py
+
+@pytest.mark.parametrize("name, local, tier", [("TeslaBLE", True, None), ("FleetAPI", False, C.FLEET_COMMAND), ("HomeAssistant", False, C.HA_BILLED)])
+def test_a_rate_is_stamped_as_the_provider_s_own_write_only_on_success(name, local, tier):
+    p = ScriptedProvider(name, 2, local, [O.Outcome(O.ERROR, "500"), O.Outcome(O.DONE)], tier=tier); m, r, reports = setup(p)
+    v = m.vehicleRegistry.get(VIN); rate = attempt(C.SET_AMPS, 16, name, AMPS)
+    submit(r, rate); assert kinds(reports) == [O.ERROR] and v.lastWrite("chargeCurrentRequest") is None
+    submit(r, rate); w = v.lastWrite("chargeCurrentRequest"); assert (w.value, w.source) == (16, name) and v.lastWrite("availableCurrent") is None
+
+def test_a_rate_for_a_forgotten_car_never_revives_it():
+    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, r, reports = setup(p)
+    rate = attempt(C.SET_AMPS, 16, "FleetAPI", AMPS); r.desired.set(VIN, AMPS, 16, "test"); m.vehicleRegistry.forget(VIN)
+    assert runAttempt(r, rate) == O.Outcome(O.ERROR, "no vehicle") and m.vehicleRegistry.get(VIN) is None and p.calls == []
+
+def test_put_never_blocks_while_the_worker_runs_and_a_raising_run_spares_the_worker():
+    gate = threading.Event(); ran = []; reported = []
+    def run(entry):
+        if entry == "boom": raise RuntimeError("secret-token")
+        gate.wait(5); ran.append(entry); return O.Outcome(O.DONE)
+    q = VehicleCommandQueue(name="t", run=run, key=lambda e: e, isHigh=lambda e: False, report=lambda e, out: reported.append((e, out)), lost=lambda e, d: None)
+    q.start()
+    try:
+        q.put("boom"); q.put("first"); assert wait_for(lambda: q._busy and len(reported) == 1)
+        t0 = time.monotonic(); assert q.put("second") is True and time.monotonic() - t0 < 0.1
+        assert isinstance(reported[0][1], RuntimeError)                                            # reported, and the worker survives
+        gate.set(); assert wait_for(lambda: ran == ["first", "second"])
+    finally:
+        gate.set(); q.close(); assert q.waitDrained(time.monotonic() + 5) is True
+
+def test_a_drain_of_an_idle_queue_returns_at_once():
+    q = VehicleCommandQueue(name="t", run=lambda e: O.Outcome(O.DONE), key=lambda e: e, isHigh=lambda e: False, report=lambda e, out: None, lost=lambda e, d: None)
+    q.start(); t0 = time.monotonic(); q.close()
+    assert q.waitDrained(time.monotonic() + 5) is True and time.monotonic() - t0 < 0.5

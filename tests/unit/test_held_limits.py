@@ -380,7 +380,7 @@ def test_listing_before_load_is_resolved_on_the_next_check(tmp_path, requests_mo
     assert api.loadVehicleList() is True and m.heldLimits.get(VIN3) is None
     m.getModuleByName = Mock(side_effect=lambda n: api if n == "TeslaAPI" else None)
     m.loadSettings()
-    assert api.updateChargeAtHome() is True
+    api.updateChargeAtHome()
     assert m.heldLimits.get(VIN3) == HeldLimit(75, 60) and "chargeLimits" not in m.settings
     assert [q.method for q in requests_mock.request_history] == ["GET", "GET"]
 

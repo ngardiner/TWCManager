@@ -68,18 +68,6 @@ class TestRefresh:
         assert api.fleetSlot.refreshToken == ""
 
 
-class TestWake:
-    def test_request_never_sent(self, api, vehicle, requests_mock):
-        requests_mock.post(
-            api.fleetSlot.baseURL + "/" + VIN + "/wake_up",
-            exc=requests.exceptions.ConnectionError,
-        )
-        refresh = requests_mock.post(TOKEN_URL, json={})
-
-        assert api.wakeVehicle(vehicle) is False
-        assert refresh.called is False
-
-
 class TestGetCarApi:
     PATH = VIN + "/vehicle_data"
     URL = FLEET_NA_URL + "/" + PATH

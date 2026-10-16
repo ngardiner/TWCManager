@@ -275,7 +275,7 @@ def test_a_fleet_only_car_is_stopped_once_the_list_loads(requests_mock):    # C1
     requests_mock.get(FLEET_NA_URL, json={"response": [{"id": 1, "vin": VIN, "display_name": "Car"}], "count": 1})
     v.observe("chargingState", "Charging", "TeslaAPI"); m.stopCarsCharging(VIN); r.pass_()
     assert calls(requests_mock, "charge_stop") == [] and m.desired.record(VIN, CHARGING).lastOutcome is None   # not listed: no candidate yet
-    assert api.updateChargeAtHome() is True; r.pass_()
+    api.updateChargeAtHome(); r.pass_()
     assert len(calls(requests_mock, "charge_stop")) == 1 and calls(requests_mock, "wake_up") == []
 
 def test_a_queued_start_is_withdrawn_when_the_offer_drops(requests_mock):   # pre-flight M7, threaded, paid counted

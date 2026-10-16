@@ -4,7 +4,7 @@ Read-only command gate.
 While TeslaAPI holds no usable Fleet API token (readOnly), e.g. only an
 Owner API token, no vehicle command may reach Tesla: the provider order keeps
 FleetAPI out of every command walk, and
-TeslaAPI's own command entry points refuse without an HTTP call and without
+the Fleet provider's commands refuse without an HTTP call and without
 recording an API error (which would back off reads too). Reads still run.
 """
 
@@ -14,6 +14,8 @@ from unittest.mock import Mock
 
 import pytest
 import requests_mock as rm
+
+from TWCManager.Vehicle.Reconcile.Outcome import DONE, REFUSED, Outcome
 
 from tests.unit.teslatokens import (
     OWNER_API_URL as OWNER_URL,
@@ -43,18 +45,14 @@ def no_error_recorded(api):
     return api.getCarApiLastErrorTime() == 0 and vehicle.lastErrorTime == 0
 
 
-class TestTeslaAPIRefusesCommands:
-    def test_set_charge_rate(self, owner_api, any_http):
-        vehicle = owner_api.getCarApiVehicles()[0]
-        before = vehicle.lastAPIAccessTime
-        assert owner_api.setChargeRate(10, vehicle) is False
-        assert any_http.call_count == 0
-        assert no_error_recorded(owner_api)
-        assert vehicle.lastAPIAccessTime == before
+class TestFleetProviderRefusesCommands:
+    VIN = "5YJ3E1EA1KF000001"
 
-    def test_wake(self, owner_api, any_http):
-        vehicle = owner_api.getCarApiVehicles()[0]
-        assert owner_api.wakeVehicle(vehicle) is False
+    @pytest.mark.parametrize("call", ["setAmps", "wake"])
+    def test_no_command_token_sends_nothing(self, owner_api, any_http, call):
+        fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
+        args = (self.VIN, 10) if call == "setAmps" else (self.VIN,)
+        assert getattr(fleet, call)(*args) == Outcome(REFUSED, "no command token")
         assert any_http.call_count == 0
         assert no_error_recorded(owner_api)
 
@@ -64,47 +62,9 @@ class TestTeslaAPIRefusesCommands:
             re.compile(r".*/5YJ3E1EA1KF000001/command/set_charging_amps"),
             json={"response": {"result": True, "reason": ""}},
         )
-        vehicle = owner_api.getCarApiVehicles()[0]
-        assert owner_api.setChargeRate(10, vehicle) == {
-            "response": {"result": True, "reason": ""}
-        }
+        fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
+        assert fleet.setAmps(self.VIN, 10) == Outcome(DONE)
         assert cmd.call_count == 1
-
-
-class TestRefusalLogging:
-    def refusals(self, caplog):
-        return [
-            r
-            for r in caplog.records
-            if r.levelno == logging.INFO
-            and "read-only" in r.getMessage()
-            and "not sending" in r.getMessage()
-        ]
-
-    def test_logged_once_per_state_change(self, owner_api, any_http, caplog):
-        caplog.set_level(logging.INFO)
-        vehicle = owner_api.getCarApiVehicles()[0]
-        owner_api.setChargeRate(10, vehicle)
-        owner_api.setChargeRate(12, vehicle)
-        owner_api.wakeVehicle(vehicle)
-        assert len(self.refusals(caplog)) == 1
-
-        # Fleet token: commands allowed. Fleet slot cleared: logs again, once.
-        owner_api.storeToken(fleet_token())
-        owner_api.fleetSlot.clear()
-        owner_api.setChargeRate(10, vehicle)
-        owner_api.setChargeRate(10, vehicle)
-        assert len(self.refusals(caplog)) == 2
-
-    def test_resync_of_owner_token_does_not_log_again(
-        self, owner_api, any_http, caplog
-    ):
-        caplog.set_level(logging.INFO)
-        vehicle = owner_api.getCarApiVehicles()[0]
-        owner_api.setChargeRate(10, vehicle)
-        owner_api.storeToken(owner_token(jti="rotated"))
-        owner_api.setChargeRate(10, vehicle)
-        assert len(self.refusals(caplog)) == 1
 
 
 class TestReadsStillRun:
@@ -140,65 +100,45 @@ class TestReadsStillRun:
         assert api.getVehicleCount() == 1
 
 
-class TestVehiclePrioritySkipsReadOnly:
-    # The facade walks the provider order: an Owner-only TeslaAPI has no
-    # command slot, so FleetAPIProvider.available() keeps every broadcast
-    # command away from it; reads still go through the Owner slot.
-    def make(self, api_read_only):
+class TestCheckChargeRefreshesEachModuleOnce:
+    # checkCharge walks the provider order: each vehicle module with a
+    # provider not suppressed for reads refreshes its cars once
+    def make(self, settings=None):
         from tests.unit.test_carapivehicle_registry import api_with_registry
+        from TWCManager.TWCMaster import TWCMaster
         from TWCManager.Vehicle.Providers import Capability as C
         from TWCManager.Vehicle.Providers.Order import ProviderOrder
         from TWCManager.Vehicle.Providers.Provider import Provider
-        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
 
         api, reg = api_with_registry()
-        api.storeToken(owner_token() if api_read_only else fleet_token())
-        assert api.readOnly is api_read_only
-        api.setChargeRate = Mock(return_value=True)
-        api.updateChargeAtHome = Mock(return_value=True)
+        api.storeToken(owner_token())
+        assert api.readOnly is True
+        api.updateChargeAtHome = Mock()
         ble = Mock()
-        ble.setChargeRate = Mock(return_value=False)
-        ble.updateChargeAtHome = Mock(return_value=False)
 
         class BLE(Provider):
             name, rank, local, module = "TeslaBLE", 2, True, ble
+            SUPPRESSED = {"api_only": C.ALL}
 
             def declarations(self):
-                return {c: C.Declaration(C.LOCAL) for c in C.COMMANDS}
+                return {C.READ_CHARGE: C.Declaration(C.LOCAL)}
 
         master = Mock()
-        master.stats = {"moduleSuccess": {}, "moduleFailures": {}}
         master.config = {}
-        master.settings = {}
+        master.settings = settings or {}
         master.vehicleRegistry = reg
         master.providerOrder = ProviderOrder(master)
         for p in [BLE()] + api.providers():
             master.providerOrder.register(p)
-        return VehiclePriority(master), master, ble, api
+        TWCMaster.updateChargeAtHome(master)
+        return ble, api
 
-    def test_read_only_api_skipped_for_commands(self, no_threads):
-        priority, master, ble, api = self.make(api_read_only=True)
-        assert priority.setChargeRate(10) is False
-        assert ble.setChargeRate.called
-        assert not api.setChargeRate.called
-        assert "FleetAPI" not in master.stats["moduleFailures"]
+    def test_read_only_api_still_refreshes_once(self, no_threads):
+        ble, api = self.make()
+        assert api.updateChargeAtHome.call_count == 1
+        assert ble.updateChargeAtHome.call_count == 1
 
-    def test_read_only_api_used_for_reads(self, no_threads):
-        priority, master, ble, api = self.make(api_read_only=True)
-        assert priority.updateChargeAtHome() is True
-        assert api.updateChargeAtHome.called
-
-    def test_writable_api_used_for_commands(self, no_threads):
-        priority, master, ble, api = self.make(api_read_only=False)
-        assert priority.setChargeRate(10) is True
-        assert api.setChargeRate.called
-
-    @pytest.mark.parametrize(
-        "method", ["setChargeRate", "wakeVehicle"]
-    )
-    def test_every_command_method_skips(self, method, no_threads):
-        priority, master, ble, api = self.make(api_read_only=True)
-        setattr(ble, method, Mock(return_value=False))
-        setattr(api, method, Mock(return_value=True))
-        getattr(priority, method)()
-        assert not getattr(api, method).called
+    def test_api_only_keeps_ble_out(self, no_threads):
+        ble, api = self.make({"commandPolicy": "api_only"})
+        assert api.updateChargeAtHome.call_count == 1
+        assert not ble.updateChargeAtHome.called

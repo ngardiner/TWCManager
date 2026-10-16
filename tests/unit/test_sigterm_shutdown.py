@@ -156,15 +156,11 @@ def test_vehicle_drains_leave_twenty_seconds_for_settings():
     ns = {}
     exec(compile(ast.Module(body=[fn], type_ignores=[]), path, "exec"), ns)
     f = ns["shutdownTimeouts"]
-    # 60 s at most for both drains, and 20 s always left for saveSettings
+    # 60 s at most for the vehicle drain, and 20 s always left for saveSettings
     assert f(1000.0, 1080.0) == 1060.0
     assert f(1000.0, 1050.0) == 1030.0
     assert f(1000.0, 1200.0) == 1060.0
     stop = source.index("master.reconciler.stop()")
-    first = source.index("master.reconciler.drain(")
-    second = source.index("master.vehicleCommandQueue.drain_high_priority(")
-    assert stop < first < second
-    assert "shutdownTimeouts(time.time(), shutdownDeadline)" in source[stop:first]
-    assert source.index("master.reconciler.start()") > source.index(
-        "master.vehicleCommandQueue.start()"
-    )
+    drain = source.index("master.reconciler.drain(")
+    assert stop < drain and "vehicleCommandQueue" not in source
+    assert "shutdownTimeouts(time.time(), shutdownDeadline)" in source[stop:drain]

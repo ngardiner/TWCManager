@@ -13,7 +13,7 @@ VIN1 = "5YJ3E1EA1KF000001"; VIN2 = "5YJ3E1EA1KF000002"
 
 def master(settings=None, *providers, slaves=()):
     m = Mock(); m.settings = settings or {}; m.config = {"config": {"wiringMaxAmpsPerTWC": 32, "defaultVoltage": 240}}
-    m.stats = {"moduleSuccess": {}, "moduleFailures": {}}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     for p in providers: m.providerOrder.register(p)
     carapi = Mock(); carapi.enabled.return_value = True
     m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves); return m
