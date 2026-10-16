@@ -415,3 +415,70 @@ def test_set_refuses_a_non_vin_and_maps_zero_to_no_entry(caplog):
     m.heldLimits.set(VIN, 80, 50)
     m.heldLimits.set(VIN, 80, 0)
     assert m.heldLimits.get(VIN) is None
+
+
+# One-pass migration (Phase 3.5 Task 1): characterization
+
+
+def test_waiting_is_false_before_load():
+    # loadSettings reads chargeLimits just before load(): nothing waits sooner
+    ns = SimpleNamespace(
+        settings={"chargeLimits": {"11": [80, 60]}},
+        queue_background_task=Mock(),
+        settingsLock=threading.RLock(),
+    )
+    h = HeldLimits(ns)
+    assert not h.waiting()
+    h.resolveLegacyIds({11: VIN})
+    assert ns.settings == {"chargeLimits": {"11": [80, 60]}}
+    ns.queue_background_task.assert_not_called()
+
+
+def test_an_id_naming_a_vin_load_migrated_keeps_that_entry(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {VIN: [70, 55], "11": [90, 50]}
+    m.heldLimits.load()
+    with caplog.at_level(logging.INFO):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert m.heldLimits.get(VIN) == HeldLimit(70, 55)
+    assert m.settings["chargeLimits"] == {VIN: [70, 55]}
+    infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert any(
+        "11" in i and VIN in i and "kept normal limit 70%, discarded 90%" in i
+        for i in infos
+    )
+
+
+def test_an_id_keys_out_of_range_hold_warns_at_load_not_at_resolve(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {"11": [80, 30]}
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.load()
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warned) == 1 and "out of range" in warned[0]
+    assert not m.heldLimits.waiting()  # dropped at load: nothing waits
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert m.heldLimits.get(VIN) is None
+
+
+def test_a_resolve_saves_once_and_logs_no_migrated_line(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {"11": [80, 60]}
+    m.heldLimits.load()
+    m.queue_background_task = Mock()
+    with caplog.at_level(logging.INFO):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert m.queue_background_task.call_args_list == [(({"cmd": "saveSettings"},),)]
+    assert "Migrated chargeLimits" not in caplog.text
+    assert m.heldLimits.get(VIN) == HeldLimit(80, 60)
+
+
+def test_a_non_dict_charge_limits_never_waits():  # pre-flight F9
+    m, s = make()
+    m.settings["chargeLimits"] = [["11", 80]]
+    m.heldLimits.load()
+    assert not m.heldLimits.waiting()
+    assert m.settings["chargeLimits"] == [["11", 80]]
