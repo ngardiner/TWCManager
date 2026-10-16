@@ -147,6 +147,16 @@ def test_an_anonymous_twc_rates_only_plugged_in_cars_else_vehicles_0():    # I2,
     assert {x[1] for x in f.calls} == {VIN2} and len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)   # never an unplugged car, nor a named one; no wake
     m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")                     # none known plugged in: main's vehicles[0]
     s._queueChargeRate(10); r.pass_(); assert f.calls == [("setAmps", VIN, 10)]
+    m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")                     # HA says "Stopped" for an unplugged car (rereview N1)
+    for vin in (VIN, VIN2, VIN4):
+        m.vehicleRegistry.get(vin).observe("chargingState", "Disconnected", "TeslaAPI")
+        m.vehicleRegistry.get(vin).observe("chargingState", "Stopped", "HomeAssistant", at=c() + 1)
+    for i in range(3600): s._queueChargeRate(10 + i % 2); r.pass_(); c.t += 1
+    assert {x[1] for x in f.calls} == {VIN} and len(f.calls) <= 240                 # the vehicles[0] fallback only, no fan-out
+    m, r, v, c, s = anonTwc()
+    m.vehicleRegistry.get(VIN2).observe("chargingState", "Unknown", "TeslaBLE"); m.vehicleRegistry.get(VIN4).observe("chargingState", "None", "TeslaMateVehicle")
+    m.vehicleRegistry.get(VIN).observe("chargingState", "Charging", "HomeAssistant")
+    assert [x.key for x in s._anonCars()] == [VIN]                            # BLE "Unknown" and TeslaMate "None" are not plugged in; HA "Charging" is
 
 def test_an_anonymous_mode_1_lift_goes_to_the_plugged_in_car_only():    # I2, paid counted
     m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI"); m.settings["chargeRateControl"] = "1"
