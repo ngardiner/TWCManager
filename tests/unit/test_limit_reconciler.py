@@ -200,7 +200,11 @@ def test_paid_retry_never_wakes_and_a_failed_wake_gets_no_blind_retry():   # pre
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "asleep"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 60, "TeslaAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); r.pass_()                                 # the wake itself fails: "wake asleep"
     for _ in range(10): c.t += 600; r.pass_()
-    assert names(f) == ["wake"] and m.desired.record(VIN, CHARGE_LIMIT).lastOutcome.detail == "wake asleep"
+    # No blind command: each arm's follow-up wakes again, and a spent arm re-arms once (the real Fleet
+    # provider holds each wake 30 min, a free online check until then: parity row 4b)
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert names(f) == ["wake"] * 4 and rec.lastOutcome.detail == "wake asleep"
+    assert rec.paidSends == 2 and rec.rearmed                                                # spent: nothing more without a reading
 
 def test_a_scheduled_charge_is_left_alone():                                # pre-flight H3, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
@@ -519,7 +523,9 @@ def test_a_limit_whose_ride_wake_failed_does_not_block_the_start_forever():   # 
     assert names(f) == ["setChargeLimit", "setChargeLimit", "wake"] and m.desired.record(VIN, CHARGE_LIMIT).rearmed
     for _ in range(60):                                                       # an hour of TeslaMate republishing, unchanged
         c.t += 60; v.observe("chargeLimit", 90, "TeslaMateVehicle"); v.observe("chargingState", "Stopped", "TeslaMateVehicle"); r.pass_()
-    assert names(f)[3] == "wake" and len(f.calls) <= 6                        # the start went with its own wake: bounded, not stalled
+    # The start went with its own wake: bounded, not stalled. Each desire's I2 cap: the limit's 4 and the
+    # start's 4, failed wakes re-arming once (this scripted provider has no wake hold; Fleet's spaces them 30 min)
+    assert names(f)[3] == "wake" and len(f.calls) <= 8
 
 def sleepy(f, v):
     # A Fleet car that answers 408 until it is woken
