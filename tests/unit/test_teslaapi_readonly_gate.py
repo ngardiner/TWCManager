@@ -192,7 +192,22 @@ class TestVehiclePrioritySkipsReadOnly:
         assert priority.setChargeRate(10) is False
         assert ble.setChargeRate.called
         assert not api.setChargeRate.called
+        assert not api.refuseCommandIfReadOnly.called
         assert "TeslaAPI" not in master.stats["moduleFailures"]
+
+    def test_read_only_module_without_refusal_method_skipped(self):
+        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+
+        class ReadOnlyModule:
+            readOnly = True
+
+        master = Mock()
+        assert (
+            VehiclePriority(master)._skip_read_only_for_command(
+                ReadOnlyModule(), "setChargeRate"
+            )
+            is True
+        )
 
     def test_read_only_api_used_for_reads(self):
         priority, master, ble, api = self.make(api_read_only=True)
@@ -811,3 +826,43 @@ class TestPerVehicleRefusalLogging:
         assert len(lines) == 1
         assert "teslaProxy" in lines[0]
         assert "TeslaBLE" in lines[0]
+
+
+class TestVehiclePriorityLogsWhy:
+    """When every listed car is read-only, VehiclePriority skips TeslaAPI
+    without calling it; the skip still logs the per-car reason once."""
+
+    @pytest.mark.parametrize(
+        "method", ["setChargeRate", "car_api_charge", "applyChargeLimit"]
+    )
+    def test_one_line_naming_the_car(self, owner_car, any_http, caplog, method):
+        caplog.set_level(logging.INFO)
+        api, vehicle = owner_car("required")
+        assert api.readOnly is True
+        ble = Mock()
+        setattr(ble, method, Mock(return_value=True))
+        calls = {
+            "setChargeRate": lambda priority: priority.setChargeRate(10, vehicle),
+            "car_api_charge": lambda priority: priority.car_api_charge(
+                {"charge": True}
+            ),
+            "applyChargeLimit": lambda priority: priority.applyChargeLimit(80),
+        }
+
+        for _ in range(5):
+            api.carApiLastStartOrStopChargeTime = 0
+            assert calls[method](priority_over(api, ble)) is True
+
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.INFO and "read-only" in r.getMessage()
+        ]
+        assert len(lines) == 1
+        assert "read-only for Car" in lines[0]
+        assert "command_signing: required" in lines[0]
+        assert "teslaProxy" in lines[0]
+        assert "TeslaBLE" in lines[0]
+        assert any_http.call_count == 0
+        assert getattr(ble, method).call_count == 5
+        assert no_error_recorded(api)
