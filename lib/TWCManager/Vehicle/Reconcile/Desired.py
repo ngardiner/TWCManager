@@ -18,7 +18,7 @@ from ..Providers.Capability import (
 )
 from .Outcome import (
     EXCLUDING,
-    LANE_DETAILS,
+    QUEUE_DETAILS,
     REFUSED,
     RETRYABLE,
     SETTLED,
@@ -322,7 +322,7 @@ class DesiredStore:
             if record is None or record.inFlight is not attempt:
                 return False
             record.inFlight = None
-            if outcome.detail in LANE_DETAILS:
+            if outcome.detail in QUEUE_DETAILS:
                 # The attempt never ran
                 return True
             want = state.desired.get(aspect)

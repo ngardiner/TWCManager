@@ -130,7 +130,7 @@ class FleetAPIProvider(_TeslaAPIProvider):
 
     # Command methods: one billed request each (set_charging_amps below 5 A
     # excepted, as TeslaPy #42), classified by TeslaAPI.command. No pre-wake:
-    # the lane wakes first when the attempt says so.
+    # the attempt runner wakes first when the attempt says so.
 
     # The clock passed to the wake hold; a test may replace it
     clock = time.time

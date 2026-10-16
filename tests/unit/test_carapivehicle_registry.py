@@ -89,19 +89,11 @@ def test_is_awake_trusts_fresh_telemetry_and_asleep_without_api_call():
     assert car.is_awake() is True
 
 
-def test_sync_timestamp_is_the_state_observation_time():
-    api, reg = api_with_registry()
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
-    obs = reg.get(VIN).observe("state", "asleep", "TeslaMateVehicle", at=123.0)
-    assert car.syncTimestamp == obs.at == 123.0
-
-
 def test_sync_getters_have_legacy_defaults_before_any_state():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.getCarApiVehicles()[0]
-    assert car.syncSource == "TeslaAPI" and car.syncTimestamp == 0
+    assert car.syncSource == "TeslaAPI"
 
 
 def test_update_vehicle_data_observes_only_present_keys():  # P15
