@@ -14,7 +14,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Hold an Owner API token and a Fleet API token side by side: reads use the free Owner API, commands use Fleet, and TeslaMate sync can stay on beside a Fleet login (#692)
     * (@MikeBishop) - Show each Tesla token slot's status on the Settings page, with a Remove token button (#692)
 * Architecture
-    * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used read-only
+    * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used for reads, and for commands only to vehicles Tesla reports with `command_signing: off`
     * (@MikeBishop) - Saved Tesla tokens migrate to separate Owner and Fleet settings on first start; downgrading afterwards loses the Owner API token (#692)
     * (@MikeBishop) - TWC abstraction layer with EVSEController/EVSEInstance interface (ported from #483)
     * (@ngardiner) - Gen3 TWC support via Neurio Modbus emulation
@@ -72,6 +72,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: A rejected pasted refresh token keeps the previous tokens, and a 401 on refresh clears the token type (#687)
     * (@MikeBishop) - Fix: Check for a car coming online after a Fleet API wake_up instead of waking it again 30 minutes later (#699)
     * (@MikeBishop) - Fix: Stale TeslaMate asleep state no longer stops the free vehicle state check (#699)
+    * (@MikeBishop) - Fix: Allow Owner API commands per vehicle when Tesla reports `command_signing: off`; other vehicles stay read-only (#659)
 
 ## v1.3.4 - 2026-04-24
 * Features
