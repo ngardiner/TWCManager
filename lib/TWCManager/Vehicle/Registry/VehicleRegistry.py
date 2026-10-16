@@ -95,9 +95,7 @@ class VehicleRegistry:
             logger.log(level, "Vehicle %s added (%s)", vin, source)
         return v, created
 
-    def getOrCreate(
-        self, vin: str, source: str, attach: Optional[Tuple[str, Any]] = None
-    ) -> Vehicle:
+    def getOrCreate(self, vin: str, source: str, attach=None) -> Vehicle:
         return self._getOrCreate(vin, source, attach)[0]
 
     def get(self, key: str) -> Optional[Vehicle]:
@@ -157,7 +155,8 @@ class VehicleRegistry:
         with self._lock:
             for key in sorted(self._vehicles):
                 v = self._vehicles[key]
-                if v.isAnonymous or v.userAsserted:
+                # An attachment is a provider's listing: kept, as its claims
+                if v.isAnonymous or v.userAsserted or v.attachmentNames():
                     continue
                 if any(c.keepsAlive for c in v.claims.values()):
                     continue

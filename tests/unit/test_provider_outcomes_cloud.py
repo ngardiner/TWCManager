@@ -302,3 +302,8 @@ def test_an_expired_token_on_wake_is_refreshed_at_fleet_auth_once(requests_mock,
     requests_mock.post(re.compile(r".*/wake_up$"), [{"status_code": 401, "text": "token expired"}, {"json": {"response": {"state": "online"}}}])
     fleetAuth = requests_mock.post(FLEET_REFRESH_URL, json=token_response(fleet_token(jti="new"))); owner = requests_mock.post(AUTH_TOKEN_URL, json={})
     assert p.wake(VIN).kind in O.SETTLED and len(calls(requests_mock, "wake_up")) == 2 and fleetAuth.call_count == 1 and owner.call_count == 0
+
+def test_a_failed_online_check_still_sends_the_stop(requests_mock):   # m2: no answer is not asleep
+    api, reg, p = fleet(requests_mock)
+    check = requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), status_code=500, json={})
+    assert p.stopCharging(VIN).kind == O.DONE and check.call_count == 1 and len(calls(requests_mock, "charge_stop")) == 1

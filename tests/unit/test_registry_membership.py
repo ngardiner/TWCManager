@@ -340,3 +340,10 @@ def test_forget_if_unattached_is_atomic():  # F7
         forgetter.join(5)
     assert result == [False] and r.get(VIN2) is added
     assert added.attachment("TeslaAPI") == "state"
+
+
+def test_an_attached_car_is_never_expired():  # m1: attach lands before the claims
+    r = VehicleRegistry({})
+    r.load({"vehicles": {VIN: {"firstSeen": 0.0, "lastSeen": 0.0}}})  # stale
+    v = r.getOrCreate(VIN, "TeslaAPI", attach=("TeslaAPI", "state"))
+    assert not v.claims and r.expire(r.now() + 10**9) == [] and r.get(VIN) is v
