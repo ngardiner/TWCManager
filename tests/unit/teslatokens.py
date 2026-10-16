@@ -131,10 +131,14 @@ def no_threads(monkeypatch):
     monkeypatch.setattr(teslaapi, "Thread", lambda *a, **k: _NoThread())
 
 
-def add_home_vehicle(api):
-    """Add vehicle VIN1, at home and recently contacted, so ready() is True
-    without an HTTP call. Use with the no_threads fixture."""
-    api.addVehicle({"id": 1, "vin": "VIN1", "display_name": "Car"})
+def add_home_vehicle(api, command_signing=None, vin="VIN1", name="Car", id=1):
+    """Add a vehicle (VIN1 by default), at home and recently contacted, so
+    ready() is True without an HTTP call. command_signing is the /products
+    field; None leaves it out. Use with the no_threads fixture."""
+    entry = {"id": id, "vin": vin, "display_name": name}
+    if command_signing is not None:
+        entry["command_signing"] = command_signing
+    api.addVehicle(entry)
     vehicle = api.getCarApiVehicles()[-1]
     vehicle.atHome = True
     vehicle.lastAPIAccessTime = time.time()

@@ -41,12 +41,12 @@ class TestOwnerToken:
         api = new_api()
         assert api.storeToken(owner_token()) == "success"
         assert api.ownerSlot.baseURL == OWNER_URL
-        assert api.readOnly is True
+        assert api.slotFor("command") is None
 
     def test_owner_token_ignores_tesla_proxy(self, proxy_api):
         proxy_api.storeToken(owner_token())
         assert proxy_api.ownerSlot.baseURL == OWNER_URL
-        assert proxy_api.readOnly is True
+        assert proxy_api.slotFor("command") is None
         # The proxy's certificate must not be used to verify owner-api.
         assert proxy_api.ownerSlot.verifyCert is True
 
@@ -192,7 +192,7 @@ class TestSwitching:
     def test_owner_and_fleet_keep_their_own_routes(self, proxy_api):
         proxy_api.storeToken(owner_token())
         assert proxy_api.ownerSlot.baseURL == OWNER_URL
-        assert proxy_api.readOnly is True
+        assert proxy_api.slotFor("command") is None
 
         proxy_api.storeToken(fleet_token())
         assert proxy_api.fleetSlot.baseURL == PROXY_URL

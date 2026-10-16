@@ -324,10 +324,13 @@ def test_save_and_load_keep_both_slots(tmp_path):
     assert api2.fleetSlot.refreshToken == "r-f"
 
 
-def test_readonly_property_follows_fleet_slot():
+def test_readonly_property_follows_fleet_slot(no_threads):
     api = new_api()
     assert api.readOnly is True
     api.storeToken(owner_token())
+    # Unknown until the vehicles are listed; a car without command_signing
+    # "off" is read-only on an Owner token.
+    add_home_vehicle(api)
     assert api.readOnly is True
     api.storeToken(fleet_token())
     assert api.readOnly is False
@@ -348,7 +351,6 @@ def test_slot_for_is_uniform_walk():
     owner_only = new_api()
     owner_only.ownerSlot.setTokens(owner_token())
     assert owner_only.slotFor("command") is None
-    assert owner_only.readOnly is True
 
 
 def test_owner_401_clears_owner_and_next_read_uses_fleet(
