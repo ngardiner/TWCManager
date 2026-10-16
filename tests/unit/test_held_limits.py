@@ -32,6 +32,7 @@ def test_legacy_charge_limits_migrate():  # Review Focus 3
     assert "chargeLimits" not in m.settings and not m.heldLimits.waiting()
     assert m.heldLimits.holding() == [VIN2]
 
+
 def test_set_and_remove():
     m, s = make()
     m.heldLimits.load()
@@ -42,6 +43,7 @@ def test_set_and_remove():
     m.heldLimits.remove(VIN)
     assert m.heldLimits.get(VIN) is None
 
+
 def test_believed_prefers_a_newer_read_over_our_write():
     m, s = make()
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
@@ -50,9 +52,13 @@ def test_believed_prefers_a_newer_read_over_our_write():
     v.noteWrite("chargeLimit", 50, "TeslaBLE")
     # our write is newer than the read
     assert v.believed("chargeLimit").value == 50
-    v.observe("chargeLimit", 80, "TeslaMateVehicle", at=v.lastWrite("chargeLimit").at + 1)
+    v.observe(
+        "chargeLimit", 80, "TeslaMateVehicle", at=v.lastWrite("chargeLimit").at + 1
+    )
     assert v.believed("chargeLimit").value == 80
-    v.observe("chargingState", "Charging", "Gen2TWC", at=v.lastWrite("chargeLimit").at + 2)
+    v.observe(
+        "chargingState", "Charging", "Gen2TWC", at=v.lastWrite("chargeLimit").at + 2
+    )
     assert v.believed("chargingState", exclude={"Gen2TWC"}) is None
     assert v.latestFrom("chargingState").source == "Gen2TWC"
 
@@ -139,7 +145,7 @@ def test_realistic_settings_file_migrates(tmp_path, caplog):
     # three dropped (bad outside values), one held value discarded
     assert len(warned) == 4 and all("chargeLimits" in r.getMessage() for r in warned)
     assert sum("Dropped" in r.getMessage() for r in warned) == 3
-    assert m.heldLimits.vins() == sorted([VIN, VIN2, VIN3])
+    assert sorted(m.settings["heldLimits"]) == sorted([VIN, VIN2, VIN3])
     assert m.heldLimits.holding() == [VIN2]
     # the store survives a JSON round trip unchanged
     assert json.loads(json.dumps(m.settings))["heldLimits"] == held
@@ -181,7 +187,12 @@ def test_saved_file_carries_the_store_and_restarts_clean(tmp_path):
     m.saveSettings()
     onDisk = json.loads((tmp_path / "settings.json").read_text())
     assert onDisk["heldLimits"] == m.settings["heldLimits"]
-    assert sorted(onDisk["chargeLimits"]) == ["1492931337", "1492931338", "1492931339", "999"]
+    assert sorted(onDisk["chargeLimits"]) == [
+        "1492931337",
+        "1492931338",
+        "1492931339",
+        "999",
+    ]
     m2 = fileMaster(tmp_path, onDisk)
     m2.loadSettings()
     assert m2.heldLimits.get(VIN2) == HeldLimit(90, 50)
@@ -201,10 +212,11 @@ def test_an_existing_store_keeps_its_own_cars(tmp_path):
     assert "1492931337" in m.settings["chargeLimits"]
     m.heldLimits._save.assert_called_once_with()
 
+
 def test_no_legacy_key_no_save(tmp_path):
     m = fileMaster(tmp_path, {"chargeStopMode": "1"})
     m.loadSettings()
-    assert "heldLimits" not in m.settings and m.heldLimits.vins() == []
+    assert "heldLimits" not in m.settings and m.heldLimits.holding() == []
     m.heldLimits._save.assert_not_called()
 
 
@@ -236,20 +248,23 @@ def test_resolving_keeps_an_existing_vin_entry():
     assert m.heldLimits.get(VIN) == HeldLimit(70, 55)
     assert "chargeLimits" not in m.settings
 
-def test_resolving_replaces_a_malformed_vin_entry():   # slim Task 11 re-review nit
+
+def test_resolving_replaces_a_malformed_vin_entry():  # slim Task 11 re-review nit
     m, s = make()
     m.settings["heldLimits"] = {VIN: {"outside": "x"}}
     m.settings["chargeLimits"] = {"777": [90, None]}
-    m.heldLimits.load(); m.settings["heldLimits"][VIN] = {"outside": "x"}
+    m.heldLimits.load()
+    m.settings["heldLimits"][VIN] = {"outside": "x"}
     m.heldLimits.resolveLegacyIds({777: VIN})
     assert m.heldLimits.get(VIN) == HeldLimit(90, None)
+
 
 def test_store_works_before_load_and_on_a_bare_master():
     ns = SimpleNamespace(
         settings={}, queue_background_task=Mock(), settingsLock=threading.RLock()
     )
     h = HeldLimits(ns)
-    assert h.get(VIN) is None and h.vins() == [] and h.holding() == []
+    assert h.get(VIN) is None and h.holding() == []
     h.remove(VIN)
     h.set(VIN, 80, 50)
     assert ns.settings["heldLimits"][VIN] == {"outside": 80, "held": 50}
@@ -383,14 +398,20 @@ def test_listing_before_load_is_resolved_on_the_next_check(tmp_path, requests_mo
     api, reg = api_with_registry()
     api.storeToken(fleet_token())
     api.master.heldLimits = m.heldLimits
-    listing = '{"count": 1, "response": [{"id": 1492931337, "vin": "%s", "display_name": null}]}' % VIN3
+    listing = (
+        '{"count": 1, "response": [{"id": 1492931337, "vin": "%s", "display_name": null}]}'
+        % VIN3
+    )
     requests_mock.get(FLEET_NA_URL, text=listing)
     assert api.loadVehicleList() is True and m.heldLimits.get(VIN3) is None
     m.getModuleByName = Mock(side_effect=lambda n: api if n == "TeslaAPI" else None)
     m.loadSettings()
     api.updateChargeAtHome()
-    assert m.heldLimits.get(VIN3) == HeldLimit(75, 60) and "chargeLimits" not in m.settings
+    assert (
+        m.heldLimits.get(VIN3) == HeldLimit(75, 60) and "chargeLimits" not in m.settings
+    )
     assert [q.method for q in requests_mock.request_history] == ["GET", "GET"]
+
 
 def test_both_keys_present_the_store_wins(tmp_path, caplog):
     blob = {
@@ -405,10 +426,78 @@ def test_both_keys_present_the_store_wins(tmp_path, caplog):
     assert m.heldLimits.get(VIN) == HeldLimit(66, None)
     assert "chargeLimits" not in m.settings
 
+
 def test_set_refuses_a_non_vin_and_maps_zero_to_none(caplog):
     m, s = make()
     with caplog.at_level(logging.WARNING):
         m.heldLimits.set("anon:8244", 80, 50)
     assert "heldLimits" not in m.settings and caplog.records
     m.heldLimits.set(VIN, 80, 0)
+    assert m.heldLimits.get(VIN) == HeldLimit(80, None)
+
+
+# One-pass migration (Phase 3.5 Task 1): characterization
+
+
+def test_waiting_is_false_before_load():
+    # loadSettings reads chargeLimits just before load(): nothing waits sooner
+    ns = SimpleNamespace(
+        settings={"chargeLimits": {"11": 80}},
+        queue_background_task=Mock(),
+        settingsLock=threading.RLock(),
+    )
+    h = HeldLimits(ns)
+    assert not h.waiting()
+    h.resolveLegacyIds({11: VIN})
+    assert ns.settings == {"chargeLimits": {"11": 80}}
+    ns.queue_background_task.assert_not_called()
+
+
+def test_an_id_naming_a_vin_load_migrated_keeps_that_entry(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {VIN: 70, "11": [90, 50]}
+    m.heldLimits.load()
+    with caplog.at_level(logging.INFO):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert m.heldLimits.get(VIN) == HeldLimit(70, None)
+    assert "chargeLimits" not in m.settings
+    infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert any(
+        "11" in i and VIN in i and "kept normal limit 70%, discarded 90%" in i
+        for i in infos
+    )
+
+
+def test_an_id_keys_out_of_range_hold_warns_at_load_not_at_resolve(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {"11": [80, 30]}
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.load()
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warned) == 1 and "Kept the normal limit" in warned[0]
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert m.heldLimits.get(VIN) == HeldLimit(80, None)
+
+
+def test_a_malformed_store_entry_is_kept_over_a_vin_key_at_load():
+    m, s = make()
+    m.settings["heldLimits"] = {VIN: {"outside": "x"}}
+    m.settings["chargeLimits"] = {VIN: 80}
+    m.heldLimits.load()
+    assert m.settings["heldLimits"] == {VIN: {"outside": "x"}}
+    assert "chargeLimits" not in m.settings
+
+
+def test_a_resolve_saves_once_and_logs_no_migrated_line(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {"11": 80}
+    m.heldLimits.load()
+    m.queue_background_task = Mock()
+    with caplog.at_level(logging.INFO):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert m.queue_background_task.call_args_list == [(({"cmd": "saveSettings"},),)]
+    assert "Migrated chargeLimits" not in caplog.text
     assert m.heldLimits.get(VIN) == HeldLimit(80, None)
