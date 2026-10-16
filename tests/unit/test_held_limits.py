@@ -118,7 +118,7 @@ def fileMaster(tmp_path, blob):
     (tmp_path / "settings.json").write_text(json.dumps(blob))
     m = TWCMaster("AB", {"config": dict(CONFIG["config"], settingsPath=str(tmp_path))})
     # loadSettings hands saved tokens to TeslaAPI; no car is listed yet.
-    api = Mock(carApiVehicles=[])
+    api = Mock()
     m.getModuleByName = Mock(side_effect=lambda n: api if n == "TeslaAPI" else None)
     m.queue_background_task = Mock()
     # loadSettings queues saves of its own; count the store's alone.
@@ -264,7 +264,7 @@ def test_store_works_before_load_and_on_a_bare_master():
 
 
 def test_teslaapi_listing_without_a_store_is_harmless():
-    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.test_teslaapi_registry import api_with_registry
 
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
@@ -387,7 +387,7 @@ def test_listing_before_load_is_resolved_on_the_next_check(tmp_path, requests_mo
     # TeslaMate token sync and retained telemetry can list cars before
     # loadSettings runs: the next checkCharge resolves (free calls only)
     from tests.unit.teslatokens import FLEET_NA_URL, fleet_token
-    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.test_teslaapi_registry import api_with_registry
 
     m = fileMaster(tmp_path, {"chargeLimits": {"1492931337": [75, 60]}})
     api, reg = api_with_registry()

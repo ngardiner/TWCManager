@@ -63,7 +63,10 @@ class _TeslaAPIProvider(Provider):
             return True
         slot = getattr(self.carapi, self.slotName)
         # Free online check (vehicles/{vin}) before a paid vehicle_data
-        return bool(car.is_awake(slot=slot) and car.update_vehicle_data(slot=slot))
+        return bool(
+            self.carapi.is_awake(vehicle, slot=slot)
+            and self.carapi.update_vehicle_data(vehicle, slot=slot)
+        )
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
         if vehicle is None:
@@ -80,15 +83,16 @@ class _TeslaAPIProvider(Provider):
     # The clock passed to the wake hold; a test may replace it
     clock = time.time
 
-    def _car(self, vin: str):
-        # The account's CarApiVehicle for vin, or None
-        return self.carapi.getVehicleByVIN(vin) or None
+    def _listed(self, vin: str):
+        # The registry vehicle for vin when the account lists it, or None
+        vehicle = self.carapi.registry.get(vin)
+        return vehicle if vehicle and vehicle.attachment("TeslaAPI") else None
 
     def _command(self, vin: str, name: str, body: Optional[dict] = None) -> Outcome:
-        car = self._car(vin)
-        if car is None:
+        vehicle = self._listed(vin)
+        if vehicle is None:
             return Outcome(UNSUPPORTED, "not listed")
-        return self.carapi.command(car, name, body)
+        return self.carapi.command(vehicle, name, body)
 
     def setChargeLimit(self, vin: str, limit: int) -> Outcome:
         return self._command(vin, "set_charge_limit", {"percent": int(limit)})
@@ -101,12 +105,11 @@ class _TeslaAPIProvider(Provider):
         return outcome
 
     def stopCharging(self, vin: str) -> Outcome:
-        car = self._car(vin)
+        vehicle = self._listed(vin)
         if (
-            car is not None
-            and self.carapi.commandSlotFor(car) is not None
-            and not car.is_awake(now=self.clock())
-            and car.lastVehicleAwakeKnown
+            vehicle is not None
+            and self.carapi.commandSlotFor(vehicle) is not None
+            and self.carapi.onlineState(vehicle, now=self.clock()) is False
         ):
             # As main: an asleep car is not charging; settled, never sent (N2)
             return Outcome(SATISFIED, "asleep, not charging")
@@ -123,10 +126,10 @@ class _TeslaAPIProvider(Provider):
         return outcome
 
     def wake(self, vin: str) -> Outcome:
-        car = self._car(vin)
-        if car is None:
+        vehicle = self._listed(vin)
+        if vehicle is None:
             return Outcome(UNSUPPORTED, "not listed")
-        return self.carapi.wakeOutcome(car, now=self.clock())
+        return self.carapi.wakeOutcome(vehicle, now=self.clock())
 
 
 class OwnerAPIProvider(_TeslaAPIProvider):
@@ -158,7 +161,7 @@ class OwnerAPIProvider(_TeslaAPIProvider):
         if capability in COMMANDS:
             # Says once why a car is read-only, as the module would have
             return self.available(capability) and not self.carapi.refuseCommandFor(
-                car, TESLA_COMMAND[capability]
+                vehicle, TESLA_COMMAND[capability]
             )
         return self.carapi.ownerSlot.usable("read")
 

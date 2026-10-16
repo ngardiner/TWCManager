@@ -14,13 +14,27 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 
 def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
     out = subprocess.run(
-        # Only a module's own list (self.carApiVehicles); getCarApiVehicles is gone
-        ["git", "grep", "-lE", r"[^f]\.carApiVehicles|getCarApiVehicles", "--", "lib/TWCManager"],
+        # The dissolved CarApiVehicle's names stay gone: no module keeps a car
+        # list (registry.attached() is the list), and "id:" keys are not written
+        ["git", "grep", "-lE",
+         r"carApiVehicles|getCarApiVehicles|CarApiVehicle|RegistryField|getVehicleByVIN"
+         r"|lastVehicleAwake|_liveVehicle|startswith\(\"id:\"\)"
+         r"|\.VIN\b([^ ]|$)",  # a car object's .VIN (not "from .VIN import")
+         "--", "lib/TWCManager", "html", "tests/integration", "tests/API"],
         capture_output=True,
         text=True,
         cwd=REPO,
     ).stdout.split()
     assert out == []
+    # Forget is atomic: the one caller re-checks "unattached" under the lock
+    # (DesiredStore.forget is the registry's removal callback, not a caller)
+    forgets = subprocess.run(
+        ["git", "grep", "-n", r"[rR]egistry\.forget(", "--", "lib/TWCManager"],
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    ).stdout.splitlines()
+    assert len(forgets) == 1 and "ifUnattached=True" in forgets[0]
 
 
 def test_get_last_vehicle_uses_registry_attachment():
@@ -198,8 +212,8 @@ def test_unset_home_location_twice_is_not_an_error():  # M5
 
 
 def _listed_car_slave():
-    # A real CarApiVehicle listed by a real TeslaAPI, on one TWC's lastVIN
-    from tests.unit.test_carapivehicle_registry import api_with_registry
+    # A car listed by a real TeslaAPI, on one TWC's lastVIN
+    from tests.unit.test_teslaapi_registry import api_with_registry
 
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})

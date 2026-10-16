@@ -30,7 +30,9 @@ def test_owner_token_lists_vehicles_from_products(requests_mock):
     api = new_api()
     api.storeToken(owner_token())
     assert api.loadVehicleList() is True
-    assert [v.VIN for v in api.carApiVehicles] == ["5YJ3E1EB9LF000001"]
+    assert [v.vin for v, _ in api.registry.attached("TeslaAPI")] == [
+        "5YJ3E1EB9LF000001"
+    ]
     assert vehicles.call_count == 0
 
 

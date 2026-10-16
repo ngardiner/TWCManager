@@ -259,7 +259,7 @@ def test_fleet_start_sends_the_limit_first(requests_mock, monkeypatch):     # Ta
     assert requests_mock.request_history[0].url == FLEET_CAR                # the free online check comes first
 
 def test_fleet_wake_comes_after_a_free_online_check(requests_mock):         # paid counted
-    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.carApiVehicles[0]
+    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = v.attachment("TeslaAPI")
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "asleep"}})
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()                            # the wake hold is over
     m.startCarsCharging(VIN); r.pass_()
@@ -300,7 +300,7 @@ def test_an_asleep_fleet_car_with_an_unknown_limit_is_woken_then_limited_then_st
     import TWCManager.Vehicle.Reconcile.Reconciler as rec
     import TWCManager.Vehicle.TeslaAPI as teslaapi
     monkeypatch.setattr(rec, "LIMIT_THEN_START_GAP", 0.0); monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
-    m, r, v, c, api = fleetOnTwc(requests_mock); car = api.carApiVehicles[0]
+    m, r, v, c, api = fleetOnTwc(requests_mock); car = v.attachment("TeslaAPI")
     requests_mock.get(FLEET_CAR, [{"json": {"response": {"state": "asleep"}}}, {"json": {"response": {"state": "online"}}}])
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()                            # the wake hold is over
     assert v.value("chargeLimit") is None                                                                           # nothing read since the restart
@@ -317,7 +317,7 @@ def test_a_limit_that_stays_unreadable_stops_holding_the_start():          # C1 
     assert "startCharging" in cmds(f) and "setChargeLimit" not in cmds(f)
 
 def fanOutCars(m):
-    reg = m.vehicleRegistry; anon = reg.beginPlugSession("8244"); api = new_api(master=m); del m.modules["TeslaAPI"]
+    reg = m.vehicleRegistry; anon = reg.beginPlugSession("8244"); api = new_api(master=m)
     for i, (vin, at) in enumerate(((VIN, HOME), ("5YJ3E1EA1KF000002", AWAY), ("5YJ3E1EA1KF000003", HOME))):
         api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, reg.get(vin), at)       # located by position
     other = reg.get("5YJ3E1EA1KF000003"); other.observe("twcVin", "8245", "TWC")
@@ -383,7 +383,7 @@ def test_load_list_logs_why_no_token_is_usable_once_per_reason(caplog):    # rev
 def test_mode_2_limit_buys_no_wake_for_a_start_the_cloud_cannot_send(requests_mock, monkeypatch):   # N1, paid counted
     import TWCManager.Vehicle.TeslaAPI as teslaapi
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
-    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.carApiVehicles[0]; m.settings["chargeStopMode"] = "2"
+    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = v.attachment("TeslaAPI"); m.settings["chargeStopMode"] = "2"
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "asleep"}})
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()
     m.setPolicyLimit(50, transition=True); m.startCarsCharging(VIN)
@@ -462,7 +462,7 @@ def test_a_fleet_command_for_one_car_sends_nothing_for_another_listed_car(reques
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     VIN2 = "5YJ3E1EA1KF000002"
     m, r, v, c, api = fleetOnTwc(requests_mock)
-    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); b = api.getVehicleByVIN(VIN2); placeAt(m, m.vehicleRegistry.get(VIN2))
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); b = m.vehicleRegistry.get(VIN2).attachment("TeslaAPI"); placeAt(m, m.vehicleRegistry.get(VIN2))
     requests_mock.get(FLEET_CAR[:-len(VIN)] + VIN2, json={"response": {"state": "asleep"}})
     held = (b.firstChargeNeededTime, b.lastChargeNeededTime, b.delayNextWakeAttempt)
     m.startCarsCharging(VIN); r.pass_()                                                           # a start

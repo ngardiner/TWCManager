@@ -36,6 +36,7 @@ def real(minAmps, ranges=None, feed=40):
     m.queue_background_task = Mock()
     carapi = Mock()
     carapi.enabled.return_value = True
+    carapi.locate.return_value = None  # no position known
     policy = Mock()
     policy.policyIsGreen.return_value = False
     iface = Mock()
@@ -149,7 +150,7 @@ def chargingAndIdle(feed):
     v = m.vehicleRegistry.getOrCreate(VIN, "TeslaAPI")
     v.attach(
         "TeslaAPI",
-        SimpleNamespace(VIN=VIN, atHome=True, locate=lambda: None),
+        SimpleNamespace(VIN=VIN, atHome=True),
     )
     v.observe("chargingState", "Charging", "TeslaAPI")
     idle = idleSlave(m)
@@ -189,7 +190,7 @@ def chargingSlave(m, twcid, vin):
     v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI")
     v.attach(
         "TeslaAPI",
-        SimpleNamespace(VIN=vin, atHome=True, locate=lambda: None),
+        SimpleNamespace(VIN=vin, atHome=True),
     )
     v.observe("chargingState", "Charging", "TeslaAPI")
     return s
@@ -234,7 +235,7 @@ def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
     v.attach(
         "TeslaAPI",
         SimpleNamespace(
-            VIN=idle.currentVIN, atHome=True, locate=lambda: None,
+            VIN=idle.currentVIN, atHome=True,
         ),
     )
     v.observe("chargingState", "Charging", "TeslaAPI")

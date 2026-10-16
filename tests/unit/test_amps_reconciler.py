@@ -143,7 +143,7 @@ def anonTwc(*outcomes):
     # first; VIN3 is on a TWC that names it
     from tests.unit.reconcile_helpers import placeAt
     from tests.unit.teslatokens import new_api
-    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),)))); m.settings["chargeRateControl"] = "2"; api = new_api(master=m); del m.modules["TeslaAPI"]
+    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),)))); m.settings["chargeRateControl"] = "2"; api = new_api(master=m)
     for i, vin in enumerate((VIN, VIN2, VIN3, VIN4)):
         api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, m.vehicleRegistry.get(vin))   # at home by position
     s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN = VIN3

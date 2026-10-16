@@ -395,9 +395,6 @@ class TeslaBLE:
         A transient failure (timeout, or a connection error) is retried once
         after QUICK_RETRY_DELAY, outside the BLE lock; anything else is
         reported at once. All other retry policy is the reconciler's."""
-        # Accept either a VIN string or a vehicle object with a .VIN attribute
-        if hasattr(vin, "VIN"):
-            vin = vin.VIN
         output = self._sendCommand_internal(vin, command, args)
         if output is None and getattr(self._failure, "transient", False):
             logger.info(f"BLE command '{command}' to {vin} failed; retrying once")

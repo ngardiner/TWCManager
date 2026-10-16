@@ -180,7 +180,6 @@ def install(fleet=False, owner=False, policy=None, held=None, at=HOME, located=T
     api = None
     if fleet or owner:
         api = new_api(master=m)
-        del m.modules["TeslaAPI"]
         api.now = c
         api.wakeDelayMins = 0
         if owner:

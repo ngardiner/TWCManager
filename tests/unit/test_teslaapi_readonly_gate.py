@@ -49,8 +49,8 @@ def any_http(requests_mock):
 
 
 def no_error_recorded(api):
-    vehicle = api.carApiVehicles[0]
-    return api.getCarApiLastErrorTime() == 0 and vehicle.lastErrorTime == 0
+    car = api.registry.attached("TeslaAPI")[0][1]
+    return api.getCarApiLastErrorTime() == 0 and car.lastErrorTime == 0
 
 
 class TestFleetProviderRefusesCommands:
@@ -60,7 +60,7 @@ class TestFleetProviderRefusesCommands:
     def test_no_command_token_sends_nothing(self, owner_api, any_http, call):
         fleet = [p for p in owner_api.providers() if p.name == "FleetAPI"][0]
         args = (self.VIN, 10) if call == "setAmps" else (self.VIN,)
-        car = owner_api.carApiVehicles[0]
+        car = owner_api.registry.get(self.VIN).attachment("TeslaAPI")
         before = car.lastAPIAccessTime
         assert getattr(fleet, call)(*args) == Outcome(REFUSED, "no command token")
         assert car.lastAPIAccessTime == before
@@ -132,10 +132,10 @@ class TestReadsStillRun:
                 }
             },
         )
-        vehicle = owner_api.carApiVehicles[0]
-        assert vehicle.update_vehicle_data() is True
+        vehicle = owner_api.registry.get("5YJ3E1EA1KF000001")
+        assert owner_api.update_vehicle_data(vehicle) is True
         assert data.call_count == 1
-        assert vehicle.batteryLevel == 55
+        assert vehicle.value("batteryLevel") == 55
 
     def test_vehicle_list_read_uses_owner_api(self, no_threads, requests_mock):
         api = new_api()
@@ -152,14 +152,14 @@ class TestReadsStillRun:
         )
         assert api.loadVehicleList() is True
         assert listing.call_count == 1
-        assert len(api.carApiVehicles) == 1
+        assert len(api.registry.attached("TeslaAPI")) == 1
 
 
 class TestCheckChargeRefreshesEachModuleOnce:
     # checkCharge walks the provider order: each vehicle module with a
     # provider not suppressed for reads refreshes its cars once
     def make(self, settings=None, ha=None):
-        from tests.unit.test_carapivehicle_registry import api_with_registry
+        from tests.unit.test_teslaapi_registry import api_with_registry
         from TWCManager.TWCMaster import TWCMaster
         from TWCManager.Vehicle.Providers.Order import ProviderOrder
         from TWCManager.Vehicle.Providers.Provider import Provider
@@ -230,27 +230,32 @@ def tesla_provider(api):
     return api.providers()[0]
 
 
+def car(vehicle):
+    """TeslaAPI's own record for a listed registry vehicle."""
+    return vehicle.attachment("TeslaAPI")
+
+
 # Each owner-command path: the endpoint under /5YJ3E1EA1KF000001 and how to send it.
 COMMANDS = {
     "set_charging_amps": (
         "/command/set_charging_amps",
-        lambda api, vehicle: tesla_provider(api).setAmps(vehicle.VIN, 10),
+        lambda api, vehicle: tesla_provider(api).setAmps(vehicle.vin, 10),
     ),
     "set_charge_limit": (
         "/command/set_charge_limit",
-        lambda api, vehicle: tesla_provider(api).setChargeLimit(vehicle.VIN, 80),
+        lambda api, vehicle: tesla_provider(api).setChargeLimit(vehicle.vin, 80),
     ),
     "charge_start": (
         "/command/charge_start",
-        lambda api, vehicle: tesla_provider(api).startCharging(vehicle.VIN),
+        lambda api, vehicle: tesla_provider(api).startCharging(vehicle.vin),
     ),
     "charge_stop": (
         "/command/charge_stop",
-        lambda api, vehicle: tesla_provider(api).stopCharging(vehicle.VIN),
+        lambda api, vehicle: tesla_provider(api).stopCharging(vehicle.vin),
     ),
     "wake_up": (
         "/wake_up",
-        lambda api, vehicle: tesla_provider(api).wake(vehicle.VIN),
+        lambda api, vehicle: tesla_provider(api).wake(vehicle.vin),
     ),
 }
 
@@ -261,15 +266,15 @@ def prime(command, api, vehicle, requests_mock, state="asleep"):
     stop asks it too and goes out to an online car."""
     if command == "charge_stop":
         for base in (OWNER_URL, FLEET_URL):
-            requests_mock.get(base + "/" + vehicle.VIN, json=ONLINE)
+            requests_mock.get(base + "/" + vehicle.vin, json=ONLINE)
         return
     if command != "wake_up":
         return
-    vehicle.lastAPIAccessTime = 0
-    vehicle.firstChargeNeededTime = 1
-    vehicle.lastChargeNeededTime = time.time()
+    car(vehicle).lastAPIAccessTime = 0
+    car(vehicle).firstChargeNeededTime = 1
+    car(vehicle).lastChargeNeededTime = time.time()
     for base in (OWNER_URL, FLEET_URL):
-        requests_mock.get(base + "/" + vehicle.VIN, json={"response": {"state": state}})
+        requests_mock.get(base + "/" + vehicle.vin, json={"response": {"state": state}})
 
 
 class Refusal:
@@ -344,15 +349,8 @@ def no_sleep(monkeypatch):
 
 
 def add_car(api, command_signing, vin="5YJ3E1EA1KF000001", name="Car", id=1):
-    """A car at home whose charge and location reads succeed without HTTP,
-    on a master that tracks charge limits."""
-    vehicle = add_home_vehicle(api, command_signing, vin=vin, name=name, id=id)
-    vehicle.update_charge = lambda *args, **kwargs: True
-    vehicle.update_location = lambda *args, **kwargs: True
-    api.master.getNormalChargeLimit = lambda vehicleID: (True, 70, -1)
-    api.master.saveNormalChargeLimit = lambda *args: None
-    api.master.removeNormalChargeLimit = lambda *args: None
-    return vehicle
+    """A listed car at home, as its registry vehicle."""
+    return add_home_vehicle(api, command_signing, vin=vin, name=name, id=id)
 
 
 @pytest.fixture
@@ -392,7 +390,7 @@ def order_over(api):
 
 def amps_candidates(api, vehicle):
     """Who may set this car's amps, in order."""
-    return [p.name for p in order_over(api).candidates(vehicle.vehicle, C.SET_AMPS)]
+    return [p.name for p in order_over(api).candidates(vehicle, C.SET_AMPS)]
 
 
 class TestOwnerCommandsForUnsignedVehicles:
@@ -422,14 +420,14 @@ class TestOwnerCommandsForUnsignedVehicles:
         cmd = requests_mock.post(
             OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps", json=ACCEPTED
         )
-        assert tesla_provider(api).setAmps(vehicle.VIN, 10) == Outcome(DONE)
+        assert tesla_provider(api).setAmps(vehicle.vin, 10) == Outcome(DONE)
         assert cmd.call_count == 1
 
     def test_cleared_owner_slot_blocks(self, owner_car, any_http):
         api, vehicle = owner_car("off")
         api.ownerSlot.clear()
         assert api.readOnlyFor(vehicle) is True
-        assert tesla_provider(api).setAmps(vehicle.VIN, 10) == REFUSED_OUTCOME
+        assert tesla_provider(api).setAmps(vehicle.vin, 10) == REFUSED_OUTCOME
         assert any_http.call_count == 0
 
 
@@ -471,13 +469,13 @@ class TestMixedFleet:
         assert api.readOnly is False
         assert api.readOnlyFor(unsigned) is False
         assert api.readOnlyFor(signed) is True
-        assert provider.setAmps(signed.VIN, 10) == REFUSED_OUTCOME
+        assert provider.setAmps(signed.vin, 10) == REFUSED_OUTCOME
         assert amps.call_count == 0
-        assert provider.setAmps(unsigned.VIN, 10) == Outcome(DONE)
+        assert provider.setAmps(unsigned.vin, 10) == Outcome(DONE)
         assert amps.call_count == 1
         assert amps.last_request.url.startswith(OWNER_URL + "/5YJ3E1EA1KF000001/")
         assert no_error_recorded(api)
-        assert signed.lastErrorTime == 0
+        assert car(signed).lastErrorTime == 0
 
     def test_stop_reaches_only_the_unsigned_car(self, mixed_fleet, requests_mock):
         api, unsigned, signed = mixed_fleet
@@ -487,15 +485,15 @@ class TestMixedFleet:
 
         # The signed car is refused without a request, so the reconciler
         # tries the next provider for it.
-        assert provider.stopCharging(signed.VIN) == REFUSED_OUTCOME
+        assert provider.stopCharging(signed.vin) == REFUSED_OUTCOME
         assert stop.call_count == 0
-        assert provider.stopCharging(unsigned.VIN) == Outcome(DONE)
+        assert provider.stopCharging(unsigned.vin) == Outcome(DONE)
         assert stop.call_count == 1
         assert (
             stop.last_request.url
             == OWNER_URL + "/5YJ3E1EA1KF000001/command/charge_stop"
         )
-        assert signed.lastErrorTime == 0
+        assert car(signed).lastErrorTime == 0
         assert no_error_recorded(api)
 
     def test_order_leaves_out_tesla_api_for_the_signed_car(self, mixed_fleet, any_http):
@@ -503,7 +501,7 @@ class TestMixedFleet:
         assert amps_candidates(api, signed) == ["Fallback"]
         assert any_http.call_count == 0
         assert no_error_recorded(api)
-        assert signed.lastErrorTime == 0
+        assert car(signed).lastErrorTime == 0
 
     def test_order_puts_owner_api_first_for_the_unsigned_car(self, mixed_fleet):
         api, unsigned, signed = mixed_fleet
@@ -517,8 +515,8 @@ class TestMixedFleet:
         order = ProviderOrder(api.master)
         for p in api.providers():
             order.register(p)
-        assert VehicleEndpoint(unsigned.vehicle, order, api.master).isReadOnly is False
-        assert VehicleEndpoint(signed.vehicle, order, api.master).isReadOnly is True
+        assert VehicleEndpoint(unsigned, order, api.master).isReadOnly is False
+        assert VehicleEndpoint(signed, order, api.master).isReadOnly is True
 
 
 class TestOwnerCommandRefusedByTesla:
@@ -544,7 +542,7 @@ class TestOwnerCommandRefusedByTesla:
         assert send(api, vehicle) == first
 
         assert cmd.call_count == 1
-        assert vehicle.ownerCommandsRefused is True
+        assert car(vehicle).ownerCommandsRefused is True
         assert no_error_recorded(api)
         assert api.readOnlyFor(vehicle) is True
         assert api.readOnly is True
@@ -556,12 +554,12 @@ class TestOwnerCommandRefusedByTesla:
         # Reads still run on the Owner token (of a car known awake: a read
         # of an asleep car is never attempted).
         assert api.ownerSlot.usable("read")
-        vehicle.lastAPIAccessTime = time.time()
-        vehicle.firstWakeAttemptTime = 0
+        car(vehicle).lastAPIAccessTime = time.time()
+        car(vehicle).firstWakeAttemptTime = 0
         data = requests_mock.get(
             OWNER_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA
         )
-        assert vehicle.update_vehicle_data() is True
+        assert api.update_vehicle_data(vehicle) is True
         assert data.call_count == 1
 
     @pytest.mark.parametrize(
@@ -578,7 +576,7 @@ class TestOwnerCommandRefusedByTesla:
             OWNER_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps",
             **ALL_REFUSALS[refusal]
         )
-        tesla_provider(api).setAmps(vehicle.VIN, 10)
+        tesla_provider(api).setAmps(vehicle.vin, 10)
 
         warnings = [
             r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
@@ -595,8 +593,8 @@ class TestOwnerCommandRefusedByTesla:
 
         # The per-car read-only line, logged again on a state change, gives
         # the same cause.
-        vehicle.refusalLoggedAt = None
-        tesla_provider(api).setAmps(vehicle.VIN, 12)
+        car(vehicle).refusalLoggedAt = None
+        tesla_provider(api).setAmps(vehicle.vin, 12)
         lines = [
             r.getMessage()
             for r in caplog.records
@@ -610,10 +608,10 @@ class TestOwnerCommandRefusedByTesla:
 
     def test_wake_from_the_reconciler_records_no_error(self, owner_car, requests_mock):
         api, vehicle = owner_car("off")
-        vehicle.lastAPIAccessTime = 0  # not known to be awake
+        car(vehicle).lastAPIAccessTime = 0  # not known to be awake
         # A live charge need whose pre-wake hold is long over
-        vehicle.firstChargeNeededTime = 1
-        vehicle.lastChargeNeededTime = time.time()
+        car(vehicle).firstChargeNeededTime = 1
+        car(vehicle).lastChargeNeededTime = time.time()
         requests_mock.get(
             OWNER_URL + "/5YJ3E1EA1KF000001", json={"response": {"state": "asleep"}}
         )
@@ -621,10 +619,10 @@ class TestOwnerCommandRefusedByTesla:
             OWNER_URL + "/5YJ3E1EA1KF000001/wake_up", status_code=403, json=VCP_403
         )
 
-        assert tesla_provider(api).wake(vehicle.VIN) == REFUSED_OUTCOME
+        assert tesla_provider(api).wake(vehicle.vin) == REFUSED_OUTCOME
 
         assert wake.call_count == 1
-        assert vehicle.ownerCommandsRefused is True
+        assert car(vehicle).ownerCommandsRefused is True
         assert no_error_recorded(api)
 
     @pytest.mark.parametrize("refusal", list(ALL_REFUSALS))
@@ -638,7 +636,7 @@ class TestOwnerCommandRefusedByTesla:
         )
         assert amps_candidates(api, vehicle) == ["OwnerAPI", "Fallback"]
 
-        assert tesla_provider(api).setAmps(vehicle.VIN, 10) == REFUSED_OUTCOME
+        assert tesla_provider(api).setAmps(vehicle.vin, 10) == REFUSED_OUTCOME
         assert cmd.call_count == 1
 
         # Latched: the next walk leaves TeslaAPI out without an HTTP call.
@@ -649,7 +647,7 @@ class TestOwnerCommandRefusedByTesla:
         data = requests_mock.get(
             OWNER_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA
         )
-        assert vehicle.update_vehicle_data() is True
+        assert api.update_vehicle_data(vehicle) is True
         assert data.call_count == 1
 
     # Fleet API answers to a command keep today's handling: Tesla is
@@ -680,7 +678,7 @@ class TestOwnerCommandRefusedByTesla:
         assert send(api, vehicle) == self.FLEET_REFUSED
 
         assert cmd.call_count >= 1
-        assert vehicle.ownerCommandsRefused is False
+        assert car(vehicle).ownerCommandsRefused is False
         # The reconciler path retires a Fleet token Tesla refused (403, 412);
         # the Owner token then carries this car's commands
         if api.fleetSlot.usable("command"):
@@ -698,7 +696,7 @@ class TestBothTokens:
         )
 
         assert api.commandSlotFor(vehicle) is api.fleetSlot
-        tesla_provider(api).setAmps(vehicle.VIN, 10)
+        tesla_provider(api).setAmps(vehicle.vin, 10)
 
         assert amps.call_count == 1
         assert amps.last_request.url.startswith(FLEET_URL + "/5YJ3E1EA1KF000001/")
@@ -716,7 +714,7 @@ class TestBothTokens:
         )
 
         assert api.commandSlotFor(vehicle) is api.ownerSlot
-        tesla_provider(api).setAmps(vehicle.VIN, 10)
+        tesla_provider(api).setAmps(vehicle.vin, 10)
         assert amps.last_request.url.startswith(OWNER_URL + "/5YJ3E1EA1KF000001/")
 
     def test_fleet_carries_commands_for_signed_car(self, owner_car):
@@ -795,10 +793,10 @@ class TestPerVehicleRefusalLogging:
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car("required")
         provider = tesla_provider(api)
-        provider.setAmps(vehicle.VIN, 10)
-        provider.setAmps(vehicle.VIN, 12)
-        provider.wake(vehicle.VIN)
-        provider.startCharging(vehicle.VIN)
+        provider.setAmps(vehicle.vin, 10)
+        provider.setAmps(vehicle.vin, 12)
+        provider.wake(vehicle.vin)
+        provider.startCharging(vehicle.vin)
 
         lines = self.lines(caplog, "command_signing")
         assert len(lines) == 1
@@ -814,8 +812,8 @@ class TestPerVehicleRefusalLogging:
         caplog.set_level(logging.INFO)
         api, vehicle = owner_car(signing)
         provider = tesla_provider(api)
-        provider.setAmps(vehicle.VIN, 10)
-        provider.setAmps(vehicle.VIN, 12)
+        provider.setAmps(vehicle.vin, 10)
+        provider.setAmps(vehicle.vin, 12)
 
         lines = self.lines(caplog, "command_signing")
         assert len(lines) == 1
@@ -828,9 +826,9 @@ class TestPerVehicleRefusalLogging:
         api, unsigned, signed = mixed_fleet
         requests_mock.post(re.compile(r".*/command/set_charging_amps"), json=ACCEPTED)
         provider = tesla_provider(api)
-        provider.setAmps(signed.VIN, 10)
-        provider.setAmps(unsigned.VIN, 10)
-        provider.setAmps(signed.VIN, 12)
+        provider.setAmps(signed.vin, 10)
+        provider.setAmps(unsigned.vin, 10)
+        provider.setAmps(signed.vin, 12)
 
         lines = self.lines(caplog, "command_signing")
         assert len(lines) == 1
@@ -845,9 +843,9 @@ class TestPerVehicleRefusalLogging:
             json=VCP_403,
         )
         provider = tesla_provider(api)
-        provider.setAmps(vehicle.VIN, 10)
-        provider.setAmps(vehicle.VIN, 12)
-        provider.wake(vehicle.VIN)
+        provider.setAmps(vehicle.vin, 10)
+        provider.setAmps(vehicle.vin, 12)
+        provider.wake(vehicle.vin)
 
         lines = self.lines(caplog, "Car")
         assert len(lines) == 1
