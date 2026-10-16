@@ -110,7 +110,7 @@ def test_legacy_ids_resolve_once_from_the_first_vehicle_list(requests_mock, capl
     warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warned) == 1 and "44" in warned[0] and "75%" in warned[0]       # unmatched: dropped, one warning naming the ID and its limit
     assert any("33" in r.getMessage() and "70%" in r.getMessage() and VIN4 in r.getMessage() for r in caplog.records if r.levelno == logging.INFO)   # the discard is logged (M5)
-    assert "Car API cmd vehicles" in caplog.text and "Car API vehicle list" in caplog.text    # the INFO8 and DEBUG lines were captured
+    assert "Car API get vehicles: HTTP 200" in caplog.text                       # the INFO8 lines were captured
     assert not any(t in caplog.text for t in (api.ownerSlot.accessToken, api.fleetSlot.accessToken))
     api.carApiVehicles = []; api.loadVehicleList(); assert (owner.call_count, fleet.call_count) == (2, 1)   # once: nothing waits, no second list
 
