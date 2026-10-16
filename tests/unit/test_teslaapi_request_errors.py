@@ -117,9 +117,17 @@ PATH_URLS = {
     "command": FLEET_NA_URL + "/" + HOME_VIN + "/command/charge_stop",
     "energy": API_ROOT + "products",
 }
-TIMEOUTS = {"read": 10, "list": 30, "command": 10, "energy": 10}
+TIMEOUTS = {"read": 10, "list": 10, "command": 10, "energy": 10}
 REFRESH = "fleet-refresh-secret"
-NO = dict(calls=1, refreshes=0, token="kept", paused=None, refused=set(), wc=False, backoff=False)
+NO = dict(
+    calls=1,
+    refreshes=0,
+    token="kept",
+    paused=None,
+    refused=set(),
+    wc=False,
+    backoff=None,
+)
 
 
 def cell(**changes):
@@ -130,14 +138,16 @@ EXPECTED = {
     # 401 "token expired" every time, with a refresh that succeeds
     ("read", 401): cell(result=False, calls=2, refreshes=1, token="cleared"),
     ("list", 401): cell(result=False, refreshes=1, token="new"),
-    ("command", 401): cell(result=("refused", "401"), calls=2, refreshes=1, token="cleared"),
+    ("command", 401): cell(
+        result=("refused", "401"), calls=2, refreshes=1, token="cleared"
+    ),
     ("energy", 401): cell(result=None, wc=True),
     ("read", 403): cell(result=False, paused="hour"),
     ("list", 403): cell(result=False, paused="hour"),
     ("command", 403): cell(result=("refused", "403"), refused={"command"}),
     ("energy", 403): cell(result=None, wc=True),
     ("read", 408): cell(result=False),
-    ("list", 408): cell(result=False, backoff=True),
+    ("list", 408): cell(result=False, backoff="module"),
     ("command", 408): cell(result=("unreachable", "408")),
     ("energy", 408): cell(result=None),
     ("read", 410): cell(result=False, paused="hour"),
@@ -148,11 +158,21 @@ EXPECTED = {
     ("list", 412): cell(result=False, paused="latched"),
     ("command", 412): cell(result=("refused", "412"), refused={"command"}),
     ("energy", 412): cell(result=None, wc=True),
-    ("read", 429): cell(result=False, backoff=True),
-    ("list", 429): cell(result=False, backoff=True),
-    ("command", 429): cell(result=("error", "429"), backoff=True),
+    ("read", 429): cell(result=False, backoff="car"),
+    ("list", 429): cell(result=False, backoff="module"),
+    ("command", 429): cell(result=("error", "429"), backoff="car"),
     ("energy", 429): cell(result=None),
 }
+
+
+def backoff_of(api, car):
+    # "car": that car alone backs off (its errorCount, not the module's);
+    # "module": every car and the vehicle list do
+    onCar = bool(car.lastErrorTime or car.errorCount)
+    onModule = bool(api.carApiLastErrorTime or api.errorCount)
+    return {(False, False): None, (True, False): "car", (False, True): "module"}.get(
+        (onCar, onModule), "both"
+    )
 
 
 def run_path(api, path):
@@ -169,16 +189,18 @@ def run_path(api, path):
 
 # A 401 that is not an expiry, and a request that never left (its text
 # carries the token, as a wrapped header error can)
-EXPECTED.update({
-    ("read", "401 rejected"): cell(result=False, token="cleared"),
-    ("list", "401 rejected"): cell(result=False, token="cleared"),
-    ("command", "401 rejected"): cell(result=("refused", "401"), token="cleared"),
-    ("energy", "401 rejected"): cell(result=None, wc=True),
-    ("read", "never sent"): cell(result=False),
-    ("list", "never sent"): cell(result=False, backoff=True),
-    ("command", "never sent"): cell(result=("error", "RequestException")),
-    ("energy", "never sent"): cell(result=None),
-})
+EXPECTED.update(
+    {
+        ("read", "401 rejected"): cell(result=False, token="cleared"),
+        ("list", "401 rejected"): cell(result=False, token="cleared"),
+        ("command", "401 rejected"): cell(result=("refused", "401"), token="cleared"),
+        ("energy", "401 rejected"): cell(result=None, wc=True),
+        ("read", "never sent"): cell(result=False),
+        ("list", "never sent"): cell(result=False, backoff="module"),
+        ("command", "never sent"): cell(result=("error", "RequestException")),
+        ("energy", "never sent"): cell(result=None),
+    }
+)
 
 
 @pytest.mark.parametrize("path,status", sorted(EXPECTED, key=str))
@@ -198,7 +220,10 @@ def test_every_path_classifies_status_codes(path, status, requests_mock, caplog)
     elif status == "401 rejected":
         answer = {"status_code": 401, "text": "invalid bearer"}
     else:
-        answer = {"status_code": status, "text": "token expired" if status == 401 else "{}"}
+        answer = {
+            "status_code": status,
+            "text": "token expired" if status == 401 else "{}",
+        }
     hit = requests_mock.request(
         "GET" if path != "command" else "POST", PATH_URLS[path], **answer
     )
@@ -221,7 +246,7 @@ def test_every_path_classifies_status_codes(path, status, requests_mock, caplog)
         paused=paused,
         refused=slot.refusedPurposes,
         wc=api._wallConnectorsRefused.get("fleet") == slot.changes,
-        backoff=bool(api.carApiLastErrorTime or car.lastErrorTime),
+        backoff=backoff_of(api, car),
     )
     assert got == want
     assert all(r.timeout == TIMEOUTS[path] for r in hit.request_history)
@@ -256,3 +281,83 @@ def test_a_wake_answering_online_refreshes_the_online_cache(requests_mock, monke
     clk.t += 50  # 150 s after the check, 50 s after the wake
     assert car.is_awake() is True and check.call_count == 1
     assert wake.last_request.timeout == 10
+
+
+def test_a_refresh_spends_one_of_a_reads_three_tries(requests_mock, monkeypatch):
+    # BASE counted the resend after a refresh against get_car_api's three
+    # tries: a read never pays for more than three vehicle_data requests
+    import TWCManager.Vehicle.TeslaAPI as T
+    from tests.unit.teslatokens import FLEET_REFRESH_URL, add_home_vehicle, new_api
+    from tests.unit.test_teslaapi_refresh import token_response
+
+    monkeypatch.setattr(T.time, "sleep", Mock())
+    api = new_api()
+    api.storeToken(fleet_token(jti="old"), REFRESH)
+    car = add_home_vehicle(api)
+    refresh = requests_mock.post(
+        FLEET_REFRESH_URL, json=token_response(fleet_token(jti="new"))
+    )
+    busy = {"json": {"response": {"reason": "could_not_wake_buses", "result": False}}}
+    data = requests_mock.get(
+        PATH_URLS["read"], [{"status_code": 401, "text": "token expired"}] + [busy] * 5
+    )
+    assert car.get_car_api(HOME_VIN + "/vehicle_data", checkReady=False) == (
+        False,
+        None,
+    )
+    assert data.call_count == 3 and refresh.call_count == 1
+
+
+@pytest.mark.parametrize("path", ["read", "command"])
+def test_a_fleet_401_never_refreshes_the_owner_slot(path, requests_mock):
+    # Both slots hold refresh tokens: only the slot that made the request
+    # refreshes, at its own auth endpoint
+    from tests.unit.teslatokens import (
+        AUTH_TOKEN_URL,
+        FLEET_REFRESH_URL,
+        add_home_vehicle,
+        new_api,
+        owner_token,
+    )
+    from tests.unit.test_teslaapi_refresh import owner_refresh_token, token_response
+
+    api = new_api()
+    api.storeToken(owner_token(), owner_refresh_token())
+    api.storeToken(fleet_token(jti="old"), REFRESH)
+    car = add_home_vehicle(api)
+    fleetAuth = requests_mock.post(
+        FLEET_REFRESH_URL, json=token_response(fleet_token(jti="new"))
+    )
+    ownerAuth = requests_mock.post(
+        AUTH_TOKEN_URL, json=token_response(owner_token(jti="new"))
+    )
+    requests_mock.request(
+        "GET" if path == "read" else "POST",
+        PATH_URLS[path],
+        [
+            {"status_code": 401, "text": "token expired"},
+            {"json": {"response": {"result": True}}},
+        ],
+    )
+    if path == "read":
+        car.get_car_api(
+            HOME_VIN + "/vehicle_data", checkReady=False, slot=api.fleetSlot
+        )
+    else:
+        api.command(car, "charge_stop")
+    assert fleetAuth.call_count == 1 and ownerAuth.call_count == 0
+
+
+def test_a_list_401_whose_refresh_never_left_backs_off(requests_mock, caplog):
+    # Not a refusal: the list failed, and loadVehicleList backs off and logs
+    from tests.unit.teslatokens import FLEET_REFRESH_URL, new_api
+
+    api = new_api()
+    old = fleet_token(jti="old")
+    api.storeToken(old, REFRESH)
+    requests_mock.post(FLEET_REFRESH_URL, exc=requests.exceptions.ConnectionError)
+    requests_mock.get(PATH_URLS["list"], status_code=401, text="token expired")
+    caplog.set_level(1)
+    assert api.loadVehicleList() is False
+    assert api.fleetSlot.accessToken == old
+    assert "Can't get list of vehicles" in caplog.text

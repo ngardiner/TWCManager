@@ -348,12 +348,17 @@ def test_a_404_version_is_final():                                              
         assert u.refreshVersion() is True
     assert u._version == {} and u.din is None
 
-def test_a_failed_query_never_logs_its_text(caplog):   # 12b parked: exc_info could carry a token
+
+def test_a_failed_query_never_logs_its_text(caplog):
+    # 12b parked: exc_info could carry a token
     from tests.unit.test_gen3twc_provider import Clock
+
     token = fleet_token(jti="leak")
-    order = Mock(); order.candidates.side_effect = RuntimeError("Bearer " + token)
+    order = Mock()
+    order.candidates.side_effect = RuntimeError("Bearer " + token)
     reader = WallConnectorVinReader(Mock(), order, clock=Clock())
     unit = Mock(occupied=True, vehicleKey="anon:u1", cloudVin=None, ID="u1")
     with caplog.at_level(1):
         reader.apply([unit])
-    assert order.candidates.called and "RuntimeError" in caplog.text and token not in caplog.text
+    assert order.candidates.called and "RuntimeError" in caplog.text
+    assert token not in caplog.text
