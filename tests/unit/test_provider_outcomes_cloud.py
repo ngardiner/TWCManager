@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import requests_mock as rm
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from tests.unit.test_carapivehicle_registry import api_with_registry, VIN
+from tests.unit.test_teslaapi_registry import api_with_registry, VIN
 from tests.unit.teslatokens import fleet_token, owner_token
 from tests.unit.test_homeassistant_registry import make_ha
 
@@ -55,7 +55,7 @@ def test_low_amps_are_sent_twice_and_counted(requests_mock, monkeypatch):
 def test_wake_checks_the_free_online_state_first_and_holds_between_wakes(requests_mock, monkeypatch):
     import TWCManager.Vehicle.TeslaAPI as T
     from tests.unit.reconcile_helpers import Clock
-    clk = Clock(1000.0); api, reg, p = fleet(requests_mock); car = api.carApiVehicles[0]; p.clock = clk
+    clk = Clock(1000.0); api, reg, p = fleet(requests_mock); car = api.registry.get(VIN).attachment("TeslaAPI"); p.clock = clk
     monkeypatch.setattr(T.time, "sleep", Mock()); api.now = clk                                                    # TeslaAPI's own clock hook follows the test clock; time.time itself is untouched
     requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "online"}})
     assert p.wake(VIN) == O.Outcome(O.SATISFIED, "online") and calls(requests_mock, "wake_up") == [] and len(calls(requests_mock, "/vehicles/" + VIN)) == 1   # free check, no $0.02
@@ -111,7 +111,7 @@ def test_a_401_for_a_token_replaced_meanwhile_sends_the_new_one_once(requests_mo
     assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "401") and len(calls(requests_mock, "charge_stop")) == 3
 
 def test_backoff_429_and_412_send_nothing_more(requests_mock):
-    api, reg, p = fleet(requests_mock, status=429); car = api.carApiVehicles[0]
+    api, reg, p = fleet(requests_mock, status=429); car = api.registry.get(VIN).attachment("TeslaAPI")
     assert p.setChargeLimit(VIN, 80) == O.Outcome(O.ERROR, "429")
     assert p.setChargeLimit(VIN, 80) == O.Outcome(O.UNREACHABLE, "backoff") and len(calls(requests_mock, "set_charge_limit")) == 1
     api, reg, p = fleet(requests_mock, status=412)
@@ -192,7 +192,7 @@ def test_an_ended_need_gets_a_fresh_grace_through_wake_outcome(requests_mock):  
     clk = Clock(5000.0); api, reg, p = fleet(requests_mock); p.clock = clk; api.now = clk      # wakeDelayMins 3
     requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
     wake = requests_mock.post(re.compile(r".*/wake_up$"), json={"response": {"state": "asleep"}})
-    car = api.carApiVehicles[0]
+    car = api.registry.get(VIN).attachment("TeslaAPI")
     assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "wake held") and car.firstChargeNeededTime == 5000.0
     clk.t += 601                                                                           # nobody asked for 10 minutes: that need ended
     assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "wake held") and wake.call_count == 0 and car.firstChargeNeededTime == clk()
@@ -201,25 +201,29 @@ def test_an_ended_need_gets_a_fresh_grace_through_wake_outcome(requests_mock):  
 
 def test_wake_due_reads_the_backoff_on_its_clock(requests_mock):   # M4
     from tests.unit.reconcile_helpers import Clock
-    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.carApiVehicles[0]
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.registry.get(VIN).attachment("TeslaAPI")
     car.lastErrorTime = clk() - 10; car.errorCount = 5                                     # a 4-minute backoff, 10 s in
     assert api.wakeDue(car, now=clk()) is False
     assert api.wakeDue(car, now=clk() + 240) is True
 
 def test_no_free_check_during_the_backoff(requests_mock):   # L2
     from tests.unit.reconcile_helpers import Clock
-    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.carApiVehicles[0]; p.clock = clk; api.now = clk
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.registry.get(VIN).attachment("TeslaAPI"); p.clock = clk; api.now = clk
     check = requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
     car.lastErrorTime = clk() - 10; car.errorCount = 5
     assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "backoff") and check.call_count == 0
 
 def test_a_cached_failed_check_stays_unknown(requests_mock):   # L1
     from tests.unit.reconcile_helpers import Clock
-    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); car = api.carApiVehicles[0]; api.now = clk
-    requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), status_code=503)
-    assert car.is_awake(now=clk()) is False and car.lastVehicleAwakeKnown is False
-    car.lastVehicleAwakeKnown = True                                                       # as a telemetry answer leaves it
-    assert car.is_awake(now=clk() + 10) is False and car.lastVehicleAwakeKnown is False    # the cache hit restores its own flag
+    import time
+    from TWCManager.Vehicle.Registry.Vehicle import Vehicle
+    clk = Clock(5000.0); api, reg, p = fleet(requests_mock); v = reg.get(VIN); api.now = clk
+    check = requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), status_code=503)
+    assert api.is_awake(v, now=clk()) is False and api.onlineState(v, now=clk()) is None
+    v.observe("state", "online", "TeslaMateVehicle"); assert api.onlineState(v, now=clk() + 5) is True   # a telemetry answer
+    v._clock = lambda: time.time() + Vehicle.SYNC_TIMEOUT                                   # ... gone stale: the check falls to its cache
+    assert api.is_awake(v, now=clk() + 10) is False and api.onlineState(v, now=clk() + 10) is None    # the cache hit keeps its own unknown
+    assert check.call_count == 1
 
 def test_odd_reasons_are_not_carried(requests_mock):   # L3
     api, reg, p = fleet(requests_mock, result=False, reason="x" * 300)
@@ -277,7 +281,7 @@ def asleep(requests_mock, monkeypatch, api):
     import TWCManager.Vehicle.TeslaAPI as T
     monkeypatch.setattr(T.time, "sleep", Mock()); api.wakeDelayMins = 0
     requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
-    car = api.carApiVehicles[0]; car.delayNextWakeAttempt = 0; return car
+    car = api.registry.get(VIN).attachment("TeslaAPI"); car.delayNextWakeAttempt = 0; return car
 
 def test_paid_posts_time_out_after_ten_seconds(requests_mock, monkeypatch):   # GAP: test_post_has_timeout
     api, reg, p = fleet(requests_mock); asleep(requests_mock, monkeypatch, api)
@@ -312,3 +316,8 @@ def test_an_expired_token_on_wake_is_refreshed_at_fleet_auth_once(requests_mock,
     requests_mock.post(re.compile(r".*/wake_up$"), [{"status_code": 401, "text": "token expired"}, {"json": {"response": {"state": "online"}}}])
     fleetAuth = requests_mock.post(FLEET_REFRESH_URL, json=token_response(fleet_token(jti="new"))); owner = requests_mock.post(AUTH_TOKEN_URL, json={})
     assert p.wake(VIN).kind in O.SETTLED and len(calls(requests_mock, "wake_up")) == 2 and fleetAuth.call_count == 1 and owner.call_count == 0
+
+def test_a_failed_online_check_still_sends_the_stop(requests_mock):   # m2: no answer is not asleep
+    api, reg, p = fleet(requests_mock)
+    check = requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), status_code=500, json={})
+    assert p.stopCharging(VIN).kind == O.DONE and check.call_count == 1 and len(calls(requests_mock, "charge_stop")) == 1

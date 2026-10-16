@@ -1,4 +1,4 @@
-# tests/unit/test_carapivehicle_registry.py
+# tests/unit/test_teslaapi_registry.py
 from unittest.mock import ANY, Mock
 
 from tests.unit.teslatokens import FakeMaster, fleet_token, new_api, wire_reads
@@ -12,7 +12,6 @@ def api_with_registry():
     master = FakeMaster()
     master.vehicleRegistry = VehicleRegistry({})
     api = new_api(master=master)
-    api.carApiVehicles = []
     wire_reads(master.vehicleRegistry, *api.providers())
     return api, master.vehicleRegistry
 
@@ -21,9 +20,8 @@ def test_vehicle_joins_registry_and_claims_teslaapi():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "TestCar"})
     v = reg.get(VIN)
-    assert (
-        v.attachment("TeslaAPI") is api.carApiVehicles[0] and v.name == "TestCar"
-    )
+    assert reg.attached("TeslaAPI") == [(v, v.attachment("TeslaAPI"))]
+    assert v.name == "TestCar"
     api.fleetSlot.clear()
     assert v.tier == "observed"  # no command slot: read-only
     api.fleetSlot.setTokens(fleet_token())
@@ -38,60 +36,44 @@ def test_listing_is_a_sighting():
     assert v.latest("name").source == "TeslaAPI"
 
 
-def test_attributes_are_observations_with_source_and_defaults():
-    api, reg = api_with_registry()
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    assert car.batteryLevel == 10000 and car.chargeLimit == -1 and car.lat == 10000
-    assert car.pluggedIn is None and car.chargingState == "Unknown"
-    car.chargeLimit = 80
-    obs = reg.get(VIN).latest("chargeLimit")
-    assert (obs.value, obs.source) == (80, "TeslaAPI") and car.chargeLimit == 80
-    car.actualCurrent = 12
-    assert reg.get(VIN).latest("actualCurrent").value == 12
-
-
 def test_master_without_registry_gets_a_private_one():
     api = new_api()
-    api.carApiVehicles = []
     api.addVehicle({"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "x"})
-    assert api.carApiVehicles[0].VIN == "5YJ3E1EA1KF000001" and isinstance(
-        api.registry, VehicleRegistry
-    )
+    assert [v.vin for v, _ in api.registry.attached("TeslaAPI")] == [
+        "5YJ3E1EA1KF000001"
+    ] and isinstance(api.registry, VehicleRegistry)
 
 
 def test_listing_without_usable_vin_is_skipped():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": None, "display_name": "x"})
     api.addVehicle({"id": 2, "vin": "", "display_name": "y"})
-    assert api.carApiVehicles == []
+    assert api.registry.attached("TeslaAPI") == []
 
 
 def test_is_awake_trusts_fresh_telemetry_and_asleep_without_api_call():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    car.get_car_api = Mock(side_effect=AssertionError("no API call"))
-    reg.get(VIN).observe("state", "asleep", "TeslaMateVehicle")
-    assert car.is_awake() is False and reg.get(VIN).syncSource == "TeslaMateVehicle"
-    reg.get(VIN).observe("state", "online", "TeslaMateVehicle")
-    assert car.is_awake() is True
+    v = reg.get(VIN)
+    api.get_car_api = Mock(side_effect=AssertionError("no API call"))
+    v.observe("state", "asleep", "TeslaMateVehicle")
+    assert api.is_awake(v) is False and v.syncSource == "TeslaMateVehicle"
+    v.observe("state", "online", "TeslaMateVehicle")
+    assert api.is_awake(v) is True
 
 
 def test_sync_getters_have_legacy_defaults_before_any_state():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
     assert reg.get(VIN).syncSource == "TeslaAPI"
 
 
 def test_update_vehicle_data_observes_only_present_keys():  # P15
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
     reg.get(VIN).observe("phases", 3, "TeslaBLE", at=5.0)
     name_before = reg.get(VIN).latest("name")
-    car.get_car_api = Mock(
+    api.get_car_api = Mock(
         return_value=(
             True,
             {
@@ -101,44 +83,45 @@ def test_update_vehicle_data_observes_only_present_keys():  # P15
             },
         )
     )
-    car.carapi.is_location_home = Mock(return_value=False)
-    car.carapi.is_far_from_home = Mock(return_value=False)
-    assert car.update_vehicle_data() is True
+    api.is_location_home = Mock(return_value=False)
+    api.is_far_from_home = Mock(return_value=False)
+    assert api.update_vehicle_data(reg.get(VIN)) is True
     phases = reg.get(VIN).latest("phases")
-    assert car.batteryLevel == 61
+    assert reg.get(VIN).value("batteryLevel") == 61
     assert (phases.value, phases.source, phases.at) == (3, "TeslaBLE", 5.0)
     assert reg.get(VIN).latest("chargeLimit") is None  # no default observed
     assert reg.get(VIN).latest("gpsAsOf") is None
     assert reg.get(VIN).latest("name") == name_before  # not re-observed
 
 
-def test_update_vehicle_data_observes_the_cars_own_current_request():   # slim Task 12b
+def test_update_vehicle_data_observes_the_cars_own_current_request():  # slim Task 12b
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    car.get_car_api = Mock(
+    api.get_car_api = Mock(
         return_value=(
             True,
             {
                 "drive_state": {"latitude": 1.0, "longitude": 2.0},
-                "charge_state": {"charge_current_request": 16, "charger_pilot_current": 32},
+                "charge_state": {
+                    "charge_current_request": 16,
+                    "charger_pilot_current": 32,
+                },
                 "vehicle_state": {},
             },
         )
     )
-    car.carapi.is_location_home = Mock(return_value=False)
-    car.carapi.is_far_from_home = Mock(return_value=False)
-    assert car.update_vehicle_data() is True
+    api.is_location_home = Mock(return_value=False)
+    api.is_far_from_home = Mock(return_value=False)
+    assert api.update_vehicle_data(reg.get(VIN)) is True
     obs = reg.get(VIN).latest("chargeCurrentRequest")
     assert (obs.value, obs.source) == (16, "TeslaAPI")
-    assert reg.get(VIN).value("availableCurrent") == 32   # the pilot stays the pilot
+    assert reg.get(VIN).value("availableCurrent") == 32  # the pilot stays the pilot
 
 
 def test_update_vehicle_data_records_the_cars_own_ac_maximum():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    car.get_car_api = Mock(
+    api.get_car_api = Mock(
         return_value=(
             True,
             {
@@ -151,9 +134,9 @@ def test_update_vehicle_data_records_the_cars_own_ac_maximum():
             },
         )
     )
-    car.carapi.is_location_home = Mock(return_value=False)
-    car.carapi.is_far_from_home = Mock(return_value=False)
-    assert car.update_vehicle_data() is True
+    api.is_location_home = Mock(return_value=False)
+    api.is_far_from_home = Mock(return_value=False)
+    assert api.update_vehicle_data(reg.get(VIN)) is True
     assert reg.get(VIN).value("chargeCurrentRequestMax") == 48
 
 
@@ -175,7 +158,7 @@ def test_debug_interface_resolves_by_vin():
     master.reconciler = inline(VehicleReconciler(master))
     # True: a one-shot attempt was submitted (inline here, so it has run)
     assert master.providerOrder.debugCommand("wakeVehicle", VIN, "{}") is True
-    api.wakeOutcome.assert_called_once_with(api.carApiVehicles[0], now=ANY)
+    api.wakeOutcome.assert_called_once_with(reg.get(VIN), now=ANY)
     assert (
         master.providerOrder.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}")
         is False
@@ -185,49 +168,11 @@ def test_debug_interface_resolves_by_vin():
 def test_stale_telemetry_falls_back_to_api_check():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    reg.get(VIN).observe("state", "online", "TeslaMateVehicle", at=0.0)
-    car.get_car_api = Mock(return_value=(True, {"state": "asleep"}))
-    assert car.is_awake() is False and car.get_car_api.called
+    v = reg.get(VIN)
+    v.observe("state", "online", "TeslaMateVehicle", at=0.0)
+    api.get_car_api = Mock(return_value=(True, {"state": "asleep"}))
+    assert api.is_awake(v) is False and api.get_car_api.called
     assert reg.get(VIN).syncSource == "TeslaAPI"
-
-
-def test_writes_after_forget_land_on_the_live_vehicle():
-    api, reg = api_with_registry()
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    assert reg.forget(VIN)
-    assert car.chargeLimit == -1  # a read does not bring it back
-    assert reg.get(VIN) is None
-    car.chargeLimit = 80  # the account still lists it: next sighting rejoins
-    v = reg.get(VIN)
-    assert v is not None and v.latest("chargeLimit").value == 80
-    assert v.attachment("TeslaAPI") is car and "FleetAPI" in v.claims
-
-
-def test_writes_after_forget_and_relist_by_another_provider():
-    api, reg = api_with_registry()
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.carApiVehicles[0]
-    reg.forget(VIN)
-    fresh = reg.getOrCreate(VIN, "TWC")
-    car.chargeLimit = 80
-    assert reg.get(VIN) is fresh and fresh.latest("chargeLimit").value == 80
-    assert fresh.attachment("TeslaAPI") is car and "FleetAPI" in fresh.claims
-
-
-def test_relisting_the_api_attaches_the_new_car():
-    api, reg = api_with_registry()
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    old = api.carApiVehicles[0]
-    reg.forget(VIN)
-    api.carApiVehicles = []
-    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    new = api.carApiVehicles[0]
-    new.batteryLevel = 70
-    v = reg.get(VIN)
-    assert v.attachment("TeslaAPI") is new and v.latest("batteryLevel").value == 70
-    assert old.batteryLevel == 70  # the old object reads the live vehicle too
 
 
 def test_telemetry_feed_drives_a_real_car():
@@ -246,7 +191,6 @@ def test_telemetry_feed_drives_a_real_car():
 
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "TestCar"})
-    car = api.carApiVehicles[0]
     master = api.master
     master.config["vehicle"]["Probe"] = {"enabled": True}
     feed = TeslaMateVehicle(master)
@@ -258,8 +202,11 @@ def test_telemetry_feed_drives_a_real_car():
     obs = reg.get(VIN).latest("state")
     assert (obs.value, obs.source) == ("online", "TeslaMateVehicle")
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
-    assert reg.get(VIN).syncSource == "TeslaMateVehicle" and reg.get(VIN).value("pluggedIn") is True
-    assert car.lat == 1.5
+    assert (
+        reg.get(VIN).syncSource == "TeslaMateVehicle"
+        and reg.get(VIN).value("pluggedIn") is True
+    )
+    assert reg.get(VIN).value("lat", 10000) == 1.5
 
 
 # Characterization: the read gates TeslaAPI keeps for a Fleet-only car (no
@@ -342,6 +289,98 @@ def test_two_concurrent_reads_pay_one_vehicle_data(requests_mock):
             assert fleet.fetch(v, "batteryLevel") is True
         return True
 
-    car.is_awake = awake
+    api.is_awake = awake
     assert fleet.fetch(v, "batteryLevel") is True
     assert data.call_count == 1
+
+
+# The interface: the attachment is the listing; the online check's three
+# states stay internal
+
+
+def test_listing_attaches_state_and_both_claims():
+    from TWCManager.Vehicle.TeslaAPI import CarApiState
+
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "TestCar"})
+    v = reg.get(VIN)
+    state = v.attachment("TeslaAPI")
+    assert type(state) is CarApiState
+    assert (state.atHome, state.statusDeferral, state.errorCount) == (False, 0, 0)
+    assert (state.lastErrorTime, state.lastAPIAccessTime) == (0, 0)
+    assert (state.firstWakeAttemptTime, state.firstChargeNeededTime) == (0, 0)
+    assert (state.lastChargeNeededTime, state.delayNextWakeAttempt) == (0, 0)
+    assert (state.online, state.onlineCheckedAt) == (None, 0)
+    owner, fleet = v.claims["OwnerAPI"], v.claims["FleetAPI"]
+    assert owner.commands is False and owner.status == fleet.status == "listed"
+    assert fleet.commands is False  # no Fleet token yet
+    api.storeToken(fleet_token())
+    assert fleet.commands is True  # follows the slot
+    assert v.latest("name").source == "TeslaAPI" and v.name == "TestCar"
+    assert reg.attached("TeslaAPI") == [(v, state)]
+
+
+def test_online_state_is_true_false_or_none_and_is_awake_stays_a_bool(
+    requests_mock,
+):
+    api, reg = api_with_registry()
+    api.storeToken(fleet_token())
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    v = reg.get(VIN)
+    check = requests_mock.get(FLEET_CAR, status_code=500, json={})
+    assert api.onlineState(v, now=1000.0) is None  # no answer
+    assert api.is_awake(v, now=1119.0) is False and check.call_count == 1  # cached
+    assert api.onlineState(v, now=1121.0) is None and check.call_count == 2
+    online = requests_mock.get(FLEET_CAR, json={"response": {"state": "online"}})
+    assert api.onlineState(v, now=1300.0) is True and online.call_count == 1
+    v.observe("state", "asleep", "TeslaMateVehicle")
+    assert (api.onlineState(v), api.is_awake(v)) == (False, False)
+    v.observe("state", "online", "TeslaMateVehicle")
+    assert (api.onlineState(v), api.is_awake(v)) == (True, True)
+    assert online.call_count == 1  # telemetry answered, no GET
+
+
+def test_update_vehicle_data_has_a_single_caller():
+    import pathlib
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "grep", "-n", "update_vehicle_data(", "--", "lib"],
+        capture_output=True,
+        text=True,
+        cwd=pathlib.Path(__file__).resolve().parents[2],
+    ).stdout.splitlines()
+    rest = [
+        line
+        for line in out
+        if "def update_vehicle_data" not in line
+        and not line.startswith("lib/TWCManager/Vehicle/Providers/TeslaAPIProviders.py")
+    ]
+    assert out and rest == []
+
+
+def test_an_incomplete_vehicle_data_answer_logs_what_is_missing(caplog):
+    import logging
+    from TWCManager.Vehicle.TeslaAPI import logger
+
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    v = reg.get(VIN)
+    answers = [
+        ({"charge_state": {}}, "drive_state missing from API response"),
+        ({"drive_state": {}}, "charge_state missing from API response"),
+        (
+            {"drive_state": {"latitude": 1.0}, "charge_state": {}},
+            "latitude/longitude missing from drive_state",
+        ),
+    ]
+    for response, missing in answers:
+        api.get_car_api = Mock(return_value=(True, response))
+        caplog.clear()
+        assert api.update_vehicle_data(v) is False
+        # Another test's background thread may still be logging; only this
+        # module's records are under test.
+        assert [
+            (r.levelno, r.getMessage()) for r in caplog.records if r.name == logger.name
+        ] == [(logging.ERROR, "update_vehicle_data: %s for %s" % (missing, VIN))]
+    assert v.value("lat") == 1.0 and v.latest("lon") is None  # lat first

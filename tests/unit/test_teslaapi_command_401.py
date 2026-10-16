@@ -6,13 +6,17 @@ thread replaced while the request was out: test_provider_outcomes_cloud.)
 """
 
 import re
-import time
 from unittest.mock import Mock
 
 import pytest
 
 from TWCManager.Vehicle.Reconcile.Outcome import DONE, REFUSED, SATISFIED, Outcome
-from tests.unit.teslatokens import FLEET_REFRESH_URL, fleet_token, new_api
+from tests.unit.teslatokens import (
+    FLEET_REFRESH_URL,
+    add_home_vehicle,
+    fleet_token,
+    new_api,
+)
 
 OPAQUE_REFRESH = "NA_0123456789abcdef0123456789abcdef"
 OK = {"json": {"response": {"result": True, "reason": ""}}}
@@ -27,8 +31,7 @@ def api(monkeypatch):
 
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     a = new_api()
-    a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car1"})
-    a.carApiVehicles[0].lastAPIAccessTime = time.time()
+    add_home_vehicle(a, vin=VIN)
     return a
 
 
@@ -47,7 +50,7 @@ def bearer(request):
 
 
 def command(api, name):
-    v = api.carApiVehicles[0]
+    v = api.registry.get(VIN)
     if name == "wake_up":
         outcome, response = api._paidPost(v, api.fleetSlot, "wake_up", purpose="wake")
         return Outcome(DONE) if outcome is None else outcome

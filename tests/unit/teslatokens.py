@@ -107,35 +107,44 @@ class FakeMaster:
 
 
 def new_api(master=None, **config_overrides):
-    """A TeslaAPI registered on a FakeMaster, with no inherited class state."""
+    """A TeslaAPI registered on master (a FakeMaster by default; a real
+    TWCMaster gets a module record)."""
+    from TWCManager.TWCMaster import TWCMaster
     from TWCManager.Vehicle.TeslaAPI import TeslaAPI
 
     master = master or FakeMaster(**config_overrides)
     api = TeslaAPI(master)
-    api.carApiVehicles = []
-    master.modules["TeslaAPI"] = api
+    if isinstance(master, TWCMaster):
+        # A module record, and the real lookup that finds it (make() stubs
+        # the lookup to find nothing)
+        master.modules["TeslaAPI"] = {"ref": api, "type": "Vehicle"}
+        master.__dict__.pop("getModuleByName", None)
+    else:
+        master.modules["TeslaAPI"] = api
     return api
 
 
 @pytest.fixture
 def no_threads():
-    """CarApiVehicle no longer starts a sync-monitoring thread; kept so the
-    tests that request it need not change."""
+    """TeslaAPI starts no sync-monitoring thread; kept so the tests that
+    request it need not change."""
 
 
 def add_home_vehicle(
     api, command_signing=None, vin="5YJ3E1EA1KF000001", name="Car", id=1
 ):
     """Add a vehicle (5YJ3E1EA1KF000001 by default), at home and recently
-    contacted, so ready() is True without an HTTP call. command_signing is the
-    /products field; None leaves it out. Use with the no_threads fixture."""
+    contacted, so _ready is True without an HTTP call; returns its registry
+    vehicle. command_signing is the /products field; None leaves it out. Use
+    with the no_threads fixture."""
     entry = {"id": id, "vin": vin, "display_name": name}
     if command_signing is not None:
         entry["command_signing"] = command_signing
     api.addVehicle(entry)
-    vehicle = api.carApiVehicles[-1]
-    vehicle.atHome = True
-    vehicle.lastAPIAccessTime = time.time()
+    vehicle = api.registry.get(vin)
+    car = vehicle.attachment("TeslaAPI")
+    car.atHome = True
+    car.lastAPIAccessTime = time.time()
     return vehicle
 
 
