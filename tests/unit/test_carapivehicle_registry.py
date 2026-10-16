@@ -130,6 +130,28 @@ def test_update_vehicle_data_observes_only_present_keys():  # P15
     assert reg.get(VIN).latest("name") == name_before  # not re-observed
 
 
+def test_update_vehicle_data_observes_the_cars_own_current_request():   # slim Task 12b
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    car = api.getCarApiVehicles()[0]
+    car.get_car_api = Mock(
+        return_value=(
+            True,
+            {
+                "drive_state": {"latitude": 1.0, "longitude": 2.0},
+                "charge_state": {"charge_current_request": 16, "charger_pilot_current": 32},
+                "vehicle_state": {},
+            },
+        )
+    )
+    car.carapi.is_location_home = Mock(return_value=False)
+    car.carapi.is_far_from_home = Mock(return_value=False)
+    assert car.update_vehicle_data() is True
+    obs = reg.get(VIN).latest("chargeCurrentRequest")
+    assert (obs.value, obs.source) == (16, "TeslaAPI")
+    assert reg.get(VIN).value("availableCurrent") == 32   # the pilot stays the pilot
+
+
 def test_debug_interface_resolves_by_vin():
     from TWCManager.Vehicle.Providers.Order import ProviderOrder
     from TWCManager.Vehicle.Reconcile.Desired import DesiredStore

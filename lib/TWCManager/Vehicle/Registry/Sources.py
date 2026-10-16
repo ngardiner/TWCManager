@@ -12,6 +12,7 @@ CHARGE_FIELDS = frozenset(
         "chargeLimit",
         "chargingState",
         "availableCurrent",
+        "chargeCurrentRequest",
         "actualCurrent",
         "voltage",
         "phases",

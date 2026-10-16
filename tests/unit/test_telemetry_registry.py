@@ -162,6 +162,14 @@ def test_fleet_telemetry_topic_id_is_the_vin():
     assert t.vinFor(VIN) == VIN and FleetTelemetryMQTT.events["syncState"][0] == "state"
 
 
+def test_fleet_telemetry_charge_current_request_is_the_cars_request():   # slim Task 12b
+    t, reg = make(FleetTelemetryMQTT)
+    t.applyDataToVehicle(VIN, "ChargeCurrentRequest", "16")
+    obs = reg.get(VIN).latest("chargeCurrentRequest")
+    assert (obs.value, obs.source) == (16, "FleetTelemetryMQTT")
+    assert reg.get(VIN).latest("availableCurrent") is None   # never the pilot
+
+
 def test_fleet_telemetry_topic_id_that_is_not_a_vin_maps_to_none():  # I3
     t, reg = make(FleetTelemetryMQTT)
     assert t.vinFor("status") is None and t.vinFor("0" * 17) is None
