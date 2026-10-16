@@ -18,7 +18,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Gen3 Wall Connectors each get their own target; several units on one bus share the headroom. TWCManager names the car on a Gen3 with a free read of the energy site's live status. This needs the Gen3 registered in the Tesla app and a token that can read energy data (a Fleet API token with the `energy_device_data` scope); a unit's optional `din` key fixes a wrong DIN guess
     * (@MikeBishop) - `controller.Gen2TWCs.ranges` sets a per-TWC `minAmps` (in place of minAmpsPerTWC) and `maxAmps`
 * Architecture
-    * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used read-only
+    * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used for reads, and for commands only to vehicles Tesla reports with `command_signing: off`
     * (@MikeBishop) - Saved Tesla tokens migrate to separate Owner and Fleet settings on first start; downgrading afterwards loses the Owner API token (#692)
     * (@MikeBishop) - Held charge limits (the limit a car had before TWCManager changed it) migrate from settings `chargeLimits` to `heldLimits`, keyed by VIN, on first start; downgrading afterwards loses them, and upgrading again after a downgrade uses the held limits saved before the downgrade (for a car the held limits already hold, the older release's `chargeLimits` entry is dropped without a warning; other cars' entries migrate as usual)
     * (@MikeBishop) - TWC abstraction layer with EVSEController/EVSEInstance interface (ported from #483)
@@ -92,6 +92,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: Don't resend an unchanged Fleet API charge rate, and time out the request after 10s (#694)
     * (@MikeBishop) - Fix: Refresh Owner API tokens with client_id ownerapi at auth.tesla.com, as 1.3.3 does (#687)
     * (@MikeBishop) - Fix: A rejected pasted refresh token keeps the previous tokens, and a 401 on refresh clears the token type (#687)
+    * (@MikeBishop) - Fix: Allow Owner API commands per vehicle when Tesla reports `command_signing: off`; other vehicles stay read-only. They take the Fleet API's place in the command order and are used only when no Fleet API token can command (#659)
 
 ## v1.3.4 - 2026-04-24
 * Features
