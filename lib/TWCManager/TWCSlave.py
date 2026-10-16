@@ -5,6 +5,7 @@ import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
+from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED
 from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles
 from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 
@@ -75,6 +76,8 @@ class TWCSlave:
     lastVIN = ""
     # The registry key of the car on this TWC (Gen2TWC); None decides nothing
     vehicleKey = None
+    # The keys the heartbeat last wrote a car rate for
+    _ampsKeys = ()
 
     def __init__(self, TWCID, maxAmps, config, master):
         self.config = config
@@ -92,25 +95,49 @@ class TWCSlave:
         )
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
+    def _anonCars(self):
+        # As main's vehicle-less rate, paid once: the unnamed cars a
+        # vehicle source shows plugged in or charging, else vehicles[0]
+        named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
+        cars = [
+            v for v in broadcastVehicles(self.master, SET_AMPS) if v.key not in named
+        ]
+        plugged = []
+        for v in cars:
+            obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
+            if obs is not None and obs.value not in (None, "Disconnected"):
+                plugged.append(v)
+        if plugged:
+            return plugged
+        # The first car the Tesla API listed (registry order is list order)
+        listed = [
+            v
+            for v in self.master.vehicleRegistry.vehicles()
+            if v.attachment("TeslaAPI")
+        ]
+        return listed[:1] if listed and listed[0] in cars else []
+
     def _setCarAmps(self, amps, by, lift=False):
         # Desired state: the reconciler talks to the car, off this (serial)
         # thread. Never for a point whose car member owns the car's amps
         key = self.vehicleKey
-        if key is None or getattr(self, "pointOwnsAmps", False):
-            return False
-        keys = [key]
-        if key.startswith(ANON_PREFIX):
-            # As main's vehicle-less rate: the cars its broadcast reached,
-            # except one a TWC names
-            named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
-            keys = [
-                v.key
-                for v in broadcastVehicles(self.master, SET_AMPS)
-                if v.key not in named
-            ]
+        keys = []
+        if key is not None and not getattr(self, "pointOwnsAmps", False):
+            anon = key.startswith(ANON_PREFIX)
+            keys = [v.key for v in self._anonCars()] if anon else [key]
+        # A car that left the set keeps no rate of ours
+        self._clearCarAmps([k for k in self._ampsKeys if k not in keys])
+        self._ampsKeys = keys
         for k in keys:
             self.master.desired.set(k, AMPS, int(amps), by, lift=lift)
         return bool(keys)
+
+    def _clearCarAmps(self, keys=None):
+        # Withdraws the heartbeat's own rate (never a lift or a distributor's)
+        for k in self._ampsKeys if keys is None else keys:
+            d = self.master.desired.get(k, AMPS)
+            if d is not None and d.by == "heartbeat":
+                self.master.desired.clearIf(k, AMPS, d.value)
 
     def _queueChargeRate(self, amps):
         self._setCarAmps(amps, "heartbeat")
@@ -780,6 +807,9 @@ class TWCSlave:
             self.timeLastAmpsDesiredFlipped = 0
 
         if desiredAmpsOffered < minAmpsToOffer:
+            if chargeRateControl in (2, 3):
+                # Nothing is handed to the car: it keeps no rate of ours
+                self._clearCarAmps()
             logger.debug(
                 "desiredAmpsOffered: "
                 + str(desiredAmpsOffered)

@@ -126,17 +126,46 @@ def test_fluctuating_offer_sends_at_most_one_rate_per_15s():               # pre
     for i in range(3600): e.setTargetPower((10 + i % 2) * 240); r.pass_(); c.t += 1
     assert 200 <= len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)       # one hour: at most main's 240 set_charging_amps, no wake
 
-def test_an_anonymous_twc_rates_the_cars_main_s_broadcast_reached(): # as main's vehicle-less setChargeRate; paid counted
+VIN2, VIN3, VIN4 = "5YJ3E1EA1KF000002", "5YJ3E1EA1KF000003", "5YJ3E1EA1KF000004"
+
+def anonTwc(*outcomes):
+    # A VIN-less Gen2 in mode 2 and four at-home Fleet cars, listed VIN
+    # first; VIN3 is on a TWC that names it
     from types import SimpleNamespace
-    VIN2, VIN3 = "5YJ3E1EA1KF000002", "5YJ3E1EA1KF000003"
-    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); m.settings["chargeRateControl"] = "2"
-    for vin, home in ((VIN, True), (VIN2, False), (VIN3, True)):
-        m.vehicleRegistry.getOrCreate(vin, "t").attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=home, lat=1.0))
-    s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN = VIN3            # VIN3 is on a TWC that names it
+    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),)))); m.settings["chargeRateControl"] = "2"
+    for vin in (VIN, VIN2, VIN3, VIN4):
+        m.vehicleRegistry.getOrCreate(vin, "t").attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=True, lat=1.0))
+    s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN = VIN3
     anon = m.vehicleRegistry.beginPlugSession("8244"); assert s.vehicleKey == anon.key
+    return m, r, v, c, s
+
+def test_an_anonymous_twc_rates_only_plugged_in_cars_else_vehicles_0():    # I2, paid counted
+    m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")
+    m.vehicleRegistry.get(VIN2).observe("chargingState", "Charging", "TeslaAPI"); m.vehicleRegistry.get(VIN3).observe("chargingState", "Charging", "TeslaAPI")
+    m.vehicleRegistry.get(VIN4).observe("chargingState", "Disconnected", "TeslaAPI")
     for i in range(3600): s._queueChargeRate(10 + i % 2); r.pass_(); c.t += 1
-    assert {x[1] for x in f.calls} == {VIN} and len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)   # never the away car, nor a named one; no wake
-    s._requestVehicleRateRaise(); assert m.desired.get(VIN, AMPS).lift and s.vehicleRateRaised
+    assert {x[1] for x in f.calls} == {VIN2} and len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)   # never an unplugged car, nor a named one; no wake
+    m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")                     # none known plugged in: main's vehicles[0]
+    s._queueChargeRate(10); r.pass_(); assert f.calls == [("setAmps", VIN, 10)]
+
+def test_an_anonymous_mode_1_lift_goes_to_the_plugged_in_car_only():    # I2, paid counted
+    m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI"); m.settings["chargeRateControl"] = "1"
+    m.vehicleRegistry.get(VIN2).observe("chargingState", "Stopped", "TeslaAPI")              # plugged in, paused
+    s._requestVehicleRateRaise()
+    for _ in range(5): r.pass_(); c.t += 61
+    assert f.calls == [("setAmps", VIN2, 32)] and s.vehicleRateRaised
+
+def test_a_car_that_leaves_the_anonymous_set_loses_the_heartbeat_rate():  # I2
+    m, r, v, c, s = anonTwc(O.Outcome(O.UNREACHABLE)); v.observe("chargingState", "Charging", "TeslaAPI")
+    s._queueChargeRate(10); assert m.desired.get(VIN, AMPS).value == 10
+    c.t += 1; v.observe("chargingState", "Disconnected", "TeslaAPI"); m.vehicleRegistry.get(VIN2).observe("chargingState", "Charging", "TeslaAPI")
+    s._queueChargeRate(10); assert m.desired.get(VIN, AMPS) is None and m.desired.get(VIN2, AMPS).value == 10
+
+def test_heartbeat_withdraws_its_rate_when_the_offer_drops_below_the_minimum():   # M2
+    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE))); s = m.getSlaveTWCs()[0]; s.currentVIN = VIN; m.settings["chargeRateControl"] = "2"
+    s._queueChargeRate(10); assert m.desired.get(VIN, AMPS).value == 10
+    m.setMaxAmpsToDivideAmongSlaves(0); heartbeat(m, s, amps_actual=0.0); assert m.desired.get(VIN, AMPS) is None
+    m.desired.set(VIN, AMPS, 32, "lift", lift=True); heartbeat(m, s, amps_actual=0.0); assert m.desired.get(VIN, AMPS).lift   # a lift survives
 
 # Fix round 1 (12b review I1, M4)
 
