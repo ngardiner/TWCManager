@@ -14,7 +14,7 @@ def setup(ble_result, clock=time.time):
     ble.get_charge_state.return_value = ble_result
     ble.get_location_state.return_value = None
     master.modules.update(
-        {"VehiclePriority": Mock(commandPolicy="prefer_ble"), "TeslaBLE": ble}
+        {"TeslaBLE": ble}
     )
     api = new_api(master=master)
     api.carApiVehicles = []

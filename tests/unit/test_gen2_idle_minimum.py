@@ -33,7 +33,6 @@ def real(minAmps, ranges=None, feed=40):
         config["controller.Gen2TWCs"] = {"ranges": ranges}
     m = TWCMaster(b"\x77\x77", config)
     m.settings["chargeRateControl"] = 1
-    m.queue_vehicle_command = Mock()
     m.queue_background_task = Mock()
     carapi = Mock()
     carapi.enabled.return_value = True

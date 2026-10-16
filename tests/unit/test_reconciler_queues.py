@@ -458,3 +458,17 @@ def test_a_drain_of_an_idle_queue_returns_at_once():
     q = VehicleCommandQueue(name="t", run=lambda e: O.Outcome(O.DONE), key=lambda e: e, isHigh=lambda e: False, report=lambda e, out: None, lost=lambda e, d: None)
     q.start(); t0 = time.monotonic(); q.close()
     assert q.waitDrained(time.monotonic() + 5) is True and time.monotonic() - t0 < 0.5
+
+def test_a_stop_submitted_during_a_live_drain_is_still_sent():             # deleted-test audit row 56
+    gate = threading.Event(); p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); gated(p, gate)
+    m, r, reports, done = threaded(p); q = r.cloud; result = []
+    try:
+        submit(r, one_shot(C.WAKE, "FleetAPI")); assert wait_for(lambda: q._busy)
+        drainer = threading.Thread(target=lambda: result.append(r.drain(5))); drainer.start()
+        assert wait_for(lambda: q._draining)
+        stop = attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING); limit = attempt(provider="FleetAPI")._replace(key=VIN2)
+        assert submit(r, stop) is True and submit(r, limit) is False             # mid-drain: the stop is taken, the limit dropped
+        gate.set(); drainer.join(5)
+        assert result == [True] and [c[0] for c in p.calls] == ["stopCharging"]
+    finally:
+        gate.set(); joined(q); joined(r.ble)

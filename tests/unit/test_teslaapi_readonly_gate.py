@@ -148,7 +148,7 @@ class TestReadsStillRun:
 class TestCheckChargeRefreshesEachModuleOnce:
     # checkCharge walks the provider order: each vehicle module with a
     # provider not suppressed for reads refreshes its cars once
-    def make(self, settings=None):
+    def make(self, settings=None, ha=None):
         from tests.unit.test_carapivehicle_registry import api_with_registry
         from TWCManager.TWCMaster import TWCMaster
         from TWCManager.Vehicle.Providers import Capability as C
@@ -175,6 +175,12 @@ class TestCheckChargeRefreshesEachModuleOnce:
         master.providerOrder = ProviderOrder(master)
         for p in [BLE()] + api.providers():
             master.providerOrder.register(p)
+        if ha is not None:
+            from TWCManager.Vehicle.Providers.HomeAssistantProvider import (
+                HomeAssistantProvider,
+            )
+
+            master.providerOrder.register(HomeAssistantProvider(ha))
         TWCMaster.updateChargeAtHome(master)
         return ble, api
 
@@ -187,3 +193,11 @@ class TestCheckChargeRefreshesEachModuleOnce:
         ble, api = self.make({"commandPolicy": "api_only"})
         assert api.updateChargeAtHome.call_count == 1
         assert not ble.updateChargeAtHome.called
+
+    def test_home_assistant_refreshes_once_alongside_teslaapi(self, no_threads):
+        # 12b deleted-test GAP: HA is refreshed even when TeslaAPI holds cars
+        ha = Mock()
+        ha.enabled.return_value = True
+        ble, api = self.make(ha=ha)
+        assert ha.updateChargeAtHome.call_count == 1
+        assert api.updateChargeAtHome.call_count == 1

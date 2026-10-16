@@ -562,3 +562,47 @@ def test_a_complete_reading_does_not_rearm_a_lowered_limit():              # rev
     v.observe("chargeLimit", 90, "TeslaAPI"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_()
     for _ in range(20): c.t += 600; v.observe("chargingState", "Complete", "TeslaMateVehicle"); r.pass_()
     assert len(cmds(f)) == 2 and not m.desired.record(VIN, CHARGE_LIMIT).rearmed
+
+
+# 12b fix round 1 (review M8; deleted-test audit rows 63, 68, 69, 71): Fleet,
+# then Home Assistant, never both for one desire
+
+import pytest
+
+def ha(*outs):
+    # As the real provider: billed, and no wake of its own
+    from tests.unit.reconcile_helpers import COMMAND_CAPS
+    caps = {k: d for k, d in COMMAND_CAPS.items() if k != C.WAKE}
+    return ScriptedProvider("HomeAssistant", 6, False, list(outs), caps=caps, tier=C.HA_BILLED)
+
+def want(m, v, aspect, value):
+    if aspect == CHARGE_LIMIT: v.observe("chargeLimit", 90, "TeslaAPI")
+    if aspect == CHARGING: v.observe("chargingState", "Stopped", "TeslaAPI")
+    m.desired.set(VIN, aspect, value, "test")
+
+ASPECTS = [(CHARGE_LIMIT, 50, 60), (CHARGING, True, True), (AMPS, 10, 11)]
+
+@pytest.mark.parametrize("aspect, value, other", ASPECTS)
+@pytest.mark.parametrize("fails", [O.Outcome(O.ERROR, "500"), O.Outcome(O.UNREACHABLE, "408"), O.Outcome(O.UNREACHABLE, "wake held"), O.Outcome(O.DONE)])
+def test_fleet_then_ha_never_in_one_pass(aspect, value, other, fails):        # paid counted
+    m, r, v, c = setup(fleet(fails), ha(O.Outcome(O.DONE))); f, h = prov(m, "FleetAPI"), prov(m, "HomeAssistant")
+    want(m, v, aspect, value)
+    for _ in range(60): r.pass_(); c.t += 61
+    assert f.calls and h.calls == []                                          # a Fleet failure, hold or success never also bills HA
+
+@pytest.mark.parametrize("aspect, value, other", ASPECTS)
+def test_ha_is_reached_only_once_fleet_has_refused_or_is_unavailable(aspect, value, other):   # paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.REFUSED, "403")), ha(O.Outcome(O.DONE))); f, h = prov(m, "FleetAPI"), prov(m, "HomeAssistant")
+    want(m, v, aspect, value)
+    for _ in range(60): r.pass_(); c.t += 61
+    assert len(f.calls) == 1 and h.calls == []                                # the desire's one paid send went to Fleet
+    m.desired.clear(VIN, aspect); m.desired.set(VIN, aspect, other, "test"); r.pass_()   # the next desire
+    assert len(f.calls) == 1 and len(h.calls) == 1                            # Fleet excluded: HA, once
+    m2, r2, v2, c2 = setup(fleet(O.Outcome(O.DONE)), ha(O.Outcome(O.DONE))); prov(m2, "FleetAPI").readyFor = lambda v, cap: False
+    want(m2, v2, aspect, value); r2.pass_(); assert len(cmds(prov(m2, "HomeAssistant"))) == 1   # Fleet unavailable: HA at once
+
+
+def test_a_restore_stamps_the_outside_value():                             # deleted-test audit row 16
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaBLE")
+    m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True); r.pass_()
+    w = v.lastWrite("chargeLimit"); assert (w.value, w.source) == (90, "TeslaBLE") and prov(m, "TeslaBLE").calls[-1] == ("setChargeLimit", VIN, 90)
