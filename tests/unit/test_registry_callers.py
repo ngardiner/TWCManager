@@ -14,12 +14,13 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 
 def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
     out = subprocess.run(
-        ["git", "grep", "-l", "getCarApiVehicles", "--", "lib/TWCManager"],
+        # Only a module's own list (self.carApiVehicles); getCarApiVehicles is gone
+        ["git", "grep", "-lE", r"[^f]\.carApiVehicles|getCarApiVehicles", "--", "lib/TWCManager"],
         capture_output=True,
         text=True,
         cwd=REPO,
     ).stdout.split()
-    assert sorted(out) == ["lib/TWCManager/Vehicle/TeslaAPI.py"]
+    assert out == []
 
 
 def test_get_last_vehicle_uses_registry_attachment():

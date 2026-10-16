@@ -28,7 +28,7 @@ def api(monkeypatch):
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     a = new_api()
     a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car1"})
-    a.getCarApiVehicles()[0].lastAPIAccessTime = time.time()
+    a.carApiVehicles[0].lastAPIAccessTime = time.time()
     return a
 
 
@@ -47,7 +47,7 @@ def bearer(request):
 
 
 def command(api, name):
-    v = api.getCarApiVehicles()[0]
+    v = api.carApiVehicles[0]
     if name == "wake_up":
         outcome, response = api._paidPost(v, api.fleetSlot, "wake_up", purpose="wake")
         return Outcome(DONE) if outcome is None else outcome

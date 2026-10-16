@@ -15,7 +15,7 @@ from .Capability import (
     Declaration,
 )
 from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
-from ..Registry.VIN import isWellFormedVIN
+from ..Registry.VehicleRegistry import canonicalKey
 from .Provider import Provider
 
 
@@ -42,9 +42,8 @@ class Gen2TWCProvider(Provider):
         return None if vehicle is None else self._slaveForKey(vehicle.key)
 
     def _slaveForKey(self, key):
-        if isinstance(key, str) and isWellFormedVIN(key):
-            # vehicleKey is the upper-case VIN; an anon: key is kept as is
-            key = key.upper()
+        # vehicleKey is the upper-case VIN; an anon: key is kept as is
+        key = canonicalKey(key)
         for slave in self.master.getSlaveTWCs():
             if getattr(slave, "vehicleKey", None) == key:
                 return slave

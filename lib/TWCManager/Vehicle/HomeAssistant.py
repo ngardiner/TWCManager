@@ -122,30 +122,19 @@ class HaVehicle:
         # entity leaves the registry's earlier value to age out.
         seen: Dict[str, object] = {}
 
-        # Battery level
-        st = get_state("battery_level_sensor")
-        if st is not None:
-            try:
-                self.battery_level = float(st.get("state"))
-                seen["batteryLevel"] = self.battery_level
-            except (TypeError, ValueError):
-                pass
-
-        # Charge limit
-        st = get_state("charge_limit_number")
-        if st is not None:
-            try:
-                seen["chargeLimit"] = float(st.get("state"))
-            except (TypeError, ValueError):
-                pass
-
-        # Charge current number (available amps setting)
-        st = get_state("charge_current_number")
-        if st is not None:
-            try:
-                seen["availableCurrent"] = float(st.get("state"))
-            except (TypeError, ValueError):
-                pass
+        # Battery level, charge limit, charge current number (available amps)
+        for key, field in (
+            ("battery_level_sensor", "batteryLevel"),
+            ("charge_limit_number", "chargeLimit"),
+            ("charge_current_number", "availableCurrent"),
+        ):
+            st = get_state(key)
+            if st is not None:
+                try:
+                    seen[field] = float(st.get("state"))
+                except (TypeError, ValueError):
+                    pass
+        self.battery_level = seen.get("batteryLevel", self.battery_level)
 
         # Charging boolean
         st = get_state("charging_sensor")
@@ -555,10 +544,6 @@ class HomeAssistant:
     # Home/Location helpers
     # ------------------------------------------------------------------
 
-    def is_location_within_radius(self, lat, lon, r):
-        home_lat, home_lon = self.master.getHomeLatLon()
-        return abs(home_lat - lat) <= r and abs(home_lon - lon) <= r
-
     def is_location_home(self, lat, lon):
         home_lat, home_lon = self.master.getHomeLatLon()
 
@@ -571,7 +556,7 @@ class HomeAssistant:
 
         feet = float(self.config.get("config", {}).get("atHomeRadius", 10560))
         deg = feet / 364488.888
-        return self.is_location_within_radius(lat, lon, deg)
+        return abs(home_lat - lat) <= deg and abs(home_lon - lon) <= deg
 
     # ------------------------------------------------------------------
     # Aggregate helpers
@@ -596,6 +581,3 @@ class HomeAssistant:
             if v.at_home and v.battery_level is not None
         ]
         return min(levels) if levels else 10000.0
-
-    def updateSettings(self):
-        return True

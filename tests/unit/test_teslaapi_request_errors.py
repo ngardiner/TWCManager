@@ -177,13 +177,13 @@ def backoff_of(api, car):
 
 def run_path(api, path):
     if path == "read":
-        car = api.getCarApiVehicles()[0]
+        car = api.carApiVehicles[0]
         return car.get_car_api(HOME_VIN + "/vehicle_data", checkReady=False)[0]
     if path == "list":
         api.carApiVehicles = []
         return api.loadVehicleList()
     if path == "command":
-        return tuple(api.command(api.getCarApiVehicles()[0], "charge_stop"))
+        return tuple(api.command(api.carApiVehicles[0], "charge_stop"))
     return api.wallConnectorVins(api.fleetSlot)
 
 

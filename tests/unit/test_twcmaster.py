@@ -208,24 +208,6 @@ class TestTWCMasterSettings:
         master.getModulesByType = Mock(return_value=[])
         return master
     
-    def test_get_setting(self, master):
-        """Test getting a setting."""
-        value = master.getSetting("chargeNowAmps")
-        
-        assert value == 0
-    
-    def test_get_setting_default(self, master):
-        """Test getting a non-existent setting returns default."""
-        value = master.getSetting("nonexistent", 42)
-        
-        assert value == 42
-    
-    def test_set_setting(self, master):
-        """Test setting a value."""
-        master.setSetting("chargeNowAmps", 32)
-        
-        assert master.settings["chargeNowAmps"] == 32
-    
     def test_charge_now_amps(self, master):
         """Test chargeNowAmps setting."""
         master.setChargeNowAmps(16)

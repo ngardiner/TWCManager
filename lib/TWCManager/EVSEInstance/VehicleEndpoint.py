@@ -152,9 +152,3 @@ class VehicleEndpoint(EVSEInstance):
         amps = max(1, int(self.convertWattsToAmps(watts, self.currentVoltage)))
         # The reconciler sends it once; a newer reading that disagrees resends
         desired.set(key, AMPS, amps, "distributor")
-
-    def startCharging(self) -> None:
-        self.master.startCarsCharging(self.vehicle.vin)
-
-    def stopCharging(self) -> None:
-        self.master.stopCarsCharging(self.vehicle.vin)

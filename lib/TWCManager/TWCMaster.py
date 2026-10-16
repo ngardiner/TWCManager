@@ -17,7 +17,7 @@ import bisect
 import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Registry import VehicleRegistry
-from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
+from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
 from TWCManager.Vehicle.Providers import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 from TWCManager.Vehicle.Providers.Capability import (
@@ -1214,7 +1214,9 @@ class TWCMaster:
         # and to push settings logic out to the individual modules
         mods = self.getModulesByType("Vehicle")
         for mod in mods:
-            mod["ref"].updateSettings()
+            # Optional: only TeslaBLE has settings to re-read
+            if hasattr(mod["ref"], "updateSettings"):
+                mod["ref"].updateSettings()
 
         # If particular details are missing from the Settings dict, create them
         with self.settingsLock:
@@ -1343,9 +1345,7 @@ class TWCMaster:
                     # shows an at-home car plugged in
                     if slaveTWC.vehicleKey is None:
                         self._plugSession(slaveTWC, True)
-                elif slaveTWC.reportedState == 0 and str(
-                    slaveTWC.vehicleKey
-                ).startswith(ANON_PREFIX):
+                elif slaveTWC.reportedState == 0 and isAnonKey(slaveTWC.vehicleKey):
                     # 00 and no car known plugged in
                     self._plugSession(slaveTWC, False)
             carsCharging += slaveTWC.isCharging
@@ -1712,28 +1712,6 @@ class TWCMaster:
                 except:
                     pass
 
-    def getSetting(self, key, default=None):
-        """Get a setting value by key.
-
-        Args:
-            key: The setting key to retrieve
-            default: Default value if key doesn't exist
-
-        Returns:
-            The setting value or default if not found
-        """
-        return self.settings.get(key, default)
-
-    def setSetting(self, key, value):
-        """Set a setting value by key.
-
-        Args:
-            key: The setting key to set
-            value: The value to set
-        """
-        with self.settingsLock:
-            self.settings[key] = value
-
     def send_master_linkready1(self):
         logger.log(logging.INFO8, "Send master linkready1")
 
@@ -2062,11 +2040,6 @@ class TWCMaster:
         with self.settingsLock:
             self.settings["respondToSlavesExpiry"] = time.time() + 60
             self.settings["respondToSlaves"] = 0
-
-    def time_now(self):
-        return datetime.now().strftime(
-            "%H:%M:%S" + (".%f" if self.config["config"]["displayMilliseconds"] else "")
-        )
 
     def tokenSyncEnabled(self):
         # TODO: Should not be hardcoded

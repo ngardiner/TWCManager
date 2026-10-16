@@ -64,7 +64,7 @@ def test_claims_are_live_and_follow_the_slots():
 def test_fleet_commands_resolve_the_car_by_vin():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     owner, fleet = api.providers()
     api.command = Mock(return_value=O.Outcome(O.DONE))
     api.wakeOutcome = Mock(return_value=O.Outcome(O.DONE))
@@ -82,7 +82,7 @@ def test_fleet_commands_resolve_the_car_by_vin():
 def test_each_provider_reads_through_its_own_slot(which):
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(owner_token())
     v = reg.get(VIN)
     car.statusDeferral = 0
@@ -100,7 +100,7 @@ def test_each_provider_reads_through_its_own_slot(which):
 def test_a_paused_slot_sends_nothing(requests_mock):
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(owner_token())
     api.ownerSlot.pause()
     anything = requests_mock.register_uri(
@@ -147,7 +147,7 @@ def test_owner_reads_cost_nothing_with_a_fleet_token_held(requests_mock, case):
     state, payload = OWNER_READS[case]
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(fleet_token())
     api.storeToken(owner_token())
     car.statusDeferral = 0
@@ -174,7 +174,7 @@ def test_fleet_reads_when_owner_holds_no_token(requests_mock):
     # Today's slotFor("read") rule: Fleet's vehicle_data is the only read.
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(fleet_token())
     car.statusDeferral = 0
     car.lastVehicleAwakeTime = 0
@@ -196,7 +196,7 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     # not tried again.
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(fleet_token())
     api.storeToken(owner_token())
     car.statusDeferral = 0

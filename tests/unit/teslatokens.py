@@ -133,7 +133,7 @@ def add_home_vehicle(
     if command_signing is not None:
         entry["command_signing"] = command_signing
     api.addVehicle(entry)
-    vehicle = api.getCarApiVehicles()[-1]
+    vehicle = api.carApiVehicles[-1]
     vehicle.atHome = True
     vehicle.lastAPIAccessTime = time.time()
     return vehicle

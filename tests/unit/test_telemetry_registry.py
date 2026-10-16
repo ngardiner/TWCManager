@@ -196,7 +196,7 @@ def teslamate(monkeypatch):
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     # The Owner API token TeslaMate syncs: the Owner provider can read.
     api.storeToken(owner_token(), "", "synced")
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     # A cloud call returns nothing usable; tests assert it is never made.
     car.get_car_api = Mock(return_value=(False, None))
     master.config["vehicle"]["TeslaMate"] = {"enabled": True}

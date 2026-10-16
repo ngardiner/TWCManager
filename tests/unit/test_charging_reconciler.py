@@ -259,7 +259,7 @@ def test_fleet_start_sends_the_limit_first(requests_mock, monkeypatch):     # Ta
     assert requests_mock.request_history[0].url == FLEET_CAR                # the free online check comes first
 
 def test_fleet_wake_comes_after_a_free_online_check(requests_mock):         # paid counted
-    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.getCarApiVehicles()[0]
+    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.carApiVehicles[0]
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "asleep"}})
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()                            # the wake hold is over
     m.startCarsCharging(VIN); r.pass_()
@@ -300,7 +300,7 @@ def test_an_asleep_fleet_car_with_an_unknown_limit_is_woken_then_limited_then_st
     import TWCManager.Vehicle.Reconcile.Reconciler as rec
     import TWCManager.Vehicle.TeslaAPI as teslaapi
     monkeypatch.setattr(rec, "LIMIT_THEN_START_GAP", 0.0); monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
-    m, r, v, c, api = fleetOnTwc(requests_mock); car = api.getCarApiVehicles()[0]
+    m, r, v, c, api = fleetOnTwc(requests_mock); car = api.carApiVehicles[0]
     requests_mock.get(FLEET_CAR, [{"json": {"response": {"state": "asleep"}}}, {"json": {"response": {"state": "online"}}}])
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()                            # the wake hold is over
     assert v.value("chargeLimit") is None                                                                           # nothing read since the restart
@@ -383,7 +383,7 @@ def test_load_list_logs_why_no_token_is_usable_once_per_reason(caplog):    # rev
 def test_mode_2_limit_buys_no_wake_for_a_start_the_cloud_cannot_send(requests_mock, monkeypatch):   # N1, paid counted
     import TWCManager.Vehicle.TeslaAPI as teslaapi
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
-    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.getCarApiVehicles()[0]; m.settings["chargeStopMode"] = "2"
+    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.carApiVehicles[0]; m.settings["chargeStopMode"] = "2"
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "asleep"}})
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()
     m.setPolicyLimit(50, transition=True); m.startCarsCharging(VIN)

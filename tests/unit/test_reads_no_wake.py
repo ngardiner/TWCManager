@@ -22,7 +22,7 @@ def setup(ble_result, clock=time.time):
     api.storeToken(owner_token())
     wire_reads(reg, TeslaBLEProvider(ble, master), *api.providers())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     car.is_awake = Mock(return_value=True)
     # The API source writes through descriptors; the stand-in must too.
     car.update_vehicle_data = Mock(

@@ -124,7 +124,7 @@ def test_vehicle_list_from_owner_products_when_both_present(no_threads, requests
 
     assert products.call_count == 1
     assert fleetList.call_count == 0
-    assert api.getVehicleCount() == 1
+    assert len(api.carApiVehicles) == 1
 
 
 def test_commands_use_fleet_only(no_threads, requests_mock):

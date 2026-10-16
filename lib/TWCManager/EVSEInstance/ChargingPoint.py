@@ -12,7 +12,7 @@ from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
-from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
+from TWCManager.Vehicle.Registry.VehicleRegistry import canonicalKey
 
 
 class ChargingPoint(EVSEInstance):
@@ -207,26 +207,6 @@ class ChargingPoint(EVSEInstance):
         for e in cars:
             e.setTargetPower(watts)
 
-    def startCharging(self) -> None:
-        for e in self.endpoints:
-            e.startCharging()
-
-    def stopCharging(self) -> None:
-        # No Phase 2 caller. chargeStopMode 1 prefers the car's own stop
-        if int(self.master.settings.get("chargeStopMode", 1)) == 1:
-            targets = [e for e in self.endpoints if not e.isLocal and not e.isReadOnly]
-        else:
-            targets = self.localEndpoints
-        for e in targets or self.endpoints:
-            e.stopCharging()
-
-
-def _groupKey(key):
-    # VINs group case-insensitively; anonymous keys are kept as issued
-    if key.startswith(ANON_PREFIX):
-        return key
-    return key.upper()
-
 
 def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]:
     """Group endpoints that serve the same car into one charging point.
@@ -242,7 +222,7 @@ def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]
     groups = {}
     for e in endpoints:
         key = e.vehicleKey
-        key = e.ID if key is None else _groupKey(key)
+        key = e.ID if key is None else canonicalKey(key)
         if e.isLocal and any(m.isLocal for m in groups.get(key, ())):
             key = e.ID
         groups.setdefault(key, []).append(e)
