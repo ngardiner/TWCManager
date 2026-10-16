@@ -173,7 +173,13 @@ def quiet(monkeypatch, requests_mock):
 
 
 def install(
-    fleet=False, owner=False, policy=None, held=None, at=HOME, located=True, signing=None
+    fleet=False,
+    owner=False,
+    policy=None,
+    held=None,
+    at=HOME,
+    located=True,
+    signing=None,
 ):
     # A real master, store and reconciler on a test clock; a real TeslaAPI
     # with the given token slots, the car listed and placed by TeslaMate's
@@ -505,54 +511,89 @@ def test_ble_only_limits_never_wake_to_lower(requests_mock):
 
 
 # Row 3b (#659): an Owner token and a car listed command_signing "off" take
-# the Fleet-only paths of rows 4, 9 and 28, request for request, on the free
-# Owner API
+# the Fleet-only paths of rows 4, 9 and 28 (and a car that never wakes),
+# request for request and with the same per-desire paid records, on the
+# free Owner API
 
 
 def path_shape(requests_mock):
-    # Each request's method and path below .../vehicles/, the host dropped
+    # Each request's method and path below .../api/1/, the host dropped
     return [
         (q.method, q.url.split("?")[0].split("/api/1/")[-1])
         for q in requests_mock.request_history
     ]
 
 
-@pytest.mark.parametrize("scenario", ["raise", "retry", "stop"])
-def test_owner_only_off_car_matches_fleet_only(requests_mock, scenario):
-    shapes = {}
-    for token, base in (("fleet", FLEET), ("owner", OWNER)):
-        requests_mock.reset_mock()
-        tokens = {token: True}
-        if scenario == "raise":
-            m, r, v, c, api = install(signing="off", held=(90, 50), **tokens)
-            FleetCar(requests_mock, limit=50, api=base)
-            v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
-            m.setPolicyLimit(80, transition=True)
-            passes(r, c, 3600)
-        elif scenario == "retry":
-            m, r, v, c, api = install(signing="off", **tokens)
-            FleetCar(
-                requests_mock, state="online", limit=90, script=[(500, None, None)],
-                api=base,
+def paid_records(m):
+    # The per-desire paid accounting the reconciler keeps, per aspect
+    out = []
+    for aspect in (CHARGE_LIMIT, CHARGING):
+        rec = m.desired.record(VIN, aspect)
+        out.append(
+            rec
+            and (
+                rec.paidSends,
+                rec.paidReached,
+                rec.paidRetryDue,
+                rec.paidAt,
+                rec.lastOutcome,
+                rec.lastOutcomeAt,
             )
-            v.observe("chargeLimit", 90, "TeslaMateVehicle")
-            m.setPolicyLimit(50, transition=True)
-            each = lambda: m.setPolicyLimit(50, transition=False)
-            passes(r, c, 3600, step=30, each=each)
-        else:
-            m, r, v, c, api = install(signing="off", **tokens)
-            FleetCar(requests_mock, state="online", charging="Charging", api=base)
-            v.observe("chargingState", "Charging", "TeslaMateVehicle")
-            m.stopCarsCharging(VIN)
-            passes(r, c, 600, each=lambda: m.stopCarsCharging(VIN))
-        shapes[token] = path_shape(requests_mock)
-        sent = {"raise": ["set_charge_limit"], "retry": ["set_charge_limit"] * 2}
-        assert commands(requests_mock) == sent.get(scenario, ["charge_stop"])
-        if token == "owner":
-            # Nothing billed, nothing else asked
-            assert paid(requests_mock) == (0, 0, 0)
-            assert counts(requests_mock)["other"] == 0
-    assert shapes["owner"] == shapes["fleet"] and shapes["fleet"]
+        )
+    return out
+
+
+def off_car_run(requests_mock, scenario, base, **tokens):
+    # One scenario on one token; returns (commands, request shape, the paid
+    # records after each pass)
+    requests_mock.reset_mock()
+    m, r, v, c, api = install(
+        signing="off", held=(90, 50) if scenario == "raise" else None, **tokens
+    )
+    each, seconds, step = (lambda: m.setPolicyLimit(50, transition=False)), 3600, 30
+    if scenario == "raise":
+        FleetCar(requests_mock, limit=50, api=base)
+        v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+        m.setPolicyLimit(80, transition=True)
+        each, step = None, 10
+    elif scenario == "stop":
+        FleetCar(requests_mock, state="online", charging="Charging", api=base)
+        v.observe("chargingState", "Charging", "TeslaMateVehicle")
+        m.stopCarsCharging(VIN)
+        each, seconds, step = (lambda: m.stopCarsCharging(VIN)), 600, 10
+    else:
+        # "retry": Fleet answers 500; "asleep": the car never wakes (408)
+        script = [(500, None, None)] if scenario == "retry" else None
+        state = "online" if scenario == "retry" else "asleep"
+        FleetCar(
+            requests_mock, state=state, wakes=False, limit=90, script=script, api=base
+        )
+        v.observe("chargeLimit", 90, "TeslaMateVehicle")
+        m.setPolicyLimit(50, transition=True)
+    records = []
+    for _ in range(int(seconds / step)):
+        c.t += step
+        if each:
+            each()
+        r.pass_()
+        records.append(paid_records(m))
+    if "owner" in tokens:
+        # Nothing billed, nothing else asked
+        assert paid(requests_mock) == (0, 0, 0)
+        assert counts(requests_mock)["other"] == 0
+    return commands(requests_mock), path_shape(requests_mock), records
+
+
+@pytest.mark.parametrize("scenario", ["raise", "retry", "asleep", "stop"])
+def test_owner_only_off_car_matches_fleet_only(requests_mock, scenario):
+    fleet = off_car_run(requests_mock, scenario, FLEET, fleet=True)
+    owner = off_car_run(requests_mock, scenario, OWNER, owner=True)
+    # A lower limit is sent without a wake; the 500 and the 408 are retried once
+    limit = ["set_charge_limit"] * (1 if scenario == "raise" else 2)
+    assert fleet[0] == (["charge_stop"] if scenario == "stop" else limit)
+    # Same requests, and the same paid records after every pass
+    assert any(rec and rec[0] for rec in fleet[2][-1])
+    assert owner == fleet
 
 
 # Row 3: Owner token only (read-only); a policy limit and a stop
