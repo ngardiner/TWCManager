@@ -8,10 +8,11 @@ from pathlib import Path
 
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT
+from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit, HeldLimits
 from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, onDeparture, presentVehicles, targetsFor
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from tests.unit.gen2_helpers import drive as heartbeat
 from tests.unit.reconcile_helpers import inline
 from tests.unit.teslatokens import FLEET_NA_URL, OWNER_API_URL, FakeMaster, fleet_token, new_api, owner_token
 from tests.unit.test_gen2twc_provider import make
@@ -228,7 +229,7 @@ def restarted(requests_mock, position=HOME, held=True, claim=True):
     # list and BLE has paired, held at 50 (normal 100) by the migrated record; asleep at SOC 51
     # with TeslaMate's retained position. Nothing sets atHome: presence comes from position
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.settings.update(commandPolicy="ble_only", homeLat=HOME[0], homeLon=HOME[1])
-    api = new_api(master=m); api.storeToken(owner_token()); api.storeToken(fleet_token())
+    api = new_api(master=m); api.storeToken(owner_token()); api.storeToken(fleet_token()); del m.modules["TeslaAPI"]   # not a module record
     for p in api.providers(): m.providerOrder.register(p)
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "Callandor"})
     if claim: v.claim("TeslaBLE", True, "paired")
@@ -267,3 +268,19 @@ def test_a_held_car_a_free_position_places_away_gets_its_normal_limit_back(reque
     m.setPolicyLimit(70, transition=False); assert m.desired.get(VIN, CHARGE_LIMIT) == d         # once: the same desire
     r.pass_(); assert prov(m, "TeslaBLE").calls == [("setChargeLimit", VIN, 100)]               # a restore never wakes
     assert requests_mock.call_count == 0
+
+def test_a_vinless_gen2_after_a_restart_is_an_anonymous_plug_session(requests_mock):   # main's unaddressed lift and start, paid counted
+    m, r, v, car = restarted(requests_mock); s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; m.setMaxAmpsToDivideAmongSlaves(32)
+    m.setPolicyLimit(70, transition=True)
+    for _ in range(2): heartbeat(m, s, 0.0, state=0x03)                                         # plugged in, asleep, drawing nothing; no VIN
+    assert s.vehicleKey == "anon:8244" and s.vehicleRateRaised
+    lift, start = m.desired.get(VIN, AMPS), m.desired.get(VIN, CHARGING)
+    assert lift.lift and lift.value == s.wiringMaxAmps and start.value is True                   # the fan-out reaches the BLE car
+    for _ in range(3): r.pass_()
+    b = prov(m, "TeslaBLE")
+    assert b.calls == [("wake", VIN, None), ("setChargeLimit", VIN, 70),                        # the limit first
+                       ("wake", VIN, None), ("setAmps", VIN, s.wiringMaxAmps)]                   # the BLE lift may wake the car, as main's; "Complete" satisfies the start
+    assert requests_mock.call_count == 0
+    heartbeat(m, s, 0.0, state=0x00)                                                             # 00: unplugged, or asleep: the session ends
+    assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None
+    heartbeat(m, s, 0.0, state=0x00); assert m.vehicleRegistry.get("anon:8244") is None          # 00 never begins one
