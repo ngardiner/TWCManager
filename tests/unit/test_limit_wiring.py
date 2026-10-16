@@ -10,7 +10,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit, HeldLimits
-from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, onDeparture, presentVehicles, targetsFor
+from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, broadcastVehicles, onArrival, onDeparture, presentVehicles, targetsFor
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.gen2_helpers import drive as heartbeat
 from tests.unit.reconcile_helpers import AWAY, HOME, inline, placeAt
@@ -287,3 +287,8 @@ def test_a_vinless_gen2_after_a_restart_is_an_anonymous_plug_session(requests_mo
     heartbeat(m, s, 0.0, state=0x00)                                                             # 00: unplugged, or asleep: the session ends
     assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None
     heartbeat(m, s, 0.0, state=0x00); assert m.vehicleRegistry.get("anon:8244") is None          # 00 never begins one
+
+def test_a_car_its_twc_names_stays_at_home_whatever_its_stale_fix_says(requests_mock):   # vehicleIsDefinitelyHome; Gen3 endpoints read atHome
+    m, r, v, car = restarted(requests_mock, position=AWAY); v.observe("twcVin", "8244", "TWC"); car.atHome = True   # as vehicleIsDefinitelyHome sets it
+    assert broadcastVehicles(m, C.START_CHARGING) == [v] and presentVehicles(m, C.SET_CHARGE_LIMIT) == [v]
+    m.setPolicyLimit(70, transition=False); assert car.atHome is True and not m.desired.get(VIN, CHARGE_LIMIT).restore   # no restore, no flip

@@ -18,7 +18,10 @@ from .Desired import CHARGE_LIMIT
 
 
 def _located(vehicle) -> Optional[bool]:
-    # The Tesla API's home check on the latest position; None if unknown
+    # On a point: home (atHome stays as vehicleIsDefinitelyHome set it).
+    # Else the Tesla API's home check on the latest position; None if unknown
+    if vehicle.value("twcVin"):
+        return True
     api = vehicle.attachment("TeslaAPI")
     return getattr(api, "locate", lambda: None)()
 
@@ -109,7 +112,7 @@ def applyPolicyLimit(master, limit: Optional[int], decision: bool) -> int:
         # Departure with no edge: a held car its free position places away
         # (main located each wasAtHome car on every apply)
         vehicle = master.vehicleRegistry.get(vin)
-        if vehicle and not vehicle.value("twcVin") and _located(vehicle) is False:
+        if vehicle is not None and _located(vehicle) is False:
             _restore(master, vehicle, decision=True)
     return touched
 
