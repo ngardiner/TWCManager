@@ -13,7 +13,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Hold an Owner API token and a Fleet API token side by side: reads use the free Owner API, commands use Fleet, and TeslaMate sync can stay on beside a Fleet login (#693)
     * (@MikeBishop) - Show each Tesla token slot's status on the Settings page, with a Remove token button (#693)
 * Architecture
-    * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used read-only
+    * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used for reads, and for commands only to vehicles Tesla reports with `command_signing: off`
     * (@MikeBishop) - Saved Tesla tokens migrate to separate Owner and Fleet settings on first start; downgrading afterwards loses the Owner API token (#693)
 * Bugfixes
     * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
@@ -27,6 +27,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: A rejected pasted refresh token keeps the previous tokens, and a 401 on refresh clears the token type (#688)
     * (@MikeBishop) - Fix: Check for a car coming online after a Fleet API wake_up instead of waking it again 30 minutes later (#700)
     * (@MikeBishop) - Fix: Stale TeslaMate asleep state no longer stops the free vehicle state check (#700)
+    * (@MikeBishop) - Fix: Allow Owner API commands per vehicle when Tesla reports `command_signing: off`; other vehicles stay read-only (#659)
     * Fix: Correct invalid logging level in update_vehicle_data error handler which crashed when logging a failed API response
     * Fix: Remove stopAskingToStartCharging heartbeat reset that caused charge_start API commands to fire every 60 seconds while already charging (re-opens #575, closes #651)
     * Fix: Remove redundant car_api_available() call at applyChargeLimit entry - rate limit check now runs first, halving Fleet API calls on every policy tick
