@@ -506,10 +506,13 @@ def CreateHTTPHandlerClass(master):
                     # Adding some vehicle data
                     vehicle = slaveTWC.getLastVehicle()
                     if vehicle is not None:
-                        data[TWCID]["lastAtHome"] = vehicle.atHome
-                        data[TWCID]["lastBatterySOC"] = vehicle.batteryLevel
-                        data[TWCID]["lastChargeLimit"] = vehicle.chargeLimit
-                        data[TWCID]["lastTimeToFullCharge"] = vehicle.timeToFullCharge
+                        row = data[TWCID]
+                        row["lastAtHome"] = vehicle.attachment("TeslaAPI").atHome
+                        row["lastBatterySOC"] = vehicle.value("batteryLevel", 10000)
+                        row["lastChargeLimit"] = vehicle.value("chargeLimit", -1)
+                        row["lastTimeToFullCharge"] = vehicle.value(
+                            "timeToFullCharge", 0.0
+                        )
 
                     totals["carsCharging"] += slaveTWC.isCharging
                     totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered

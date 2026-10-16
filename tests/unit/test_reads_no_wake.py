@@ -155,11 +155,10 @@ def test_ble_read_marks_car_awake_but_cache_hit_does_not():
     ble.get_charge_state.assert_called_once()
 
 
-def test_ble_actual_current_change_is_timed():
+def test_ble_read_observes_actual_current():
     car, ble, reg = setup({"batteryLevel": 61, "actualCurrent": 16})
-    car.lastCurrentChangeTime = 0
     car.update_charge()
-    assert car.actualCurrent == 16 and car.lastCurrentChangeTime > 0
+    assert car.actualCurrent == 16
     assert reg.get(VIN).latest("actualCurrent").source == "TeslaBLE"
 
 

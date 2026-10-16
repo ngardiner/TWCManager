@@ -134,8 +134,8 @@ def real(mode=1, gen3=False):
 
 def budget(m, amps): m.getMaxAmpsToDivideAmongSlaves = lambda: amps
 
-def car(m, vin, state, pluggedIn=None):
-    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=True, syncSource="TeslaAPI", pluggedIn=pluggedIn, locate=lambda: None))
+def car(m, vin, state):
+    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=True, locate=lambda: None))
     if state: v.observe("chargingState", state, "TeslaAPI")
     return v
 
