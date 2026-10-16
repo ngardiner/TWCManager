@@ -35,6 +35,12 @@ logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
 # _classify refreshed an expired token: the request is sent once more
 _REFRESHED = Outcome(DONE, "refreshed")
+# Tesla refused an Owner API command or wake for one car: it wants signed
+# commands (noteOwnerCommandRefused)
+_SIGNING_REQUIRED = Outcome(REFUSED, "signing required")
+# Tesla takes no Owner API commands at all any more: no Owner command or wake
+# goes to any car (noteOwnerCommandsRetired)
+_OWNER_RETIRED = Outcome(REFUSED, "owner commands retired")
 
 
 class CarApiState:
@@ -53,16 +59,11 @@ class CarApiState:
     delayNextWakeAttempt = 0
     online = None  # the free online check: True, False, None (no answer)
     onlineCheckedAt = 0  # ... reused for 120 s from here
-    # command_signing from Tesla's vehicle list: Owner API commands go only
-    # to cars where it is "off". ownerCommandsRefused is set when Tesla
-    # refuses one anyway; ownerCommandsRetired too when the refusal says the
-    # Owner API no longer takes commands (410/412, "only available on
-    # fleetapi") rather than that the car needs signing. refusalLoggedAt is
-    # TeslaAPI.refusalState when the car's read-only line was last logged.
+    # As listed: Owner API commands only for "off" (#659). The latch is set
+    # by a 403 to one (noteOwnerCommandRefused)
     commandSigning = None
     ownerCommandsRefused = False
-    ownerCommandsRetired = False
-    refusalLoggedAt = None
+    refusalLoggedAt = None  # refusalState when its read-only line was logged
 
 
 class TLS13Adapter(HTTPAdapter):
@@ -95,16 +96,13 @@ class TeslaAPI:
     COMMAND_UNREACHABLE_REASONS = ("could_not_wake_buses", "vehicle_unavailable")
     # Seconds between failed wake_up attempts on one car (a wake is $0.02)
     WAKE_RETRY_SECONDS = 30 * 60
-    # fleetSlot.changes when the module-wide read-only line was last logged
-    refusalLoggedAt = None
     regionURL = {
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
         "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
-        # Not a Fleet region: the Owner API used by TeslaMate tokens. It reads
-        # every car but commands only cars Tesla lists with command_signing
-        # "off" (see commandSlotFor). fleetRegions() leaves it out of every
-        # region list and lookup.
+        # Not a Fleet region: the Owner API used by TeslaMate tokens. It reads,
+        # and commands only a car that takes unsigned commands (#659).
+        # fleetRegions() leaves it out of every region list and lookup.
         "OwnerAPI": "https://owner-api.teslamotors.com/api/1/vehicles",
     }
     # teslaProxy base URL and certificate from config.json, used for Fleet
@@ -242,22 +240,20 @@ class TeslaAPI:
         # A listed car joins the registry with this module's record attached
         if "vin" not in json:
             return
+        state = CarApiState()
+        state.commandSigning = json.get("command_signing")
         try:
             vehicle = self.registry.getOrCreate(
-                json["vin"], "TeslaAPI", attach=("TeslaAPI", CarApiState())
+                json["vin"], "TeslaAPI", attach=("TeslaAPI", state)
             )
         except ValueError:
             # The registry refuses a missing or malformed VIN.
             logger.debug("Skipping a listed vehicle without a usable VIN")
             return
-        car = vehicle.attachment("TeslaAPI")
-        car.commandSigning = json.get("command_signing")
-        car.ownerCommandsRefused = False
-        car.ownerCommandsRetired = False
-        # The Owner claim follows this car's command_signing and the Fleet
-        # claim the Fleet slot, live, so a token pasted or synced after the
-        # listing manages the car without a re-list
-        vehicle.claim("OwnerAPI", lambda: self.ownerCommandsAllowed(vehicle), "listed")
+        # Each claim follows its slot live, so a token pasted or synced after
+        # the listing manages the car without a re-list; the Owner claim also
+        # follows this car's signing (#659)
+        vehicle.claim("OwnerAPI", lambda: self.ownerCommandsAllowed(state), "listed")
         vehicle.claim("FleetAPI", lambda: self.fleetSlot.usable("command"), "listed")
         # A cloud account listing is a sighting.
         vehicle.observe("name", json["display_name"] or vehicle.vin, "TeslaAPI")
@@ -313,9 +309,8 @@ class TeslaAPI:
         purpose,
         body=None,
         timeout=10,
-        car=None,
-        tries=3,
         vehicle=None,
+        tries=3,
     ):
         # One request with slot's token to path under the API root (where
         # .../api/1/vehicles lives), bounded by timeout. Returns (response,
@@ -345,17 +340,8 @@ class TeslaAPI:
                 logging.INFO8,
                 "Car API %s %s: HTTP %s" % (method, path, req.status_code),
             )
-            if (
-                purpose in ("command", "wake")
-                and slot is self.ownerSlot
-                and vehicle is not None
-                and self.noteOwnerCommandRefused(vehicle, req)
-            ):
-                # Tesla refused the Owner API for this car (logged, latched):
-                # no error backoff, so the next provider sends at once
-                return req, Outcome(REFUSED, "owner refused")
             outcome = self._classify(
-                slot, req.status_code, purpose, req.text, car, tries > 0
+                slot, req.status_code, purpose, req.text, vehicle, tries > 0
             )
             if outcome is not _REFRESHED:
                 return req, outcome
@@ -363,25 +349,30 @@ class TeslaAPI:
             if tries < 1:
                 return req, Outcome(REFUSED, "401")
 
-    def _classify(self, slot, status, purpose, body, car=None, refresh=True):
-        # What an answer means, acted on: None for an HTTP 200, else an
-        # Outcome. purpose is "read", "list" (the vehicle list), "command",
-        # "wake" or "energy" (the Wall Connector VIN read). Energy refusals
-        # latch that read alone: Storm Watch and vehicle reads keep the token.
-        # Elsewhere a 401 refreshes an expired token once (_REFRESHED: send
-        # again) and otherwise retires the slot; 403 refuses commands or wakes
-        # and pauses reads for an hour; 412 retires commands, or latches reads
-        # until the token changes; 410 pauses reads; 429 backs off; 408 is an
-        # asleep or unreachable car. None of these touches the API backoff
-        # but 429, so the next poll can use the other slot at once.
+    def _classify(self, slot, status, purpose, body, vehicle=None, refresh=True):
+        # What an answer means, acted on: None for an HTTP 200 (unless it is
+        # an Owner command's refusal), else an Outcome. purpose is "read",
+        # "list" (the vehicle list), "command", "wake" or "energy" (the Wall
+        # Connector VIN read). Energy refusals latch that read alone: Storm
+        # Watch and vehicle reads keep the token. Elsewhere a 401 refreshes
+        # an expired token once (_REFRESHED: send again) and otherwise
+        # retires the slot; 403 refuses commands or wakes and pauses reads
+        # for an hour (an Owner command's 403 latches that car alone); 412
+        # retires commands, or latches reads until the token changes; 410
+        # pauses reads; an Owner command's 410 or 412 retires Owner commands
+        # (ownerRefusal); 429 backs off; 408 is an asleep or unreachable car.
+        # None of these touches the API backoff but 429, so the next poll can
+        # use the other slot at once.
+        paid = purpose in ("command", "wake")
+        owner = paid and slot is self.ownerSlot and vehicle is not None
         if status == 200:
-            return None
+            # Tesla can refuse an Owner command in a 200's error text
+            return self.ownerRefusal(vehicle, status, body) if owner else None
         if purpose == "energy":
             if status not in (401, 403, 410, 412):
                 return Outcome(ERROR, str(status))
             self._refuseWallConnectors(slot, status)
             return Outcome(REFUSED, str(status))
-        paid = purpose in ("command", "wake")
         label = slot.kind.capitalize()
         if status == 401:
             if (
@@ -416,6 +407,10 @@ class TeslaAPI:
             slot.clear()
             self.master.queue_background_task({"cmd": "saveSettings"})
             return Outcome(REFUSED, "401")
+        if owner:
+            refused = self.ownerRefusal(vehicle, status, body)
+            if refused is not None:
+                return refused
         if paid and status == 403:
             slot.reportScopeRefused(purpose, refused=True)
             if purpose == "wake":
@@ -446,6 +441,7 @@ class TeslaAPI:
             return Outcome(UNREACHABLE, "408")
         if status == 429:
             # Explicitly told to back off
+            car = vehicle.attachment("TeslaAPI") if vehicle else None
             target = car or self
             target.errorCount = max(30, target.errorCount)
             self.updateCarApiLastErrorTime(car)
@@ -483,71 +479,59 @@ class TeslaAPI:
         return None
 
     def slotFor(self, purpose):
-        # The slot a request of this purpose ("read", "command" or "energy")
-        # uses, or None when no slot is usable for it. Only a Fleet token
-        # serves "command" here; commands to a car choose with commandSlotFor.
+        # The slot a request of this purpose ("read" or "energy") uses, or
+        # None when no slot is usable for it. Commands and wakes go to one
+        # car, so each provider asks canCommand for its own slot.
         for slot in (self.ownerSlot, self.fleetSlot):
             if slot.usable(purpose):
                 return slot
         return None
 
-    def ownerTokenHeld(self):
-        # True when the owner slot holds a live Owner API token. A read
-        # pause does not count: it is for reads only.
-        return not self.ownerSlot.empty() and self.ownerSlot.tokenType == "owner"
-
-    @staticmethod
-    def _carOf(vehicle):
-        # The listed car's CarApiState, from its registry Vehicle (or itself)
-        if hasattr(vehicle, "attachment"):
-            return vehicle.attachment("TeslaAPI")
-        return vehicle
-
-    def ownerCommandsAllowed(self, vehicle):
-        # True when an Owner API token may command this car: Tesla listed it
-        # with command_signing exactly "off" and has not since refused an
-        # Owner API command for it. "required", a missing field and any
-        # other value are read-only (fail closed).
-        car = self._carOf(vehicle)
-        return (
-            car is not None
-            and self.ownerTokenHeld()
-            and car.commandSigning == "off"
-            and not car.ownerCommandsRefused
-        )
-
-    def commandSlotFor(self, vehicle):
-        # The slot a command to this car uses, or None when it is read-only.
-        # Fleet first, so a working Fleet (and proxy) setup is unchanged;
-        # the Owner token only carries commands when Fleet can't.
-        if self.fleetSlot.usable("command"):
-            return self.fleetSlot
-        if self.ownerCommandsAllowed(vehicle):
-            return self.ownerSlot
-        return None
-
-    def readOnlyFor(self, vehicle):
-        # True when no slot can send this car commands.
-        return self.commandSlotFor(vehicle) is None
-
     @property
     def readOnly(self):
         # True when no listed car can be sent commands. With an Owner token
         # and no cars listed yet it is False: whether the token can command
-        # is only known once they are listed, and only a read (or
-        # telemetry) lists them. Commands still check each car.
+        # is only known once they are listed. Commands still check each car.
         if self.fleetSlot.usable("command"):
             return False
-        listed = self.registry.attached("TeslaAPI")
-        if not listed:
+        attached = self.registry.attached("TeslaAPI")
+        if not attached:
             return not self.ownerTokenHeld()
-        return not any(self.ownerCommandsAllowed(car) for _, car in listed)
+        return not any(self.ownerCommandsAllowed(car) for _, car in attached)
 
     @property
     def ownerTokenOnly(self):
         # True when only an Owner API token is held for commands, so which
-        # cars can be commanded depends on each car's command_signing.
+        # cars can be commanded depends on each car's command_signing
         return not self.fleetSlot.usable("command") and self.ownerTokenHeld()
+
+    def canCommand(self, vehicle, slot):
+        # Whether slot (a provider's own) may send vehicle (a registry
+        # Vehicle) a command or wake: the Owner slot only for a car that
+        # takes unsigned commands, any other while its token commands. The
+        # provider order picks between them; neither sends the other's token
+        if slot is self.ownerSlot:
+            return self.ownerCommandsAllowed(vehicle.attachment("TeslaAPI"))
+        return slot.usable("command")
+
+    def ownerTokenHeld(self):
+        # True when the Owner slot holds a live Owner API token. A read
+        # pause does not count: it is for reads only
+        return not self.ownerSlot.empty() and self.ownerSlot.tokenType == "owner"
+
+    def ownerCommandsAllowed(self, car):
+        # True when the Owner token may command the car (its CarApiState):
+        # the token is not refused commands (an expired one that could not
+        # refresh, a 412), Tesla lists the car with command_signing exactly
+        # "off" (#659), and no Owner command to it has come back 403 since.
+        # "required", no field, or any other value is read-only: fail closed
+        return (
+            car is not None
+            and self.ownerTokenHeld()
+            and "command" not in self.ownerSlot.refusedPurposes
+            and car.commandSigning == "off"
+            and not car.ownerCommandsRefused
+        )
 
     def loadVehicleList(self):
         # List the cars (attach their records) from the vehicle list of the read slot
@@ -1316,138 +1300,143 @@ class TeslaAPI:
             return ("fleet", "NA")
         return ("unknown", None)
 
-    def refuseCommandIfReadOnly(self, command):
-        # True when no listed car can be sent commands. Logs at INFO once per
-        # state change (per car when an Owner token is held), makes no HTTP
-        # call and records no API error (an error would start the backoff
-        # that also blocks reads).
-        if not self.readOnly:
-            return False
-        if self.ownerTokenHeld():
-            for vehicle, _ in self.registry.attached("TeslaAPI"):
-                self.refuseCommandFor(vehicle, command)
-        elif self.fleetSlot.changes != self.refusalLoggedAt:
-            logger.info(
-                "Tesla API is read-only (no usable Fleet API token); not sending "
-                + command
-                + " or any other vehicle command. Commands need a Fleet API "
-                "token or the TeslaBLE module."
-            )
-            self.refusalLoggedAt = self.fleetSlot.changes
-        return True
+    def noteReadOnly(self):
+        # The INFO hint when no token can command any car, once per Fleet
+        # slot change: no HTTP call, no API error (an error would start the
+        # backoff that also blocks reads). With an Owner token each car says
+        # why instead (refuseCommandFor)
+        if (
+            not self.readOnly
+            or self.ownerTokenHeld()
+            or self.fleetSlot.changes == self.refusalLoggedAt
+        ):
+            return
+        self.refusalLoggedAt = self.fleetSlot.changes
+        logger.info(
+            "Tesla API is read-only (no usable Fleet API token); not sending "
+            "vehicle commands. Commands need a Fleet API token or the "
+            "TeslaBLE module."
+        )
 
     def refusalState(self, car):
-        # What a car's refusal log line depends on; it is logged again only
-        # when this changes. Not the owner slot's changes: a resync of the
-        # same Owner token is not news.
-        return (self.fleetSlot.changes, car.commandSigning, car.ownerCommandsRefused)
+        # What a car's refusal line depends on; it is logged again only when
+        # this changes. Not the Owner slot's changes: a resync of the same
+        # Owner token is not news
+        return (
+            self.fleetSlot.changes,
+            car.commandSigning,
+            car.ownerCommandsRefused,
+            "command" in self.ownerSlot.refusedPurposes,
+        )
 
     def refuseCommandFor(self, vehicle, command):
-        # True when no slot can send this car commands. Like
-        # refuseCommandIfReadOnly: no HTTP call, no API error, and one INFO
-        # line per state change, naming the car and why.
-        if not self.readOnlyFor(vehicle):
+        # True when no slot can send vehicle commands. No HTTP call, no API
+        # error, and one INFO line per state change, naming the car and why
+        if self.canCommand(vehicle, self.fleetSlot) or self.canCommand(
+            vehicle, self.ownerSlot
+        ):
             return False
         if not self.ownerTokenHeld():
-            # No token can command any car: the module-wide line.
-            self.refuseCommandIfReadOnly(command)
+            # No token can command any car: the module-wide line
+            self.noteReadOnly()
             return True
-        car = self._carOf(vehicle)
-        if car is None:
-            return True
+        car = vehicle.attachment("TeslaAPI")
         state = self.refusalState(car)
         if car.refusalLoggedAt == state:
             return True
         car.refusalLoggedAt = state
-        signing = car.commandSigning
-        if car.ownerCommandsRetired:
-            why = "Tesla's Owner API no longer takes commands for it."
+        if "command" in self.ownerSlot.refusedPurposes:
+            why = (
+                "Tesla refused commands with the Owner API token (it no longer "
+                "accepts Owner API commands, or the token expired and could "
+                "not be refreshed)."
+            )
         elif car.ownerCommandsRefused:
             why = (
                 "Tesla refused an Owner API command for it although it "
                 "reported command_signing: off."
             )
-        elif signing == "required":
+        elif car.commandSigning == "required":
             why = (
-                "Tesla reports "
-                + vehicle.name
-                + " requires signed commands (command_signing: required)."
-            )
-        elif signing is None:
-            why = (
-                "Tesla did not report command_signing for it, so it is "
-                "treated as read-only."
+                "Tesla reports %s requires signed commands (command_signing: "
+                "required)." % vehicle.name
             )
         else:
             why = (
-                "Tesla reports command_signing: "
-                + str(signing)
-                + " for it, a value TWCManager does not know, so it is "
+                "Tesla did not report command_signing: off for it, so it is "
                 "treated as read-only."
             )
         logger.info(
-            "Tesla API is read-only for "
-            + vehicle.name
-            + "; not sending "
-            + command
-            + " or any other vehicle command to it. "
-            + why
-            + " Charge commands need a Fleet API token with the Vehicle "
-            "Command proxy (teslaProxy) or the TeslaBLE module."
+            "Tesla API is read-only for %s; not sending %s or any other vehicle "
+            "command to it. %s Charge commands need a Fleet API token with the "
+            "Vehicle Command proxy (teslaProxy) or the TeslaBLE module."
+            % (vehicle.name, command, why)
         )
         return True
 
-    def noteOwnerCommandRefused(self, vehicle, req):
-        # True when Tesla refused an Owner API command for this car. Two
-        # causes: HTTP 403 or an error naming the Vehicle Command Protocol
-        # (the car needs signed commands after all), or HTTP 410/412 or
-        # "only available on fleetapi" (the Owner API no longer takes
-        # commands). Stops Owner API commands to it until TWCManager
-        # restarts, and logs that once. Records no API error, which would
-        # also back off reads; the caller returns its failure, so the next
-        # provider is tried.
-        car = self._carOf(vehicle)
-        if req is None or car is None:
-            return False
-        text = str(getattr(req, "text", "") or "")
+    def ownerRefusal(self, vehicle, status, body):
+        # An Owner API command's or wake's answer (any status, 200 included)
+        # that refuses it, acted on: Tesla takes no Owner commands at all
+        # (410 Gone, 412, or "only available on fleetapi" anywhere in the
+        # body), or this car needs signed ones. None for any other answer
+        if status in (410, 412) or "only available on fleetapi" in (
+            str(body or "").lower()
+        ):
+            return self.noteOwnerCommandsRetired(status)
+        return self.noteOwnerCommandRefused(vehicle, status, body)
+
+    def noteOwnerCommandsRetired(self, status):
+        # A token-wide signal, unlike a car's 403: no Owner command or wake
+        # goes to any car until the Owner token is stored again (setTokens;
+        # a TeslaMate resync tries once more). Reads keep the token. Never
+        # the API error backoff. One line, which stands for every car's
+        if "command" not in self.ownerSlot.refusedPurposes:
+            self.ownerSlot.refuse("command")
+            for _, car in self.registry.attached("TeslaAPI"):
+                car.refusalLoggedAt = self.refusalState(car)
+            if self.fleetSlot.usable("command"):
+                # Nothing is lost: the Fleet token carries the commands
+                carrier = "The Fleet API carries charge commands from here."
+            else:
+                carrier = (
+                    "Charge commands need a Fleet API token with the Vehicle "
+                    "Command proxy (teslaProxy) or the TeslaBLE module."
+                )
+            logger.error(
+                "Tesla no longer accepts Owner API commands (HTTP %d). Not "
+                "sending commands or wakes with the Owner API token until it is "
+                "entered or synced again; reads continue with it. %s"
+                % (status, carrier)
+            )
+        return _OWNER_RETIRED
+
+    def noteOwnerCommandRefused(self, vehicle, status, body):
+        # An Owner API command or wake for a car listed with signing "off"
+        # came back HTTP 403, or with an error naming the Vehicle Command
+        # Protocol: the car needs signed commands after all. No Owner
+        # command goes to it again until TWCManager restarts, logged once.
+        # Never the API error backoff, which would also stop reads, and
+        # never a slot-wide refusal: the other cars keep their commands.
+        # Returns the refusal, or None for any other answer. Tesla's error
+        # text is matched, never logged
         try:
-            error = str((json.loads(text) or {}).get("error") or "")
+            error = str((json.loads(body) or {}).get("error") or "")
         except (ValueError, AttributeError, TypeError):
             error = ""
-        if "Vehicle Command Protocol required" in error:
-            retired = False
-        elif (
-            req.status_code in (410, 412)
-            or "only available on fleetapi" in text.lower()
-        ):
-            retired = True
-        elif req.status_code == 403:
-            retired = False
-        else:
-            return False
-        car.ownerCommandsRefused = True
-        car.ownerCommandsRetired = retired
-        car.refusalLoggedAt = self.refusalState(car)
-        answer = " (HTTP " + str(req.status_code) + (": " + error if error else "")
-        if retired:
+        if status != 403 and "Vehicle Command Protocol required" not in error:
+            return None
+        car = vehicle.attachment("TeslaAPI")
+        if car is not None and not car.ownerCommandsRefused:
+            car.ownerCommandsRefused = True
+            car.refusalLoggedAt = self.refusalState(car)
             logger.warning(
-                "Tesla's Owner API no longer takes commands for "
-                + vehicle.name
-                + answer
-                + "). Not sending it further Owner API commands; charge "
-                "commands need a Fleet API token or the TeslaBLE module."
+                "Tesla refused an Owner API command for %s (HTTP %d) although "
+                "it reported command_signing: off. Not sending it further "
+                "Owner API commands; charge commands need a Fleet API token "
+                "with the Vehicle Command proxy (teslaProxy) or the TeslaBLE "
+                "module." % (vehicle.name, status)
             )
-        else:
-            logger.warning(
-                "Tesla refused an Owner API command for "
-                + vehicle.name
-                + answer
-                + ") although it reported command_signing: off; it needs "
-                "signed commands. Not sending it further Owner API commands; "
-                "charge commands need a Fleet API token with the Vehicle "
-                "Command proxy (teslaProxy) or the TeslaBLE module."
-            )
-        return True
+        return _SIGNING_REQUIRED
 
     def applySyncedToken(self, accessToken):
         # Entry point for token sync sources (TeslaMate): the access token
@@ -1459,14 +1448,13 @@ class TeslaAPI:
     # most one billed request (two only when an expired token is refreshed
     # in between). Nothing here retries a billed request.
 
-    def command(self, vehicle, name: str, body: Optional[dict] = None) -> Outcome:
-        # One Tesla API command (name, e.g. "set_charge_limit") to vehicle,
-        # through the slot that may command this car (commandSlotFor)
+    def command(
+        self, vehicle, name: str, body: Optional[dict] = None, *, slot
+    ) -> Outcome:
+        # One command (name, e.g. "set_charge_limit") to vehicle with slot,
+        # the provider's own, when canCommand lets it
         car = vehicle.attachment("TeslaAPI")
-        slot = self.commandSlotFor(vehicle)
-        if slot is None:
-            # Says once why this car is read-only
-            self.refuseCommandFor(vehicle, name)
+        if not self.canCommand(vehicle, slot):
             return Outcome(REFUSED, "no command token")
         if self.getCarApiRetryRemaining(car, now=self.now()):
             return Outcome(UNREACHABLE, "backoff")
@@ -1505,7 +1493,6 @@ class TeslaAPI:
             "vehicles/%s/%s" % (vehicle.vin, path),
             purpose,
             body,
-            car=vehicle.attachment("TeslaAPI"),
             vehicle=vehicle,
         )
         if outcome is not None:
@@ -1539,15 +1526,13 @@ class TeslaAPI:
             return False
         return True
 
-    def wakeOutcome(self, vehicle, now=None) -> Outcome:
-        # Wakes vehicle through the Fleet API, but only after the free
+    def wakeOutcome(self, vehicle, now=None, *, slot) -> Outcome:
+        # Wakes vehicle with slot (as for command), but only after the free
         # online check (vehicles/{vin}, cached 120 s) says it is not online
         # and wakeDue allows it. One wake_up at most.
         now = self.now() if now is None else now
         car = vehicle.attachment("TeslaAPI")
-        slot = self.commandSlotFor(vehicle)
-        if slot is None:
-            self.refuseCommandFor(vehicle, "wake_up")
+        if not self.canCommand(vehicle, slot):
             return Outcome(REFUSED, "no command token")
         if self.getCarApiRetryRemaining(car, now=now):
             # Told to back off: not even the free check
@@ -1566,8 +1551,8 @@ class TeslaAPI:
         if slot is self.fleetSlot and not slot.usable("wake"):
             # Tesla refused a wake with this token (403): no wake_up until
             # the token changes. Checked after the free online check, so an
-            # online car still gets its command. An Owner refusal is noted
-            # per car instead
+            # online car still gets its command. An Owner 403 latches the
+            # car instead (ownerCommandsAllowed)
             return Outcome(UNREACHABLE, "wake refused")
         if car.firstChargeNeededTime == 0:
             car.firstChargeNeededTime = now
@@ -1584,7 +1569,11 @@ class TeslaAPI:
         # The wake hold is measured from here
         car.lastAPIAccessTime = now
         outcome, response = self._paidPost(vehicle, slot, "wake_up", purpose="wake")
-        if outcome == Outcome(UNREACHABLE, "wake refused"):
+        if outcome in (
+            Outcome(UNREACHABLE, "wake refused"),
+            _SIGNING_REQUIRED,
+            _OWNER_RETIRED,
+        ):
             return outcome
         state = "error"
         if outcome is None:
@@ -1823,7 +1812,7 @@ class TeslaAPI:
                 "get",
                 "vehicles/" + path,
                 "read",
-                car=car,
+                vehicle=vehicle,
                 tries=3 - sent + (not refreshed),
             )
             if outcome is not None:

@@ -183,7 +183,11 @@ def run_path(api, path):
         api.registry = VehicleRegistry({})
         return api.loadVehicleList()
     if path == "command":
-        return tuple(api.command(api.registry.get(HOME_VIN), "charge_stop"))
+        return tuple(
+            api.command(
+                api.registry.get(HOME_VIN), "charge_stop", slot=api.fleetSlot
+            )
+        )
     return api.wallConnectorVins(api.fleetSlot)
 
 
@@ -277,7 +281,7 @@ def test_a_wake_answering_online_refreshes_the_online_cache(requests_mock, monke
     )
     assert api.is_awake(car) is False and check.call_count == 1
     clk.t += 100
-    assert api.wakeOutcome(car).kind == DONE and wake.call_count == 1
+    assert api.wakeOutcome(car, slot=api.fleetSlot).kind == DONE and wake.call_count == 1
     clk.t += 50  # 150 s after the check, 50 s after the wake
     assert api.is_awake(car) is True and check.call_count == 1
     assert wake.last_request.timeout == 10
@@ -382,7 +386,7 @@ def test_a_fleet_401_never_refreshes_the_owner_slot(path, requests_mock):
             HOME_VIN + "/vehicle_data", checkReady=False, slot=api.fleetSlot
         )
     else:
-        api.command(car, "charge_stop")
+        api.command(car, "charge_stop", slot=api.fleetSlot)
     assert fleetAuth.call_count == 1 and ownerAuth.call_count == 0
 
 
