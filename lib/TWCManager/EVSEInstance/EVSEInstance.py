@@ -117,14 +117,6 @@ class EVSEInstance(abc.ABC):
     def setTargetPower(self, watts: float) -> None:
         """Set the target charge power in watts."""
 
-    @abc.abstractmethod
-    def startCharging(self) -> None:
-        """Initiate a charging session."""
-
-    @abc.abstractmethod
-    def stopCharging(self) -> None:
-        """Terminate a charging session."""
-
     # ------------------------------------------------------------------
     # Conversion helpers
     # ------------------------------------------------------------------
