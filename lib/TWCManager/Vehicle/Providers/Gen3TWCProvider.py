@@ -1,5 +1,5 @@
-# The Gen3 TWC as a provider: the unit serving a vehicle reads its plug state
-# and amps passively from the cached vitals and sets its amps locally through
+# The Gen3 TWC as a provider: the unit serving a vehicle sets its amps locally
+# through
 # the controller's shared fake-Neurio value. Every unit reads that one value,
 # so a unit cannot be stopped alone while a sibling charges: declared as
 # NO_INDIVIDUAL_STOP whenever more than one unit is occupied. The stop is a
@@ -10,8 +10,6 @@ from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
 from .Capability import (
     LOCAL,
     NO_INDIVIDUAL_STOP,
-    READ_AMPS,
-    READ_PLUG,
     SET_AMPS,
     START_CHARGING,
     STOP_CHARGING,
@@ -26,10 +24,7 @@ class Gen3TWCProvider(Provider):
     local = True
     worker = "local"
     module = None
-    sharedControl = True
     DECLARATIONS = {
-        READ_PLUG: Declaration(LOCAL, passive=True),
-        READ_AMPS: Declaration(LOCAL, passive=True),
         SET_AMPS: Declaration(LOCAL),
         START_CHARGING: Declaration(LOCAL),
         STOP_CHARGING: Declaration(LOCAL),

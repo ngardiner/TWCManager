@@ -23,7 +23,7 @@ def test_vocabulary_and_prices():
     assert (
         C.READS | C.COMMANDS == C.ALL
         and C.SET_AMPS in C.COMMANDS
-        and C.READ_ONLINE in C.READS
+        and C.READ_CHARGE in C.READS
     )
     assert (C.FLEET_COMMAND.price, C.FLEET_DATA.price, C.FLEET_WAKE.price) == (
         0.001,
@@ -38,7 +38,7 @@ def test_provider_defaults_and_declarations():
     p = Stub()
     assert p.declares(C.SET_AMPS) and not p.declares(C.READ_CHARGE)
     assert p.cost(C.WAKE) == C.FLEET_WAKE and p.cost(C.READ_CHARGE) is None
-    assert p.declarations()[C.WAKE] == C.Declaration(C.FLEET_WAKE) and not p.declarations()[C.WAKE].passive
+    assert p.declarations()[C.WAKE] == C.Declaration(C.FLEET_WAKE)
     assert p.ready(None, C.SET_AMPS) is False
     assert not hasattr(Provider, "attempts")                      # retries are the reconciler's
     assert p.limitations(None) == frozenset()

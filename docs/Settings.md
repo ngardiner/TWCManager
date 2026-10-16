@@ -83,7 +83,7 @@ For finer control than the policy, the `providerSuppressions` setting (in settin
 }
 ```
 
-Provider names are `Gen2TWC`, `Gen3TWC`, `TeslaBLE`, `OwnerAPI`, `FleetAPI` and `HomeAssistant`, plus the telemetry feeds `TeslaMateVehicle` and `FleetTelemetryMQTT` (which only report, so a suppression has no effect on them). Capability names are the reads `readList`, `readOnline`, `readCharge`, `readLocation`, `readPlug`, `readVin`, `readAmps` and `wallConnectorVins`, and the commands `setChargeLimit`, `startCharging`, `stopCharging`, `setAmps` and `wake`; `"*"` suppresses every operation. Suppressing `readCharge` also takes the provider out of vehicle reads. Unknown names are ignored. The suppressions apply on top of the Vehicle Command Policy.
+Provider names are `Gen2TWC`, `Gen3TWC`, `TeslaBLE`, `OwnerAPI`, `FleetAPI` and `HomeAssistant`. The telemetry feeds (TeslaMate, Fleet Telemetry) only report, so they are not providers and cannot be suppressed. Capability names are the reads `readCharge` (charge state and location) and `wallConnectorVins`, and the commands `setChargeLimit`, `startCharging`, `stopCharging`, `setAmps` and `wake`; `"*"` suppresses every operation. Suppressing `readCharge` also takes the provider out of vehicle reads. Unknown names are ignored, including the earlier `readList`, `readOnline`, `readLocation`, `readPlug`, `readVin` and `readAmps`, which nothing ever read. The suppressions apply on top of the Vehicle Command Policy.
 
 ### Consumption Offsets
 

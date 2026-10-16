@@ -61,10 +61,10 @@ def test_old_plug_evidence_or_a_car_already_on_a_twc_is_not_a_candidate():
     vitals(u, False); car.observe("pluggedIn", True, "TeslaMateVehicle"); car.observe("twcVin", "8244", "TWC")
     vitals(u, True); assert u.vehicleKey == "anon:" + u.ID
 
-def test_capabilities_normal_tier_stop_and_declared_shared_control():              # G2, G4
+def test_capabilities_and_normal_tier_stop():                                       # G2, G4
     m, ctl, p = make()
-    assert (p.name, p.rank, p.local, p.sharedControl, ctl.sharedControl) == ("Gen3TWC", 1, True, True, True)
-    assert p.cost(C.STOP_CHARGING) == C.LOCAL and p.cost(C.SET_AMPS) == C.LOCAL and p.declarations()[C.READ_PLUG].passive
+    assert (p.name, p.rank, p.local) == ("Gen3TWC", 1, True)
+    assert p.cost(C.STOP_CHARGING) == C.LOCAL and p.cost(C.SET_AMPS) == C.LOCAL
 
 def test_single_unit_headroom_equals_its_target_as_today():                        # G2
     m, ctl, p = make(); (u,) = ctl.devices()

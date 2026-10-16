@@ -223,7 +223,7 @@ def test_ready_without_a_vehicle_is_only_relaxed_for_wall_connector_vins(request
     owner, fleet = api.providers()
     assert fleet.ready(None, C.READ_WALL_CONNECTOR_VINS)
     for p in (owner, fleet):
-        for cap in (C.READ_CHARGE, C.READ_LIST, C.SET_AMPS, C.WAKE, C.READ_VIN):
+        for cap in (C.READ_CHARGE, C.SET_AMPS, C.WAKE):
             assert p.ready(None, cap) is False
     assert not owner.ready(None, C.READ_WALL_CONNECTOR_VINS)                 # no Owner token
 

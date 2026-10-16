@@ -2,18 +2,12 @@
 # operation costs, and how often it may be asked. It imports nothing.
 from typing import NamedTuple, Optional
 
-# Reads
-READ_LIST = "readList"
-READ_ONLINE = "readOnline"
+# Reads: a vehicle's charge state and location (one fetch fills both)
 READ_CHARGE = "readCharge"
-READ_LOCATION = "readLocation"
-READ_PLUG = "readPlug"
-READ_VIN = "readVin"
-READ_AMPS = "readAmps"
 # An energy-site read: which VIN each Wall Connector on the account reports
 READ_WALL_CONNECTOR_VINS = "wallConnectorVins"
 
-# The registry fields a READ_CHARGE / READ_LOCATION fetch can fill
+# The registry fields a READ_CHARGE fetch can fill
 CHARGE_FIELDS = frozenset(
     {
         "batteryLevel",
@@ -37,18 +31,7 @@ STOP_CHARGING = "stopCharging"
 SET_AMPS = "setAmps"
 WAKE = "wake"
 
-READS = frozenset(
-    {
-        READ_LIST,
-        READ_ONLINE,
-        READ_CHARGE,
-        READ_LOCATION,
-        READ_PLUG,
-        READ_VIN,
-        READ_AMPS,
-        READ_WALL_CONNECTOR_VINS,
-    }
-)
+READS = frozenset({READ_CHARGE, READ_WALL_CONNECTOR_VINS})
 COMMANDS = frozenset({SET_CHARGE_LIMIT, START_CHARGING, STOP_CHARGING, SET_AMPS, WAKE})
 ALL = READS | COMMANDS
 
@@ -80,5 +63,3 @@ NO_INDIVIDUAL_STOP = "noIndividualStop"
 
 class Declaration(NamedTuple):
     cost: Cost
-    # The provider reports this on its own and cannot be asked (telemetry)
-    passive: bool = False

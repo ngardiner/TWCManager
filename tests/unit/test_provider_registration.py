@@ -11,7 +11,6 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
 from TWCManager.Vehicle.Providers.Order import ProviderOrder, registerProviders
-from TWCManager.Vehicle.Providers.TelemetryProvider import TelemetryProvider
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.HomeAssistant import HomeAssistant
 from TWCManager.Vehicle.TeslaAPI import TeslaAPI
@@ -22,17 +21,7 @@ from tests.unit.test_provider_order import ble as bleStub   # the Phase 1 fixtur
 from tests.unit.test_provider_order import fleet as fleetStub
 from tests.unit.test_provider_order import owner as ownerStub
 VIN = "5YJ3E1EA1KF000001"
-live = {"at": 100.0}
 _LIB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
-
-class TeslaMateVehicle:                                   # the provider takes its name from the module's class
-    def feedLiveAt(self, vehicle=None): return live["at"]
-
-def test_telemetry_provider_is_passive_free_and_ready_while_live():
-    live["at"] = 100.0; p = TelemetryProvider(TeslaMateVehicle())
-    assert (p.name, p.rank, p.module) == ("TeslaMateVehicle", 3, None)
-    assert p.declarations()[C.READ_PLUG] == C.Declaration(C.CLOUD_FREE, passive=True) and p.ready(None, C.READ_PLUG)
-    live["at"] = None; assert p.ready(None, C.READ_PLUG) is False
 
 def test_home_assistant_provider_follows_entities():
     ha, reg = make_ha(); (p,) = ha.providers(); v = reg.getOrCreate(VIN, "t")
@@ -43,12 +32,6 @@ def test_home_assistant_provider_follows_entities():
     assert p.ready(v, C.START_CHARGING) and p.ready(v, C.SET_CHARGE_LIMIT) and not p.ready(v, C.SET_AMPS) and not p.declares(C.WAKE)
     ha._post_service = Mock(return_value=O.Outcome(O.DONE)); hv.has_charge_current_number = True; hv.entity_ids = {"charge_current_number": "number.a"}
     assert p.setAmps(VIN, 8) == O.Outcome(O.DONE); ha._post_service.assert_called_once_with("number", "set_value", {"entity_id": "number.a", "value": 8.0})
-
-def test_passive_providers_never_enter_the_walk():
-    m = Mock(); m.settings = {}; m.config = {}; m.vehicleRegistry = VehicleRegistry({})
-    o = ProviderOrder(m); live["at"] = 1.0
-    o.register(TelemetryProvider(TeslaMateVehicle()))
-    assert o.ordered(C.READ_PLUG) == [] and [p.name for p in o.providers()] == ["TeslaMateVehicle"]
 
 def test_register_providers_collects_every_vehicle_module_in_rank_order():
     m = Mock(); m.settings = {}; m.config = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)

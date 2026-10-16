@@ -87,7 +87,6 @@ def test_provider_readiness_and_range_per_vehicle():
     assert p.ampsRange(v) == (5, 32) and p.covers(v, 5)
     m.settings["chargeRateControl"] = "2"
     assert p.ready(v, C.SET_AMPS) is False
-    assert p.ready(v, C.READ_VIN) and p.declarations()[C.READ_VIN].passive
 
 
 # Mode 3 hands the rate to the vehicle API below 6 A (TWCSlave's literal

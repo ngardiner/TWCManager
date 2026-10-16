@@ -73,7 +73,7 @@ def test_api_only_suppresses_ble_for_everything(caplog):        # Review Focus 1
 
 def test_config_policy_overrides_settings():
     s = Suppressions(master({"commandPolicy": "ble_only"}, {"vehicle": {"commandPolicy": "api_only"}}))
-    assert s.commandPolicy == "api_only" and s.commandPolicyOverridden
+    assert s.commandPolicy == "api_only"
     assert Suppressions(master({"commandPolicy": "banana"})).commandPolicy == "prefer_ble"
 
 def test_explicit_suppressions_per_provider_and_capability():
