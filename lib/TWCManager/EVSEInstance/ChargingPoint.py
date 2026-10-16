@@ -2,15 +2,16 @@
 A charging point: the endpoints that serve one car, grouped by vehicle key.
 
 A TWC and the car it serves are one point however many endpoints can see the
-car, so the distributor budgets the car once. A point with a local (TWC)
-member gives the whole target to it and TWCSlave applies chargeRateControl as
-before; the car's own endpoint gets no amps command. A point without a local
-member sends the target to its vehicle endpoints.
+car, so the distributor budgets the car once. A point without a local member
+sends the target to its vehicle endpoints. A Gen2 TWC with a car splits the
+rate by chargeRateControl (carriers); any other local member (a Gen3 unit,
+whose target feeds one shared headroom) carries the whole target.
 """
 
-from typing import List
+from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 
 
@@ -144,11 +145,53 @@ class ChargingPoint(EVSEInstance):
     # EVSEInstance: control
     # ------------------------------------------------------------------
 
+    def carriers(self) -> Tuple[bool, bool]:
+        # (the TWC carries the rate, the car carries it), by chargeRateControl
+        mode = int(self.master.settings.get("chargeRateControl", 1))
+        return {2: (False, True), 3: (True, True)}.get(mode, (True, False))
+
     def setTargetPower(self, watts: float) -> None:
-        # The TWC carries the whole target and its heartbeat applies
-        # chargeRateControl; a vehicle member then gets no amps command
-        targets = self.localEndpoints or [e for e in self.endpoints if not e.isReadOnly]
-        for e in targets:
+        local = self.localEndpoints[0] if self.localEndpoints else None
+        cars = [e for e in self.vehicleEndpoints if not e.isReadOnly]
+        layered = hasattr(local, "pointOwnsAmps")
+        if layered:
+            # One writer per cycle: the heartbeat writes no car rate now
+            local.pointOwnsAmps = bool(cars)
+        if local is None or not (layered and cars):
+            for e in [local] if local else cars:
+                e.setTargetPower(watts)
+            return
+        if not watts:
+            # A stop is the charging aspect; a pending lift still goes
+            local.setTargetPower(0)
+            for e in cars:
+                e.setTargetPower(0)
+            return
+        twc, car = self.carriers()
+        amps = self.convertWattsToAmps(watts, self.currentVoltage)
+        floor = local.layerFloorAmps()
+        if twc and (not car or amps >= floor):
+            local.setTargetPower(watts)
+            for e in cars:
+                if car:
+                    # Mode 3 in range: only a car that would cap below the
+                    # offer (undershoot is safe; an unknown is left alone)
+                    k = e.requestedAmps()
+                    lift = k is not None and k < int(amps)
+                else:
+                    # Mode 1: once per plug session
+                    lift = not local.vehicleRateRaised
+                if lift:
+                    self.master.desired.set(
+                        e.vehicleKey, AMPS, local.wiringMaxAmps, "lift", lift=True
+                    )
+            if not car:
+                local.vehicleRateRaised = True
+            return
+        # The car carries: the TWC offers its maximum (mode 2) or holds the
+        # heartbeat's handoff floor (mode 3 below range)
+        local.setTargetPower(local.convertAmpsToWatts(floor) if twc else local.maxPower)
+        for e in cars:
             e.setTargetPower(watts)
 
     def startCharging(self) -> None:

@@ -2,34 +2,27 @@
 EVSEInstance for a registry vehicle whose charge rate a vehicle provider sets.
 
 The endpoint reads only the registry's latest values and never calls a
-provider: the distributor runs on the serial thread, so a rate goes to the
-vehicle command worker, whose setAmps walks the provider order (the local
+provider: the distributor runs on the serial thread, so a rate is desired
+state, which the reconciler delivers through the provider order (the local
 path first; a paid provider only where no local one covers the rate).
 """
-
-import time
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
+from TWCManager.Vehicle.Reconcile.Desired import AMPS
+from TWCManager.Vehicle.Reconcile.Reconciler import known
 
 
 class VehicleEndpoint(EVSEInstance):
-    # An unchanged rate is queued again after this long, as setChargeRate
-    # resends one
-    REFRESH_SECONDS = 600
-
     # Tesla vehicles accept as low as 5 A (car-side minimum)
     MIN_AMPS = 5
 
-    def __init__(self, vehicle, order, master, clock=time.time):
+    def __init__(self, vehicle, order, master):
         self.vehicle = vehicle
         self.order = order
         self.master = master
         self.configConfig = master.config.get("config", {})
-        self._clock = clock
-        self._lastAmps = None
-        self._lastQueuedAt = 0.0
 
     # ------------------------------------------------------------------
     # EVSEInstance: identity
@@ -142,21 +135,23 @@ class VehicleEndpoint(EVSEInstance):
     # EVSEInstance: control
     # ------------------------------------------------------------------
 
+    def requestedAmps(self):
+        # The car's own current request we believe (a read or our write)
+        obs = known(self.vehicle, AMPS)
+        return None if obs is None else obs.value
+
     def setTargetPower(self, watts: float) -> None:
+        desired, key = self.master.desired, self.vehicle.key
         if not watts:
-            # A stop is a stop command; vehicle amps are never 0, and a
-            # clamped 1 A would be a stream of spurious commands
+            # A stop is a stop command; vehicle amps are never 0. A pending
+            # lift still goes
+            d = desired.get(key, AMPS)
+            if d is not None and not d.lift:
+                desired.clearIf(key, AMPS, d.value)
             return
         amps = max(1, int(self.convertWattsToAmps(watts, self.currentVoltage)))
-        now = self._clock()
-        if amps == self._lastAmps and now - self._lastQueuedAt < self.REFRESH_SECONDS:
-            return
-        # Runs on the serial thread: the worker talks to the car
-        self.master.queue_vehicle_command(
-            {"cmd": "setAmps", "vin": self.vehicle.vin, "amps": amps}
-        )
-        self._lastAmps = amps
-        self._lastQueuedAt = now
+        # The reconciler sends it once; a newer reading that disagrees resends
+        desired.set(key, AMPS, amps, "distributor")
 
     def startCharging(self) -> None:
         self.master.startCarsCharging(self.vehicle.vin)

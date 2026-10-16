@@ -402,21 +402,17 @@ class TestAmpsHeartbeat:
         assert slave._amps_heartbeat(0) == bytearray([0x09, 0, 0, 0, 0, 0, 0, 0, 0])
 
 
-class TestVehicleChargeRateQueueing:
-    """setChargeRate is queued to the vehicle worker, never called inline."""
+class TestVehicleChargeRateDesired:
+    """The car's rate is desired state, never a command from the serial thread."""
 
     @pytest.fixture
-    def vehicle(self):
-        v = Mock()
-        v.VIN = "5YJ3E1EA1KF000001"
-        return v
-
-    @pytest.fixture
-    def slave(self, vehicle):
+    def slave(self):
         from TWCManager.TWCSlave import TWCSlave
+        from TWCManager.Vehicle.Reconcile.Desired import DesiredStore
 
         master = Mock()
         master.getModuleByName = Mock(return_value=None)
+        master.desired = DesiredStore()
         config = {
             "config": {
                 "wiringMaxAmpsPerTWC": 32,
@@ -426,55 +422,38 @@ class TestVehicleChargeRateQueueing:
             }
         }
         s = TWCSlave(bytearray(b"AB"), 80, config, master)
-        s.getLastVehicle = Mock(return_value=vehicle)
+        s.vehicleKey = "5YJ3E1EA1KF000001"
         return s
 
-    def test_queue_charge_rate(self, slave, vehicle):
+    def test_queue_charge_rate_sets_desired(self, slave):
+        from TWCManager.Vehicle.Reconcile.Desired import AMPS
+
         slave._queueChargeRate(16.7)
-        slave.master.queue_vehicle_command.assert_called_once_with(
-            {"cmd": "setChargeRate", "amps": 16, "vehicle": vehicle}, None
-        )
+        d = slave.master.desired.get(slave.vehicleKey, AMPS)
+        assert (d.value, d.by, d.lift) == (16, "heartbeat", False)
 
-    def test_raise_queues_wiring_max_with_callback(self, slave, vehicle):
-        slave._requestVehicleRateRaise()
-        task, callback = slave.master.queue_vehicle_command.call_args[0]
-        assert task == {"cmd": "setChargeRate", "amps": 32, "vehicle": vehicle}
-        assert callable(callback)
-        assert slave.vehicleRateRaised is False
+    def test_raise_sets_a_lift_and_the_flag_at_once(self, slave):
+        from TWCManager.Vehicle.Reconcile.Desired import AMPS
 
-    @pytest.mark.parametrize("result", [True, "success", None])
-    def test_raise_success_sets_flag(self, slave, result):
         slave._requestVehicleRateRaise()
-        _, callback = slave.master.queue_vehicle_command.call_args[0]
-        callback(result)
+        d = slave.master.desired.get(slave.vehicleKey, AMPS)
+        assert (d.value, d.by, d.lift) == (32, "lift", True)
         assert slave.vehicleRateRaised is True
-
-    def test_raise_failure_leaves_flag(self, slave):
-        slave._requestVehicleRateRaise()
-        _, callback = slave.master.queue_vehicle_command.call_args[0]
-        callback(False)
-        assert slave.vehicleRateRaised is False
-
-    def test_stale_raise_ignored_after_reset(self, slave):
-        slave._requestVehicleRateRaise()
-        _, callback = slave.master.queue_vehicle_command.call_args[0]
-        slave._resetVehicleRateRaised()
-        callback(True)
-        assert slave.vehicleRateRaised is False
-
-    def test_reset_clears_flag_and_bumps_generation(self, slave):
-        slave.vehicleRateRaised = True
-        gen = slave._vehicleRateRaiseGen
         slave._resetVehicleRateRaised()
         assert slave.vehicleRateRaised is False
-        assert slave._vehicleRateRaiseGen == gen + 1
+
+    def test_no_car_key_sets_nothing_and_raises_no_flag(self, slave):
+        slave.vehicleKey = None
+        slave._requestVehicleRateRaise()
+        assert slave.master.desired.keys() == [] and slave.vehicleRateRaised is False
 
     def test_heartbeat_code_never_calls_set_charge_rate_inline(self):
         import inspect
         from TWCManager.TWCSlave import TWCSlave
 
         source = inspect.getsource(TWCSlave)
-        assert "vehicleModule.setChargeRate" not in source
+        assert "setChargeRate" not in source and "queue_vehicle_command" not in source
+
 
 class TestPolicyNotOnMainLoop:
     """The serial main loop must not evaluate charging policy inline."""
