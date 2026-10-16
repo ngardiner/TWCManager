@@ -252,3 +252,25 @@ def test_read_stamped_like_the_previous_one_still_counts_as_fetched():
     assert car.update_charge() is True and car.batteryLevel == 61
     ble.get_charge_state.assert_called_once()
     assert car.lastAPIAccessTime > 0
+
+
+def test_a_status_deferral_ends_the_read_walk_before_home_assistant():  # 13b M1
+    # Owner and HA both ready: the deferred car reports its stored values
+    # with no request, and HA (billed, after the cloud API) is never read
+    from TWCManager.Vehicle.Providers.HomeAssistantProvider import (
+        HomeAssistantProvider,
+    )
+
+    car, ble, reg = setup(None)
+    ha = Mock()
+    ha.enabled.return_value = True
+    hv = Mock()
+    reg.get(VIN).attach("HomeAssistant", hv)
+    reg.providerOrder.register(HomeAssistantProvider(ha))
+    car.update_vehicle_data = Mock(return_value=True)
+    reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
+    car.statusDeferral = time.time() + 1800
+    assert car.update_charge() is True
+    car.is_awake.assert_not_called()
+    car.update_vehicle_data.assert_not_called()
+    hv.parse_from_home_assistant.assert_not_called()
