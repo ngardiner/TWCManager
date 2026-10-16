@@ -308,6 +308,43 @@ def test_a_refresh_spends_one_of_a_reads_three_tries(requests_mock, monkeypatch)
     assert data.call_count == 3 and refresh.call_count == 1
 
 
+EXPIRED = {"status_code": 401, "text": "token expired"}
+BUSY = {"json": {"response": {"reason": "could_not_wake_buses", "result": False}}}
+
+
+@pytest.mark.parametrize(
+    "answers, cleared",
+    [
+        # A refreshed token refused again on a later try retires the slot,
+        # with no second refresh
+        ([EXPIRED, BUSY, EXPIRED], True),
+        # An expiry on the last try still refreshes, but sends nothing more
+        ([BUSY, BUSY, EXPIRED], False),
+    ],
+)
+def test_a_read_refreshes_at_most_once_across_its_tries(
+    answers, cleared, requests_mock, monkeypatch
+):   # slim Task 13: one tries budget in place of resend/retried
+    import TWCManager.Vehicle.TeslaAPI as T
+    from tests.unit.teslatokens import FLEET_REFRESH_URL, add_home_vehicle, new_api
+    from tests.unit.test_teslaapi_refresh import token_response
+
+    monkeypatch.setattr(T.time, "sleep", Mock())
+    api = new_api()
+    api.storeToken(fleet_token(jti="old"), REFRESH)
+    car = add_home_vehicle(api)
+    refresh = requests_mock.post(
+        FLEET_REFRESH_URL, json=token_response(fleet_token(jti="new"))
+    )
+    data = requests_mock.get(PATH_URLS["read"], answers + [BUSY] * 3)
+    assert car.get_car_api(HOME_VIN + "/vehicle_data", checkReady=False) == (
+        False,
+        None,
+    )
+    assert data.call_count == 3 and refresh.call_count == 1
+    assert api.fleetSlot.empty() is cleared
+
+
 @pytest.mark.parametrize("path", ["read", "command"])
 def test_a_fleet_401_never_refreshes_the_owner_slot(path, requests_mock):
     # Both slots hold refresh tokens: only the slot that made the request
