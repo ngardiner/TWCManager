@@ -6,7 +6,7 @@ from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED
-from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles
+from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles, located
 from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
@@ -100,15 +100,17 @@ class TWCSlave:
         )
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
-    def _anonCars(self):
-        # As main's vehicle-less rate, paid once: the unnamed cars a
-        # vehicle source shows plugged in or charging, else vehicles[0]
+    def pluggedCars(self):
+        # The unnamed cars a vehicle source shows plugged in or charging,
+        # and not placed away; with every unnamed car the fan-out reaches
         named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
         cars = [
             v for v in broadcastVehicles(self.master, SET_AMPS) if v.key not in named
         ]
         plugged = []
         for v in cars:
+            if located(v) is False:
+                continue
             obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
             if obs is None:
                 continue
@@ -118,6 +120,12 @@ class TWCSlave:
                     plugged.append(v)
             elif obs.value in _PLUGGED:
                 plugged.append(v)
+        return plugged, cars
+
+    def _anonCars(self):
+        # As main's vehicle-less rate, paid once: the plugged-in cars, else
+        # vehicles[0]
+        plugged, cars = self.pluggedCars()
         if plugged:
             return plugged
         # The first car the Tesla API listed (registry order is list order)
