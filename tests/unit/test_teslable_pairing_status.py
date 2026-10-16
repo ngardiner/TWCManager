@@ -119,29 +119,105 @@ def test_pairing_failure_status():
 REFUSED = b"Error: vehicle rejected request: your public key has not been paired with the vehicle"
 
 
-def fast_retries(ble):
-    ble.maxRetries = 2
-    ble._calculate_backoff = Mock(return_value=0)
-
-
 def test_key_refusal_stops_retrying_and_records_once():
     ble, reg, master = make()
     ble._setBleStatus(VIN, "paired")
     master.queue_background_task.reset_mock()
-    fast_retries(ble)
     ble._run_command_with_timeout = Mock(return_value=(b"", REFUSED, 1))
-    assert ble.sendCommand(VIN, "ping") is None
-    assert ble._run_command_with_timeout.call_count == 1
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert ble.sendCommand(VIN, "ping") is None
+    assert ble._run_command_with_timeout.call_count == 1 and sleep.call_count == 0
     assert master.queue_background_task.call_count == 1
     assert ble.bleStatus(VIN)["status"] == "refused"
 
 
-def test_other_failures_are_still_retried():
+@pytest.mark.parametrize(
+    "failure",
+    [(None, None, None), (b"", b"", -9), (b"", b"ble: Connection failed", 1)],
+    ids=["timeout", "killed", "connection"],
+)
+def test_a_transient_failure_is_retried_once_then_reported(failure):
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
     ble, reg, master = make()
-    fast_retries(ble)
-    ble._run_command_with_timeout = Mock(return_value=(b"", b"ble: timeout", 1))
-    assert ble.sendCommand(VIN, "ping") is None
-    assert ble._run_command_with_timeout.call_count == 3
+    (p,) = ble.providers()
+    ble._run_command_with_timeout = Mock(return_value=failure)
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply")
+    assert ble._run_command_with_timeout.call_count == 2
+    sleep.assert_called_once_with(2.0)
+    assert TeslaBLE.QUICK_RETRY_DELAY == 2.0
+
+
+def test_a_transient_failure_then_success_is_done():
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    ble._run_command_with_timeout = Mock(
+        side_effect=[(None, None, None), (b"", b"Command executed successfully", 0)]
+    )
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep"):
+        assert p.setAmps(VIN, 10).kind == O.DONE
+    assert ble._run_command_with_timeout.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [b"ble: timeout", b"Error: car could not execute command: not_allowed", b""],
+)
+def test_a_non_transient_failure_is_not_retried(stderr):
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    ble._run_command_with_timeout = Mock(return_value=(b"", stderr, 1))
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply")
+    assert ble._run_command_with_timeout.call_count == 1 and sleep.call_count == 0
+
+
+def test_a_command_rejected_before_running_is_not_retried():
+    ble, reg, master = make()
+    ble._run_command_with_timeout = Mock()
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert ble.sendCommand("5YJ3E1EA1KF000009", "ping") is None  # not in settings
+    assert ble._run_command_with_timeout.call_count == 0 and sleep.call_count == 0
+
+
+def test_removed_retry_config_keys_are_ignored():
+    master_config = {
+        "maxRetries": 9,
+        "retryDelay": 30,
+        "circuitBreakerThreshold": 1,
+        "circuitBreakerTimeout": 3600,
+    }
+    reg = VehicleRegistry({})
+    master = Mock()
+    master.vehicleRegistry = reg
+    master.settings = {"Vehicles": {VIN: {"privKey": "x"}}}
+    master.settingsLock = threading.RLock()
+    master.config = {
+        "config": {
+            "teslaControlPath": "/bin/true",
+            "moduleConfiguration": {"TeslaBLE": master_config},
+        },
+        "vehicle": {"teslaBLE": {"enabled": True}},
+    }
+    with patch.object(TeslaBLE, "_start_dbus_session"), patch.object(
+        TeslaBLE, "_cleanup_stale_pipe"
+    ):
+        ble = TeslaBLE(master)
+    ble.sendPrivateKey = Mock(return_value=True)
+    ble._ensure_pipe_closed = Mock()
+    for name in ("maxRetries", "retryDelay", "circuit_breaker", "retry_stats"):
+        assert not hasattr(ble, name)
+    ble._run_command_with_timeout = Mock(return_value=(None, None, None))
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        for _ in range(3):  # a breaker at threshold 1 would stop the later sends
+            assert ble.sendCommand(VIN, "ping") is None
+    assert ble._run_command_with_timeout.call_count == 6
+    assert [c.args for c in sleep.call_args_list] == [(2.0,)] * 3
 
 
 def test_other_failures_leave_status_alone():
@@ -918,10 +994,12 @@ def test_failed_device_lookup_is_range_unknown():  # M3
     assert ble.rangeStatus(VIN)["inRange"] is None
 
 
-def test_charge_state_maps_the_cars_own_current_request():   # slim Task 12b
+def test_charge_state_maps_the_cars_own_current_request():  # slim Task 12b
     ble, reg, master = make()
     ble._fetch_state_json = Mock(
-        return_value={"chargeState": {"chargeCurrentRequest": 16, "chargerPilotCurrent": 32}}
+        return_value={
+            "chargeState": {"chargeCurrentRequest": 16, "chargerPilotCurrent": 32}
+        }
     )
     state = ble.get_charge_state(VIN)
     assert state["chargeCurrentRequest"] == 16 and state["availableCurrent"] == 32
