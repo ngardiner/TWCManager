@@ -131,10 +131,11 @@ VIN2, VIN3, VIN4 = "5YJ3E1EA1KF000002", "5YJ3E1EA1KF000003", "5YJ3E1EA1KF000004"
 def anonTwc(*outcomes):
     # A VIN-less Gen2 in mode 2 and four at-home Fleet cars, listed VIN
     # first; VIN3 is on a TWC that names it
-    from types import SimpleNamespace
-    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),)))); m.settings["chargeRateControl"] = "2"
-    for vin in (VIN, VIN2, VIN3, VIN4):
-        m.vehicleRegistry.getOrCreate(vin, "t").attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=True, lat=1.0))
+    from tests.unit.reconcile_helpers import placeAt
+    from tests.unit.teslatokens import new_api
+    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),)))); m.settings["chargeRateControl"] = "2"; api = new_api(master=m); del m.modules["TeslaAPI"]
+    for i, vin in enumerate((VIN, VIN2, VIN3, VIN4)):
+        api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, m.vehicleRegistry.get(vin))   # at home by position
     s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN = VIN3
     anon = m.vehicleRegistry.beginPlugSession("8244"); assert s.vehicleKey == anon.key
     return m, r, v, c, s
