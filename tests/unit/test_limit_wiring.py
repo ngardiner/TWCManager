@@ -308,6 +308,14 @@ def test_an_away_fix_older_than_our_last_limit_write_is_no_departure(requests_mo
     c.t += 1; placeAt(m, v, AWAY); m.setPolicyLimit(70, transition=False)                        # a newer fix shows the departure
     d = m.desired.get(VIN, CHARGE_LIMIT); assert d.restore and d.value == 100 and requests_mock.call_count == 0
 
+def test_an_away_fix_stamped_at_our_write_instant_is_no_departure(requests_mock):   # slim Task 13: the <= boundary
+    m, r, v, car = restarted(requests_mock, position=AWAY); c = m.vehicleRegistry._clock
+    v.noteWrite("chargeLimit", 50, "TeslaBLE")                                                   # a retained position redelivered with our write's stamp
+    assert v.lastWrite("chargeLimit").at == v.latest("lat").at
+    m.setPolicyLimit(70, transition=False); assert m.desired.get(VIN, CHARGE_LIMIT) is None      # equal stamps: no departure
+    c.t += 0.001; placeAt(m, v, AWAY); m.setPolicyLimit(70, transition=False)                    # any later fix shows it
+    assert m.desired.get(VIN, CHARGE_LIMIT).restore
+
 def test_at_00_a_plugged_car_a_free_source_shows_at_home_begins_the_session(requests_mock):   # review I2, paid counted
     m, r, v, car = restarted(requests_mock); s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; m.setMaxAmpsToDivideAmongSlaves(32)
     heartbeat(m, s, 0.0, state=0x00)                                                             # asleep, plugged in: TeslaMate says "Complete" at home
