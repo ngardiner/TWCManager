@@ -275,7 +275,7 @@ def test_paid_posts_time_out_after_ten_seconds(requests_mock, monkeypatch):   # 
 def test_a_wake_or_command_that_never_left_is_an_error_and_refreshes_nothing(requests_mock, monkeypatch, path):   # GAPs: wake never sent
     import requests
     from tests.unit.teslatokens import FLEET_REFRESH_URL
-    api, reg, p = fleet(requests_mock); asleep(requests_mock, monkeypatch, api)
+    api, reg, p = fleet(requests_mock); api.storeToken(fleet_token(), "refresh-me"); asleep(requests_mock, monkeypatch, api)   # a refresh would really go out
     requests_mock.post(re.compile(r".*/%s$" % path), exc=requests.exceptions.ConnectionError)
     refresh = requests_mock.post(FLEET_REFRESH_URL, json={})
     outcome = p.wake(VIN) if path == "wake_up" else p.setAmps(VIN, 10)
