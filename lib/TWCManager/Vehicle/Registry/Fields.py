@@ -141,10 +141,6 @@ class FieldStore:
         # write is not trusted over it.
         return obs is not None and obs.at > write.at
 
-    def fresherThanWrite(self, field: str) -> bool:
-        with self._lock:
-            return self._fresher(self._latest.get(field), self._writes.get(field))
-
     def trusted(
         self,
         field: str,

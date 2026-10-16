@@ -8,15 +8,11 @@ from TWCManager.Vehicle.Providers.Gen3TWCProvider import Gen3TWCProvider
 from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Suppressions import Suppressions
-from TWCManager.Vehicle.Providers.TelemetryProvider import TelemetryProvider
 from TWCManager.Vehicle.Providers.TeslaAPIProviders import FleetAPIProvider, OwnerAPIProvider
 from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.teslatokens import fleet_token, owner_token
 from tests.unit.test_carapivehicle_registry import VIN, api_with_registry
-
-class TeslaMateVehicle:                                   # the provider takes its name from the module's class
-    def feedLiveAt(self, vehicle=None): return 1.0
 
 def master(settings=None):
     m = Mock(); m.settings = dict(settings or {}); m.config = {}
@@ -44,19 +40,17 @@ def install(kinds, settings):
         elif kind == "ha":
             v.attach("HomeAssistant", Mock(has_charge_switch=True, has_charge_current_number=True, has_charge_limit_number=True))
             o.register(HomeAssistantProvider(Mock(enabled=Mock(return_value=True), master=m)))
-        elif kind == "telemetry":
-            o.register(TelemetryProvider(TeslaMateVehicle()))
     return o, v
 
 def providers_of_every_kind():
-    o, v = install(("gen2", "gen3", "ble", "owner", "fleet", "ha", "telemetry"), {}); return o.providers()
+    o, v = install(("gen2", "gen3", "ble", "owner", "fleet", "ha"), {}); return o.providers()
 
 SHAPES = {
     "gen2": ("gen2",),
     "gen2+ble": ("gen2", "ble"),
     "gen2+owner+fleet": ("gen2", "owner", "fleet"),
     "gen2+ble+fleet": ("gen2", "ble", "fleet"),
-    "gen2+ble+owner+fleet+ha+telemetry": ("gen2", "ble", "owner", "fleet", "ha", "telemetry"),
+    "gen2+ble+owner+fleet+ha": ("gen2", "ble", "owner", "fleet", "ha"),
     "gen3+owner+fleet": ("gen3", "owner", "fleet"),
     "gen3+ble+ha": ("gen3", "ble", "ha"),
 }
@@ -97,7 +91,7 @@ def test_order_ready_and_available_match_the_rule_the_tables_replace(shape, poli
     monkeypatch.setattr(Suppressions, "suppressed", legacySuppressed); before = snapshot(o, v)
     assert after == before
 
-FULL = SHAPES["gen2+ble+owner+fleet+ha+telemetry"]
+FULL = SHAPES["gen2+ble+owner+fleet+ha"]
 EXPECTED = {     # (policy, stopMode) -> candidates at ccbe58c for setAmps below the TWC floor (BLE covers it), stopCharging, wake, readCharge
     (None, 1): (["TeslaBLE"], ["TeslaBLE", "FleetAPI", "HomeAssistant"], ["TeslaBLE", "FleetAPI"], ["TeslaBLE", "OwnerAPI", "HomeAssistant"]),
     ("prefer_ble", 3): (["TeslaBLE"], ["TeslaBLE", "Gen2TWC"], ["TeslaBLE", "FleetAPI"], ["TeslaBLE", "OwnerAPI", "HomeAssistant"]),
@@ -117,18 +111,16 @@ def test_tables_match_the_declarations_they_replace():
     for p in byName.values(): assert p.declarations() is type(p).DECLARATIONS
     assert FleetAPIProvider.DECLARATIONS[C.SET_AMPS] == D(C.FLEET_COMMAND)
     assert HomeAssistantProvider.DECLARATIONS[C.STOP_CHARGING] == D(C.HA_BILLED)
-    passive = lambda caps, cost: {c: D(cost, passive=True) for c in caps}
-    assert byName["Gen2TWC"].declarations() == dict(passive((C.READ_PLUG, C.READ_VIN, C.READ_AMPS), C.LOCAL), **{C.SET_AMPS: D(C.LOCAL), C.START_CHARGING: D(C.LOCAL), C.STOP_CHARGING: D(C.DISRUPTIVE)})
-    assert byName["Gen3TWC"].declarations() == dict(passive((C.READ_PLUG, C.READ_AMPS), C.LOCAL), **{c: D(C.LOCAL) for c in (C.SET_AMPS, C.START_CHARGING, C.STOP_CHARGING)})
-    assert byName["TeslaBLE"].declarations() == {c: D(C.LOCAL) for c in (C.READ_CHARGE, C.READ_LOCATION, C.READ_PLUG, C.READ_ONLINE, C.SET_CHARGE_LIMIT, C.START_CHARGING, C.STOP_CHARGING, C.SET_AMPS, C.WAKE)}
+    assert byName["Gen2TWC"].declarations() == {C.SET_AMPS: D(C.LOCAL), C.START_CHARGING: D(C.LOCAL), C.STOP_CHARGING: D(C.DISRUPTIVE)}
+    assert byName["Gen3TWC"].declarations() == {c: D(C.LOCAL) for c in (C.SET_AMPS, C.START_CHARGING, C.STOP_CHARGING)}
+    assert byName["TeslaBLE"].declarations() == {c: D(C.LOCAL) for c in (C.READ_CHARGE, C.SET_CHARGE_LIMIT, C.START_CHARGING, C.STOP_CHARGING, C.SET_AMPS, C.WAKE)}
     wcv = D(C.CLOUD_FREE)
-    assert byName["OwnerAPI"].declarations() == dict({c: D(C.CLOUD_FREE) for c in (C.READ_LIST, C.READ_ONLINE, C.READ_CHARGE, C.READ_LOCATION)}, **{c: D(C.OWNER_COMMAND) for c in C.COMMANDS}, **{C.READ_WALL_CONNECTOR_VINS: wcv})
-    assert byName["FleetAPI"].declarations() == {C.READ_LIST: D(C.CLOUD_FREE), C.READ_ONLINE: D(C.CLOUD_FREE), C.READ_CHARGE: D(C.FLEET_DATA), C.READ_LOCATION: D(C.FLEET_DATA),
+    assert byName["OwnerAPI"].declarations() == dict({C.READ_CHARGE: D(C.CLOUD_FREE), C.READ_WALL_CONNECTOR_VINS: wcv}, **{c: D(C.OWNER_COMMAND) for c in C.COMMANDS})
+    assert byName["FleetAPI"].declarations() == {C.READ_CHARGE: D(C.FLEET_DATA),
         C.SET_CHARGE_LIMIT: D(C.FLEET_COMMAND), C.START_CHARGING: D(C.FLEET_COMMAND), C.STOP_CHARGING: D(C.FLEET_COMMAND), C.SET_AMPS: D(C.FLEET_COMMAND),
         C.WAKE: D(C.FLEET_WAKE), C.READ_WALL_CONNECTOR_VINS: wcv}
-    assert byName["HomeAssistant"].declarations() == {C.READ_CHARGE: D(C.HA_BILLED), C.READ_LOCATION: D(C.HA_BILLED), C.SET_CHARGE_LIMIT: D(C.HA_BILLED), C.SET_AMPS: D(C.HA_BILLED),
+    assert byName["HomeAssistant"].declarations() == {C.READ_CHARGE: D(C.HA_BILLED), C.SET_CHARGE_LIMIT: D(C.HA_BILLED), C.SET_AMPS: D(C.HA_BILLED),
         C.START_CHARGING: D(C.HA_BILLED), C.STOP_CHARGING: D(C.HA_BILLED)}
-    assert byName["TeslaMateVehicle"].declarations() == passive((C.READ_CHARGE, C.READ_LOCATION, C.READ_PLUG, C.READ_ONLINE), C.CLOUD_FREE)
 
 def test_a_provider_without_a_table_is_suppressed_by_locality():          # pre-flight M5
     m = master({"commandPolicy": "ble_only"}); s = Suppressions(m)

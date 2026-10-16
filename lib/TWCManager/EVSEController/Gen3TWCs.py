@@ -157,8 +157,6 @@ class Gen3TWCs(EVSEController):
     """EVSEController for Gen3 Tesla Wall Connectors via Neurio Modbus emulation."""
 
     name = "Gen3TWCs"
-    # Every unit reads the one fake-Neurio value
-    sharedControl = True
     # Republish only when the headroom moves by more than this (or the
     # targets change)
     DAMP_AMPS = 1.0
@@ -265,12 +263,6 @@ class Gen3TWCs(EVSEController):
     # Per-unit targets and the one shared house load
     # ------------------------------------------------------------------
 
-    @property
-    def unitTargets(self) -> Dict[str, float]:
-        """Each unit's own target in watts."""
-        with self._targetLock:
-            return dict(self._unitTargets)
-
     def setUnitTarget(self, unitId: str, watts: float) -> None:
         """Record one unit's target and republish the shared house load."""
         with self._targetLock:
@@ -311,13 +303,6 @@ class Gen3TWCs(EVSEController):
         with self._targetLock:
             published = self._publishedLoad
         return self._maxFuse() if published is None else published
-
-    def headroom(self) -> float:
-        """The first device's current headroom in amps."""
-        devices = self.devices()
-        if not devices:
-            return 0.0
-        return round(devices[0].fuseAmps - self._servedLoad(), 2)
 
     def demandAmps(self, unit) -> float:
         """What a unit would draw from a headroom: its measured current when

@@ -250,10 +250,6 @@ class VehicleRegistry:
         found.sort(key=lambda p: p[0], reverse=True)
         return [v for _, v in found]
 
-    def pointFor(self, vin: str) -> Optional[str]:
-        v = self.get(vin)
-        return None if v is None else v.value("twcVin")
-
     def vehicleAt(self, pointId: str) -> Optional[Vehicle]:
         attributed = self._attributedTo(pointId)
         if attributed:

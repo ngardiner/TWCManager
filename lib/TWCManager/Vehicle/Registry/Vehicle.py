@@ -164,9 +164,6 @@ class Vehicle:
     def noteWrite(self, field: str, value: Any, source: str) -> Observation:
         return self._fields.noteWrite(field, value, source)
 
-    def fresherThanWrite(self, field: str) -> bool:
-        return self._fields.fresherThanWrite(field)
-
     def read(
         self,
         field: str,

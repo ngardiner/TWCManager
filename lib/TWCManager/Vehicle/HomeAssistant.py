@@ -20,10 +20,8 @@ Expected TWCManager config:
 
 import asyncio
 import json
-import logging
 import re
 import threading
-import time
 from typing import Dict, List, Optional
 
 import requests
@@ -66,17 +64,12 @@ class HaVehicle:
         self.slug = _slugify_name(name)
         self.entity_ids = entity_ids  # only the entities we need
 
-        # Cached state used by TWCManager:
+        # Cached for the policy's minBatteryLevelAtHome/numCarsAtHome and the
+        # presence check; everything else goes only to the registry
         self.battery_level: Optional[float] = None
-        self.charge_limit: Optional[float] = None
-        self.available_current: Optional[float] = None
-        self.charging: Optional[bool] = None
-
         self.lat: Optional[float] = None
         self.lon: Optional[float] = None
         self.at_home: bool = False
-
-        self.last_state_update: float = 0.0
 
     # ---- Helpers for entity availability ----
 
@@ -106,7 +99,8 @@ class HaVehicle:
         return True
 
     def parse_from_home_assistant(self, api: "HomeAssistant") -> Optional[dict]:
-        """Read the entities and update the cached state. Returns the registry
+        """Read the entities and update the cached battery level, position
+        and at_home. Returns the registry
         fields this pass observed, or None if Home Assistant could not be
         reached or no entity answered. Does not touch the registry."""
         answered = False
@@ -141,8 +135,7 @@ class HaVehicle:
         st = get_state("charge_limit_number")
         if st is not None:
             try:
-                self.charge_limit = float(st.get("state"))
-                seen["chargeLimit"] = self.charge_limit
+                seen["chargeLimit"] = float(st.get("state"))
             except (TypeError, ValueError):
                 pass
 
@@ -150,8 +143,7 @@ class HaVehicle:
         st = get_state("charge_current_number")
         if st is not None:
             try:
-                self.available_current = float(st.get("state"))
-                seen["availableCurrent"] = self.available_current
+                seen["availableCurrent"] = float(st.get("state"))
             except (TypeError, ValueError):
                 pass
 
@@ -159,8 +151,8 @@ class HaVehicle:
         st = get_state("charging_sensor")
         if st is not None:
             state = st.get("state", "").lower()
-            self.charging = state in ("charging", "starting", "on")
-            seen["chargingState"] = "Charging" if self.charging else "Stopped"
+            charging = state in ("charging", "starting", "on")
+            seen["chargingState"] = "Charging" if charging else "Stopped"
 
         # Location
         st = get_state("location_tracker")
@@ -181,7 +173,6 @@ class HaVehicle:
 
         if not answered:
             return None
-        self.last_state_update = time.time()
         return seen
 
 
@@ -559,16 +550,6 @@ class HomeAssistant:
         self._refusalLogged = False
         logger.debug("HA: service call %s.%s succeeded", domain, service)
         return Outcome(DONE)
-
-    # ------------------------------------------------------------------
-    # TeslaAPI-compatible methods
-    # ------------------------------------------------------------------
-
-    def getCarApiVehicles(self):
-        return self.carApiVehicles
-
-    def getVehicleCount(self):
-        return len(self.carApiVehicles)
 
     # ------------------------------------------------------------------
     # Home/Location helpers

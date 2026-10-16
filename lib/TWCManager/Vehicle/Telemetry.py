@@ -4,7 +4,6 @@ import threading
 from typing import Optional
 
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Vehicle.Providers.TelemetryProvider import TelemetryProvider
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("Telemetry", "Vehicle")
@@ -97,9 +96,6 @@ class TelmetryBase:
             timer = threading.Timer(30, self.doMQTT)
             timer.daemon = True
             timer.start()
-
-    def providers(self):
-        return [TelemetryProvider(self)]
 
     def doMQTT(self):
         client_name = f"TWC{self.__class__.__name__}"

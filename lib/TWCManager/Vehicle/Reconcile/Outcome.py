@@ -30,13 +30,13 @@ RETRYABLE = frozenset({UNREACHABLE, ERROR})
 # The provider is skipped for the rest of the round
 EXCLUDING = frozenset({UNSUPPORTED, REFUSED})
 
-# An ERROR with one of these details was produced by the lane itself, not by
+# An ERROR with one of these details was produced by the queue itself, not by
 # a provider, and counts against nothing
-LANE_DETAILS = frozenset({"cancelled", "dropped", "replaced"})
+QUEUE_DETAILS = frozenset({"cancelled", "dropped", "replaced"})
 
 # An outcome with one of these details, or one starting RULES, made no
 # request: it is neither a paid call nor a sent command
-NOT_SENT = LANE_DETAILS | {
+NOT_SENT = QUEUE_DETAILS | {
     "backoff",
     "wake held",
     "wake refused",

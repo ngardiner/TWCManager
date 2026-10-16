@@ -91,15 +91,13 @@ def test_max_age_none_never_fetches():
     assert v.read("chargeLimit", maxAge=None) is None and src.calls == []
 
 
-def test_provider_without_field_not_ready_or_not_reading_is_skipped():
+def test_provider_without_field_or_not_ready_is_skipped():
     loc = Reader("A", C.LOCAL, {"lat": 1.0}, fields=("lat", "lon"))
     shy = Reader("B", C.LOCAL, {"chargeLimit": 5})
     shy.isReady = False
-    passive = Reader("C", C.LOCAL, {"chargeLimit": 6})
-    passive.DECLARATIONS = {C.READ_CHARGE: C.Declaration(C.LOCAL, passive=True)}
-    reg, v = setup(loc, shy, passive)
+    reg, v = setup(loc, shy)
     assert v.read("chargeLimit", maxAge=0) is None
-    assert loc.calls == [] and shy.calls == [] and passive.calls == []
+    assert loc.calls == [] and shy.calls == []
 
 
 def test_readiness_is_asked_just_before_each_fetch():

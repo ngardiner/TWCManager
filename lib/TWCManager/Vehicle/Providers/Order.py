@@ -52,7 +52,7 @@ class ProviderOrder:
         found = []
         for index, p in self._indexed():
             declaration = p.declarations().get(capability)
-            if declaration is None or declaration.passive:
+            if declaration is None:
                 continue
             if self.suppressions.suppressed(p, capability):
                 continue

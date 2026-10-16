@@ -19,9 +19,6 @@ from .Capability import (
     OWNER_COMMAND,
     LOCATION_FIELDS,
     READ_CHARGE,
-    READ_LIST,
-    READ_LOCATION,
-    READ_ONLINE,
     READ_WALL_CONNECTOR_VINS,
     SET_AMPS,
     SET_CHARGE_LIMIT,
@@ -78,7 +75,7 @@ class _TeslaAPIProvider(Provider):
     # (commandSlotFor), and ready() says which provider that is, so each
     # car's command goes out once. One request each (set_charging_amps below 5 A
     # excepted, as TeslaPy #42), classified by TeslaAPI.command. No pre-wake:
-    # the lane wakes first when the attempt says so.
+    # the attempt runner wakes first when the attempt says so.
 
     # The clock passed to the wake hold; a test may replace it
     clock = time.time
@@ -139,10 +136,7 @@ class OwnerAPIProvider(_TeslaAPIProvider):
     rank = 4
     local = False
     DECLARATIONS = {
-        READ_LIST: Declaration(CLOUD_FREE),
-        READ_ONLINE: Declaration(CLOUD_FREE),
         READ_CHARGE: Declaration(CLOUD_FREE),
-        READ_LOCATION: Declaration(CLOUD_FREE),
         SET_CHARGE_LIMIT: Declaration(OWNER_COMMAND),
         START_CHARGING: Declaration(OWNER_COMMAND),
         STOP_CHARGING: Declaration(OWNER_COMMAND),
@@ -188,10 +182,7 @@ class FleetAPIProvider(_TeslaAPIProvider):
     rank = 5
     local = False
     DECLARATIONS = {
-        READ_LIST: Declaration(CLOUD_FREE),
-        READ_ONLINE: Declaration(CLOUD_FREE),
         READ_CHARGE: Declaration(FLEET_DATA),
-        READ_LOCATION: Declaration(FLEET_DATA),
         SET_CHARGE_LIMIT: Declaration(FLEET_COMMAND),
         START_CHARGING: Declaration(FLEET_COMMAND),
         STOP_CHARGING: Declaration(FLEET_COMMAND),

@@ -50,14 +50,14 @@ def test_own_write_stamp_and_freshness():
     c = Clock()
     s = FieldStore(clock=c)
     s.observe("chargeLimit", 80, "TeslaMateVehicle", at=900.0)
-    assert s.fresherThanWrite("chargeLimit") is True  # no write yet
+    assert s.trusted("chargeLimit") is not None  # no write yet
     s.noteWrite("chargeLimit", 70, "TeslaBLE")  # at 1000
     assert s.lastWrite("chargeLimit") == Observation(70, "TeslaBLE", 1000.0)
-    assert s.fresherThanWrite("chargeLimit") is False  # stored 900 < write 1000
+    assert s.trusted("chargeLimit") is None  # stored 900 < write 1000
     s.observe("chargeLimit", 70, "TeslaMateVehicle", at=1000.0)
-    assert s.fresherThanWrite("chargeLimit") is False  # same instant: not fresher (P1)
+    assert s.trusted("chargeLimit") is None  # same instant: not fresher (P1)
     s.observe("chargeLimit", 70, "TeslaMateVehicle", at=1000.5)
-    assert s.fresherThanWrite("chargeLimit") is True
+    assert s.trusted("chargeLimit") is not None
 
 
 def test_snapshot_is_a_copy():

@@ -223,7 +223,7 @@ def test_ready_without_a_vehicle_is_only_relaxed_for_wall_connector_vins(request
     owner, fleet = api.providers()
     assert fleet.ready(None, C.READ_WALL_CONNECTOR_VINS)
     for p in (owner, fleet):
-        for cap in (C.READ_CHARGE, C.READ_LIST, C.SET_AMPS, C.WAKE, C.READ_VIN):
+        for cap in (C.READ_CHARGE, C.SET_AMPS, C.WAKE):
             assert p.ready(None, cap) is False
     assert not owner.ready(None, C.READ_WALL_CONNECTOR_VINS)                 # no Owner token
 
@@ -252,7 +252,7 @@ def test_no_energy_sites_makes_the_capability_not_ready(requests_mock):
 def test_a_failed_products_fetch_is_not_cached_as_empty(requests_mock):
     api, reg, ctl, u = setup(requests_mock)
     requests_mock.get(re.compile(r".*/api/1/products$"), status_code=500, json={})
-    assert api.wallConnectorVins(api.ownerSlot) is None and api.energySites(api.ownerSlot) == []
+    assert api.wallConnectorVins(api.ownerSlot) is None and api._fetchEnergySites(api.ownerSlot) is None
     assert api.wallConnectorVinsReady(api.ownerSlot)
 
 def test_a_site_without_wall_connectors_is_dropped_from_later_polls(requests_mock):
