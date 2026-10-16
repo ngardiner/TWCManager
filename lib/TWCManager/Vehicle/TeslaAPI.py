@@ -285,15 +285,25 @@ class TeslaAPI:
         return result
 
     def _request(
-        self, slot, method, path, purpose, body=None, timeout=10, vehicle=None
+        self,
+        slot,
+        method,
+        path,
+        purpose,
+        body=None,
+        timeout=10,
+        vehicle=None,
+        resend=True,
+        retried=False,
     ):
         # One request with slot's token to path under the API root (where
         # .../api/1/vehicles lives), bounded by timeout. Returns (response,
         # None) for an HTTP 200, else (response or None, the Outcome
-        # _classify gave). An expired token it refreshed is sent once more,
-        # except for the vehicle list. A transport error is logged and
+        # _classify gave). An expired token it refreshed is sent once more
+        # when resend (the caller has a try left for it); retried says the
+        # caller already refreshed once. A transport error is logged and
         # carried by its type alone, never its text (it can hold the header).
-        for retried in (False, True):
+        for retried in (retried, True):
             try:
                 req = getattr(requests, method)(
                     slot.baseURL[: -len("vehicles")] + path,
@@ -316,6 +326,8 @@ class TeslaAPI:
             )
             if outcome is not _REFRESHED:
                 return req, outcome
+            if not resend:
+                return req, Outcome(REFUSED, "401")
 
     def _classify(self, slot, status, purpose, body, vehicle=None, retried=False):
         # What an answer means, acted on: None for an HTTP 200, else an
@@ -346,8 +358,7 @@ class TeslaAPI:
             ):
                 result = self.refreshSlot(slot)
                 if result == "success":
-                    # The vehicle list is not sent again: the next poll is
-                    return _REFRESHED if purpose != "list" else Outcome(REFUSED, "401")
+                    return _REFRESHED
                 if result == "unreachable":
                     return Outcome(UNREACHABLE, "token refresh")
                 if paid and not slot.empty():
@@ -539,10 +550,10 @@ class TeslaAPI:
         # /vehicles (it answers 412 "only available on fleetapi"); /products
         # still does, with energy sites that addVehicle skips (no VIN).
         path = "products" if slot.tokenType == "owner" else "vehicles"
-        req, outcome = self._request(slot, "get", path, "list", timeout=30)
+        # After a refresh the list is not sent again: the next poll is
+        req, outcome = self._request(slot, "get", path, "list", resend=False)
         if outcome is not None:
-            refused = req is not None and req.status_code in (401, 403, 410, 412)
-            return None if refused else False
+            return None if outcome.kind == REFUSED else False
         try:
             listed = json.loads(req.text)
             cars = listed["response"][: listed["count"]]
@@ -1753,14 +1764,26 @@ class CarApiVehicle:
             return False, None
 
         apiResponseDict = {}
-        # Up to 3 tries while the car's buses wake or a transient error clears
-        for _ in range(0, 3):
+        # Up to 3 requests while the car's buses wake or a transient error
+        # clears; a resend after a refresh (at most one) is one of them
+        sent, refreshed = 0, False
+        while sent < 3:
+            token = slot.accessToken
             req, outcome = self.carapi._request(
-                slot, "get", "vehicles/" + path, "read", vehicle=self
+                slot,
+                "get",
+                "vehicles/" + path,
+                "read",
+                vehicle=self,
+                resend=sent < 2,
+                retried=refreshed,
             )
             if outcome is not None:
                 # Refused, asleep (408), backed off (429) or never sent
                 return False, None
+            if slot.accessToken != token:
+                sent, refreshed = sent + 1, True
+            sent += 1
             try:
                 apiResponseDict = json.loads(req.text)
             except ValueError:
