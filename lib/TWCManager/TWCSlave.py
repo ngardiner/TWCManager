@@ -3,7 +3,10 @@ import logging
 import re
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
+from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles
+from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
 
@@ -92,10 +95,22 @@ class TWCSlave:
     def _setCarAmps(self, amps, by, lift=False):
         # Desired state: the reconciler talks to the car, off this (serial)
         # thread. Never for a point whose car member owns the car's amps
-        if self.vehicleKey is None or getattr(self, "pointOwnsAmps", False):
+        key = self.vehicleKey
+        if key is None or getattr(self, "pointOwnsAmps", False):
             return False
-        self.master.desired.set(self.vehicleKey, AMPS, int(amps), by, lift=lift)
-        return True
+        keys = [key]
+        if key.startswith(ANON_PREFIX):
+            # As main's vehicle-less rate: the cars its broadcast reached,
+            # except one a TWC names
+            named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
+            keys = [
+                v.key
+                for v in broadcastVehicles(self.master, SET_AMPS)
+                if v.key not in named
+            ]
+        for k in keys:
+            self.master.desired.set(k, AMPS, int(amps), by, lift=lift)
+        return bool(keys)
 
     def _queueChargeRate(self, amps):
         self._setCarAmps(amps, "heartbeat")

@@ -121,3 +121,15 @@ def test_fluctuating_offer_sends_at_most_one_rate_per_15s():               # pre
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); e = VehicleEndpoint(v, m.providerOrder, m)
     for i in range(3600): e.setTargetPower((10 + i % 2) * 240); r.pass_(); c.t += 1
     assert 200 <= len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)       # one hour: at most main's 240 set_charging_amps, no wake
+
+def test_an_anonymous_twc_rates_the_cars_main_s_broadcast_reached(): # as main's vehicle-less setChargeRate; paid counted
+    from types import SimpleNamespace
+    VIN2, VIN3 = "5YJ3E1EA1KF000002", "5YJ3E1EA1KF000003"
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); m.settings["chargeRateControl"] = "2"
+    for vin, home in ((VIN, True), (VIN2, False), (VIN3, True)):
+        m.vehicleRegistry.getOrCreate(vin, "t").attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=home, lat=1.0))
+    s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN = VIN3            # VIN3 is on a TWC that names it
+    anon = m.vehicleRegistry.beginPlugSession("8244"); assert s.vehicleKey == anon.key
+    for i in range(3600): s._queueChargeRate(10 + i % 2); r.pass_(); c.t += 1
+    assert {x[1] for x in f.calls} == {VIN} and len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)   # never the away car, nor a named one; no wake
+    s._requestVehicleRateRaise(); assert m.desired.get(VIN, AMPS).lift and s.vehicleRateRaised
