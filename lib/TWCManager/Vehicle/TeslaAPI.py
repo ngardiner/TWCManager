@@ -1498,30 +1498,24 @@ class TeslaAPI:
                     car.statusDeferral = 0
                     updated = car.update_location(0)
                     if updated and not car.atHome:
-                        logger.log(
-                            logging.INFO2,
-                            car.name
-                            + " was connected to a TWC, so is definitely home.",
+
+                        def say(msg, *args):
+                            logger.log(logging.INFO2, msg, *args)
+
+                        say(
+                            "%s was connected to a TWC, so is definitely home.",
+                            car.name,
                         )
                         if car.gpsAsOf and time.time() - car.gpsAsOf > 600:
                             # The car is home (the TWC reports its VIN), but
                             # its GPS fix is stale - don't move home to
                             # wherever the car last had reception.
-                            logger.log(
-                                logging.INFO2,
-                                "Not resetting home location: "
-                                + car.name
-                                + "'s GPS fix is stale.",
+                            say(
+                                "Not resetting home location: %s's GPS fix is stale.",
+                                car.name,
                             )
                         else:
-                            logger.log(
-                                logging.INFO2,
-                                "Resetting home location to ("
-                                + str(car.lat)
-                                + ", "
-                                + str(car.lon)
-                                + ")",
-                            )
+                            say("Resetting home location to (%s, %s)", car.lat, car.lon)
                             self.master.setHomeLat(car.lat)
                             self.master.setHomeLon(car.lon)
                             self.master.queue_background_task({"cmd": "sunrise"})
