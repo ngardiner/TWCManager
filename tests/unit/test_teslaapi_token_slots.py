@@ -94,7 +94,7 @@ def test_reads_use_owner_when_usable(no_threads, requests_mock):
     data = requests_mock.get(OWNER_API_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA)
     fleet = fleet_calls(requests_mock)
 
-    assert vehicle.update_vehicle_data() is True
+    assert api.update_vehicle_data(vehicle) is True
 
     assert data.call_count == 1
     assert data.last_request.headers["Authorization"] == "Bearer " + owner
@@ -108,7 +108,7 @@ def test_reads_use_fleet_without_owner(no_threads, requests_mock):
     vehicle = add_home_vehicle(api)
     data = requests_mock.get(FLEET_NA_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA)
 
-    assert vehicle.update_vehicle_data() is True
+    assert api.update_vehicle_data(vehicle) is True
 
     assert data.call_count == 1
     assert data.last_request.headers["Authorization"] == "Bearer " + token
@@ -124,7 +124,7 @@ def test_vehicle_list_from_owner_products_when_both_present(no_threads, requests
 
     assert products.call_count == 1
     assert fleetList.call_count == 0
-    assert len(api.carApiVehicles) == 1
+    assert len(api.registry.attached("TeslaAPI")) == 1
 
 
 def test_commands_use_fleet_only(no_threads, requests_mock):
@@ -161,7 +161,7 @@ def test_command_refused_without_usable_fleet(no_threads, requests_mock, fleet):
 
     assert anyCall.call_count == 0
     assert api.getCarApiLastErrorTime() == 0
-    assert vehicle.lastErrorTime == 0
+    assert vehicle.attachment("TeslaAPI").lastErrorTime == 0
 
 
 def test_no_usable_slot_makes_no_requests(no_threads, requests_mock):
@@ -170,8 +170,8 @@ def test_no_usable_slot_makes_no_requests(no_threads, requests_mock):
     anyCall = requests_mock.register_uri(rm.ANY, rm.ANY, json={})
 
     assert api.slotFor("read") is None
-    assert vehicle.is_awake() is False
-    assert vehicle.update_vehicle_data() is False
+    assert api.is_awake(vehicle) is False
+    assert api.update_vehicle_data(vehicle) is False
 
     assert anyCall.call_count == 0
     assert api.getCarApiLastErrorTime() == 0
@@ -238,7 +238,7 @@ def test_get_car_api_expired_401_refreshes_once_and_retries(no_threads, requests
         json={"access_token": newAccess, "refresh_token": "r2", "expires_in": 28800},
     )
 
-    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
+    assert api.get_car_api(vehicle, "5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
         True,
         {"ok": True},
     )
@@ -260,7 +260,7 @@ def test_get_car_api_refreshes_at_most_once(no_threads, requests_mock):
         json={"access_token": fleet_token(), "refresh_token": "r", "expires_in": 60},
     )
 
-    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
+    assert api.get_car_api(vehicle, "5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
         False,
         None,
     )
@@ -277,7 +277,7 @@ def test_get_car_api_connection_error_returns_false(no_threads, requests_mock):
         FLEET_NA_URL + "/5YJ3E1EA1KF000001/vehicle_data", exc=requests.exceptions.ConnectionError
     )
 
-    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
+    assert api.get_car_api(vehicle, "5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
         False,
         None,
     )
@@ -366,13 +366,13 @@ def test_owner_401_clears_owner_and_next_read_uses_fleet(
         FLEET_NA_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA
     )
 
-    assert vehicle.update_vehicle_data() is False
+    assert api.update_vehicle_data(vehicle) is False
     assert api.ownerSlot.accessToken == ""
     assert "Tesla Owner API token was rejected (HTTP 401); removing it." in caplog.text
     assert {"cmd": "saveSettings"} in api.master.tasks
     assert ownerData.call_count == 1
 
-    assert vehicle.update_vehicle_data() is True
+    assert api.update_vehicle_data(vehicle) is True
     assert fleetData.call_count == 1
     assert owner not in caplog.text and fleet not in caplog.text
 
@@ -416,7 +416,7 @@ def test_synced_401_expired_clears_without_refresh(no_threads, requests_mock):
     )
     refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
 
-    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (False, None)
+    assert api.get_car_api(vehicle, "5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (False, None)
 
     assert refresh.call_count == 0
     assert api.ownerSlot.accessToken == ""
@@ -429,7 +429,7 @@ def test_5xx_and_429_do_not_pause_or_clear(no_threads, requests_mock, code):
     vehicle = add_home_vehicle(api)
     requests_mock.get(OWNER_API_URL + "/5YJ3E1EA1KF000001/vehicle_data", status_code=code)
 
-    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (False, None)
+    assert api.get_car_api(vehicle, "5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (False, None)
 
     assert api.ownerSlot.accessToken == owner
     assert api.ownerSlot.pausedUntil == 0

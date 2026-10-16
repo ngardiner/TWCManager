@@ -187,9 +187,7 @@ def test_forget_refuses_a_car_listed_after_the_check(monkeypatch):  # F7
     monkeypatch.setattr(
         HTTPControl,
         "canForgetVehicle",
-        lambda master, vin: api.addVehicle(
-            {"id": 1, "vin": TYPO, "display_name": "C"}
-        )
+        lambda master, vin: api.addVehicle({"id": 1, "vin": TYPO, "display_name": "C"})
         or True,
     )
     assert HTTPControl.forgetVehicle(m, TYPO) == "/vehicleDetail/" + TYPO

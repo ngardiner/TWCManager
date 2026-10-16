@@ -185,7 +185,6 @@ def master_with_settings(tmp_path, settings, syncTokensConfigured=False):
     master = TWCMaster("AB", config)
     # Not new_api(): TWCMaster.modules has its own structure.
     api = TeslaAPI(master)
-    api.carApiVehicles = []
     modules = {"TeslaAPI": api}
     master.getModuleByName = modules.get
     return master, api, modules

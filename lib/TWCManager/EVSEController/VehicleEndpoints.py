@@ -110,11 +110,8 @@ class VehicleEndpoints(EVSEController):
             return self._keep({})
 
         listed = {}
-        for vehicle in self.master.vehicleRegistry.vehicles():
-            if vehicle.isAnonymous:
-                continue
-            car = vehicle.attachment("TeslaAPI")
-            if car is None or not getattr(car, "atHome", False):
+        for vehicle, car in self.master.vehicleRegistry.attached("TeslaAPI"):
+            if not car.atHome:
                 continue
             if unknown and self._telemetryPluggedIn(vehicle):
                 continue
