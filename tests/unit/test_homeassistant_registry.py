@@ -211,3 +211,9 @@ def test_failed_registration_does_not_append_vehicle():
     ), patch.object(reg, "getOrCreate", side_effect=ValueError("bad")):
         ha._build_vehicles_from_registry(devices, [])
     assert ha.carApiVehicles == []
+
+
+def test_fetch_without_an_attachment_reads_nothing():  # 13b M3
+    ha, reg = make_ha()
+    (p,) = ha.providers()
+    assert p.fetch(reg.getOrCreate(VIN, "t"), "batteryLevel") is False

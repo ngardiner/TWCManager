@@ -31,7 +31,7 @@ PAUSE_SECONDS = 3600
 RETIRED_ON_REFUSAL = frozenset({"command", "wake"})
 DEFAULT_LIFETIME = 8 * 60 * 60
 REFRESH_MARGIN = 60 * 60
-REFRESH_TIMEOUT = 30  # seconds, same as the vehicle list request
+REFRESH_TIMEOUT = 10  # seconds, as every Tesla API request
 
 
 def decodeToken(token):
@@ -247,7 +247,10 @@ class TeslaTokenSlot:
             logger.log(logging.INFO2, "Error parsing API Token Refresh Response")
             return "rejected"
         except Exception as e:
-            logger.warning(f"Unexpected error during token refresh: {e}")
+            # The type alone: the message is not controlled and may hold a token
+            logger.warning(
+                "Unexpected error during token refresh: %s", type(e).__name__
+            )
             return "rejected"
 
         try:
@@ -260,7 +263,9 @@ class TeslaTokenSlot:
             )
             return "success"
         except Exception as e:
-            logger.warning(f"Error processing token refresh response: {e}")
+            logger.warning(
+                "Error processing token refresh response: %s", type(e).__name__
+            )
         return "rejected"
 
     def snapshot(self):

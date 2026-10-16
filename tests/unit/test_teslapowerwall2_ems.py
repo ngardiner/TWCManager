@@ -201,3 +201,30 @@ class TestStormWatchTokenSlots:
         pw.getStormWatch()
 
         assert live.last_request.headers["Authorization"] == "Bearer " + owner
+
+    def test_storm_watch_times_out_and_logs_no_exception_text(
+        self, requests_mock, caplog
+    ):   # slim Task 13: a 10 s bound, and the type alone in the log
+        import requests
+        from tests.unit.teslatokens import fleet_token, new_api
+
+        api = new_api()
+        token = fleet_token()
+        api.storeToken(token)
+        pw = self._powerwall(api)
+        live = requests_mock.get(
+            self.SITE, exc=requests.exceptions.ConnectionError("Bearer " + token)
+        )
+        pw.cloudID = None
+        products = requests_mock.get(
+            "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/products",
+            exc=ValueError("Bearer " + token),
+        )
+
+        pw.getStormWatch()               # the products lookup fails
+        pw.lastFetch = {}; pw.cloudID = "42"
+        pw.getStormWatch()               # the live status fails
+
+        assert products.last_request.timeout == 10 and live.last_request.timeout == 10
+        assert token not in caplog.text and "Bearer" not in caplog.text
+        assert "ValueError" in caplog.text and "ConnectionError" in caplog.text

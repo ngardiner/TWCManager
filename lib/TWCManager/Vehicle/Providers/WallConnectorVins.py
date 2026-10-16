@@ -13,6 +13,7 @@
 # reader's own state is touched from that one thread.
 import logging
 import time
+import traceback
 from typing import Dict
 
 from ..Registry.VehicleRegistry import ANON_PREFIX
@@ -148,8 +149,13 @@ class WallConnectorVinReader:
         try:
             self._apply(list(units))
         except Exception as e:
-            # A cloud or registry hiccup never stops the vitals loop
-            logger.debug("Wall Connector VINs: %s", type(e).__name__, exc_info=True)
+            # A cloud or registry hiccup never stops the vitals loop. The
+            # frames are logged, never the message: it can carry a token
+            logger.debug(
+                "Wall Connector VINs: %s\n%s",
+                type(e).__name__,
+                "".join(traceback.format_tb(e.__traceback__)),
+            )
 
     def _apply(self, units) -> None:
         for unit in units:

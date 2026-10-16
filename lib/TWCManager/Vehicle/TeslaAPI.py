@@ -1,4 +1,5 @@
 import base64
+from contextlib import nullcontext
 import hashlib
 import json
 import logging
@@ -31,6 +32,9 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 
 logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
+
+# _classify refreshed an expired token: the request is sent once more
+_REFRESHED = Outcome(DONE, "refreshed")
 
 
 class RegistryField:
@@ -69,10 +73,6 @@ class TLS13Adapter(HTTPAdapter):
 class TeslaAPI:
     # The energy-site list (/products) is fetched at most this often (seconds)
     ENERGY_SITES_TTL = 3600
-    # Seconds a free energy-site request may take (background thread)
-    ENERGY_TIMEOUT = 10
-    # Seconds a billed command or wake_up may take (a lane thread)
-    COMMAND_TIMEOUT = 10
     # A command refused for one of these reasons found the car already
     # where it was asked to be
     COMMAND_SATISFIED_REASONS = (
@@ -302,44 +302,164 @@ class TeslaAPI:
                 self.master.queue_background_task({"cmd": "saveSettings"})
         return result
 
-    def slotRequestFailed(self, slot, response):
-        # Reacts to a failed vehicle read made with this slot's token.
-        # Returns True only when it refreshed the slot, so the caller should
-        # retry once. A dead token is cleared and a refused one paused for
-        # reads; neither records an API error, so the next poll can use the
-        # other slot at once. Storm Watch does not come here: a refused
-        # energy read must not pause vehicle reads.
-        if response is None:
-            return False
-        code = response.status_code
-        label = slot.kind.capitalize()
-        if code == 401:
+    def _request(
+        self,
+        slot,
+        method,
+        path,
+        purpose,
+        body=None,
+        timeout=10,
+        vehicle=None,
+        tries=3,
+    ):
+        # One request with slot's token to path under the API root (where
+        # .../api/1/vehicles lives), bounded by timeout. Returns (response,
+        # None) for an HTTP 200, else (response or None, the Outcome
+        # _classify gave). tries is how many requests and token refreshes
+        # this call may make, one each, refreshing at most once: 3 refreshes
+        # an expired token and sends again, 2 refreshes but leaves the resend
+        # to the caller's next round, 1 never refreshes (a 401 retires the
+        # slot). A transport error is logged and carried by its type alone,
+        # never its text (it can hold the header).
+        while True:
+            sent = slot.accessToken
+            try:
+                req = getattr(requests, method)(
+                    slot.baseURL[: -len("vehicles")] + path,
+                    headers={
+                        "accept": "application/json",
+                        "Authorization": "Bearer " + sent,
+                    },
+                    json=body,
+                    verify=slot.verifyCert,
+                    timeout=timeout,
+                )
+            except requests.exceptions.RequestException as e:
+                return None, Outcome(ERROR, type(e).__name__)
+            tries -= 1
+            logger.log(
+                logging.INFO8,
+                "Car API %s %s: HTTP %s" % (method, path, req.status_code),
+            )
             if (
-                "expired" in response.text
+                purpose in ("command", "wake")
+                and slot is self.ownerSlot
+                and vehicle is not None
+                and self.noteOwnerCommandRefused(vehicle, req)
+            ):
+                # Tesla refused the Owner API for this car (logged, latched):
+                # no error backoff, so the next provider sends at once
+                return req, Outcome(REFUSED, "owner refused")
+            status = req.status_code
+            # A 401 is handled under the slot's lock, so no other thread
+            # refreshes, pastes or clears the token in between
+            with slot.lock if status == 401 else nullcontext():
+                if status == 401 and slot.accessToken != sent:
+                    # Another thread refreshed or replaced the token while
+                    # this request was out: the 401 was for the old one, so
+                    # the new one is sent once, and a cleared slot sends
+                    # nothing
+                    outcome = (
+                        _REFRESHED if slot.accessToken else Outcome(REFUSED, "401")
+                    )
+                else:
+                    outcome = self._classify(
+                        slot, status, purpose, req.text, vehicle, tries > 0
+                    )
+            if outcome is not _REFRESHED:
+                return req, outcome
+            tries = min(tries - 1, 1)
+            if tries < 1:
+                return req, Outcome(REFUSED, "401")
+
+    def _classify(self, slot, status, purpose, body, vehicle=None, refresh=True):
+        # What an answer means, acted on: None for an HTTP 200, else an
+        # Outcome. purpose is "read", "list" (the vehicle list), "command",
+        # "wake" or "energy" (the Wall Connector VIN read). Energy refusals
+        # latch that read alone: Storm Watch and vehicle reads keep the token.
+        # Elsewhere a 401 refreshes an expired token once (_REFRESHED: send
+        # again) and otherwise retires the slot; 403 refuses commands or wakes
+        # and pauses reads for an hour; 412 retires commands, or latches reads
+        # until the token changes; 410 pauses reads; 429 backs off; 408 is an
+        # asleep or unreachable car. None of these touches the API backoff
+        # but 429, so the next poll can use the other slot at once.
+        if status == 200:
+            return None
+        if purpose == "energy":
+            if status not in (401, 403, 410, 412):
+                return Outcome(ERROR, str(status))
+            self._refuseWallConnectors(slot, status)
+            return Outcome(REFUSED, str(status))
+        paid = purpose in ("command", "wake")
+        label = slot.kind.capitalize()
+        if status == 401:
+            if (
+                refresh
+                and "expired" in body
                 and slot.source != "synced"
                 and slot.refreshToken
             ):
-                return self.refreshSlot(slot) == "success"
+                result = self.refreshSlot(slot)
+                if result == "success":
+                    return _REFRESHED
+                if result == "unreachable":
+                    return Outcome(UNREACHABLE, "token refresh")
+                if paid and not slot.empty():
+                    # Expired and the refresh failed (a 5xx, no client ID):
+                    # the tokens are kept, as refresh() alone clears on a
+                    # 401, but no later round pays for another 401. A
+                    # successful refresh (setTokens) lifts the refusal.
+                    logger.error(
+                        "Tesla %s API token has expired and could not be "
+                        "refreshed (%s); not sending commands with it until "
+                        "it is refreshed or replaced." % (label, result)
+                    )
+                    slot.refuse("command")
+                return Outcome(REFUSED, "401")
+            # Retrying a bad token might make Tesla block remote access to
+            # the car: nothing more is sent with it until the user supplies
+            # fresh tokens
             logger.error(
                 "Tesla %s API token was rejected (HTTP 401); removing it." % label
             )
             slot.clear()
             self.master.queue_background_task({"cmd": "saveSettings"})
-        elif code == 412:
-            # "Only available on fleetapi": Tesla will keep refusing this
-            # kind of token, so it is not retried until it changes
+            return Outcome(REFUSED, "401")
+        if paid and status == 403:
+            slot.reportScopeRefused(purpose, refused=True)
+            if purpose == "wake":
+                # Not REFUSED, which would exclude Fleet for commands too
+                return Outcome(UNREACHABLE, "wake refused")
+            return Outcome(REFUSED, "403")
+        if paid and status == 412:
+            # A token kind Tesla will keep refusing commands (e.g. a
+            # registration it lacks): no paid command or wake is sent with
+            # it again until it changes. Its reads are untouched.
             logger.error(
-                "Tesla %s API refused a read (HTTP 412); not using that token "
-                "for reads until it is replaced." % label
+                "Tesla %s API refused a command (HTTP 412); not sending commands "
+                "with this token until it is replaced." % label
             )
-            slot.pause(latch=True)
-        elif code in (403, 410):
+            slot.refuse("command")
+            return Outcome(REFUSED, "412")
+        if not paid and status in (403, 410, 412):
+            # A 412 ("only available on fleetapi") will keep coming, so it
+            # holds until the token changes
+            hold = "until it is replaced" if status == 412 else "for an hour"
             logger.error(
                 "Tesla %s API refused a read (HTTP %d); not using that token "
-                "for reads for an hour." % (label, code)
+                "for reads %s." % (label, status, hold)
             )
-            slot.pause()
-        return False
+            slot.pause(latch=status == 412)
+            return Outcome(REFUSED, str(status))
+        if status == 408:
+            return Outcome(UNREACHABLE, "408")
+        if status == 429:
+            # Explicitly told to back off
+            target = vehicle or self
+            target.errorCount = max(30, target.errorCount)
+            self.updateCarApiLastErrorTime(vehicle)
+        return Outcome(ERROR, str(status))
 
     def tokenRoute(self, token):
         # (tokenType, baseURL, verifyCert) for an access token: where its
@@ -515,33 +635,21 @@ class TeslaAPI:
         # One free GET of the slot's vehicle list: the listed cars; None when
         # the slot refused (it is cleared or paused, with no API error
         # backoff, so the next poll can use the other slot at once); False on
-        # any other failure.
-        req = None
-        url = self.vehicleListURL(slot)
-        headers = {
-            "accept": "application/json",
-            "Authorization": "Bearer " + slot.accessToken,
-        }
+        # any other failure. The Owner API no longer lists vehicles under
+        # /vehicles (it answers 412 "only available on fleetapi"); /products
+        # still does, with energy sites that addVehicle skips (no VIN).
+        path = "products" if slot.tokenType == "owner" else "vehicles"
+        # After a refresh the list is not sent again: the next poll is
+        req, outcome = self._request(slot, "get", path, "list", tries=2)
+        if outcome is not None:
+            return None if outcome.kind == REFUSED else False
         try:
-            req = requests.get(url, headers=headers, verify=slot.verifyCert, timeout=30)
-            logger.log(logging.INFO8, "Car API cmd vehicles " + str(req))
-            if req.status_code in (401, 403, 410, 412):
-                self.slotRequestFailed(slot, req)
-                return None
-            apiResponseDict = json.loads(req.text)
-            logger.debug("Car API vehicle list" + str(apiResponseDict) + "\n")
-            cars = apiResponseDict["response"][: apiResponseDict["count"]]
+            listed = json.loads(req.text)
+            cars = listed["response"][: listed["count"]]
             return [car for car in cars if isinstance(car, dict)]
-        except requests.exceptions.RequestException:
-            logger.info("Failed to make API call " + url)
-        except json.decoder.JSONDecodeError:
-            logger.info("Could not parse JSON result from " + url)
-        except (KeyError, TypeError):
-            # No 'response' or 'count' in the answer
+        except (ValueError, KeyError, TypeError):
+            # Not JSON, or no 'response' or 'count' in the answer
             return False
-        if req:
-            logger.log(logging.INFO6, "Response: " + req.text)
-        return False
 
     def is_location_within_radius(self, lat, lon, radius):
         if (
@@ -613,15 +721,6 @@ class TeslaAPI:
     def getCarApiLastErrorTime(self):
         return self.carApiLastErrorTime
 
-    def vehicleListURL(self, slot):
-        # The Owner API no longer lists vehicles under /vehicles (it answers
-        # 412 "only available on fleetapi"); /products still works and also
-        # returns energy sites, which addVehicle skips because they have no
-        # VIN. Per-vehicle endpoints (/vehicles/<VIN>/...) work as they are.
-        if slot.tokenType == "owner":
-            return slot.baseURL[: -len("vehicles")] + "products"
-        return slot.baseURL
-
     # Energy sites and the Wall Connector VINs. Only the free /products and
     # /energy_sites/<id>/live_status are ever requested here: never a vehicle
     # endpoint, vehicle_data, a wake or a command. Background thread only.
@@ -630,39 +729,8 @@ class TeslaAPI:
     # types), and whether the Owner API serves live_status at all (a refusal
     # falls to the Fleet slot).
 
-    def _energyURL(self, slot, path):
-        # The API root under the slot's vehicles URL, as vehicleListURL
-        return slot.baseURL[: -len("vehicles")] + path
-
-    def _energyGet(self, slot, path):
-        # (status code, parsed body or None); a transport error raises
-        req = requests.get(
-            self._energyURL(slot, path),
-            headers={
-                "accept": "application/json",
-                "Authorization": "Bearer " + slot.accessToken,
-            },
-            verify=slot.verifyCert,
-            timeout=self.ENERGY_TIMEOUT,
-        )
-        try:
-            body = req.json()
-        except ValueError:
-            body = None
-        return req.status_code, body
-
-    # Answers that latch the Wall Connector read off for a slot until its
-    # token changes, as the vehicle reads treat 403/410/412
-    ENERGY_REFUSALS = (401, 403, 410, 412)
-
-    def _energyRefused(self, slot, status, liveStatus=False):
-        # A 404 from live_status on the Owner API is taken as the Owner API
-        # not serving it (unverified), so the Fleet slot is asked instead
-        return status in self.ENERGY_REFUSALS or (
-            liveStatus and status == 404 and slot.kind == "owner"
-        )
-
     def _refuseWallConnectors(self, slot, status):
+        # Latches the Wall Connector read off for slot until its token changes
         if status == 403:
             # Only a 403 says the scope is missing; a 401 is authentication
             slot.reportScopeRefused("energy", refused=True)
@@ -683,23 +751,16 @@ class TeslaAPI:
             and now - cached[1] < self.ENERGY_SITES_TTL
         ):
             return cached[2]
-        try:
-            status, body = self._energyGet(slot, "products")
-        except requests.exceptions.RequestException as e:
-            logger.debug("Energy sites: %s", type(e).__name__)
-            return None
-        if self._energyRefused(slot, status):
-            self._refuseWallConnectors(slot, status)
-            return None
-        if status != 200:
+        req, outcome = self._request(slot, "get", "products", "energy")
+        if outcome is not None:
             return None
         try:
             sites = [
                 entry
-                for entry in body["response"]
+                for entry in json.loads(req.text)["response"]
                 if isinstance(entry, dict) and "energy_site_id" in entry
             ]
-        except (KeyError, TypeError):
+        except (ValueError, KeyError, TypeError):
             return None
         self._energySites[slot.kind] = (slot.changes, now, sites)
         self._wallConnectorSitesDropped[slot.kind] = set()
@@ -744,19 +805,22 @@ class TeslaAPI:
         vins = {}
         answered = False
         for siteID in siteIDs:
-            try:
-                status, body = self._energyGet(
-                    slot, "energy_sites/%s/live_status" % siteID
-                )
-            except requests.exceptions.RequestException as e:
-                logger.debug("Wall Connector VINs: %s", type(e).__name__)
-                continue
-            if self._energyRefused(slot, status, liveStatus=True):
-                self._refuseWallConnectors(slot, status)
+            req, outcome = self._request(
+                slot, "get", "energy_sites/%s/live_status" % siteID, "energy"
+            )
+            if req is not None and req.status_code == 404 and slot.kind == "owner":
+                # Taken as the Owner API not serving live_status (unverified),
+                # so the Fleet slot is asked instead
+                self._refuseWallConnectors(slot, 404)
                 return None
-            if status != 200:
+            if outcome is not None:
+                if outcome.kind == REFUSED:
+                    return None
                 continue
-            response = body.get("response") if isinstance(body, dict) else None
+            try:
+                response = json.loads(req.text)["response"]
+            except (ValueError, KeyError, TypeError):
+                continue
             if not isinstance(response, dict):
                 continue
             answered = True
@@ -1461,128 +1525,27 @@ class TeslaAPI:
         return outcome
 
     def _paidPost(self, vehicle, slot, path, body=None, purpose="command"):
-        # POSTs <VIN>/<path> with slot's token. Returns (Outcome, None) when
-        # the request failed, or (None, response) for an HTTP 200 whose
-        # "response" object the caller classifies. An expired token is
-        # refreshed and the request sent once more; nothing else is retried.
-        # A 403 retires the slot for purpose ("command" or "wake") alone.
-        refreshed = False
-        while True:
-            # Built per attempt, so the retry after a refresh sends the new token
-            url = slot.baseURL + "/" + str(vehicle.VIN) + "/" + path
-            sent = slot.accessToken
-            headers = {
-                "accept": "application/json",
-                "Authorization": "Bearer " + sent,
-            }
-            try:
-                req = requests.post(
-                    url,
-                    headers=headers,
-                    json=body,
-                    verify=slot.verifyCert,
-                    timeout=self.COMMAND_TIMEOUT,
-                )
-            except requests.exceptions.RequestException as e:
-                return Outcome(ERROR, type(e).__name__), None
-            code = req.status_code
-            if slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
-                # Tesla refused the Owner API for this car (logged, latched):
-                # no error backoff, so the next provider sends at once
-                return Outcome(REFUSED, "owner refused"), None
-            if code == 401:
-                # Under the slot's lock, so no other thread refreshes, pastes
-                # or clears the token between this check and what follows
-                with slot.lock:
-                    outcome = self._commandUnauthorized(slot, sent, req, refreshed)
-                if outcome is None:
-                    refreshed = True
-                    continue
-                return outcome, None
-            if code == 403:
-                slot.reportScopeRefused(purpose, refused=True)
-                if purpose == "wake":
-                    # Not REFUSED, which would exclude Fleet for commands too
-                    return Outcome(UNREACHABLE, "wake refused"), None
-                return Outcome(REFUSED, "403"), None
-            if code == 412:
-                # A token kind Tesla will keep refusing commands (e.g. a
-                # registration it lacks): no paid command or wake is sent
-                # with it again until it changes. Its reads are untouched; a
-                # read 412 latches those (slotRequestFailed).
-                self.commandRefused(slot, 412)
-                return Outcome(REFUSED, "412"), None
-            if code == 408:
-                return Outcome(UNREACHABLE, "408"), None
-            if code == 429:
-                # Explicitly told to back off: as get_car_api does
-                self.errorCount = max(30, self.errorCount)
-                self.updateCarApiLastErrorTime(vehicle)
-                return Outcome(ERROR, "429"), None
-            if code != 200:
-                return Outcome(ERROR, str(code)), None
-            try:
-                response = json.loads(req.text)["response"]
-                if not isinstance(response, dict):
-                    raise TypeError("response")
-            except (ValueError, KeyError, TypeError) as e:
-                return Outcome(ERROR, type(e).__name__), None
-            return None, response
-
-    def _commandUnauthorized(self, slot, sent, req, refreshed):
-        # A 401 on a command sent with the access token sent. None: send once
-        # more with the slot's token; else the Outcome. Another thread may
-        # have refreshed or replaced the token while the request was out: the
-        # 401 was for the old one, so the new one is sent once, and a cleared
-        # slot sends nothing. An expired token is refreshed once; any other
-        # 401 means the token is dead and the slot is cleared.
-        if slot.accessToken != sent:
-            return (
-                None if slot.accessToken and not refreshed else Outcome(REFUSED, "401")
-            )
-        if (
-            not refreshed
-            and "expired" in req.text
-            and slot.source != "synced"
-            and slot.refreshToken
-        ):
-            result = self.refreshSlot(slot)
-            if result == "success":
-                return None
-            if result == "unreachable":
-                return Outcome(UNREACHABLE, "token refresh")
-            if not slot.empty():
-                # Expired and the refresh failed (a 5xx, no client ID): the
-                # tokens are kept, as refresh() alone clears on a 401, but no
-                # later round pays for another 401. A successful refresh
-                # (setTokens) lifts the refusal.
-                logger.error(
-                    "Tesla %s API token has expired and could not be "
-                    "refreshed (%s); not sending commands with it until "
-                    "it is refreshed or replaced." % (slot.kind.capitalize(), result)
-                )
-                slot.refuse("command")
-            return Outcome(REFUSED, "401")
-        self.commandRefused(slot, 401)
-        return Outcome(REFUSED, "401")
-
-    def commandRefused(self, slot, code):
-        # Retires a slot Tesla refused a command or wake with: a 401 clears
-        # it; a 412 retires its command purpose until the token changes.
-        # Logged once: afterwards slotFor("command") never picks the slot.
-        label = slot.kind.capitalize()
-        if code == 401:
-            logger.error(
-                "Tesla %s API token was rejected (HTTP 401); removing it." % label
-            )
-            slot.clear()
-            self.master.queue_background_task({"cmd": "saveSettings"})
-        elif code == 412:
-            logger.error(
-                "Tesla %s API refused a command (HTTP 412); not sending commands "
-                "with this token until it is replaced." % label
-            )
-            slot.refuse("command")
+        # POSTs vehicles/<VIN>/<path> with slot's token. Returns (Outcome,
+        # None) when the request failed, or (None, response) for an HTTP 200
+        # whose "response" object the caller classifies. purpose ("command"
+        # or "wake") is what a refusal retires (_classify).
+        req, outcome = self._request(
+            slot,
+            "post",
+            "vehicles/%s/%s" % (vehicle.VIN, path),
+            purpose,
+            body,
+            vehicle=vehicle,
+        )
+        if outcome is not None:
+            return outcome, None
+        try:
+            response = json.loads(req.text)["response"]
+            if not isinstance(response, dict):
+                raise TypeError("response")
+        except (ValueError, KeyError, TypeError) as e:
+            return Outcome(ERROR, type(e).__name__), None
+        return None, response
 
     def wakeDue(self, vehicle, now=None) -> bool:
         # Whether the hold schedule lets a wake_up go to vehicle now: not
@@ -2038,50 +2001,34 @@ class CarApiVehicle:
             return False, None
 
         apiResponseDict = {}
-        refreshed = False
-
-        # Retry up to 3 times on certain errors.
-        for _ in range(0, 3):
-            # Built per attempt, so a retry after a refresh sends the new token.
-            url = slot.baseURL + "/" + path
-            headers = {
-                "accept": "application/json",
-                "Authorization": "Bearer " + slot.accessToken,
-            }
-            req = None
-            try:
-                req = requests.get(url, headers=headers, verify=slot.verifyCert)
-                req.raise_for_status()
-                logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
-                apiResponseDict = json.loads(req.text)
-                # This error can happen here as well:
-                #   {'response': {'reason': 'could_not_wake_buses', 'result': False}}
-                # This one is somewhat common:
-                #   {'response': None, 'error': 'vehicle unavailable: {:error=>"vehicle unavailable:"}', 'error_description': ''}
-            except requests.exceptions.RequestException:
-                if req is None:
-                    # The request never went out (e.g. no network).
-                    pass
-                elif req.status_code in (401, 403, 410, 412):
-                    # Clears or pauses the slot, or refreshes it for one retry.
-                    if not refreshed and self.carapi.slotRequestFailed(slot, req):
-                        refreshed = True
-                        continue
-                elif req.status_code == 429:
-                    # We're explicitly being told to back off
-                    self.errorCount = max(30, self.errorCount)
-                    self.carapi.updateCarApiLastErrorTime(self)
+        # Up to 3 requests while the car's buses wake or a transient error
+        # clears; a resend after a refresh (at most one) is one of them
+        sent, refreshed = 0, False
+        while sent < 3:
+            token = slot.accessToken
+            req, outcome = self.carapi._request(
+                slot,
+                "get",
+                "vehicles/" + path,
+                "read",
+                vehicle=self,
+                tries=3 - sent + (not refreshed),
+            )
+            if outcome is not None:
+                # Refused, asleep (408), backed off (429) or never sent
                 return False, None
-            except json.decoder.JSONDecodeError:
-                pass
-
+            if slot.accessToken != token:
+                sent, refreshed = sent + 1, True
+            sent += 1
             try:
-                logger.debug("Car API vehicle status" + str(apiResponseDict))
-
+                apiResponseDict = json.loads(req.text)
+            except ValueError:
+                pass
+            try:
+                # A failed read can answer 200 with, e.g.:
+                #   {'response': {'reason': 'could_not_wake_buses', 'result': False}}
+                #   {'response': None, 'error': 'vehicle unavailable: ...'}
                 response = apiResponseDict["response"]
-
-                # A successful call to drive_state will not contain a
-                # response['reason'], so we check if the 'reason' key exists.
                 if (
                     "reason" in response
                     and response["reason"] == "could_not_wake_buses"
@@ -2090,42 +2037,31 @@ class CarApiVehicle:
                     time.sleep(5)
                     continue
             except (KeyError, TypeError):
-                # This catches cases like trying to access
-                # apiResponseDict['response'] when 'response' doesn't exist in
-                # apiResponseDict.
                 error = (apiResponseDict or {}).get("error", "")
-                is_transient = any(
+                if not any(
                     error.startswith(e) for e in self.carapi.carApiTransientErrors
-                )
-                if is_transient:
-                    # Transient errors (vehicle unavailable, operation_timedout,
-                    # etc.) should not increment errorCount and trigger the full
-                    # exponential backoff; just retry after a short delay (closes #377).
-                    logger.log(
-                        logging.INFO8,
-                        "Transient error for "
-                        + self.name
-                        + ": "
-                        + error
-                        + ".  Will retry shortly.",
+                ):
+                    logger.info(
+                        "ERROR: Can't access vehicle status for %s.  Will try "
+                        "again later." % self.name
                     )
-                    time.sleep(5)
-                    continue
-                logger.info(
-                    "ERROR: Can't access vehicle status for "
-                    + self.name
-                    + ".  Will try again later."
+                    self.carapi.updateCarApiLastErrorTime(self)
+                    return False, None
+                # Transient errors (vehicle unavailable, operation_timedout,
+                # etc.) retry after a short delay, without incrementing
+                # errorCount into the full exponential backoff (closes #377).
+                logger.log(
+                    logging.INFO8,
+                    "Transient error for %s: %s.  Will retry shortly."
+                    % (self.name, error),
                 )
-                self.carapi.updateCarApiLastErrorTime(self)
-                return False, None
-
+                time.sleep(5)
+                continue
             if provesOnline:
                 self.lastAPIAccessTime = time.time()
-
-            return (True, response)
-        else:
-            self.carapi.updateCarApiLastErrorTime(self)
-            return (False, None)
+            return True, response
+        self.carapi.updateCarApiLastErrorTime(self)
+        return False, None
 
     def _readFresh(self, field, maxAge):
         # Reads field through the registry cascade (BLE, then the cloud API;
@@ -2179,11 +2115,7 @@ class CarApiVehicle:
         if now < self.statusDeferral:
             return True
 
-        try:
-            result, response = self.get_car_api(path, slot=slot)
-        except TypeError:
-            logger.error("Got None response from get_car_api()")
-            return False
+        result, response = self.get_car_api(path, slot=slot)
 
         if result:
             try:

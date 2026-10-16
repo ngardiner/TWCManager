@@ -260,7 +260,7 @@ class TeslaPowerwall2:
 
                     try:
                         r = self.httpSession.get(
-                            url, headers=headers, verify=slot.verifyCert
+                            url, headers=headers, verify=slot.verifyCert, timeout=10
                         )
                         r.raise_for_status()
                         bodyjson = r.json()
@@ -271,8 +271,11 @@ class TeslaPowerwall2:
                             and i["battery_type"] == "ac_powerwall"
                         ]
                     except Exception as e:
+                        # The type alone: an exception's text can carry the
+                        # request, and with it the token
                         logger.warning(
-                            f"Error parsing Powerwall products response: {e}"
+                            "Error parsing Powerwall products response: %s",
+                            type(e).__name__,
                         )
 
                     if len(products) == 1:
@@ -294,23 +297,19 @@ class TeslaPowerwall2:
 
                     try:
                         r = self.httpSession.get(
-                            url, headers=headers, verify=slot.verifyCert
+                            url, headers=headers, verify=slot.verifyCert, timeout=10
                         )
                         r.raise_for_status()
                         bodyjson = r.json()
                         lastData = bodyjson["response"]
                     except Exception as e:
-                        if (
-                            hasattr(e, "response")
-                            and e.response is not None
-                            and e.response.status_code == 403
-                        ):
-                            if slot.kind == "fleet":
-                                slot.reportScopeRefused("energy", refused=True)
-                            else:
-                                logger.warning(f"Error fetching Powerwall data: {e}")
+                        status = getattr(getattr(e, "response", None), "status_code", None)
+                        if status == 403 and slot.kind == "fleet":
+                            slot.reportScopeRefused("energy", refused=True)
                         else:
-                            logger.warning(f"Error fetching Powerwall data: {e}")
+                            logger.warning(
+                                "Error fetching Powerwall data: %s", type(e).__name__
+                            )
             else:
                 logger.log(
                     logging.INFO8,
