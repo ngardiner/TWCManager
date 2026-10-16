@@ -2012,10 +2012,12 @@ class TWCMaster:
                     policy.overrideLimit()
 
     def stopRespondingToSlaves(self):
-        # Every slave stops charging once we go quiet; resumes after a minute
+        # Every slave stops charging once we go quiet; resumes after a minute.
+        # The expiry first: the serial thread reads both without the lock, and
+        # a 0 seen with the old expiry would be reset at once (M1)
         with self.settingsLock:
-            self.settings["respondToSlaves"] = 0
             self.settings["respondToSlavesExpiry"] = time.time() + 60
+            self.settings["respondToSlaves"] = 0
 
     def tokenSyncEnabled(self):
         # TODO: Should not be hardcoded
