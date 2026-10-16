@@ -330,7 +330,7 @@ class TestOffCarCommandsThroughOwner:
     def test_module_is_not_read_only(self, no_threads):
         api = owner_api_with("off")
         vehicle, car = listed(api)
-        assert api.readOnly is False and api.commandSlotFor(vehicle) is not None
+        assert api.readOnly is False
         assert api.commandSlotFor(vehicle) is api.ownerSlot
 
     def test_owner_claim_commands(self, no_threads):
@@ -348,7 +348,6 @@ class TestOwnerTokenRefusesOtherCars:
         vehicle, car = listed(api)
         owner = provider(api, "OwnerAPI")
         assert api.readOnly is True and api.commandSlotFor(vehicle) is None
-        assert api.commandSlotFor(vehicle) is None
         for cap in C.COMMANDS:
             assert not owner.ready(vehicle, cap)
         assert owner.setAmps(VIN, 10) == Outcome(REFUSED, "no command token")
@@ -396,7 +395,7 @@ class TestOwnerTokenRefusesOtherCars:
         said = [m for m in self.infos(caplog) if "Model S" in m]
         assert len(said) == 1
         assert "treated as read-only" in said[0]
-        assert ("did not report" if signing is None else "does not know") in said[0]
+        assert "did not report command_signing: off" in said[0]
 
     def test_no_per_car_hint_while_fleet_commands(self, no_threads, caplog):
         caplog.set_level(logging.INFO)
