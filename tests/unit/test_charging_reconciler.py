@@ -11,7 +11,7 @@ from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT, CHARGING
 from TWCManager.Vehicle.Reconcile.Reconciler import LIMIT_THEN_START_GAP, PAID_AFTER, PROBE_AFTER, RETRY
 from tests.unit.gen2_helpers import drive
-from tests.unit.reconcile_helpers import ScriptedProvider
+from tests.unit.reconcile_helpers import AWAY, HOME, ScriptedProvider, placeAt
 from tests.unit.teslatokens import fleet_token, new_api
 from tests.unit.test_limit_reconciler import VIN, ble, cmds, fleet, setup
 
@@ -238,7 +238,7 @@ def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True, read=Tr
     api = new_api(master=m); api.storeToken(fleet_token())
     for p in api.providers(): m.providerOrder.register(p)
     if listed:
-        api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); api.getCarApiVehicles()[0].atHome = True
+        api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); placeAt(m, v)
     onTwc(m, v)
     if read: v.observe("chargingState", "Stopped", "TeslaAPI")
     requests_mock.get(FLEET_CAR, json={"response": {"state": state}})
@@ -317,11 +317,10 @@ def test_a_limit_that_stays_unreadable_stops_holding_the_start():          # C1 
     assert "startCharging" in cmds(f) and "setChargeLimit" not in cmds(f)
 
 def fanOutCars(m):
-    from types import SimpleNamespace
-    reg = m.vehicleRegistry; anon = reg.beginPlugSession("8244")
-    home = reg.getOrCreate(VIN, "t"); home.attach("TeslaAPI", SimpleNamespace(atHome=True, lat=1.0))
-    away = reg.getOrCreate("5YJ3E1EA1KF000002", "t"); away.attach("TeslaAPI", SimpleNamespace(atHome=False, lat=1.0))
-    other = reg.getOrCreate("5YJ3E1EA1KF000003", "t"); other.attach("TeslaAPI", SimpleNamespace(atHome=True, lat=1.0)); other.observe("twcVin", "8245", "TWC")
+    reg = m.vehicleRegistry; anon = reg.beginPlugSession("8244"); api = new_api(master=m); del m.modules["TeslaAPI"]
+    for i, (vin, at) in enumerate(((VIN, HOME), ("5YJ3E1EA1KF000002", AWAY), ("5YJ3E1EA1KF000003", HOME))):
+        api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, reg.get(vin), at)       # located by position
+    other = reg.get("5YJ3E1EA1KF000003"); other.observe("twcVin", "8245", "TWC")
     bleCar = reg.getOrCreate("5YJ3E1EA1KF000004", "t"); bleCar.claim("TeslaBLE", True, "paired")
     return anon, [VIN, "5YJ3E1EA1KF000003", "5YJ3E1EA1KF000004"]
 
@@ -394,7 +393,7 @@ def test_mode_2_limit_buys_no_wake_for_a_start_the_cloud_cannot_send(requests_mo
 def test_the_fan_out_stop_sends_nothing_to_an_asleep_car(requests_mock):  # N2, paid counted
     VIN2 = "5YJ3E1EA1KF000002"
     m, r, v, c, api = fleetOnTwc(requests_mock); m.settings["chargeStopMode"] = "1"; anon = m.vehicleRegistry.beginPlugSession("8245")
-    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); api.getVehicleByVIN(VIN2).atHome = True     # listed, at home, never read
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); placeAt(m, m.vehicleRegistry.get(VIN2))     # listed, at home, never read
     requests_mock.get(FLEET_CAR[:-len(VIN)] + VIN2, json={"response": {"state": "asleep"}})
     m.stopCarsCharging(anon.key); assert m.desired.get(VIN2, CHARGING).value is False
     for _ in range(5): r.pass_()
@@ -463,7 +462,7 @@ def test_a_fleet_command_for_one_car_sends_nothing_for_another_listed_car(reques
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     VIN2 = "5YJ3E1EA1KF000002"
     m, r, v, c, api = fleetOnTwc(requests_mock)
-    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); b = api.getVehicleByVIN(VIN2); b.atHome = True
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); b = api.getVehicleByVIN(VIN2); placeAt(m, m.vehicleRegistry.get(VIN2))
     requests_mock.get(FLEET_CAR[:-len(VIN)] + VIN2, json={"response": {"state": "asleep"}})
     held = (b.firstChargeNeededTime, b.lastChargeNeededTime, b.delayNextWakeAttempt)
     m.startCarsCharging(VIN); r.pass_()                                                           # a start

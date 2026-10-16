@@ -16,6 +16,17 @@ from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 COMMAND_CAPS = {capability: C.Declaration(C.LOCAL) for capability in C.COMMANDS}
 
 
+# Presence from position, as live: home is set and TeslaMate's free
+# position lands in the registry; nothing sets atHome by hand
+HOME, AWAY = (39.077408, -84.393779), (40.0, -86.0)
+
+
+def placeAt(master, vehicle, at=HOME):
+    master.settings.update(homeLat=HOME[0], homeLon=HOME[1])
+    vehicle.observe("lat", at[0], "TeslaMateVehicle")
+    vehicle.observe("lon", at[1], "TeslaMateVehicle")
+
+
 class Clock:
     def __init__(self, t=1000.0):
         self.t = t

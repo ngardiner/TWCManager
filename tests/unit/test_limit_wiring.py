@@ -13,19 +13,16 @@ from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit, HeldLimits
 from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, onDeparture, presentVehicles, targetsFor
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.gen2_helpers import drive as heartbeat
-from tests.unit.reconcile_helpers import inline
+from tests.unit.reconcile_helpers import AWAY, HOME, inline, placeAt
 from tests.unit.teslatokens import FLEET_NA_URL, OWNER_API_URL, FakeMaster, fleet_token, new_api, owner_token
 from tests.unit.test_gen2twc_provider import make
 from tests.unit.test_limit_reconciler import VIN, ble, prov, setup
 VIN2 = "5YJ3E1EA1KF000002"; VIN3 = "5YJ3E1EA1KF000003"; VIN4 = "5YJ3E1EA1KF000004"
 REPO = Path(__file__).resolve().parents[2]
-HOME = (39.077408, -84.393779)
-AWAY = (40.0, -86.0)
 
 def cars(m):
     reg = m.vehicleRegistry; a = reg.get(VIN); a.observe("twcVin", "8244", "TWC")
-    m.settings.update(homeLat=HOME[0], homeLon=HOME[1]); new_api(master=m).addVehicle({"id": 2, "vin": VIN2, "display_name": None})
-    b = reg.get(VIN2); b.observe("lat", AWAY[0], "TeslaMateVehicle"); b.observe("lon", AWAY[1], "TeslaMateVehicle")   # the API car's position says away
+    new_api(master=m).addVehicle({"id": 2, "vin": VIN2, "display_name": None}); b = reg.get(VIN2); placeAt(m, b, AWAY)   # the API car's position says away
     d = reg.getOrCreate(VIN3, "t"); d.claim("TeslaBLE", True, "paired"); return a, b, d
 
 def test_present_rule_until_phase_5():
@@ -198,6 +195,12 @@ def test_an_unplug_at_home_is_not_a_departure(requests_mock):
     onDeparture(m); r.pass_()
     assert m.desired.get(VIN, CHARGE_LIMIT) is None and paid(requests_mock) == ["vehicle_data"]
 
+def test_live_telemetry_places_a_departing_car_for_free(requests_mock):   # main's telemetry update_location, paid counted
+    m, r, car = fleetCarOffItsPoint(requests_mock, home=True)                                     # awake: a paid read would go out, and say home
+    v = m.vehicleRegistry.get(VIN); v.observe("state", "online", "TeslaMateVehicle"); placeAt(m, v, AWAY)
+    onDeparture(m); d = m.desired.get(VIN, CHARGE_LIMIT)
+    assert car.syncSource == "TeslaMateVehicle" and d.restore and d.value == 90 and requests_mock.call_count == 0
+
 def test_a_policy_change_while_the_car_is_away_sends_nothing(requests_mock):  # C1, paid counted
     m, r, car = fleetCarOffItsPoint(requests_mock, home=False)
     onDeparture(m); r.pass_(); before = len(requests_mock.request_history)
@@ -234,7 +237,7 @@ def restarted(requests_mock, position=HOME, held=True, claim=True):
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "Callandor"})
     if claim: v.claim("TeslaBLE", True, "paired")
     if held: m.heldLimits.set(VIN, 100, 50)
-    if position: v.observe("lat", position[0], "TeslaMateVehicle"); v.observe("lon", position[1], "TeslaMateVehicle")
+    if position: placeAt(m, v, position)
     for field, value in (("chargeLimit", 50), ("chargingState", "Complete"), ("batteryLevel", 51)): v.observe(field, value, "TeslaMateVehicle")
     from requests_mock import ANY
     requests_mock.register_uri(ANY, ANY, json={"response": {"state": "asleep"}})   # any request is counted, none fails
