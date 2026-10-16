@@ -11,7 +11,7 @@ from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
-from TWCManager.Vehicle.Reconcile.Reconciler import known
+from TWCManager.Vehicle.Reconcile.Belief import known
 
 
 class VehicleEndpoint(EVSEInstance):
