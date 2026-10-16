@@ -68,6 +68,10 @@ Setting `commandPolicy` under `vehicle` in config.json hard-sets the policy and 
 
 Every Fleet API command is billed, so the Fleet API never sets a car's charge rate where a local path can: the TWC the car is plugged into, or BLE for a paired car. A car on a TWC gets its rate from the TWC. A BLE-paired car on a mobile connector (or any charger TWCManager does not control) gets its rate over BLE only; before v1.4.0 it got it from the Fleet API. If the BLE command fails, the Fleet API does not step in. To let the Fleet API carry the rate for such a car, use `api_only`. Charge Rate Control modes 2 and 3 are unchanged.
 
+#### BLE retries
+
+A BLE command that times out or fails to connect is retried once, two seconds later; any other failure is reported straight away. The vehicle command order then decides when to try again and whether to fall back to the cloud. The `maxRetries`, `retryDelay`, `circuitBreakerThreshold` and `circuitBreakerTimeout` keys under `config.moduleConfiguration.TeslaBLE` were removed in v1.4.0 and are ignored if present.
+
 #### providerSuppressions
 
 For finer control than the policy, the `providerSuppressions` setting (in settings.json, or under `vehicle` in config.json, which wins for a provider named in both) lists, per provider, the operations it may not perform:
