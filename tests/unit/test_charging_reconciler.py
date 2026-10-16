@@ -4,7 +4,7 @@
 import re
 import threading
 import time
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
@@ -426,3 +426,50 @@ def test_a_start_that_spends_no_cloud_wake_buys_none_for_the_limit(starter):   #
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")   # the limit is unknown
     for _ in range(6): r.pass_(); c.t += 61
     assert not any(x[0] == "wake" for x in f.calls)
+
+# 12b fix round 1: deleted-test audit row 61 (main's unaddressed HA start/stop)
+
+def haInstall(m, enabled=True):
+    # An HA-only install: two HA cars at home, VIN on a TWC that names it
+    from types import SimpleNamespace
+    from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
+    ha = Mock(); ha.enabled.return_value = enabled; ha.registry = m.vehicleRegistry; ha.master = m
+    ha._post_service = Mock(return_value=O.Outcome(O.DONE)); m.providerOrder.register(HomeAssistantProvider(ha))
+    for i, vin in enumerate((VIN, "5YJ3E1EA1KF000002")):
+        hv = SimpleNamespace(vin=vin, at_home=True, has_charge_switch=True, has_charge_current_number=True, has_charge_limit_number=True,
+                             entity_ids={"charge_switch": "switch.c%d" % i})
+        m.vehicleRegistry.getOrCreate(vin, "t").attach("HomeAssistant", hv)
+    s = slave(m); s.currentVIN = VIN; m.settings["chargeStopMode"] = "1"
+    return ha, m.vehicleRegistry.beginPlugSession("8245")
+
+def test_an_anonymous_point_reaches_at_home_connected_home_assistant_cars():   # audit row 61, paid counted
+    m, r, v, c = setup(); ha, anon = haInstall(m); v.observe("chargingState", "Charging", "HomeAssistant")
+    m.stopCarsCharging(anon.key)
+    # As main's HA car_api_charge: at home and connected (a TWC reports its VIN); an at-home car on no TWC is skipped
+    assert m.desired.get(VIN, CHARGING).value is False and m.desired.get("5YJ3E1EA1KF000002", CHARGING) is None
+    for _ in range(3): r.pass_(); c.t += 61
+    assert ha._post_service.call_args_list == [call("switch", "turn_off", {"entity_id": "switch.c0"})]
+
+def test_disabled_home_assistant_gets_no_broadcast():                      # deleted-test GAP (12b), paid counted
+    m, r, v, c = setup(); ha, anon = haInstall(m, enabled=False); v.observe("chargingState", "Charging", "HomeAssistant")
+    m.stopCarsCharging(anon.key); m.desired.set(VIN, CHARGING, False, "test")
+    for _ in range(3): r.pass_(); c.t += 61
+    m.updateChargeAtHome()
+    assert ha._post_service.call_count == 0 and not ha.updateChargeAtHome.called
+    assert all(p.name != "HomeAssistant" for cap in (C.SET_AMPS, C.STOP_CHARGING) for p in m.providerOrder.candidates(v, cap))
+
+def test_a_fleet_command_for_one_car_sends_nothing_for_another_listed_car(requests_mock, monkeypatch):   # audit rows 28, 29, 31, 32; paid counted
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+    monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
+    VIN2 = "5YJ3E1EA1KF000002"
+    m, r, v, c, api = fleetOnTwc(requests_mock)
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); b = api.getVehicleByVIN(VIN2); b.atHome = True
+    requests_mock.get(FLEET_CAR[:-len(VIN)] + VIN2, json={"response": {"state": "asleep"}})
+    held = (b.firstChargeNeededTime, b.lastChargeNeededTime, b.delayNextWakeAttempt)
+    m.startCarsCharging(VIN); r.pass_()                                                           # a start
+    v.observe("chargeLimit", 50, "TeslaAPI"); m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); r.pass_()   # a raise
+    m.desired.record(VIN, CHARGING).lastSentAt -= 60                                             # past the send gap (wall clock)
+    v.observe("chargingState", "Charging", "TeslaAPI"); m.stopCarsCharging(VIN); r.pass_()       # a stop
+    assert [len(calls(requests_mock, x)) for x in ("charge_start", "set_charge_limit", "charge_stop")] == [1, 1, 1]
+    assert not any(VIN2 in q.url for q in requests_mock.request_history)                          # no command, read or wake for B
+    assert (b.firstChargeNeededTime, b.lastChargeNeededTime, b.delayNextWakeAttempt) == held

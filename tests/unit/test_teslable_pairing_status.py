@@ -960,3 +960,19 @@ def test_charge_state_maps_the_cars_own_current_request():   # slim Task 12b
     )
     state = ble.get_charge_state(VIN)
     assert state["chargeCurrentRequest"] == 16 and state["availableCurrent"] == 32
+
+
+def test_pairing_and_pairing_failed_keys_are_claimed_and_commandable():  # 12b deleted-test PARTIAL (upgrade users)
+    from TWCManager.Vehicle.Providers import Capability as C
+
+    ble, reg, master = make()
+    vins = {"5YJ3E1EA1KF000002": "pairing", "5YJ3E1EA1KF000003": "pairing_failed"}
+    master.settings["Vehicles"] = {
+        vin: {"privKey": "x", "ble": {"status": status, "since": 1.0}}
+        for vin, status in vins.items()
+    }
+    ble.scanForVehicles = Mock()
+    ble.updateSettings()
+    (p,) = ble.providers()
+    for vin in vins:
+        assert "TeslaBLE" in reg.get(vin).claims and p.ready(reg.get(vin), C.SET_AMPS)

@@ -44,15 +44,15 @@ def test_home_assistant_provider_follows_entities():
     assert p.setAmps(VIN, 8) == O.Outcome(O.DONE); ha._post_service.assert_called_once_with("number", "set_value", {"entity_id": "number.a", "value": 8.0})
 
 def test_passive_providers_never_enter_the_walk():
-    m = Mock(); m.settings = {}; m.config = {}; m.stats = {"moduleSuccess": {}, "moduleFailures": {}}; m.vehicleRegistry = VehicleRegistry({})
+    m = Mock(); m.settings = {}; m.config = {}; m.vehicleRegistry = VehicleRegistry({})
     o = ProviderOrder(m); live["at"] = 1.0
     o.register(TelemetryProvider(TeslaMateVehicle()))
     assert o.ordered(C.READ_PLUG) == [] and [p.name for p in o.providers()] == ["TeslaMateVehicle"]
 
 def test_register_providers_collects_every_vehicle_module_in_rank_order():
-    m = Mock(); m.settings = {}; m.config = {}; m.stats = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    m = Mock(); m.settings = {}; m.config = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     ha, reg = make_ha(); ble = Mock(); ble.providers = lambda: [bleStub()]
-    m.getModulesByType = Mock(return_value=[{"name": "HomeAssistant", "ref": ha}, {"name": "TeslaBLE", "ref": ble}, {"name": "VehiclePriority", "ref": object()}])
+    m.getModulesByType = Mock(return_value=[{"name": "HomeAssistant", "ref": ha}, {"name": "TeslaBLE", "ref": ble}, {"name": "Policy", "ref": object()}])
     assert registerProviders(m) == ["TeslaBLE", "HomeAssistant"]      # rank order, not module order
 
 
@@ -60,7 +60,7 @@ def test_register_providers_collects_every_vehicle_module_in_rank_order():
 # commands under ble_only
 
 def _haMaster(settings):
-    m = Mock(); m.settings = settings; m.config = {}; m.stats = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    m = Mock(); m.settings = settings; m.config = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     ha, reg = make_ha(); api = Mock(); api.providers = lambda: [ownerStub(), fleetStub()]; ble = Mock(); ble.providers = lambda: [bleStub()]
     m.getModulesByType = Mock(return_value=[{"name": "HomeAssistant", "ref": ha}, {"name": "TeslaAPI", "ref": api}, {"name": "TeslaBLE", "ref": ble}])
     registerProviders(m); return m, ha
@@ -139,7 +139,7 @@ def test_default_boot_registers_unconfigured_modules_that_never_command():
     assert [c["name"] for c in m.getModulesByType("EVSEController")] == ["Gen2TWCs"]
 
 def test_one_failing_module_does_not_stop_the_others(caplog):
-    m = Mock(); m.settings = {}; m.config = {}; m.stats = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    m = Mock(); m.settings = {}; m.config = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     ha, reg = make_ha(); ble = Mock(); ble.providers = lambda: [bleStub()]
     broken = Mock(); broken.providers = Mock(side_effect=RuntimeError("boom"))
     m.getModulesByType = Mock(return_value=[{"name": "Broken", "ref": broken}, {"name": "HomeAssistant", "ref": ha}, {"name": "TeslaBLE", "ref": ble}])

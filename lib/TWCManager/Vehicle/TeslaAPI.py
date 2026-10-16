@@ -108,6 +108,8 @@ class TeslaAPI:
     # One slot per token type; built in __init__.
     ownerSlot = None
     fleetSlot = None
+    # fleetSlot.changes when the read-only hint was last logged
+    refusalLoggedAt = None
     refreshClientID = ""
     # FleetAPI OAuth (authorization code) login. Two variants, auto-selected by
     # whether a client secret is configured:

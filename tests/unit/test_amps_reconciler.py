@@ -147,6 +147,16 @@ def test_an_anonymous_twc_rates_only_plugged_in_cars_else_vehicles_0():    # I2,
     assert {x[1] for x in f.calls} == {VIN2} and len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)   # never an unplugged car, nor a named one; no wake
     m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")                     # none known plugged in: main's vehicles[0]
     s._queueChargeRate(10); r.pass_(); assert f.calls == [("setAmps", VIN, 10)]
+    m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")                     # HA says "Stopped" for an unplugged car (rereview N1)
+    for vin in (VIN, VIN2, VIN4):
+        m.vehicleRegistry.get(vin).observe("chargingState", "Disconnected", "TeslaAPI")
+        m.vehicleRegistry.get(vin).observe("chargingState", "Stopped", "HomeAssistant", at=c() + 1)
+    for i in range(3600): s._queueChargeRate(10 + i % 2); r.pass_(); c.t += 1
+    assert {x[1] for x in f.calls} == {VIN} and len(f.calls) <= 240                 # the vehicles[0] fallback only, no fan-out
+    m, r, v, c, s = anonTwc()
+    m.vehicleRegistry.get(VIN2).observe("chargingState", "Unknown", "TeslaBLE"); m.vehicleRegistry.get(VIN4).observe("chargingState", "None", "TeslaMateVehicle")
+    m.vehicleRegistry.get(VIN).observe("chargingState", "Charging", "HomeAssistant")
+    assert [x.key for x in s._anonCars()] == [VIN]                            # BLE "Unknown" and TeslaMate "None" are not plugged in; HA "Charging" is
 
 def test_an_anonymous_mode_1_lift_goes_to_the_plugged_in_car_only():    # I2, paid counted
     m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI"); m.settings["chargeRateControl"] = "1"
@@ -182,3 +192,34 @@ def test_a_floor_rate_is_withdrawn_when_the_twc_carries_again():         # M4
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE))); v.observe("chargeCurrentRequest", 32, "TeslaBLE"); pt, s = point(m, v, 3)
     pt.setTargetPower(4 * 240); r.pass_(); assert m.desired.get(VIN, AMPS).value == 4    # undelivered
     pt.setTargetPower(10 * 240); assert m.desired.get(VIN, AMPS) is None                 # the TWC carries; the car is not left chasing 4 A
+
+# 12b deleted-test PARTIALs: HA after a failed Fleet rate, per car
+
+@pytest.mark.parametrize("fails, fleetSends", [(O.Outcome(O.ERROR, "500"), 2), (O.Outcome(O.REFUSED, "403"), 1)])
+def test_home_assistant_after_a_failed_fleet_rate_spends_from_the_same_paid_budget(fails, fleetSends):   # paid counted
+    from tests.unit.test_limit_reconciler import ha
+    m, r, v, c = setup(fleet(fails), ha(O.Outcome(O.DONE))); f, h = prov(m, "FleetAPI"), prov(m, "HomeAssistant")
+    e = VehicleEndpoint(v, m.providerOrder, m)
+    for _ in range(3600): e.setTargetPower(10 * 240); r.pass_(); c.t += 1
+    assert len(f.calls) == fleetSends and h.calls == []                      # one budget for the desire: never Fleet and HA both
+    e.setTargetPower(11 * 240); r.pass_()
+    if fails.kind == O.REFUSED: assert h.calls == [("setAmps", VIN, 11)] and len(f.calls) == 1   # Fleet excluded: HA carries the next value
+    else: assert f.calls[-1] == ("setAmps", VIN, 11) and h.calls == []        # a plain failure: Fleet again, never HA
+
+def test_the_paid_budget_is_per_car():                                      # paid counted
+    m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "500"))); f = prov(m, "FleetAPI"); v2 = m.vehicleRegistry.getOrCreate(VIN2, "t")
+    e, e2 = VehicleEndpoint(v, m.providerOrder, m), VehicleEndpoint(v2, m.providerOrder, m)
+    e.setTargetPower(10 * 240); r.pass_(); c.t += RETRY[AMPS]; r.pass_(); c.t += RETRY[AMPS]; r.pass_()
+    assert [x[1] for x in f.calls] == [VIN, VIN]                              # VIN's budget is spent
+    e2.setTargetPower(10 * 240); r.pass_(); assert f.calls[-1] == ("setAmps", VIN2, 10)   # VIN2's own send, in the same pass
+
+@pytest.mark.parametrize("fails, after", [(O.Outcome(O.UNREACHABLE, "408"), 4), (O.Outcome(O.ERROR, "500"), 2)])
+def test_failed_paid_rate_waits_for_a_newer_reading_once_per_desire(fails, after):   # review M6, paid counted
+    # A send that never reached the car is re-armed once by a newer live
+    # reading (one send and one blind retry more: 4 per desire at most); a
+    # send the car answered is not
+    m, r, v, c = setup(fleet(fails)); f = prov(m, "FleetAPI"); e = VehicleEndpoint(v, m.providerOrder, m)
+    e.setTargetPower(10 * 240); r.pass_(); c.t += RETRY[AMPS]; r.pass_(); c.t += 3600; r.pass_(); assert len(f.calls) == 2
+    for _ in range(3):
+        c.t += RETRY[AMPS]; v.observe("chargeCurrentRequest", 9, "TeslaAPI"); r.pass_(); c.t += RETRY[AMPS]; r.pass_()
+    assert len(f.calls) == after and not any(x[0] == "wake" for x in f.calls)

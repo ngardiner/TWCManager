@@ -12,6 +12,11 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 logger = LoggerFactory.get_logger("Slave", "Slave")
 
 
+# Charging states only a plugged-in car reports ("Unknown", TeslaMate's "None"
+# and "Disconnected" are not)
+_PLUGGED = frozenset({"Charging", "Starting", "Stopped", "Complete", "NoPower"})
+
+
 class TWCSlave:
     config = None
     configConfig = None
@@ -105,7 +110,13 @@ class TWCSlave:
         plugged = []
         for v in cars:
             obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
-            if obs is not None and obs.value not in (None, "Disconnected"):
+            if obs is None:
+                continue
+            if obs.source == "HomeAssistant":
+                # HA reports "Stopped" for an unplugged car too
+                if obs.value == "Charging":
+                    plugged.append(v)
+            elif obs.value in _PLUGGED:
                 plugged.append(v)
         if plugged:
             return plugged

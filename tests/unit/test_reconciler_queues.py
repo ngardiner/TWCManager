@@ -250,7 +250,17 @@ def test_a_raising_report_is_logged_by_type_name(caplog):
     with caplog.at_level(logging.DEBUG):
         assert submit(r, attempt()) is True
     warnings = [x.getMessage() for x in caplog.records if x.levelno >= logging.WARNING]
-    assert any("ValueError" in w for w in warnings) and not any("secret-token" in w for w in warnings)   # the traceback is DEBUG only
+    assert any("ValueError" in w for w in warnings)
+    assert "secret-token" not in caplog.text                                   # at every level, the DEBUG traceback too (audit R9)
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")   # the SystemExit is the point
+def test_a_worker_that_dies_logs_no_exception_text_at_any_level(caplog):     # audit R9
+    p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, r, reports = setup(p, inline_=False); q = r.cloud
+    def exit_now(vin): raise SystemExit("secret-token")
+    p.stopCharging = exit_now
+    with caplog.at_level(logging.DEBUG):
+        q.start(); q.put(attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING)); joined(q)
+    assert reports == [("FleetAPI", O.ERROR, "SystemExit")] and "SystemExit" in caplog.text and "secret-token" not in caplog.text
 
 def test_errors_log_type_names_only_and_warn_once(caplog):
     p = ScriptedProvider("FleetAPI", 5, False, []); m, r, reports = setup(p)
@@ -448,3 +458,17 @@ def test_a_drain_of_an_idle_queue_returns_at_once():
     q = VehicleCommandQueue(name="t", run=lambda e: O.Outcome(O.DONE), key=lambda e: e, isHigh=lambda e: False, report=lambda e, out: None, lost=lambda e, d: None)
     q.start(); t0 = time.monotonic(); q.close()
     assert q.waitDrained(time.monotonic() + 5) is True and time.monotonic() - t0 < 0.5
+
+def test_a_stop_submitted_during_a_live_drain_is_still_sent():             # deleted-test audit row 56
+    gate = threading.Event(); p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); gated(p, gate)
+    m, r, reports, done = threaded(p); q = r.cloud; result = []
+    try:
+        submit(r, one_shot(C.WAKE, "FleetAPI")); assert wait_for(lambda: q._busy)
+        drainer = threading.Thread(target=lambda: result.append(r.drain(5))); drainer.start()
+        assert wait_for(lambda: q._draining)
+        stop = attempt(C.STOP_CHARGING, False, "FleetAPI", CHARGING); limit = attempt(provider="FleetAPI")._replace(key=VIN2)
+        assert submit(r, stop) is True and submit(r, limit) is False             # mid-drain: the stop is taken, the limit dropped
+        gate.set(); drainer.join(5)
+        assert result == [True] and [c[0] for c in p.calls] == ["stopCharging"]
+    finally:
+        gate.set(); joined(q); joined(r.ble)
