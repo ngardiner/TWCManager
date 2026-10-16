@@ -559,11 +559,11 @@ class TWCMaster:
         receive_slave_heartbeat with a controller-agnostic algorithm that
         allocates per charging point: a TWC and the car it serves are one
         point, budgeted once.  After this method runs:
-        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it
-          (and applies chargeRateControl for the car on it).
+        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it.
+          With a car member, ChargingPoint splits the rate by
+          chargeRateControl and owns the car's amps.
         - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
-        - A car on no TWC has had VehicleEndpoint.setTargetPower() called
-          (→ a queued setAmps).
+        - A car on no TWC has desired amps (VehicleEndpoint.setTargetPower).
 
         A point not wanting power (an idle TWC) gets a target of 0 and counts
         nothing against the budget.  On the wire, TWCSlave offers it 0 when no
@@ -1344,6 +1344,8 @@ class TWCMaster:
                         # Close off the current charging session
                         self.recordVehicleSessionEnd(slaveTWC)
                         self._plugSession(slaveTWC, False)
+                        # The next session lifts the car's own rate again
+                        slaveTWC._resetVehicleRateRaised()
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
             carsCharging += slaveTWC.isCharging

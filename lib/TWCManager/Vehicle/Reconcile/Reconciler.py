@@ -321,11 +321,14 @@ class VehicleReconciler(threading.Thread):
         key = vehicle.key
         d = self.desired.get(key, aspect)
         rec = self.desired.record(key, aspect)
-        if (
-            d is None
-            or rec.inFlight is not None
-            or now - rec.lastSentAt < MIN_SEND_GAP[aspect]
-        ):
+        if d is None or rec.inFlight is not None:
+            return None
+        k = known(vehicle, aspect)
+        if d.lift and (rec.settledAt is not None or satisfied(AMPS, d.value, k)):
+            # A lift is a one-shot desire: done once it settles
+            self.desired.clearIf(key, AMPS, d.value)
+            return None
+        if now - rec.lastSentAt < MIN_SEND_GAP[aspect]:
             return None
         last = rec.lastOutcome
         if (
@@ -336,7 +339,6 @@ class VehicleReconciler(threading.Thread):
         ):
             # Wake held, backoff, wake refused: no resubmit loop (H2)
             return None
-        k = known(vehicle, aspect)
         if aspect == CHARGE_LIMIT:
             adopted = self._adoptable(vehicle, d)
             if adopted is not None:
@@ -348,10 +350,7 @@ class VehicleReconciler(threading.Thread):
                 return None
         held = self._held(vehicle)
         if satisfied(aspect, d.value, k):
-            if d.lift:
-                # A lift is a one-shot desire
-                self.desired.clearIf(key, AMPS, d.value)
-            elif d.restore and held is not None and held.held is not None:
+            if d.restore and held is not None and held.held is not None:
                 # Already back at the outside limit: nothing is held (c6)
                 self.master.heldLimits.remove(vehicle.vin)
                 self.desired.clear(key, aspect)
