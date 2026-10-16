@@ -1024,3 +1024,69 @@ def test_pairing_and_pairing_failed_keys_are_claimed_and_commandable():  # 12b d
     (p,) = ble.providers()
     for vin in vins:
         assert "TeslaBLE" in reg.get(vin).claims and p.ready(reg.get(vin), C.SET_AMPS)
+
+
+# tesla-control -debug logs to stderr before its final error line
+DEBUG_PREAMBLE = (
+    b"2026-10-15T00:00:00Z [debug] Connecting to car...\n"
+    b"2026-10-15T00:00:01Z [info ] Connecting to car...\n"
+    b"2026-10-15T00:00:02Z [info ] Securing connection...\n"
+    b"2026-10-15T00:00:03Z [warn ] timeout waiting for session info, retrying\n"
+)
+
+
+@pytest.mark.parametrize(
+    "last_line, runs",
+    [
+        (b"Failed to execute command: car could not execute command: not_allowed", 1),
+        (b"Error: failed to find BLE beacon: context deadline exceeded", 2),
+        (b"Failed to execute command: ble: connection lost", 2),
+        (b"Failed to execute command: request timeout", 2),
+    ],
+    ids=["not_allowed", "deadline", "connection", "timeout"],
+)
+def test_only_the_final_error_line_decides_a_quick_retry(last_line, runs):
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    ble._run_command_with_timeout = Mock(
+        return_value=(b"", DEBUG_PREAMBLE + last_line + b"\n", 1)
+    )
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply")
+    assert ble._run_command_with_timeout.call_count == runs
+    assert sleep.call_count == runs - 1
+
+
+def test_a_stored_refused_key_is_refused_even_when_the_run_times_out():
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    ble._setBleStatus(VIN, "refused")
+    ble._run_command_with_timeout = Mock(return_value=(None, None, None))
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep"):
+        assert p.setAmps(VIN, 10) == O.Outcome(O.REFUSED, "key")
+
+
+def test_the_quick_retry_is_logged_at_info_once(caplog):
+    import logging
+
+    ble, reg, master = make()
+    ble._run_command_with_timeout = Mock(return_value=(None, None, None))
+    from TWCManager.Vehicle import TeslaBLE as bleModule
+
+    level = bleModule.logger.level
+    bleModule.logger.setLevel(logging.DEBUG)
+    try:
+        with caplog.at_level(logging.INFO), patch(
+            "TWCManager.Vehicle.TeslaBLE.time.sleep"
+        ):
+            assert ble.sendCommand(VIN, "wake") is None
+    finally:
+        bleModule.logger.setLevel(level)
+    retries = [
+        r for r in caplog.records if r.levelno == logging.INFO and "retrying" in r.getMessage()
+    ]
+    assert len(retries) == 1 and "wake" in retries[0].getMessage()
