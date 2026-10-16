@@ -133,8 +133,13 @@ def test_key_refusal_stops_retrying_and_records_once():
 
 @pytest.mark.parametrize(
     "failure",
-    [(None, None, None), (b"", b"", -9), (b"", b"ble: Connection failed", 1)],
-    ids=["timeout", "killed", "connection"],
+    [
+        (None, None, None),
+        (b"", b"", -9),
+        (b"", b"ble: Connection failed", 1),
+        (b"", b"ble: timeout", 1),
+    ],
+    ids=["timeout", "killed", "connection", "timeout-output"],
 )
 def test_a_transient_failure_is_retried_once_then_reported(failure):
     from TWCManager.Vehicle.Reconcile import Outcome as O
@@ -164,7 +169,7 @@ def test_a_transient_failure_then_success_is_done():
 
 @pytest.mark.parametrize(
     "stderr",
-    [b"ble: timeout", b"Error: car could not execute command: not_allowed", b""],
+    [b"Error: car could not execute command: not_allowed", b""],
 )
 def test_a_non_transient_failure_is_not_retried(stderr):
     from TWCManager.Vehicle.Reconcile import Outcome as O

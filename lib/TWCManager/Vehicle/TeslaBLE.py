@@ -127,8 +127,6 @@ class TeslaBLE:
         # Retry policy is the reconciler's; maxRetries, retryDelay and
         # circuitBreaker* are no longer read.
         self.commandTimeout = ble_config.get("commandTimeout", 5)
-        self.processGroupManagement = ble_config.get("processGroupManagement", True)
-        self.dockerCompatibility = ble_config.get("dockerCompatibility", True)
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
@@ -507,7 +505,8 @@ class TeslaBLE:
                     self._failure.refused = True
                     self._safeNote(self._noteBleRefusal, vin, output)
                 else:
-                    self._failure.transient = "connection" in output.lower()
+                    out = output.lower()
+                    self._failure.transient = "connection" in out or "timeout" in out
                 return None
 
             logger.debug(
