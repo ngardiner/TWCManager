@@ -238,7 +238,7 @@ class TestPastedRefreshToken:
         assert owner.last_request.json()["client_id"] == "ownerapi"
         assert owner.last_request.json()["refresh_token"] == pasted
         assert api.ownerSlot.accessToken == new_access
-        assert api.readOnly is True
+        assert api.slotFor("command") is None
         assert api.ownerSlot.baseURL == OWNER_API_URL
 
     def test_owner_refresh_token_pasted_back(self, requests_mock):
@@ -254,7 +254,7 @@ class TestPastedRefreshToken:
         assert fleet.call_count == 0
         assert owner.call_count == 1
         assert api.ownerSlot.accessToken == new_access
-        assert api.readOnly is True
+        assert api.slotFor("command") is None
 
     def test_owner_access_token_pasted_back(self, requests_mock):
         refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
@@ -265,7 +265,7 @@ class TestPastedRefreshToken:
 
         assert refresh.call_count == 0
         assert api.ownerSlot.accessToken == access
-        assert api.readOnly is True
+        assert api.slotFor("command") is None
         assert {"cmd": "saveSettings"} in api.master.tasks
 
     @pytest.mark.parametrize(
@@ -630,12 +630,13 @@ class TestLoginPages:
         assert "bare access or refresh" in page
 
     def test_success_page_for_owner_token_points_at_ble(self):
-        page = render_login_page("success", carapi=Mock(readOnly=True))
+        page = render_login_page("success", carapi=Mock(ownerTokenOnly=True))
         assert "TeslaBLE" in page
+        assert "command_signing" in page
         assert "you also need the Tesla Vehicle Command proxy" not in page
 
     def test_success_page_for_fleet_token_points_at_proxy(self):
-        page = render_login_page("success", carapi=Mock(readOnly=False))
+        page = render_login_page("success", carapi=Mock(ownerTokenOnly=False))
         assert "you also need the Tesla Vehicle Command proxy" in page
 
 
@@ -648,7 +649,7 @@ class TestNoClientID:
 
         assert owner.call_count == 1
         assert owner.last_request.json()["client_id"] == "ownerapi"
-        assert api.readOnly is True
+        assert api.slotFor("command") is None
 
     def test_fleet_refresh_refused(self, requests_mock, caplog):
         fleet = requests_mock.post(FLEET_REFRESH_URL, json={})
