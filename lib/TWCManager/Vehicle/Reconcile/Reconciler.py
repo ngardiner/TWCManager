@@ -6,9 +6,11 @@
 # car's free channel has failed for the aspect's PAID_AFTER window and was
 # tried recently (a channel nobody has tried for PROBE_AFTER gets the real
 # command over it first). Each desire gets one paid request, plus one blind
-# retry after a failure that actually sent and never with a wake; after that
-# only a reading that reached the car or a new desired value sends again, and
-# such a reading re-arms a desire once at most. No aspect is sent to a car
+# retry after a failure that actually sent and never with a wake, or, after a
+# wake the car did not answer, one more attempt that wakes through the same
+# provider (its free online check while it holds its wake); after that only a
+# reading that reached the car or a new desired value sends again, and such a
+# reading re-arms a desire once at most. No aspect is sent to a car
 # twice inside MIN_SEND_GAP, whichever providers carried it.
 #
 # It owns the ble and cloud attempt queues. Each accepted attempt is reported
@@ -66,6 +68,10 @@ TICK = 1.0
 # have failed before a paid provider is used; RETRY, the gap before the same
 # aspect is tried again. Split the table to tune one alone
 PAID_AFTER = RETRY = {CHARGE_LIMIT: 300.0, CHARGING: 60.0, AMPS: 60.0}
+# After a cloud wake the car did not answer, the gap before the next attempt:
+# the provider's free online check (TeslaAPI caches it 120 s) is all it
+# makes until the car is online or the provider's wake hold ends
+WAKE_CHECK = 120.0
 # A restore to a car that is not answering is retried hourly
 RESTORE_RETRY = 3600.0
 # A free channel failing but untried for this long gets the real command
@@ -337,10 +343,20 @@ class VehicleReconciler(threading.Thread):
             rec.paidSends = 0
             rec.rearmed = True
             rec.paidRetryDue = False
+        wakes = allowWake(aspect, d, k) or ride and not d.restore
         paidAgain = rec.paidSends == 0 or (
             rec.paidSends < 2
-            and now - rec.paidAt >= RETRY[aspect]
-            and (rec.paidRetryDue or reached)
+            and (
+                now - rec.paidAt >= RETRY[aspect]
+                and (rec.paidRetryDue or reached)
+                # Its wake failed: the same provider wakes again, which it
+                # holds, so this pays only once the car is online (the
+                # command) or the hold is over (one more wake)
+                or now - rec.paidAt >= WAKE_CHECK
+                and wakes
+                and bool(paid)
+                and paid[0].name == rec.wakeCheckBy
+            )
         )
         freeGap = RESTORE_RETRY if d.restore and rec.lastFreeAt else RETRY[aspect]
         if paid and freeFailed and paidAgain:
@@ -375,9 +391,7 @@ class VehicleReconciler(threading.Thread):
             capability,
             d.value,
             p.name,
-            wake=(allowWake(aspect, d, k) or ride and not d.restore)
-            and (p.local or aspect != AMPS)
-            and not blind,
+            wake=wakes and (p.local or aspect != AMPS) and not blind,
             maxAge=(
                 None
                 if aspect == AMPS or blind

@@ -200,7 +200,10 @@ def test_paid_retry_never_wakes_and_a_failed_wake_gets_no_blind_retry():   # pre
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "asleep"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 60, "TeslaAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); r.pass_()                                 # the wake itself fails: "wake asleep"
     for _ in range(10): c.t += 600; r.pass_()
-    assert names(f) == ["wake"] and m.desired.record(VIN, CHARGE_LIMIT).lastOutcome.detail == "wake asleep"
+    # No blind command: the one follow-up wakes again (the real Fleet provider
+    # holds that wake 30 min, a free online check until then: parity row 4b)
+    assert names(f) == ["wake", "wake"] and m.desired.record(VIN, CHARGE_LIMIT).lastOutcome.detail == "wake asleep"
+    assert m.desired.record(VIN, CHARGE_LIMIT).paidSends == 2                              # spent: nothing more without a reading
 
 def test_a_scheduled_charge_is_left_alone():                                # pre-flight H3, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")

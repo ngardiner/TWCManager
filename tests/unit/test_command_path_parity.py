@@ -285,39 +285,83 @@ def test_fleet_only_raise_costs_the_same(requests_mock):
 
 
 # Row 4b (#699, merge plan Finding 1): Fleet-only, asleep; wake_up answers
-# offline and the car comes online 59 s later. main (#699) notices it with a
-# free state GET and sends the limit; here nothing plans another attempt, so
-# the free check never runs again and the limit is not sent (one GET, one
-# wake, no command in 4 h). Strict: it fails loudly once that is fixed.
+# offline and the car comes online 59 s later. As main (#699): the free
+# online check notices it and the limit goes out, with no second wake. The
+# reads and the cost are row 4's: one wake, the read, one command
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="no free online check after a wake answers offline; limit stranded",
-)
-def test_fleet_only_car_online_after_an_offline_wake_gets_the_limit(requests_mock):
-    m, r, v, c, api = install(fleet=True, held=(90, 50))
+def offlineWake(requests_mock, m, r, c, want, seconds=1800, online=59):
+    # Runs want() every pass for seconds; wake_up answers offline and the car
+    # comes online online s after it. Returns {"wake": t, "online": t, "sent":
+    # t}: the wake, the car online, the first command
     car = FleetCar(requests_mock, limit=50)
     requests_mock.post(
         FLEET + VIN + "/wake_up", json={"response": {"state": "offline"}}
     )
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
-    m.setPolicyLimit(80, transition=True)
     seen = {}
 
     def each():
+        want()
         if paid(requests_mock)[1] and "wake" not in seen:
             seen["wake"] = c()
-        if "wake" in seen and c() - seen["wake"] >= 59:
-            car.state = "online"
-        if commands(requests_mock) and "limit" not in seen:
-            seen["limit"] = c()
+        if "wake" in seen and c() - seen["wake"] >= online and "online" not in seen:
+            car.state, seen["online"] = "online", c()
+        if commands(requests_mock) and "sent" not in seen:
+            seen["sent"] = c()
 
-    passes(r, c, 1800, step=1, each=each)
-    assert paid(requests_mock)[1] == 1  # no second wake inside 30 min
+    passes(r, c, seconds, step=1, each=each)
+    return car, seen
+
+
+def test_fleet_only_car_online_after_an_offline_wake_gets_the_limit(requests_mock):
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    car, seen = offlineWake(requests_mock, m, r, c, lambda: None, seconds=3600)
+    assert seen["sent"] - seen["online"] <= 150  # the free check noticed it
+    assert paid(requests_mock) == (1, 1, 1)  # one wake in the hour: none again
     assert commands(requests_mock) == ["set_charge_limit"]
-    assert seen["limit"] - seen["wake"] <= 150
-    assert car.charge["charge_limit_soc"] == 80
+    assert car.charge["charge_limit_soc"] == 80 and dollars(requests_mock) == 0.023
+    assert m.desired.record(VIN, CHARGE_LIMIT).paidSends == 2  # the wake, the send
+
+
+def test_fleet_only_car_never_online_after_an_offline_wake_is_woken_twice(
+    requests_mock,
+):
+    # The car never answers: free checks only through the 30-minute wake
+    # hold, then one more wake; then nothing more is paid (I2)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    wakes = []
+
+    def want():
+        if paid(requests_mock)[1] > len(wakes):
+            wakes.append(c())
+
+    offlineWake(requests_mock, m, r, c, want, seconds=4 * 3600, online=10**9)
+    assert len(wakes) == 2 and wakes[1] - wakes[0] > 1800
+    assert paid(requests_mock) == (0, 2, 0) and counts(requests_mock)["other"] == 0
+    assert 2 < counts(requests_mock)["free"] < 10  # the free check, RETRY apart
+
+
+def test_fleet_only_car_online_after_an_offline_wake_gets_the_start(requests_mock):
+    # The same for a start (CHARGING), which wakes on its own
+    m, r, v, c, api = install(fleet=True)
+    for field, value in (
+        ("chargingState", "Stopped"),
+        ("chargeLimit", 80),
+        ("batteryLevel", 40),
+    ):
+        v.observe(field, value, "TeslaMateVehicle", at=c() - 600)
+    car, seen = offlineWake(
+        requests_mock, m, r, c, lambda: m.startCarsCharging(VIN), seconds=3600
+    )
+    assert seen["sent"] - seen["online"] <= 150
+    assert paid(requests_mock)[1:] == (1, 1) and commands(requests_mock) == [
+        "charge_start"
+    ]
+    assert car.charge["charging_state"] == "Charging"
 
 
 # Row 1: pure Gen2, no vehicle module; the heartbeat stops and starts

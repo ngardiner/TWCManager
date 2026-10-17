@@ -111,6 +111,9 @@ class AttemptRecord:
         self.paidRetryDue: bool = False
         # The desire's one re-arm of its paid sends is used
         self.rearmed = False
+        # The provider whose wake the car did not answer on the last paid
+        # send: the command never went (Reconciler's WAKE_CHECK)
+        self.wakeCheckBy: Optional[str] = None
         self.settledAt: Optional[float] = None
         self.pendingSave: Any = None
         # Sends that found the current value unreadable (a limit's c4 backstop)
@@ -132,6 +135,7 @@ class AttemptRecord:
         self.paidSaw = None
         self.paidRetryDue = False
         self.rearmed = False
+        self.wakeCheckBy = None
         self.settledAt = None
         self.unread = 0
         self.clearedValue = None
@@ -352,11 +356,10 @@ class DesiredStore:
                 else:
                     # One blind retry, after the desire's first paid request
                     # failed; never after a failed wake
-                    record.paidRetryDue = (
-                        record.paidSends == 0
-                        and outcome.kind in RETRYABLE
-                        and not outcome.detail.startswith("wake ")
-                    )
+                    retry = outcome.kind in RETRYABLE
+                    woke = not outcome.detail.startswith("wake ")
+                    record.paidRetryDue = record.paidSends == 0 and retry and woke
+                    record.wakeCheckBy = None if woke or not retry else attempt.provider
                     record.paidSends += 1
                     record.paidReached |= outcome.kind != UNREACHABLE
                     record.paidAt = now

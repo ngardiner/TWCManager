@@ -81,6 +81,8 @@ class Provider:
         return Outcome(UNSUPPORTED, "not implemented")
 
     def wake(self, vin: str) -> Outcome:
+        # A billed wake that fails holds the next one itself, a free online
+        # check until then: the reconciler's follow-up wakes again (WAKE_CHECK)
         return Outcome(UNSUPPORTED, "not implemented")
 
     def limitations(self, vehicle) -> FrozenSet[str]:
