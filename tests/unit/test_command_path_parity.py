@@ -361,6 +361,34 @@ def test_fleet_only_car_online_after_a_later_wake_gets_the_limit(
     assert car.charge["charge_limit_soc"] == 80
 
 
+def test_fleet_only_wake_http_errors_then_online_gets_the_limit(requests_mock):
+    # wake_up answers HTTP 500 twice (an ERROR, not asleep), and the car
+    # comes online 600 s after the second: those failed wakes reached
+    # nothing, so the arm re-arms as for an offline wake and the limit goes
+    # out; at most 4 paid
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    car = FleetCar(requests_mock, limit=50)
+    requests_mock.post(FLEET + VIN + "/wake_up", status_code=500, json={})
+    times, want = wakeTimes(requests_mock, c)
+    seen = {}
+
+    def each():
+        want()
+        if len(times) == 2 and c() - times[1] >= 600 and "online" not in seen:
+            car.state, seen["online"] = "online", c()
+        if commands(requests_mock) and "sent" not in seen:
+            seen["sent"] = c()
+
+    passes(r, c, 4 * 3600, step=1, each=each)
+    assert len(times) == 2 and times[1] - times[0] > 1800
+    assert seen["sent"] - seen["online"] <= 150
+    assert paid(requests_mock) == (1, 2, 1) and sum(paid(requests_mock)) <= 4
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert car.charge["charge_limit_soc"] == 80
+
+
 @pytest.mark.parametrize("start, wakes", [(False, 4), (True, 7)])
 def test_fleet_only_car_never_online_after_an_offline_wake(requests_mock, start, wakes):
     # The car never answers, 4 h. A limit: each of its two arms (I2) gets a

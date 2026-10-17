@@ -363,7 +363,8 @@ class DesiredStore:
                     )
                     record.wakeCheckBy = attempt.provider if failedWake else None
                     record.paidSends += 1
-                    record.paidReached |= outcome.kind != UNREACHABLE
+                    # A failed wake (an HTTP error too) never reached the car
+                    record.paidReached |= outcome.kind != UNREACHABLE and not failedWake
                     record.paidAt = now
             if current and outcome.kind in SETTLED:
                 record.settledAt = now
