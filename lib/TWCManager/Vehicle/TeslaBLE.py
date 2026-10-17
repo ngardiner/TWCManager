@@ -50,7 +50,7 @@ def _serialized(method):
 
 class TeslaBLE:
     binaryPath = None
-    commandTimeout = 5
+    commandTimeout = 15
     config = None
     configConfig = None
     isDockerCached = None
@@ -127,7 +127,7 @@ class TeslaBLE:
 
         # Retry policy is the reconciler's; maxRetries, retryDelay and
         # circuitBreaker* are no longer read.
-        self.commandTimeout = ble_config.get("commandTimeout", 5)
+        self.commandTimeout = ble_config.get("commandTimeout", 15)
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
