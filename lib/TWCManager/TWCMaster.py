@@ -2,6 +2,7 @@
 
 from TWCManager.EVSEController.Gen2TWCs import Gen2TWCs
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
+from collections import deque
 from datetime import datetime, timedelta
 import json
 import logging
@@ -116,6 +117,9 @@ class TWCMaster:
         self.modules = {}
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
+        # RS-485 messages from any thread, sent by the serial loop between
+        # slave replies (sendRS485, flushRS485)
+        self._outbox = deque()
         # Guards mutation of self.settings from non-serial threads; saves
         # serialise under it and write the file outside it. Lock order:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
@@ -665,6 +669,18 @@ class TWCMaster:
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]
 
+    def sendRS485(self, msg):
+        # Any thread: a write in the middle of a slave's reply corrupts both
+        self._outbox.append(msg)
+
+    def flushRS485(self):
+        # Serial thread only
+        sent = 0
+        while self._outbox:
+            self.getInterfaceModule().send(self._outbox.popleft())
+            sent += 1
+        return sent
+
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
 
@@ -739,7 +755,7 @@ class TWCMaster:
         now = time.time()
         if now >= self.lastkWhPoll + 60:
             for slaveTWC in self.getSlaveTWCs():
-                self.getInterfaceModule().send(
+                self.sendRS485(
                     bytearray(b"\xfb\xeb")
                     + self.TWCID
                     + slaveTWC.TWCID
@@ -861,7 +877,7 @@ class TWCMaster:
             prefixByte = bytearray(b"\xfb\xf1")
 
         if prefixByte:
-            self.getInterfaceModule().send(
+            self.sendRS485(
                 prefixByte
                 + self.TWCID
                 + slaveID
@@ -1825,7 +1841,7 @@ class TWCMaster:
     def sendStartCommand(self):
         # This function will loop through each of the Slave TWCs, and send them the start command.
         for slaveTWC in self.getSlaveTWCs():
-            self.getInterfaceModule().send(
+            self.sendRS485(
                 bytearray(b"\xfc\xb1")
                 + self.TWCID
                 + slaveTWC.TWCID
@@ -1837,7 +1853,7 @@ class TWCMaster:
         # If the subTWC parameter is supplied, we only stop the specified TWC
         for slaveTWC in self.getSlaveTWCs():
             if (not subTWC) or (subTWC == slaveTWC.TWCID):
-                self.getInterfaceModule().send(
+                self.sendRS485(
                     bytearray(b"\xfc\xb2")
                     + self.TWCID
                     + slaveTWC.TWCID

@@ -50,10 +50,10 @@ def test_heartbeat_readings_are_not_evidence_for_a_car_with_vehicle_reads():   #
     assert cmds(f) == ["stopCharging"]                                                                                    # no vehicle read arrived: not re-sent
 
 def test_heartbeat_stop_targets_the_anonymous_car():                         # real TWCSlave heartbeat, non-Tesla car
-    m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"; m.sendStopCommand = Mock()
-    m.setMaxAmpsToDivideAmongSlaves(0); drive(m, s, amps_actual=12.0); ready_to_stop(s); drive(m, s, amps_actual=12.0)   # offer 0, the car still draws past the gates
-    assert m.desired.get(anon.key, CHARGING).value is False and r.pass_() == 1 and s.stopRequested
-    drive(m, s, amps_actual=12.0); m.sendStopCommand.assert_called_once_with(s.TWCID)                                       # sent by the heartbeat, on its thread
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"
+    m.setMaxAmpsToDivideAmongSlaves(0); iface = drive(m, s, amps_actual=12.0); ready_to_stop(s); drive(m, s, amps_actual=12.0)   # offer 0, the car still draws past the gates
+    assert m.desired.get(anon.key, CHARGING).value is False and r.pass_() == 1 and [x[:2] + x[4:6] for x in m._outbox] == [b"\xfc\xb2" + s.TWCID]
+    iface.send.reset_mock(); assert m.flushRS485() == 1 and iface.send.call_args.args[0][:2] == b"\xfc\xb2"            # sent by the serial loop, on its thread
 
 def test_heartbeat_with_no_vehicle_key_decides_nothing():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); v.observe("chargingState", "Stopped", "TeslaBLE")
@@ -101,10 +101,10 @@ def test_disruptive_stop_is_sent_once_until_new_evidence_then_reasserted():   # 
     m.settings["respondToSlaves"] = 1; c.t += 61; drive(m, s, amps_actual=0.5); assert r.pass_() == 0 and m.settings["respondToSlaves"] == 1   # quiet bus: satisfied
 
 def test_disruptive_stop_on_the_real_clock_is_sent_once():                    # production clock
-    m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"; m.sendStopCommand = Mock()
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"
     drive(m, s, amps_actual=12.0); m.stopCarsCharging(anon.key)
     sent = sum(r.pass_() for _ in range(20)); drive(m, s, amps_actual=12.0)
-    assert sent == 1 and m.sendStopCommand.call_count == 1 and not s.stopRequested                                # one relay stop, not one per pass
+    assert sent == 1 and m.flushRS485() == 1                                                                         # one relay stop, not one per pass
 
 def test_mode_2_start_after_a_ble_stop_goes_through_ble():
     m, r, v, c = setup(ble(O.Outcome(O.DONE), O.Outcome(O.DONE), O.Outcome(O.DONE))); onTwc(m, v); v.observe("chargingState", "Charging", "TeslaBLE"); m.settings["chargeStopMode"] = "2"
@@ -123,7 +123,7 @@ def test_non_tesla_car_on_a_twc_gets_the_disruptive_stop_at_once():
     anon.observe("actualCurrent", 12.0, "Gen2TWC"); m.stopCarsCharging(anon.key); assert r.pass_() == 1 and m.settings["respondToSlaves"] == 0
     assert m.providerOrder.provider("TeslaBLE").calls == [] and m.providerOrder.provider("FleetAPI").calls == []
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"
-    anon.observe("actualCurrent", 12.0, "Gen2TWC"); m.stopCarsCharging(anon.key); assert r.pass_() == 1 and m.getSlaveTWCs()[0].stopRequested
+    anon.observe("actualCurrent", 12.0, "Gen2TWC"); m.stopCarsCharging(anon.key); assert r.pass_() == 1 and [x[:2] for x in m._outbox] == [b"\xfc\xb2"]
 
 def test_gen3_multi_unit_stop_uses_the_car_not_the_bus():
     from tests.unit.test_gen3twc_provider import make as make_gen3, vitals

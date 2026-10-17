@@ -42,6 +42,7 @@ import threading
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
 from TWCManager.Vehicle.Reconcile.Targets import onArrival, onDeparture
+from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
 import requests
 from enum import Enum
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -900,6 +901,9 @@ while True:
             logger.warning("Main loop stalled for %.1fs", now - timeLastLoopTop)
         timeLastLoopTop = now
 
+        # Messages other threads queued, sent while the bus is quiet
+        master.flushRS485()
+
         if config["config"]["fakeMaster"] == 1:
             # A real master sends 5 copies of linkready1 and linkready2 whenever
             # it starts up, which we do here.
@@ -1487,86 +1491,12 @@ while True:
                     else:
                         potentialVIN = "".join(slaveTWC.VINData)
 
-                        # Ensure we have a valid VIN
-                        vinValid = True
-
-                        if len(potentialVIN) != 17 and len(potentialVIN) != 0:
-                            vinValid = False
-
-                        if vinValid and len(potentialVIN) == 17:
-                            potentialVIN = potentialVIN.upper()
-                            check = potentialVIN[8]
-                            if check == "X":
-                                check = 10
-                            elif check.isdigit():
-                                check = int(check)
-                            else:
-                                vinValid = False
-
-                        if vinValid and len(potentialVIN) == 17:
-                            weights = [
-                                8,
-                                7,
-                                6,
-                                5,
-                                4,
-                                3,
-                                2,
-                                10,
-                                0,
-                                9,
-                                8,
-                                7,
-                                6,
-                                5,
-                                4,
-                                3,
-                                2,
-                            ]
-                            replaceValues = {
-                                "A": 1,
-                                "B": 2,
-                                "C": 3,
-                                "D": 4,
-                                "E": 5,
-                                "F": 6,
-                                "G": 7,
-                                "H": 8,
-                                "J": 1,
-                                "K": 2,
-                                "L": 3,
-                                "M": 4,
-                                "N": 5,
-                                "P": 7,
-                                "R": 9,
-                                "S": 2,
-                                "T": 3,
-                                "U": 4,
-                                "V": 5,
-                                "W": 6,
-                                "X": 7,
-                                "Y": 8,
-                                "Z": 9,
-                                "1": 1,
-                                "2": 2,
-                                "3": 3,
-                                "4": 4,
-                                "5": 5,
-                                "6": 6,
-                                "7": 7,
-                                "8": 8,
-                                "9": 9,
-                                "0": 0,
-                            }
-
-                            sum = 0
-                            for digit, weight in zip(potentialVIN, weights):
-                                if digit not in replaceValues:
-                                    vinValid = False
-                                    break
-                                sum += replaceValues[digit] * weight
-                            if sum % 11 != check:
-                                vinValid = False
+                        # Ensure we have a valid VIN: empty (no VIN to
+                        # read) or 17 characters with a good check digit
+                        vinValid = len(potentialVIN) == 0 or vinCheckDigitValid(
+                            potentialVIN
+                        )
+                        potentialVIN = potentialVIN.upper()
 
                         if vinValid and len(potentialVIN) == 0:
                             # All VIN parts are empty - non-Tesla vehicle or CAN
@@ -2052,7 +1982,8 @@ while master.backgroundTasksQueue.unfinished_tasks > 0:
         break
     time.sleep(0.1)
 
-# Close the input module
+# Send what the drains queued (a mode-3 stop), then close the input module
+master.flushRS485()
 master.getInterfaceModule().close()
 
 # Backstop: any stray non-daemon thread (paho, future modules) would otherwise

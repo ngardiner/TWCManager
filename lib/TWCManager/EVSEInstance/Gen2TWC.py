@@ -39,10 +39,6 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         # instead of recomputing the per-car fair share.
         self._evseTargetAmps = None
 
-        # A mode-3 stop: set off the serial thread (Gen2TWCProvider),
-        # consumed and sent by send_master_heartbeat on it.
-        self.stopRequested = False
-
         TWCSlave.__init__(self, TWCID, maxAmps, config, master)
 
     # ------------------------------------------------------------------

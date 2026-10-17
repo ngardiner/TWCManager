@@ -43,12 +43,13 @@ def test_gen2_stop_and_start_outcomes_and_the_billed_stop_suppression():
     m.settings["chargeStopMode"] = "1"; assert not m.providerOrder.suppressions.suppressed(fleet, C.STOP_CHARGING)
     assert p.stopCharging("5YJ3E1EA1KF000009") == O.Outcome(O.UNSUPPORTED, "no slave")
 
-def test_mode_3_stop_is_sent_by_the_heartbeat_not_the_caller():
+def test_mode_3_stop_is_sent_by_the_serial_loop_not_the_caller():
     from tests.unit.gen2_helpers import drive
-    m, s = make_gen2(); m.desired = DesiredStore(); p = m.providerOrder.provider("Gen2TWC"); s.currentVIN = VIN; m.settings["chargeStopMode"] = "3"; m.sendStopCommand = Mock()
-    assert p.stopCharging(VIN) == O.Outcome(O.DONE, "queued") and s.stopRequested and m.sendStopCommand.call_count == 0
-    drive(m, s, amps_actual=12.0)                                                                         # the serial thread's own heartbeat
-    m.sendStopCommand.assert_called_once_with(s.TWCID); assert not s.stopRequested
+    m, s = make_gen2(); m.desired = DesiredStore(); p = m.providerOrder.provider("Gen2TWC"); s.currentVIN = VIN; m.settings["chargeStopMode"] = "3"
+    assert p.stopCharging(VIN) == O.Outcome(O.DONE, "queued") and [x[:2] for x in m._outbox] == [b"\xfc\xb2"]
+    iface = drive(m, s, amps_actual=12.0)                                                                 # the serial thread's own heartbeat
+    assert [c.args[0][:2] for c in iface.send.call_args_list] == [b"\xfb\xe0"] and len(m._outbox) == 1
+    assert m.flushRS485() == 1 and iface.send.call_args.args[0][:2] == b"\xfc\xb2" and not m._outbox
 
 # --- Fix round 1 ---
 import logging
@@ -93,6 +94,6 @@ def test_key_refusal_outside_the_pairing_window_is_refused_and_drops_the_claim()
     assert p.setChargeLimit(VIN, 80) == O.Outcome(O.REFUSED, "key") and "TeslaBLE" not in reg.get(VIN).claims
 
 
-def test_bare_twcslave_has_no_stop_requested():
+def test_twcslave_has_no_stop_flag():
     from TWCManager.TWCSlave import TWCSlave
-    assert TWCSlave.stopRequested is False
+    assert not hasattr(TWCSlave, "stopRequested")                                                       # stops go through the master's outbox

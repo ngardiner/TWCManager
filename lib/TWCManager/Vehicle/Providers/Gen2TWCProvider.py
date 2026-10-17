@@ -2,8 +2,8 @@
 # locally. Its stop is disruptive (it stops answering every slave, or stops the
 # TWC itself), so it is declared at the very-high-cost tier and only
 # chargeStopMode selects it.
-# Command methods never touch RS-485: a stop is published for the serial
-# thread's heartbeat (slave.stopRequested), a target likewise.
+# Command methods never touch RS-485: a stop is queued for the serial loop
+# (master.sendRS485), a target is published for the heartbeat.
 from typing import Optional, Tuple
 
 from .Capability import (
@@ -110,7 +110,7 @@ class Gen2TWCProvider(Provider):
             self.master.stopRespondingToSlaves()
             return Outcome(DONE, "respond")
         if mode == 3:
-            # Sent by this slave's next heartbeat, on the serial thread
-            slave.stopRequested = True
+            # Queued: the serial loop sends it between slave replies
+            self.master.sendStopCommand(slave.TWCID)
             return Outcome(DONE, "queued")
         return Outcome(UNSUPPORTED, "mode %d" % mode)
