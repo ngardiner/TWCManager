@@ -939,7 +939,7 @@ def CreateHTTPHandlerClass(master):
                 master.lastTWCResponseMsg = bytearray()
 
                 # Send packet to network
-                master.getModuleByName("RS485").send(
+                master.sendRS485(
                     master.getModuleByName("TWCProtocol").createMessage(packet)
                 )
 

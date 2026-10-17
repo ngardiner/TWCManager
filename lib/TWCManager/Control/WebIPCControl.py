@@ -255,7 +255,7 @@ class WebIPCControl:
                             )
                         else:
                             self.master.lastTWCResponseMsg = bytearray()
-                            self.master.getModuleByName("RS485").send(twcMsg)
+                            self.master.sendRS485(twcMsg)
                 elif webMsg == b"getLastTWCMsgResponse":
                     if (
                         self.master.lastTWCResponseMsg != None
