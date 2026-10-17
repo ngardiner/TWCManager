@@ -235,9 +235,9 @@ def test_a_failed_boot_list_load_recovers_without_an_arrival(requests_mock):  # 
     api.loadList(); assert len(api.registry.attached("TeslaAPI")) == 1 and not api.listPending()      # the periodic retry
     assert [q.method for q in requests_mock.request_history] == ["GET", "GET"]
     source = (REPO / "lib/TWCManager/TWCManager.py").read_text()
-    tick = source[source.index("master.lastTeslaTokenRefreshCheck = time.time()"):]
-    assert tick.index("carapi.listPending()") < tick.index('{"cmd": "loadVehicleList"}') < 600
-    assert 'task["cmd"] == "loadVehicleList"' in source and "carapi.loadList()" in source
+    tick = source[source.index("def refreshTokens(master):"):]                       # the 5-minute background task
+    assert tick.index("carapi.listPending()") < tick.index("carapi.loadList()") < 900
+    assert 'task["cmd"] == "refreshTokens"' in source and "refreshTokens(master)" in source
 
 # Restart presence (slim Task 12c): the 2026-10-16 live failure
 

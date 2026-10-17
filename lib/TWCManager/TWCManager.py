@@ -296,6 +296,23 @@ def shutdownTimeouts(now, shutdownDeadline):
     return min(shutdownDeadline - 20, now + 60)
 
 
+def refreshTokens(master):
+    # Every 5 minutes, refresh the Tesla API tokens even if no vehicle
+    # command has run recently, so read-only features like Storm Watch
+    # don't rely on a charge/wake command to keep them alive. A POST of up
+    # to 10 s, so here, never on the serial loop (#690).
+    try:
+        carapi = master.getModuleByName("TeslaAPI")
+        if carapi:
+            carapi.refreshTokenIfNeeded()
+            if carapi.listPending():
+                # A list load that failed (at boot, say) or held limits
+                # still waiting on it retry here: free calls only
+                carapi.loadList()
+    finally:
+        master.queue_background_task({"cmd": "refreshTokens"}, delay=300)
+
+
 def background_tasks_thread(master):
     while True:
         try:
@@ -309,10 +326,8 @@ def background_tasks_thread(master):
                     master.updateChargeAtHome()
                 elif task["cmd"] == "checkCharge":
                     master.updateChargeAtHome()
-                elif task["cmd"] == "loadVehicleList":
-                    carapi = master.getModuleByName("TeslaAPI")
-                    if carapi:
-                        carapi.loadList()
+                elif task["cmd"] == "refreshTokens":
+                    refreshTokens(master)
                 elif task["cmd"] == "checkDeparture":
                     onDeparture(master)
                 elif task["cmd"] == "checkGreenEnergy":
@@ -821,6 +836,7 @@ master.reconciler.start()
 # The Tesla API vehicle list loads here (a free call), so the cloud
 # providers can carry commands before any arrival
 master.queue_background_task({"cmd": "checkCharge"})
+master.queue_background_task({"cmd": "refreshTokens"}, delay=300)
 
 # Charging policy is evaluated on its own thread so module I/O done by
 # policy conditions never stalls serial servicing. The first evaluation
@@ -1006,19 +1022,6 @@ while True:
         if (time.time() - master.lastVehicleExpiry) > 3600:
             master.lastVehicleExpiry = time.time()
             master.queue_background_task({"cmd": "expireVehicles"})
-
-        # Periodically refresh the Tesla Fleet API token even if no vehicle
-        # command has run recently, so read-only features like Storm Watch
-        # don't rely on a charge/wake command to keep it alive.
-        if (time.time() - master.lastTeslaTokenRefreshCheck) > (60 * 5):
-            master.lastTeslaTokenRefreshCheck = time.time()
-            carapi = master.getModuleByName("TeslaAPI")
-            if carapi:
-                carapi.refreshTokenIfNeeded()
-                if carapi.listPending():
-                    # A list load that failed (at boot, say) or held limits
-                    # still waiting on it retry here: free calls only
-                    master.queue_background_task({"cmd": "loadVehicleList"})
 
         ########################################################################
         # See if there's an incoming message on the input interface.

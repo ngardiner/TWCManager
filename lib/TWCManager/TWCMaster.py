@@ -55,7 +55,6 @@ class TWCMaster:
     generationValues = {}
     lastkWhMessage = time.time()
     lastkWhPoll = 0
-    lastTeslaTokenRefreshCheck = 0
     lastSaveFailed = 0
     lastTWCResponseMsg = None
     lastUpdateCheck = 0
