@@ -284,6 +284,42 @@ def test_fleet_only_raise_costs_the_same(requests_mock):
     assert dollars(requests_mock) == 0.023
 
 
+# Row 4b (#699, merge plan Finding 1): Fleet-only, asleep; wake_up answers
+# offline and the car comes online 59 s later. main (#699) notices it with a
+# free state GET and sends the limit; here nothing plans another attempt, so
+# the free check never runs again and the limit is not sent (one GET, one
+# wake, no command in 4 h). Strict: it fails loudly once that is fixed.
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="no free online check after a wake answers offline; limit stranded",
+)
+def test_fleet_only_car_online_after_an_offline_wake_gets_the_limit(requests_mock):
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    car = FleetCar(requests_mock, limit=50)
+    requests_mock.post(
+        FLEET + VIN + "/wake_up", json={"response": {"state": "offline"}}
+    )
+    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    seen = {}
+
+    def each():
+        if paid(requests_mock)[1] and "wake" not in seen:
+            seen["wake"] = c()
+        if "wake" in seen and c() - seen["wake"] >= 59:
+            car.state = "online"
+        if commands(requests_mock) and "limit" not in seen:
+            seen["limit"] = c()
+
+    passes(r, c, 1800, step=1, each=each)
+    assert paid(requests_mock)[1] == 1  # no second wake inside 30 min
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert seen["limit"] - seen["wake"] <= 150
+    assert car.charge["charge_limit_soc"] == 80
+
+
 # Row 1: pure Gen2, no vehicle module; the heartbeat stops and starts
 
 
