@@ -4,6 +4,7 @@ from unittest.mock import ANY, Mock
 from tests.unit.teslatokens import FakeMaster, fleet_token, new_api, wire_reads
 from TWCManager.Vehicle.Reconcile.Outcome import DONE, Outcome
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from tests.unit.vehicle_helpers import commands
 
 VIN = "5YJ3E1EA1KF000001"
 
@@ -23,9 +24,9 @@ def test_vehicle_joins_registry_and_claims_teslaapi():
     assert reg.attached("TeslaAPI") == [(v, v.attachment("TeslaAPI"))]
     assert v.name == "TestCar"
     api.fleetSlot.clear()
-    assert v.tier == "observed"  # no command slot: read-only
+    assert not commands(v)  # no command slot: read-only
     api.fleetSlot.setTokens(fleet_token())
-    assert v.tier == "managed"
+    assert commands(v)
 
 
 def test_listing_is_a_sighting():

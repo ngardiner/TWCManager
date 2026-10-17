@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import Mock
 from TWCManager.Vehicle.Registry.Fields import NOT_TRACKED
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from tests.unit.vehicle_helpers import commands
 
 VIN = "5YJ3E1EA1KF000001"
 VIN2 = "5YJ3E1EA1KF000002"
@@ -46,7 +47,7 @@ def test_user_asserted_add_validates_format():
     with pytest.raises(ValueError):
         r.addUserAsserted("5YJ3E1EA1KF00000I")
     v = r.addUserAsserted(VIN)
-    assert v.userAsserted and v.tier == "observed"
+    assert v.userAsserted and not commands(v)
     assert r.addUserAsserted(VIN) is v
 
 

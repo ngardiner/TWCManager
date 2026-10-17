@@ -708,3 +708,19 @@ def test_fleet_live_message_attaches_by_topic_vin_without_a_name():
     v = reg.get(VIN)
     assert v is not None and t.vehicles[VIN] is v
     assert v.value("batteryLevel") == 55 and v.value("state") == "online"
+
+
+def test_a_live_report_lists_the_source_on_the_car_but_retained_does_not():
+    t, reg = make()
+    t.vinFor = lambda vid: VIN
+    t.applyDataToVehicle("1", "display_name", "TestCar", retained=True)
+    t.applyDataToVehicle("1", "charge_limit_soc", "80", retained=True)
+    assert reg.get(VIN) is None  # a retained message never creates a car
+    t.applyDataToVehicle("1", "display_name", "TestCar")
+    claim = reg.get(VIN).claims["Probe"]
+    assert (claim.status, claim.commands, claim.keepsAlive) == ("reports", False, False)
+    # a silent telemetry-only car still ages out, and the claim buys it nothing
+    assert reg.expire(now=reg.now() + reg.forgetAfter + 1) == [VIN]
+    # a car with only retained data later reported live: claim made once
+    t.applyDataToVehicle("1", "display_name", "TestCar")
+    reg.get(VIN).claims["Probe"]

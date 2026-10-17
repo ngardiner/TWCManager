@@ -36,6 +36,7 @@ from tests.unit.teslatokens import (
     owner_token,
     wire_reads,
 )
+from tests.unit.vehicle_helpers import commands
 
 
 @pytest.fixture
@@ -343,7 +344,7 @@ class TestOffCarCommandsThroughOwner:
         api = owner_api_with("off")
         vehicle = api.registry.get(VIN)
         assert vehicle.claims["OwnerAPI"].commands is True
-        assert vehicle.tier == "managed"
+        assert commands(vehicle)
 
     def test_read_pause_does_not_block_owner_commands(self, no_threads, requests_mock):
         # A paused read slot is paused for reads only
@@ -381,7 +382,7 @@ class TestOwnerTokenRefusesOtherCars:
         assert requests_mock.call_count == 0
         assert no_error_recorded(api)
         assert vehicle.claims["OwnerAPI"].commands is False
-        assert vehicle.tier == "observed"
+        assert not commands(vehicle)
 
     def test_off_must_match_exactly(self, no_threads):
         for signing in ("Off", "OFF", " off", "false", False, 0, ""):

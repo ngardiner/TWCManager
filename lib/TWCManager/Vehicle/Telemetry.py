@@ -254,6 +254,10 @@ class TelmetryBase:
         source = self.__class__.__name__
         if not retained:
             vehicle.observe(field, value, source)
+            if source not in vehicle.claims:
+                # Listed on the car's provider list; it commands nothing and
+                # is not kept alive: a car it stops reporting still ages out.
+                vehicle.claim(source, False, "reports", keepsAlive=False)
             return
         # A retained redelivery is not a sighting. One that repeats this
         # source's last report is not news either: restamping it would make

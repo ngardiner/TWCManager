@@ -9,6 +9,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.test_teslaapi_registry import api_with_registry, VIN
 from tests.unit.teslatokens import fleet_token, owner_token
+from tests.unit.vehicle_helpers import commands
 
 OWNER_VEHICLE = "https://owner-api.teslamotors.com/api/1/vehicles/" + VIN
 FLEET_ANY = re.compile(r"https://fleet-api\.prd\..*")
@@ -53,15 +54,15 @@ def test_claims_are_live_and_follow_the_slots():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})  # both slots empty
     v = reg.get(VIN)
-    assert set(v.claims) == {"OwnerAPI", "FleetAPI"} and v.tier == "observed"
+    assert set(v.claims) == {"OwnerAPI", "FleetAPI"} and not commands(v)
     assert v.claims["OwnerAPI"].status == "listed"
     assert v.claims["OwnerAPI"].commands is False
     api.storeToken(fleet_token())
-    assert v.tier == "managed"  # pasted after the listing: no re-list needed
+    assert commands(v)  # pasted after the listing: no re-list needed
     api.fleetSlot.clear()
-    assert v.tier == "observed"
+    assert not commands(v)
     api.storeToken(owner_token())
-    assert v.tier == "observed"
+    assert not commands(v)
 
 
 def test_fleet_commands_resolve_the_car_by_vin():
@@ -129,7 +130,7 @@ def test_a_data_only_fleet_token_reads_but_never_commands():
     api.storeToken(fleet_token(scp=["openid", "vehicle_device_data"]))
     assert fleet.available(C.READ_CHARGE) is True and fleet.ready(v, C.READ_CHARGE)
     assert fleet.available(C.SET_AMPS) is False and fleet.available(C.WAKE) is False
-    assert fleet.ready(v, C.SET_AMPS) is False and v.tier == "observed"
+    assert fleet.ready(v, C.SET_AMPS) is False and not commands(v)
 
 
 VEHICLE_DATA = {
