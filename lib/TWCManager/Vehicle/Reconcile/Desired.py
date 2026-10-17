@@ -327,9 +327,9 @@ class DesiredStore:
             record = state.records.get(aspect) if state else None
             if record is None or record.inFlight is not attempt:
                 return False
-            record.inFlight = None
             if outcome.detail in QUEUE_DETAILS:
                 # The attempt never ran
+                record.inFlight = None
                 return True
             want = state.desired.get(aspect)
             # Only an attempt made for the current desire settles it or
@@ -357,9 +357,11 @@ class DesiredStore:
                     # One blind retry, after the desire's first paid request
                     # failed; never after a failed wake
                     retry = outcome.kind in RETRYABLE
-                    woke = not outcome.detail.startswith("wake ")
-                    record.paidRetryDue = record.paidSends == 0 and retry and woke
-                    record.wakeCheckBy = None if woke or not retry else attempt.provider
+                    failedWake = retry and outcome.detail.startswith("wake ")
+                    record.paidRetryDue = (
+                        record.paidSends == 0 and retry and not failedWake
+                    )
+                    record.wakeCheckBy = attempt.provider if failedWake else None
                     record.paidSends += 1
                     record.paidReached |= outcome.kind != UNREACHABLE
                     record.paidAt = now
@@ -381,6 +383,8 @@ class DesiredStore:
             if outcome.kind == REFUSED or (current and outcome.kind in EXCLUDING):
                 # UNSUPPORTED can depend on the value: a superseded one's not
                 record.exclude(attempt.provider, outcome.kind)
+            # Last: plan reads the record without the lock once this is None
+            record.inFlight = None
             return True
 
     def forget(self, key) -> bool:

@@ -7,11 +7,11 @@
 # tried recently (a channel nobody has tried for PROBE_AFTER gets the real
 # command over it first). Each desire gets one paid request, plus one blind
 # retry after a failure that actually sent and never with a wake, or, after a
-# wake the car did not answer, one more attempt that wakes through the same
-# provider (its free online check while it holds its wake); after that only a
-# reading that reached the car or a new desired value sends again, and such a
-# reading re-arms a desire once at most. No aspect is sent to a car
-# twice inside MIN_SEND_GAP, whichever providers carried it.
+# wake the car did not answer, one follow-up through the same provider
+# (WAKE_CHECK); after that only a reading that reached the car (or a failed
+# wake) or a new desired value sends again, and such a reading re-arms a
+# desire once at most. No aspect is sent to a car twice inside MIN_SEND_GAP,
+# whichever providers carried it.
 #
 # It owns the ble and cloud attempt queues. Each accepted attempt is reported
 # once: on its queue's thread when it runs, else on the caller's (a local
@@ -68,9 +68,9 @@ TICK = 1.0
 # have failed before a paid provider is used; RETRY, the gap before the same
 # aspect is tried again. Split the table to tune one alone
 PAID_AFTER = RETRY = {CHARGE_LIMIT: 300.0, CHARGING: 60.0, AMPS: 60.0}
-# After a cloud wake the car did not answer, the gap before the next attempt:
-# the provider's free online check (TeslaAPI caches it 120 s) is all it
-# makes until the car is online or the provider's wake hold ends
+# After a cloud wake the car did not answer, the gap between its follow-ups:
+# the provider holds its next wake (Provider.wake), so each is its free
+# online check (TeslaAPI caches it 120 s) until the car is online
 WAKE_CHECK = 120.0
 # A restore to a car that is not answering is retried hourly
 RESTORE_RETRY = 3600.0
@@ -258,7 +258,8 @@ class VehicleReconciler(threading.Thread):
             last is not None
             and isNotSent(last)
             and last.detail not in QUEUE_DETAILS
-            and now - rec.lastOutcomeAt < RETRY[aspect]
+            and now - rec.lastOutcomeAt
+            < (WAKE_CHECK if rec.wakeCheckBy else RETRY[aspect])
         ):
             # Wake held, backoff, wake refused: no resubmit loop (H2)
             return None
@@ -327,34 +328,40 @@ class VehicleReconciler(threading.Thread):
         # A start goes with the limit first: its wake carries the limit
         ride = aspect == CHARGE_LIMIT and self._startWanted(vehicle, config)
         field = FIELD_FOR[aspect]
+        wakes = allowWake(aspect, d, k) or ride and not d.restore
         reached = rec.paidSends and reachedCar(vehicle, field, rec.paidAt, rec.paidSaw)
         if (
             rec.paidSends
             and not rec.paidReached
             and not rec.rearmed
             and now - rec.paidAt >= RETRY[aspect]
-            and (reached or ride or self._chargingSince(vehicle, aspect, rec.paidAt))
+            and (
+                reached
+                or ride
+                or self._chargingSince(vehicle, aspect, rec.paidAt)
+                or rec.paidSends >= 2
+                and rec.wakeCheckBy
+                and wakes
+            )
         ):
-            # No paid send reached the car: a reading shows it awake, or a
-            # start will wake it. At most two more sends, once per desire, each
-            # with the normal wake and read (N1, I2). Written without the
-            # store's lock: a newDesire() racing it can inherit rearmed and
-            # lose a retry, never gain a paid send (final review M6)
+            # No paid send reached the car: a reading shows it awake, a start
+            # will wake it, or the arm ended on a failed wake. At most two
+            # more sends, once per desire, each with the normal wake and read
+            # (N1, I2). Written without the store's lock: a newDesire()
+            # racing it can inherit rearmed and lose a retry, never gain a
+            # paid send (final review M6)
             rec.paidSends = 0
             rec.rearmed = True
             rec.paidRetryDue = False
-        wakes = allowWake(aspect, d, k) or ride and not d.restore
         paidAgain = rec.paidSends == 0 or (
             rec.paidSends < 2
             and (
                 now - rec.paidAt >= RETRY[aspect]
                 and (rec.paidRetryDue or reached)
-                # Its wake failed: the same provider wakes again, which it
-                # holds, so this pays only once the car is online (the
-                # command) or the hold is over (one more wake)
+                # Its wake failed: the follow-up through it (WAKE_CHECK)
                 or now - rec.paidAt >= WAKE_CHECK
                 and wakes
-                and bool(paid)
+                and paid
                 and paid[0].name == rec.wakeCheckBy
             )
         )
