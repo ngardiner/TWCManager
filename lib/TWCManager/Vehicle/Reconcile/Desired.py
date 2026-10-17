@@ -86,6 +86,8 @@ class Attempt(NamedTuple):
     since: float
     # The pre-write read cascades even when the stored value is fresh
     force: bool = False
+    # Why a command goes without a wake (logged by runAttempt)
+    wakeSkipped: Optional[str] = None
 
 
 class AttemptRecord:
