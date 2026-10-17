@@ -82,6 +82,7 @@ def offers(s, iface, beats=10, spike=True):
 def idleSlave(m, twcid=b"\x82\x44"):
     s = m.newSlave(twcid, 80)
     s.protocolVersion = 1
+    s.heardFrom = True  # it has replied
     s.reportedState, s.reportedAmpsMax, s.reportedAmpsActual = 0x04, 0, 0
     return s
 
@@ -145,6 +146,7 @@ def chargingAndIdle(feed):
     m, iface = real(minAmps=12, feed=feed)
     busy = m.newSlave(b"\x82\x45", 80)
     busy.protocolVersion = 1
+    busy.heardFrom = True  # it has replied
     busy.currentVIN = VIN
     busy.reportedState, busy.reportedAmpsMax, busy.reportedAmpsActual = 0x01, 32, 20
     v = m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
@@ -185,6 +187,7 @@ def test_start_request_follows_the_range_override():
 def chargingSlave(m, twcid, vin):
     s = m.newSlave(twcid, 80)
     s.protocolVersion = 1
+    s.heardFrom = True  # it has replied
     s.currentVIN = vin
     s.reportedState, s.reportedAmpsMax, s.reportedAmpsActual = 0x01, 32, 20
     v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI")

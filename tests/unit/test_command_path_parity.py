@@ -20,7 +20,12 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
-from TWCManager.Vehicle.Reconcile.Reconciler import PAID_AFTER, RESTORE_RETRY, RETRY
+from TWCManager.Vehicle.Reconcile.Reconciler import (
+    MIN_SEND_GAP,
+    PAID_AFTER,
+    RESTORE_RETRY,
+    RETRY,
+)
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
 from tests.unit.gen2_helpers import drive as heartbeat
 from tests.unit.reconcile_helpers import AWAY, HOME, placeAt
@@ -1220,21 +1225,37 @@ def test_restart_with_the_car_plugged_in_and_asleep_gets_the_scheduled_limit(
     m.setMaxAmpsToDivideAmongSlaves(32)
     m.setPolicyLimit(50, transition=True)  # Non Scheduled, after the restart
     m.setPolicyLimit(70, transition=True)  # 00:00: Scheduled Charging
+    sentAt = []
+    run = b._sendCommand_internal
+
+    def timed(vin, command, args=None):
+        sentAt.append((command, c.t))
+        return run(vin, command, args)
+
+    b._sendCommand_internal = timed
     passes(
-        r, c, 600, each=lambda: heartbeat(m, s, 0.0, state=0x03)
-    )  # plugged in, asleep, no VIN
+        r, c, 600, each=lambda: heartbeat(m, s, 0.0, state=0x03, amps_max=32)
+    )  # plugged in, asleep, no VIN; the TWC echoes its last offer
+    # INTENTIONALLY CHANGED (d), Phase 4 Task 3: the tick targets the slave
+    # one beat after its first reply, so the lift and the start are desired
+    # together after the limit gap and go in the reconciler's aspect order
+    # (start, then amps); at BASE the lift went before the start
     assert [(cmd, args) for vin, cmd, args in b.runs] == [
         ("wake", None),
         ("charging-set-limit", 70),
         ("wake", None),
-        ("charging-set-amps", 32),
-        ("wake", None),
         ("charging-start", None),
+        ("wake", None),
+        ("charging-set-amps", 32),
     ]
+    times = dict(sentAt)
+    assert (
+        0 <= times["charging-set-amps"] - times["charging-start"] < MIN_SEND_GAP[AMPS]
+    )  # the lift still follows within one send gap
     assert m.heldLimits.get(VIN) == HeldLimit(
         100, 70
-    )  # the limit first, then the BLE lift (main's rate broadcast), then
-    # main's start: TeslaMate's "Complete" predates the raise
+    )  # the limit first, then main's start and the BLE lift (main's rate
+    # broadcast): TeslaMate's "Complete" predates the raise
     assert (
         requests_mock.call_count == 0
     )  # nothing paid, nothing free: presence came from TeslaMate
@@ -1288,3 +1309,33 @@ def test_a_car_below_min_charge_level_is_not_stopped(requests_mock):
     m.stopCarsCharging(VIN)
     passes(r, c, 600, each=lambda: m.stopCarsCharging(VIN))
     assert requests_mock.call_count == 0
+
+
+# Rows 29-30 (Phase 4 Task 3, (h)): a vehicle-only install, no wall
+# connector, is controlled by the tick's distributor; an hour of 10 s ticks
+# at a 16 A budget, the car charging at home
+
+
+def vehicleOnly(requests_mock, **kw):
+    m, r, v, c, api = install(**kw)
+    m.deleteSlaveTWC(m.getSlaveTWCs()[0].TWCID)
+    v.observe("chargingState", "Charging", "TeslaMateVehicle")
+    assert api.locate(v) is True  # free: TeslaMate's position is home
+    m.setMaxAmpsToDivideAmongSlaves(16)
+    return m, r, v, c
+
+
+def test_fleet_only_vehicle_install_gets_its_rate(requests_mock):
+    m, r, v, c = vehicleOnly(requests_mock, fleet=True)
+    FleetCar(requests_mock, state="online", charging="Charging")
+    passes(r, c, 3600, each=m.controlPass)
+    assert amps(requests_mock) == [16]
+    assert paid(requests_mock) == (0, 0, 1) and dollars(requests_mock) == 0.001
+
+
+def test_ble_only_vehicle_install_gets_its_rate_with_nothing_paid(requests_mock):
+    m, r, v, c = vehicleOnly(requests_mock, owner=True, policy="ble_only")
+    b = realBle(m)
+    passes(r, c, 3600, each=m.controlPass)
+    assert ("charging-set-amps", 16) in [(cmd, a) for vin, cmd, a in b.runs]
+    assert paid(requests_mock) == (0, 0, 0)

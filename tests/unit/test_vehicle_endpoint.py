@@ -16,7 +16,9 @@ def master(settings=None, *providers, slaves=()):
     m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     for p in providers: m.providerOrder.register(p)
     carapi = Mock(); carapi.enabled.return_value = True; carapi.locate.return_value = None
-    m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves); return m
+    m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves)
+    m.getModulesByType = lambda t: []                                            # no RS-485 interface loaded
+    return m
 
 def car(m, vin, atHome=True):
     v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome)); return v

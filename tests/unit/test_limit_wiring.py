@@ -276,7 +276,7 @@ def test_a_restart_with_the_car_plugged_in_and_asleep_still_gets_the_policy_limi
 def startAfterRaise(m, r):
     # The VIN-less Gen2 at 03 asks for a start; passes past the limit-then-start gap
     s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; m.setMaxAmpsToDivideAmongSlaves(32); c = m.vehicleRegistry._clock
-    for _ in range(6): heartbeat(m, s, 0.0, state=0x03); c.t += 30; r.pass_()
+    for _ in range(6): heartbeat(m, s, 0.0, state=0x03, amps_max=32); c.t += 30; r.pass_()   # the TWC echoes its offer
 
 def test_a_complete_read_after_the_raise_still_satisfies_the_start(requests_mock):   # parity row 26
     m, r, v, car = restarted(requests_mock); m.setPolicyLimit(70, transition=True); r.pass_()
@@ -304,7 +304,7 @@ def test_a_held_car_a_free_position_places_away_gets_its_normal_limit_back(reque
 def test_a_vinless_gen2_after_a_restart_is_an_anonymous_plug_session(requests_mock):   # main's unaddressed lift and start, paid counted
     m, r, v, car = restarted(requests_mock); s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; m.setMaxAmpsToDivideAmongSlaves(32)
     m.setPolicyLimit(70, transition=True)
-    for _ in range(2): heartbeat(m, s, 0.0, state=0x03)                                         # plugged in, asleep, drawing nothing; no VIN
+    for _ in range(2): heartbeat(m, s, 0.0, state=0x03, amps_max=32)                            # plugged in, asleep, drawing nothing; no VIN; the TWC echoes its offer
     assert s.vehicleKey == "anon:8244" and s.vehicleRateRaised
     lift, start = m.desired.get(VIN, AMPS), m.desired.get(VIN, CHARGING)
     assert lift.lift and lift.value == s.wiringMaxAmps and start.value is True                   # the fan-out reaches the BLE car
@@ -354,7 +354,7 @@ def test_an_away_fix_stamped_at_our_write_instant_is_no_departure(requests_mock)
 
 def test_at_00_a_plugged_car_a_free_source_shows_at_home_begins_the_session(requests_mock):   # review I2, paid counted
     m, r, v, car = restarted(requests_mock); s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; m.setMaxAmpsToDivideAmongSlaves(32)
-    heartbeat(m, s, 0.0, state=0x00)                                                             # asleep, plugged in: TeslaMate says "Complete" at home
+    for _ in range(2): heartbeat(m, s, 0.0, state=0x00, amps_max=32)                            # asleep, plugged in: TeslaMate says "Complete" at home; the TWC echoes its offer, targeted from the second beat
     assert s.vehicleKey == "anon:8244" and m.desired.get(VIN, AMPS).lift and requests_mock.call_count == 0
     v.observe("chargingState", "Disconnected", "TeslaMateVehicle"); heartbeat(m, s, 0.0, state=0x00)
     assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None                   # unplugged: the session ends

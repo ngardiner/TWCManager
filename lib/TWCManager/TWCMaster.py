@@ -1,6 +1,7 @@
 #! /usr/bin/python3
 
 from TWCManager.EVSEController.Gen2TWCs import Gen2TWCs
+from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
 from collections import deque
 from datetime import datetime, timedelta
@@ -40,7 +41,6 @@ logger = LoggerFactory.get_logger("Master", "Master")
 
 
 class TWCMaster:
-    allowed_flex = 0
     backgroundTasksQueue = queue.Queue()
     backgroundTasksCmds = {}
     backgroundTasksLock = threading.Lock()
@@ -168,11 +168,12 @@ class TWCMaster:
         # Register ourself as a module, allows lookups via the Module architecture
         self.registerModule({"name": "master", "ref": self, "type": "Master"})
 
-        # Register the Gen2TWCs EVSEController so power distribution can
-        # discover RS485 slaves through the unified EVSEController interface
-        self.registerModule(
-            {"name": "Gen2TWCs", "ref": Gen2TWCs(self), "type": "EVSEController"}
-        )
+        # The distributor's controllers: RS485 slaves, and the cars an
+        # enabled TeslaAPI places at home (none without one)
+        for controller in (Gen2TWCs(self), VehicleEndpoints(self)):
+            self.registerModule(
+                {"name": controller.name, "ref": controller, "type": "EVSEController"}
+            )
 
     def addkWhDelivered(self, kWh):
         self.settings["kWhDelivered"] = self.settings.get("kWhDelivered", 0) + kWh
@@ -394,9 +395,6 @@ class TWCMaster:
         # in the queue are done.
         self.backgroundTasksQueue.task_done()
 
-    def getAllowedFlex(self):
-        return self.allowed_flex
-
     def getBackgroundTask(self):
         result = None
 
@@ -529,16 +527,24 @@ class TWCMaster:
 
         return groupEndpoints(self, self.getAllEVSEs())
 
-    def distributeEVSEPower(self) -> None:
-        """Centralized watt-based power distribution across charging points.
+    def controlPass(self, now=None, distribute=True) -> None:
+        """The control tick's pass (ControlTick, fakeMaster 1 only), for
+        every install: Gen2, Gen3 and vehicle-only alike. With no charging
+        endpoint the distributor finds nothing to do.
+        """
+        if distribute:
+            self._points = self.distributeEVSEPower()
 
-        Replaces the per-slave fair-share amps calculation in
-        receive_slave_heartbeat with a controller-agnostic algorithm that
-        allocates per charging point: a TWC and the car it serves are one
-        point, budgeted once.  After this method runs:
+    def distributeEVSEPower(self) -> list:
+        """Watt-based power distribution across charging points.
+
+        The one distributor for every install. It allocates per charging
+        point: a TWC and the car it serves are one point, budgeted once.
+        After this method runs:
         - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it.
           With a car member, ChargingPoint splits the rate by
-          chargeRateControl and owns the car's amps.
+          chargeRateControl and owns the car's amps. A slave not yet heard
+          from is no endpoint (Gen2TWCs.allEVSEs) and gets no target.
         - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
         - A car on no TWC has desired amps (VehicleEndpoint.setTargetPower).
 
@@ -548,22 +554,13 @@ class TWCMaster:
         hardware minimum when another car charges with at least
         minAmpsPerTWC of power per car, so it can see a car plug in.
 
-        Only runs when an EVSEController other than Gen2TWCs is registered;
-        pure Gen2 deployments keep the existing per-slave heartbeat
-        distribution.
+        Returns the charging points it built.
 
         Ported from ngardiner/TWCManager#483 (MikeBishop).
         """
         controllers = self.getModulesByType("EVSEController")
         if not controllers:
-            return
-
-        # Only activate the centralized distributor when VehicleEndpoints is
-        # present — otherwise the existing per-slave heartbeat logic is sufficient
-        # and more battle-tested for pure Gen2 deployments.
-        non_gen2 = [c for c in controllers if c["name"] != "Gen2TWCs"]
-        if not non_gen2:
-            return
+            return []
 
         points = self.chargingPoints()
         wants_power = [p for p in points if p.wantsToCharge and not p.isReadOnly]
@@ -644,6 +641,7 @@ class TWCMaster:
                 ", ".join("%s=%d W" % (pid, watts) for pid, watts in offers)
                 or "no points",
             )
+        return points
 
     # When each refused point was last logged
     _refusedPointLogged = {}
@@ -1026,8 +1024,8 @@ class TWCMaster:
         return self.slaveTWCRoundRobin[id]
 
     def getSlaveTWCs(self):
-        # Returns a list of all Slave TWCs
-        return self.slaveTWCRoundRobin
+        # A copy: other threads never iterate the serial thread's live list
+        return list(self.slaveTWCRoundRobin)
 
     def getTotalAmpsInUse(self):
         # Returns the number of amps currently in use by all TWCs
@@ -1297,6 +1295,12 @@ class TWCMaster:
         return slaveTWC
 
     def num_cars_charging_now(self):
+        # A pure count, safe from any thread
+        return sum(s.isCharging for s in self.getSlaveTWCs())
+
+    def observeChargingSessions(self):
+        # Serial thread only: starts and ends charging sessions from what
+        # the slaves report
         carsCharging = 0
         for slaveTWC in self.getSlaveTWCs():
             if slaveTWC.reportedAmpsActual >= 1.0:
@@ -1379,8 +1383,6 @@ class TWCMaster:
 
         if carsCharging == 0:
             self.stopTimeout = datetime.max
-
-        return carsCharging
 
     def queue_background_task(self, task, delay=0):
         if delay > 0:
@@ -1863,9 +1865,6 @@ class TWCMaster:
         # transition: a policy change, a decision that ends an adopted value
         self.policyLimit = limit
         applyPolicyLimit(self, limit, decision=transition)
-
-    def setAllowedFlex(self, amps):
-        self.allowed_flex = amps if amps >= 0 else 0
 
     def setChargeNowAmps(self, amps):
         # Accepts a number of amps to define the amperage at which we

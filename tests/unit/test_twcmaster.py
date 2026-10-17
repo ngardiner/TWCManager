@@ -102,12 +102,6 @@ class TestTWCMasterAmperage:
         
         assert master.limitAmpsToDivideAmongSlaves == 16
     
-    def test_set_allowed_flex(self, master):
-        """Test setting allowed flex amperage."""
-        master.setAllowedFlex(8)
-        
-        assert master.allowed_flex == 8
-    
     def test_add_kwh_delivered(self, master):
         """Test adding kWh delivered."""
         initial = master.settings["kWhDelivered"]

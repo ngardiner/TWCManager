@@ -132,8 +132,8 @@ class WebIPCControl:
                 if webMsg == b"getStatus":
                     needCarApiBearerToken = False
                     if self.master.getModuleByName("TeslaAPI").slotFor("read") is None:
-                        for i in range(0, self.master.countSlaveTWC()):
-                            if slaveTWCRoundRobin[i].protocolVersion == 2:
+                        for slaveTWC in slaveTWCRoundRobin:
+                            if slaveTWC.protocolVersion == 2:
                                 needCarApiBearerToken = True
 
                     webResponseMsg = (
@@ -173,25 +173,21 @@ class WebIPCControl:
                         "`"
                         + ("1" if needCarApiBearerToken else "0")
                         + "`"
-                        + str(self.master.countSlaveTWC())
+                        + str(len(slaveTWCRoundRobin))
                     )
 
-                    for i in range(0, self.master.countSlaveTWC()):
+                    for slaveTWC in slaveTWCRoundRobin:
                         webResponseMsg += (
                             "`"
-                            + "%02X%02X"
-                            % (
-                                self.master.getSlaveTWCID(i)[0],
-                                self.master.getSlaveTWCID(i)[1],
-                            )
+                            + "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
                             + "~"
-                            + str(slaveTWCRoundRobin[i].maxAmps)
+                            + str(slaveTWC.maxAmps)
                             + "~"
-                            + "%.2f" % (slaveTWCRoundRobin[i].reportedAmpsActual)
+                            + "%.2f" % (slaveTWC.reportedAmpsActual)
                             + "~"
-                            + str(slaveTWCRoundRobin[i].lastAmpsOffered)
+                            + str(slaveTWC.lastAmpsOffered)
                             + "~"
-                            + str(slaveTWCRoundRobin[i].reportedState)
+                            + str(slaveTWC.reportedState)
                         )
 
                 elif webMsg[0:20] == b"setNonScheduledAmps=":
@@ -236,7 +232,7 @@ class WebIPCControl:
                             bytearray.fromhex(m.group(1).decode("ascii")),
                             (
                                 15
-                                if self.master.countSlaveTWC() == 0
+                                if not slaveTWCRoundRobin
                                 or slaveTWCRoundRobin[0].protocolVersion == 2
                                 else 13
                             ),

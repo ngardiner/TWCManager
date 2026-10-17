@@ -20,7 +20,8 @@ def _master(evses, amps):
     m.config = {"config": {"defaultVoltage": 240, "numberOfPhases": 1}}
     ctrl = MagicMock()
     ctrl.maxPower = 100000
-    # A non-Gen2 controller makes the distributor run.
+    # The registered controllers (every install), and slaves countSlaveTWC sees
+    m.slaveTWCRoundRobin = list(evses)
     m.getModulesByType = lambda t: [
         {"name": "Gen2TWCs", "ref": ctrl},
         {"name": "VehicleEndpoints", "ref": ctrl},

@@ -39,6 +39,8 @@ class TWCSlave:
     reportedAmpsMax = 0
     reportedAmpsActual = 0
     reportedState = 0
+    # Set by the first reply: a slave not yet heard from is offered nothing
+    heardFrom = False
 
     # history* vars are used to track power usage over time
     historyAvgAmps = 0
@@ -60,7 +62,6 @@ class TWCSlave:
 
     lastAmpsOffered = -1
     lastAmpsDesired = -1
-    useFlexAmpsToStartCharge = False
     timeLastAmpsOfferedChanged = 0
     timeLastAmpsDesiredFlipped = 0
     lastHeartbeatDebugOutput = ""
@@ -93,9 +94,6 @@ class TWCSlave:
         self.vehicleRateRaised = False
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
-        self.useFlexAmpsToStartCharge = self.configConfig.get(
-            "useFlexAmpsToStartCharge", False
-        )
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
     def pluggedCars(self):
@@ -667,6 +665,7 @@ class TWCSlave:
         self.reportedAmpsMax = ((heartbeatData[1] << 8) + heartbeatData[2]) / 100
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
+        self.heardFrom = True
         self.refreshingChargerLoadStatus()
         key = self.vehicleKey
         vehicle = self.master.vehicleRegistry.get(key) if key else None
@@ -746,45 +745,19 @@ class TWCSlave:
             self.timeReportedAmpsActualChangedSignificantly = now
             self.reportedAmpsActualSignificantChangeMonitor = self.reportedAmpsActual
 
-        ltNow = time.localtime()
-        hourNow = ltNow.tm_hour + (ltNow.tm_min / 60)
-        yesterday = ltNow.tm_wday - 1
-        if yesterday < 0:
-            yesterday += 7
-
         # Charging policy is evaluated on the Policy module's own thread;
         # here we only read its results (getMaxAmpsToDivideAmongSlaves etc.).
 
-        # Determine how many cars are charging and how many amps they're using
+        # Charging sessions start and end here, on the serial thread
+        self.master.observeChargingSessions()
         numCarsCharging = self.master.num_cars_charging_now()
 
-        # Phase 4: if the centralized EVSE power distributor has pre-computed a
-        # per-EVSE target (via Gen2TWC.setTargetPower), use it directly and skip
-        # the per-car fair-share calculation below.  All downstream logic (6A
-        # spike workaround, dampen, timing guards, send) still applies.
-        _centralized_target = getattr(self, "_evseTargetAmps", None)
-        if _centralized_target is not None:
-            desiredAmpsOffered = _centralized_target
-            flex = 0
-        else:
-            desiredAmpsOffered = self.master.getMaxAmpsToDivideAmongSlaves()
-            flex = self.master.getAllowedFlex()
-
-            if numCarsCharging > 0:
-                desiredAmpsOffered -= sum(
-                    slaveTWC.reportedAmpsActual
-                    for slaveTWC in self.master.getSlaveTWCs()
-                    if slaveTWC.TWCID != self.TWCID
-                )
-                flex = self.master.getAllowedFlex() / numCarsCharging
-
-                # Allocate this slave a fraction of maxAmpsToDivideAmongSlaves
-                # divided by the number of cars actually charging.
-                fairShareAmps = int(
-                    self.master.getMaxAmpsToDivideAmongSlaves() / numCarsCharging
-                )
-                if desiredAmpsOffered > fairShareAmps:
-                    desiredAmpsOffered = fairShareAmps
+        # The distributor's target (Gen2TWC.setTargetPower). Until a pass
+        # has targeted this slave the heartbeat keeps its payload, so a
+        # restart never offers a charging car 0 A.
+        desiredAmpsOffered = getattr(self, "_evseTargetAmps", None)
+        if desiredAmpsOffered is None:
+            return
 
         # Get charge rate control mode from settings
         # 1 = Use TWC Exclusively to control Charge Rate
@@ -792,29 +765,7 @@ class TWCSlave:
         # 3 = Use TWC >= 6A + Tesla API < 6A to control Charge Rate
         chargeRateControl = int(self.master.settings.get("chargeRateControl", 1))
 
-        if _centralized_target is None and numCarsCharging > 0:
-            logger.debug(
-                "desiredAmpsOffered TWC: "
-                + self.master.hex_str(self.TWCID)
-                + " reduced from "
-                + str(self.master.getMaxAmpsToDivideAmongSlaves())
-                + " to "
-                + str(desiredAmpsOffered)
-                + " with "
-                + str(numCarsCharging)
-                + " cars charging and flex Amps of "
-                + str(flex)
-                + "."
-            )
-
         minAmpsToOffer = self.minAmpsToOffer()
-
-        if (
-            desiredAmpsOffered < minAmpsToOffer
-            and desiredAmpsOffered + flex >= minAmpsToOffer
-            and (self.useFlexAmpsToStartCharge or self.reportedAmpsActual >= 1.0)
-        ):
-            desiredAmpsOffered = minAmpsToOffer
 
         dampenChanges = False
         if self.master.getModuleByName("Policy").policyIsGreen():
@@ -832,9 +783,6 @@ class TWCSlave:
                 + str(desiredAmpsOffered)
                 + " < minAmpsToOffer: "
                 + str(minAmpsToOffer)
-                + " (flexAmps: "
-                + str(flex)
-                + ")"
             )
             if numCarsCharging > 0:
                 if (

@@ -194,7 +194,7 @@ def test_zero_offer_clears_a_pending_start_and_sends_no_wake():             # Re
 
 def test_an_offer_starts_the_car_from_the_heartbeat():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = onTwc(m, v); v.observe("chargingState", "Stopped", "TeslaBLE")
-    m.setMaxAmpsToDivideAmongSlaves(32); drive(m, s, amps_actual=0.0); drive(m, s, amps_actual=0.0)
+    m.setMaxAmpsToDivideAmongSlaves(32); drive(m, s, amps_actual=0.0, amps_max=32); drive(m, s, amps_actual=0.0, amps_max=32)   # the TWC echoes its offer
     assert m.desired.get(VIN, CHARGING).value is True and r.pass_() == 2                # and mode 1's once-per-session lift, as main's raise
     assert cmds(m.providerOrder.provider("TeslaBLE")) == ["startCharging", "setAmps"]
 
