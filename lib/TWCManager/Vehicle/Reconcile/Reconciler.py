@@ -90,8 +90,9 @@ _REFUSALS = frozenset({"wake refused", "no command token"})
 
 # A car reporting one of these is drawing power, so awake
 _DRAWING = frozenset({"Charging", "Starting"})
-# The plan order: a limit is planned before a start
-_ORDER = (CHARGE_LIMIT, CHARGING, AMPS)
+# The plan order: a limit, then the rate before a start (less overshoot);
+# a stop never waits behind a rate
+_ORDER, _STOP_ORDER = (CHARGE_LIMIT, AMPS, CHARGING), (CHARGE_LIMIT, CHARGING, AMPS)
 
 
 def _tier(provider, capability) -> int:
@@ -192,7 +193,8 @@ class VehicleReconciler(threading.Thread):
             vehicle = self.master.vehicleRegistry.get(key)
             if vehicle is None:
                 continue
-            for aspect in _ORDER:
+            stop = getattr(self.desired.get(key, CHARGING), "value", None) is False
+            for aspect in _STOP_ORDER if stop else _ORDER:
                 try:
                     attempt = self.plan(vehicle, aspect, now)
                 except Exception as e:
