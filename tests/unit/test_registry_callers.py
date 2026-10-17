@@ -39,7 +39,7 @@ def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
 
 def test_get_last_vehicle_uses_registry_attachment():
     reg = VehicleRegistry({})
-    reg.getOrCreate(VIN, "TeslaAPI").attach("TeslaAPI", object())
+    reg.getOrCreate(VIN, "OwnerAPI").attach("TeslaAPI", object())
     m = Mock()
     m.vehicleRegistry = reg
     m.getModuleByName = Mock(return_value=None)
@@ -84,13 +84,13 @@ def _handler(master):
 
 def _registry():
     reg = VehicleRegistry({})
-    v = reg.getOrCreate(VIN, "TeslaAPI")
-    v.observe("name", "TestCar", "TeslaAPI")
-    v.observe("lat", 47.5, "TeslaAPI")
-    v.observe("lon", -122.25, "TeslaAPI")
+    v = reg.getOrCreate(VIN, "OwnerAPI")
+    v.observe("name", "TestCar", "OwnerAPI")
+    v.observe("lat", 47.5, "OwnerAPI")
+    v.observe("lon", -122.25, "OwnerAPI")
     v.attach("TeslaAPI", object())
     # No name, no location, but cloud-listed
-    reg.getOrCreate("5YJ3E1EA1KF000002", "TeslaAPI").attach("TeslaAPI", object())
+    reg.getOrCreate("5YJ3E1EA1KF000002", "OwnerAPI").attach("TeslaAPI", object())
     # Known only by VIN (e.g. a BLE claim): the debug page lists cloud cars only
     reg.getOrCreate("5YJ3E1EA1KF000003", "TeslaBLE")
     reg.beginPlugSession("AB")  # anonymous anon:AB
@@ -133,7 +133,7 @@ def test_settings_page_lists_only_located_vehicles():
 
 def test_settings_page_hides_learn_without_a_located_vehicle():
     reg = VehicleRegistry({})
-    reg.getOrCreate(VIN, "TeslaAPI").attach("TeslaAPI", object())
+    reg.getOrCreate(VIN, "OwnerAPI").attach("TeslaAPI", object())
     h = _handler(_master(reg))
     out = _render_loop(h, "settings.html.j2", "L.marker({lon: {{ master", "</form>")
     assert "name=unset" in out
@@ -260,9 +260,9 @@ def test_get_slave_twcs_reports_the_listed_cars_fields_and_legacy_defaults():
         row["lastTimeToFullCharge"],
     ) == (False, 10000, -1, 0.0)
     v = reg.get(VIN)
-    v.observe("batteryLevel", 61, "TeslaAPI")
-    v.observe("chargeLimit", 80, "TeslaAPI")
-    v.observe("timeToFullCharge", 1.5, "TeslaAPI")
+    v.observe("batteryLevel", 61, "OwnerAPI")
+    v.observe("chargeLimit", 80, "OwnerAPI")
+    v.observe("timeToFullCharge", 1.5, "OwnerAPI")
     v.attachment("TeslaAPI").atHome = True
     row = get()
     assert (
@@ -312,6 +312,6 @@ def test_flex_start_reads_the_listed_cars_limit_and_battery():
     # No observations: the legacy -1 / 10000 defaults
     assert m.getScheduledAmpsTimeFlex() == (1308.96, 7, 0x7F)
     v = reg.get(VIN)
-    v.observe("chargeLimit", 80, "TeslaAPI")
-    v.observe("batteryLevel", 40, "TeslaAPI")
+    v.observe("chargeLimit", 80, "OwnerAPI")
+    v.observe("batteryLevel", 40, "OwnerAPI")
     assert m.getScheduledAmpsTimeFlex() == (1.54, 7, 0x7F)

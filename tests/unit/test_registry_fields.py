@@ -27,7 +27,7 @@ def test_observe_and_latest_carry_value_source_time():
 def test_age_uses_clock():
     c = Clock()
     s = FieldStore(clock=c)
-    s.observe("batteryLevel", 50, "TeslaAPI")
+    s.observe("batteryLevel", 50, "OwnerAPI")
     c.t = 1030.0
     assert s.age("batteryLevel") == 30.0
     assert s.age("lat") is None
@@ -62,9 +62,9 @@ def test_own_write_stamp_and_freshness():
 
 def test_snapshot_is_a_copy():
     s = FieldStore()
-    s.observe("lat", 1.0, "TeslaAPI")
+    s.observe("lat", 1.0, "OwnerAPI")
     snap = s.snapshot()
-    s.observe("lat", 2.0, "TeslaAPI")
+    s.observe("lat", 2.0, "OwnerAPI")
     assert snap["lat"].value == 1.0 and set(snap) == {"lat"}
 
 
@@ -74,7 +74,7 @@ def test_report_on_change_age_counts_from_feed_liveness():
     s.observe("chargeLimit", 50, "TeslaMateVehicle", at=100.0)  # old, still current
     assert s.age("chargeLimit", liveAt=990.0) == 10.0  # healthy: age from liveness
     assert s.age("chargeLimit", liveAt=None) == 900.0  # unhealthy: from the change
-    s.observe("batteryLevel", 50, "TeslaAPI", at=100.0)
+    s.observe("batteryLevel", 50, "OwnerAPI", at=100.0)
     assert s.age("batteryLevel") == 900.0  # polled source: NOT_TRACKED
 
 
@@ -96,7 +96,7 @@ def test_trusted_edge_cases():
     c = Clock()
     s = FieldStore(clock=c)
     assert s.trusted("lat") is None  # nothing observed
-    s.observe("lat", 1.0, "TeslaAPI")
+    s.observe("lat", 1.0, "OwnerAPI")
     assert s.trusted("lat").value == 1.0  # no write: fresher
     s.noteWrite("lat", 2.0, "TeslaBLE")
     c.t += FEED_LAG + 1
@@ -109,15 +109,15 @@ def test_trusted_edge_cases():
 
 def test_older_observation_does_not_overwrite_newer():
     s = FieldStore(clock=Clock())
-    s.observe("lat", 2.0, "TeslaAPI", at=950.0)
+    s.observe("lat", 2.0, "OwnerAPI", at=950.0)
     kept = s.observe("lat", 1.0, "TeslaMateVehicle", at=900.0)
-    assert s.latest("lat") == Observation(2.0, "TeslaAPI", 950.0)
-    assert kept == Observation(2.0, "TeslaAPI", 950.0)
+    assert s.latest("lat") == Observation(2.0, "OwnerAPI", 950.0)
+    assert kept == Observation(2.0, "OwnerAPI", 950.0)
 
 
 def test_equal_timestamp_observation_replaces():
     s = FieldStore(clock=Clock())
-    s.observe("lat", 1.0, "TeslaAPI", at=950.0)
+    s.observe("lat", 1.0, "OwnerAPI", at=950.0)
     s.observe("lat", 2.0, "TeslaMateVehicle", at=950.0)
     assert s.latest("lat") == Observation(2.0, "TeslaMateVehicle", 950.0)
 
@@ -125,10 +125,10 @@ def test_equal_timestamp_observation_replaces():
 def test_older_write_does_not_overwrite_newer_write():
     s = FieldStore(clock=Clock())
     s.noteWrite("chargeLimit", 80, "TeslaBLE", at=950.0)
-    s.noteWrite("chargeLimit", 70, "TeslaAPI", at=900.0)
+    s.noteWrite("chargeLimit", 70, "OwnerAPI", at=900.0)
     assert s.lastWrite("chargeLimit") == Observation(80, "TeslaBLE", 950.0)
-    s.noteWrite("chargeLimit", 60, "TeslaAPI", at=950.0)
-    assert s.lastWrite("chargeLimit") == Observation(60, "TeslaAPI", 950.0)
+    s.noteWrite("chargeLimit", 60, "OwnerAPI", at=950.0)
+    assert s.lastWrite("chargeLimit") == Observation(60, "OwnerAPI", 950.0)
 
 
 def test_clock_read_inside_lock():
@@ -144,7 +144,7 @@ def test_per_source_record_keeps_newest_stamp():
     s = FieldStore(Clock())
     s.observe("chargeLimit", 80, "Feed", at=200.0)
     s.observe("chargeLimit", 70, "Feed", at=100.0)
-    s.observe("chargeLimit", 60, "TeslaAPI", at=300.0)
+    s.observe("chargeLimit", 60, "OwnerAPI", at=300.0)
     rep = s.reported("chargeLimit")
-    assert rep["Feed"].value == 80 and rep["TeslaAPI"].value == 60
+    assert rep["Feed"].value == 80 and rep["OwnerAPI"].value == 60
     assert s.reported("lat") == {}

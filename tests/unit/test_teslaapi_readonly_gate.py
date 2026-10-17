@@ -790,7 +790,7 @@ class TestThroughTheWalk:
             add_home_vehicle(
                 api, command_signing=signing, vin=vins[i], name="Car%d" % i, id=i + 1
             )
-            m.vehicleRegistry.get(vins[i]).observe("chargeLimit", 90, "TeslaAPI")
+            m.vehicleRegistry.get(vins[i]).observe("chargeLimit", 90, "OwnerAPI")
         return m, r, api, last
 
     def limit(self, m, r, *vins, passes=3):
@@ -846,7 +846,7 @@ class TestThroughTheWalk:
         assert no_error_recorded(api)
         assert last.calls == [("setChargeLimit", VIN, 50)]
         # A second desire, past the send gap, sends nothing to the Owner API
-        m.vehicleRegistry.get(VIN).observe("chargeLimit", 50, "TeslaAPI")
+        m.vehicleRegistry.get(VIN).observe("chargeLimit", 50, "OwnerAPI")
         m.desired.set(VIN, CHARGE_LIMIT, 60, "policy")
         m.desired.record(VIN, CHARGE_LIMIT).lastSentAt -= 60
         for _ in range(3):
@@ -906,7 +906,7 @@ class TestThroughTheWalk:
         assert rec.paidSends == 1 and rec.lastProvider == "FleetAPI"
         assert no_error_recorded(api)
         # Later desires go to Fleet only
-        m.vehicleRegistry.get(VIN).observe("chargeLimit", 50, "TeslaAPI")
+        m.vehicleRegistry.get(VIN).observe("chargeLimit", 50, "OwnerAPI")
         m.desired.set(VIN, CHARGE_LIMIT, 60, "policy")
         m.desired.record(VIN, CHARGE_LIMIT).lastSentAt -= 60
         for _ in range(3):

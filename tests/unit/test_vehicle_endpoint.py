@@ -19,7 +19,7 @@ def master(settings=None, *providers, slaves=()):
     m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves); return m
 
 def car(m, vin, atHome=True):
-    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome)); return v
+    v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome)); return v
 
 def slave(key=None, amps=0.0, state=0x00): return SimpleNamespace(vehicleKey=key, reportedAmpsActual=amps, reportedState=state)
 
@@ -45,9 +45,9 @@ def test_read_only_follows_fleet_slot():
 def test_state_from_registry_values_without_reads():
     m = master({}, fleet()); v = car(m, VIN1); e = VehicleEndpoint(v, m.providerOrder, m); v.read = Mock(side_effect=AssertionError("no reads"))
     assert not e.wantsToCharge and e.occupied is None and e.maxPower == 32 * 240 and e.minPower == 5 * 240
-    v.observe("chargingState", "Stopped", "TeslaAPI"); v.observe("availableCurrent", 16, "TeslaAPI"); v.observe("actualCurrent", 0, "TeslaAPI")
+    v.observe("chargingState", "Stopped", "OwnerAPI"); v.observe("availableCurrent", 16, "OwnerAPI"); v.observe("actualCurrent", 0, "OwnerAPI")
     assert e.wantsToCharge and not e.isCharging and e.occupied is True and e.maxPower == 32 * 240   # the pilot is not the car's limit
-    v.observe("chargeCurrentRequestMax", 16, "TeslaAPI"); assert e.maxPower == 16 * 240
+    v.observe("chargeCurrentRequestMax", 16, "OwnerAPI"); assert e.maxPower == 16 * 240
 
 def test_set_target_power_sets_desired_amps():                            # slim Task 12b
     from TWCManager.Vehicle.Reconcile.Desired import AMPS, DesiredStore

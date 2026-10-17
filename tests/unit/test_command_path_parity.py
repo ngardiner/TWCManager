@@ -282,7 +282,7 @@ def passes(r, c, seconds, step=10, each=None):
 def test_fleet_only_raise_costs_the_same(requests_mock):
     m, r, v, c, api = install(fleet=True, held=(90, 50))
     car = FleetCar(requests_mock, limit=50)
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     passes(r, c, 3600)
     assert paid(requests_mock) == (1, 1, 1) and commands(requests_mock) == [
@@ -329,7 +329,7 @@ def offlineWake(requests_mock, m, r, c, want, seconds=1800, online=59, api=FLEET
 
 def test_fleet_only_car_online_after_an_offline_wake_gets_the_limit(requests_mock):
     m, r, v, c, api = install(fleet=True, held=(90, 50))
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     car, seen = offlineWake(requests_mock, m, r, c, lambda: None, seconds=3600)
     assert seen["sent"] - seen["online"] <= 150  # the free check noticed it
@@ -358,7 +358,7 @@ def test_fleet_only_car_online_after_a_later_wake_gets_the_limit(
     # (+4000 s): the arm ended on a failed wake, so the desire's one re-arm
     # keeps the free checks and the held wakes going
     m, r, v, c, api = install(fleet=True, held=(90, 50))
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     times, want = wakeTimes(requests_mock, c)
     car, seen = offlineWake(
@@ -376,7 +376,7 @@ def test_fleet_only_wake_http_errors_then_online_gets_the_limit(requests_mock):
     # nothing, so the arm re-arms as for an offline wake and the limit goes
     # out; at most 4 paid
     m, r, v, c, api = install(fleet=True, held=(90, 50))
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     car = FleetCar(requests_mock, limit=50)
     requests_mock.post(FLEET + VIN + "/wake_up", status_code=500, json={})
@@ -410,7 +410,7 @@ def test_fleet_only_car_never_online_after_an_offline_wake(requests_mock, start,
         ("chargingState", "Stopped"),
         ("batteryLevel", 40),
     ):
-        v.observe(field, value, "TeslaAPI", at=c() - 600)
+        v.observe(field, value, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     also = (lambda: m.startCarsCharging(VIN)) if start else (lambda: None)
     times, want = wakeTimes(requests_mock, c, also)
@@ -479,7 +479,7 @@ def test_owner_off_car_online_after_an_offline_wake_gets_the_limit(requests_mock
     # Row 4b for a car listed command_signing "off" on an Owner token: its
     # wake takes the same hold, so the same single wake, all of it free
     m, r, v, c, api = install(owner=True, signing="off", held=(90, 50))
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     car, seen = offlineWake(
         requests_mock, m, r, c, lambda: None, seconds=3600, api=OWNER
@@ -566,7 +566,7 @@ def off_car_run(requests_mock, scenario, base, **tokens):
     each, seconds, step = (lambda: m.setPolicyLimit(50, transition=False)), 3600, 30
     if scenario == "raise":
         FleetCar(requests_mock, limit=50, api=base)
-        v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+        v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
         m.setPolicyLimit(80, transition=True)
         each, step = None, 10
     elif scenario == "stop":
@@ -622,7 +622,7 @@ def test_both_tokens_off_car_commands_free(requests_mock):
         ("chargingState", "Stopped"),
         ("batteryLevel", 40),
     ):
-        v.observe(field, value, "TeslaAPI", at=c() - 600)
+        v.observe(field, value, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     m.startCarsCharging(VIN)
     passes(r, c, 3600, each=lambda: m.startCarsCharging(VIN))

@@ -1,4 +1,5 @@
 # tests/unit/test_teslaapi_registry.py
+import pytest
 from unittest.mock import ANY, Mock
 
 from tests.unit.teslatokens import FakeMaster, fleet_token, new_api, wire_reads
@@ -33,8 +34,8 @@ def test_listing_is_a_sighting():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "TestCar"})
     v = reg.get(VIN)
-    assert v.lastSeenSource == "TeslaAPI"
-    assert v.latest("name").source == "TeslaAPI"
+    assert v.lastSeenSource == "OwnerAPI"
+    assert v.latest("name").source == "OwnerAPI"
 
 
 def test_master_without_registry_gets_a_private_one():
@@ -115,8 +116,33 @@ def test_update_vehicle_data_observes_the_cars_own_current_request():  # slim Ta
     api.is_far_from_home = Mock(return_value=False)
     assert api.update_vehicle_data(reg.get(VIN)) is True
     obs = reg.get(VIN).latest("chargeCurrentRequest")
-    assert (obs.value, obs.source) == (16, "TeslaAPI")
-    assert reg.get(VIN).value("availableCurrent") == 32  # the pilot stays the pilot
+    assert (obs.value, obs.source) == (16, "OwnerAPI")
+    assert reg.get(VIN).value("availableCurrent") == 32   # the pilot stays the pilot
+
+
+@pytest.mark.parametrize("kind, source", [("owner", "OwnerAPI"), ("fleet", "FleetAPI")])
+def test_each_slot_records_its_own_source(kind, source):
+    # Never "TeslaAPI": the listing and each read name the slot that made it
+    api, reg = api_with_registry()
+    slot = api.ownerSlot if kind == "owner" else api.fleetSlot
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"}, slot)
+    v = reg.get(VIN)
+    assert (v.lastSeenSource, v.latest("name").source) == (source, source)
+    api.get_car_api = Mock(
+        return_value=(
+            True,
+            {
+                "drive_state": {"latitude": 1.0, "longitude": 2.0},
+                "charge_state": {"battery_level": 61},
+                "vehicle_state": {},
+            },
+        )
+    )
+    api.is_location_home = Mock(return_value=False)
+    api.is_far_from_home = Mock(return_value=False)
+    assert api.update_vehicle_data(v, slot=slot) is True
+    assert api.get_car_api.call_args.kwargs["slot"] is slot
+    assert {v.latest(f).source for f in ("lat", "lon", "batteryLevel")} == {source}
 
 
 def test_update_vehicle_data_records_the_cars_own_ac_maximum():
@@ -317,7 +343,7 @@ def test_listing_attaches_state_and_both_claims():
     assert fleet.commands is False  # no Fleet token yet
     api.storeToken(fleet_token())
     assert fleet.commands is True  # follows the slot
-    assert v.latest("name").source == "TeslaAPI" and v.name == "TestCar"
+    assert v.latest("name").source == "OwnerAPI" and v.name == "TestCar"
     assert reg.attached("TeslaAPI") == [(v, state)]
 
 

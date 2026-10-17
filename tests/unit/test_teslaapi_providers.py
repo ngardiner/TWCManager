@@ -177,7 +177,7 @@ def test_owner_reads_cost_nothing_with_a_fleet_token_held(requests_mock, case):
     assert online.call_count == 1
     if case == "lands":
         assert ok is True and reg.get(VIN).value("batteryLevel") == 61 and data.call_count == 1
-        assert reg.get(VIN).latest("batteryLevel").source == "TeslaAPI"
+        assert reg.get(VIN).latest("batteryLevel").source == "OwnerAPI"
     else:
         assert ok is False and data.call_count == (0 if case == "asleep" else 1)
 

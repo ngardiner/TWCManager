@@ -18,7 +18,7 @@ class Clock:
 
 def test_get_or_create_is_idempotent_and_uppercases():
     r = VehicleRegistry({})
-    a = r.getOrCreate(VIN.lower(), "TeslaAPI")
+    a = r.getOrCreate(VIN.lower(), "OwnerAPI")
     b = r.getOrCreate(VIN, "TeslaBLE")
     assert a is b and a.vin == VIN and [v.key for v in r.vehicles()] == [VIN]
     assert r.get(VIN.lower()) is a
@@ -28,7 +28,7 @@ def test_get_or_create_rejects_empty_and_non_string():
     r = VehicleRegistry({})
     for bad in ("", None, 5, "anon:x"):
         with pytest.raises(ValueError):
-            r.getOrCreate(bad, "TeslaAPI")
+            r.getOrCreate(bad, "OwnerAPI")
     assert r.vehicles() == []
 
 
@@ -64,7 +64,7 @@ def test_expire_forgets_unclaimed_after_default_30_days_but_not_claimed_or_asser
     r.getOrCreate(VIN, "TWC")
     r.getOrCreate(VIN2, "TeslaBLE").claim("TeslaBLE", True)
     r.addUserAsserted("5YJ3E1EA1KF000003")
-    r.getOrCreate("5YJ3E1EA1KF000004", "TeslaAPI").claim("TeslaAPI", False, "listed")
+    r.getOrCreate("5YJ3E1EA1KF000004", "OwnerAPI").claim("TeslaAPI", False, "listed")
     c.t = 1000.0 + 29 * 86400
     assert r.expire() == []
     c.t = 1000.0 + 31 * 86400
@@ -111,7 +111,7 @@ def test_persistence_round_trip_and_merge():
     c = Clock()
     r = VehicleRegistry({}, clock=c)
     v = r.getOrCreate(VIN, "TWC")
-    v.observe("name", "Car", "TeslaAPI")
+    v.observe("name", "Car", "OwnerAPI")
     c.t = 2000.0
     v.observe("chargeLimit", 80, "TeslaBLE")
     data = r.toJSON()
@@ -124,7 +124,7 @@ def test_persistence_round_trip_and_merge():
         "userAsserted": False,
     }
     r2 = VehicleRegistry({}, clock=Clock(3000.0))
-    r2.getOrCreate(VIN, "TeslaAPI")
+    r2.getOrCreate(VIN, "OwnerAPI")
     r2.load(data)
     w = r2.get(VIN)
     assert (w.firstSeen, w.lastSeen, w.name) == (1000.0, 3000.0, "Car")
@@ -134,7 +134,7 @@ def test_load_into_empty_registry_keeps_persisted_times_and_marks_persisted():
     c = Clock()
     r = VehicleRegistry({}, clock=c)
     v = r.addUserAsserted(VIN)
-    v.observe("name", "Car", "TeslaAPI")
+    v.observe("name", "Car", "OwnerAPI")
     data = r.toJSON()
     c.t = 5000.0
     r2 = VehicleRegistry({}, clock=c)
@@ -142,7 +142,7 @@ def test_load_into_empty_registry_keeps_persisted_times_and_marks_persisted():
     w = r2.get(VIN)
     assert (w.firstSeen, w.lastSeen, w.userAsserted) == (1000.0, 1000.0, True)
     assert w.latest("name").source == "persisted"
-    assert w.lastSeenSource == "TeslaAPI"
+    assert w.lastSeenSource == "OwnerAPI"
 
 
 def test_load_clamps_future_times_and_skips_bad_vins():
@@ -186,7 +186,7 @@ def test_liveness_feeds_vehicle_age_and_trust():
     assert v.age("chargeLimit") == 10.0
     live["at"] = None
     assert (
-        v.age("chargeLimit") == 900.0 and r.sourceLiveAt("TeslaAPI", v) is NOT_TRACKED
+        v.age("chargeLimit") == 900.0 and r.sourceLiveAt("OwnerAPI", v) is NOT_TRACKED
     )
 
 
@@ -202,8 +202,8 @@ def test_raising_liveness_counts_as_not_live():
 
 def test_find_by_name_and_attached():
     r = VehicleRegistry({})
-    v = r.getOrCreate(VIN, "TeslaAPI")
-    v.observe("name", "TestCar", "TeslaAPI")
+    v = r.getOrCreate(VIN, "OwnerAPI")
+    v.observe("name", "TestCar", "OwnerAPI")
     v.attach("TeslaAPI", "obj")
     assert r.findByName("TestCar") is v and r.findByName("x") is None
     assert r.attached("TeslaAPI") == [(v, "obj")] and r.attached("HomeAssistant") == []
@@ -219,7 +219,7 @@ def test_summaries_sorted_by_key():
 def test_get_or_create_rejects_non_ascii_like_load():
     r = VehicleRegistry({})
     with pytest.raises(ValueError):
-        r.getOrCreate("ÿ1", "TeslaAPI")
+        r.getOrCreate("ÿ1", "OwnerAPI")
     assert r.vehicles() == []
 
 
@@ -304,7 +304,7 @@ def test_forget_if_unattached_is_atomic():  # F7
     from TWCManager.Vehicle.Registry.Vehicle import Vehicle
 
     r = VehicleRegistry({})
-    listed = r.getOrCreate(VIN, "TeslaAPI", attach=("TeslaAPI", "state"))
+    listed = r.getOrCreate(VIN, "OwnerAPI", attach=("TeslaAPI", "state"))
     listed.userAsserted = True
     assert r.forget(VIN, ifUnattached=True) is False and r.get(VIN) is listed
     seen = r.getOrCreate(VIN2, "TWC")  # not user-asserted
@@ -326,7 +326,7 @@ def test_forget_if_unattached_is_atomic():  # F7
 
     with patch.object(Vehicle, "attach", slowAttach):
         lister = threading.Thread(
-            target=r.getOrCreate, args=(VIN2, "TeslaAPI", ("TeslaAPI", "state"))
+            target=r.getOrCreate, args=(VIN2, "OwnerAPI", ("TeslaAPI", "state"))
         )
         lister.start()
         assert entered.wait(5)
@@ -346,5 +346,5 @@ def test_forget_if_unattached_is_atomic():  # F7
 def test_an_attached_car_is_never_expired():  # m1: attach lands before the claims
     r = VehicleRegistry({})
     r.load({"vehicles": {VIN: {"firstSeen": 0.0, "lastSeen": 0.0}}})  # stale
-    v = r.getOrCreate(VIN, "TeslaAPI", attach=("TeslaAPI", "state"))
+    v = r.getOrCreate(VIN, "OwnerAPI", attach=("TeslaAPI", "state"))
     assert not v.claims and r.expire(r.now() + 10**9) == [] and r.get(VIN) is v

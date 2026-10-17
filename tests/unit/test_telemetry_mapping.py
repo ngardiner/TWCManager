@@ -30,8 +30,8 @@ class FakeCarApi:
         self.loads += 1
         if self.load_ok:
             for vin, name in self._pending:
-                self.registry.getOrCreate(vin, "TeslaAPI").observe(
-                    "name", name, "TeslaAPI"
+                self.registry.getOrCreate(vin, "OwnerAPI").observe(
+                    "name", name, "OwnerAPI"
                 )
         return self.load_ok
 

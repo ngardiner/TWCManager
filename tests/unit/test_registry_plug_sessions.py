@@ -28,7 +28,7 @@ def test_unknown_vin_needs_two_matching_reads_then_merges_anonymous():
 
 def test_known_vin_confirms_at_once():
     r = VehicleRegistry({})
-    r.getOrCreate(VIN, "TeslaAPI")
+    r.getOrCreate(VIN, "OwnerAPI")
     r.beginPlugSession("8244")
     assert r.observeTwcVin("8244", VIN) == "confirmed"
 
@@ -55,7 +55,7 @@ def test_malformed_vin_rejected_and_session_end_clears_pending():
 
 def test_session_end_clears_twc_vin_on_the_car():
     r = VehicleRegistry({})
-    r.getOrCreate(VIN, "TeslaAPI")
+    r.getOrCreate(VIN, "OwnerAPI")
     r.beginPlugSession("8244")
     r.observeTwcVin("8244", VIN)
     r.endPlugSession("8244")

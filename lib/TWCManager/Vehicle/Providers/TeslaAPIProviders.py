@@ -54,7 +54,7 @@ class _TeslaAPIProvider(Provider):
 
     def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
         # Never wakes, whatever allowWake says: a cloud wake is never worth a
-        # read. update_vehicle_data observes as "TeslaAPI" for either slot
+        # read. update_vehicle_data observes as the slot's provider
         car = vehicle.attachment("TeslaAPI")
         if car is None:
             return False
