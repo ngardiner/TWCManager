@@ -50,7 +50,7 @@ def test_set_and_remove():
 def test_believed_prefers_a_newer_read_over_our_write():
     m, s = make()
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
-    v.observe("chargeLimit", 90, "TeslaAPI")
+    v.observe("chargeLimit", 90, "OwnerAPI")
     assert v.believed("chargeLimit").value == 90
     v.noteWrite("chargeLimit", 50, "TeslaBLE")
     # our write is newer than the read
@@ -69,7 +69,7 @@ def test_believed_prefers_a_newer_read_over_our_write():
 def test_latest_from_skips_excluded_sources():
     m, s = make()
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
-    v.observe("chargingState", "Stopped", "TeslaAPI", at=100.0)
+    v.observe("chargingState", "Stopped", "OwnerAPI", at=100.0)
     v.observe("chargingState", "Charging", "Gen2TWC", at=200.0)
     assert v.latestFrom("chargingState", exclude={"Gen2TWC"}).value == "Stopped"
     assert v.believed("chargingState", exclude={"Gen2TWC"}).value == "Stopped"
@@ -79,15 +79,15 @@ def test_latest_from_skips_excluded_sources():
 def test_trusted_with_exclude_reads_past_the_excluded_source():
     m, s = make()
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
-    v.observe("chargeLimit", 90, "TeslaAPI", at=100.0)
+    v.observe("chargeLimit", 90, "OwnerAPI", at=100.0)
     v.noteWrite("chargeLimit", 50, "TeslaBLE")
     w = v.lastWrite("chargeLimit").at
-    v.observe("chargeLimit", 70, "TeslaAPI", at=w + 1)
+    v.observe("chargeLimit", 70, "OwnerAPI", at=w + 1)
     v.observe("chargeLimit", 60, "Gen2TWC", at=w + 2)
     assert v.trusted("chargeLimit").source == "Gen2TWC"
     assert v.trusted("chargeLimit", exclude={"Gen2TWC"}).value == 70
     # every source excluded: nothing is trusted, not the store's latest
-    assert v.trusted("chargeLimit", exclude={"Gen2TWC", "TeslaAPI"}) is None
+    assert v.trusted("chargeLimit", exclude={"Gen2TWC", "OwnerAPI"}) is None
 
 
 # Migration safety

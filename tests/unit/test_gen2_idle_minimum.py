@@ -147,12 +147,12 @@ def chargingAndIdle(feed):
     busy.protocolVersion = 1
     busy.currentVIN = VIN
     busy.reportedState, busy.reportedAmpsMax, busy.reportedAmpsActual = 0x01, 32, 20
-    v = m.vehicleRegistry.getOrCreate(VIN, "TeslaAPI")
+    v = m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
     v.attach(
         "TeslaAPI",
         SimpleNamespace(VIN=VIN, atHome=True),
     )
-    v.observe("chargingState", "Charging", "TeslaAPI")
+    v.observe("chargingState", "Charging", "OwnerAPI")
     idle = idleSlave(m)
     m.distributeEVSEPower()
     return busy._evseTargetAmps, idle._evseTargetAmps
@@ -187,12 +187,12 @@ def chargingSlave(m, twcid, vin):
     s.protocolVersion = 1
     s.currentVIN = vin
     s.reportedState, s.reportedAmpsMax, s.reportedAmpsActual = 0x01, 32, 20
-    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI")
+    v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI")
     v.attach(
         "TeslaAPI",
         SimpleNamespace(VIN=vin, atHome=True),
     )
-    v.observe("chargingState", "Charging", "TeslaAPI")
+    v.observe("chargingState", "Charging", "OwnerAPI")
     return s
 
 
@@ -231,14 +231,14 @@ def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
     # The idle TWC's car plugs in and wants power
     idle.currentVIN = "5YJ3E1EA1KF000002"
     idle.reportedState, idle.reportedAmpsMax, idle.reportedAmpsActual = 0x01, 32, 20
-    v = m.vehicleRegistry.getOrCreate(idle.currentVIN, "TeslaAPI")
+    v = m.vehicleRegistry.getOrCreate(idle.currentVIN, "OwnerAPI")
     v.attach(
         "TeslaAPI",
         SimpleNamespace(
             VIN=idle.currentVIN, atHome=True,
         ),
     )
-    v.observe("chargingState", "Charging", "TeslaAPI")
+    v.observe("chargingState", "Charging", "OwnerAPI")
     m.distributeEVSEPower()
     assert busy._evseTargetAmps == idle._evseTargetAmps == 16
     assert busy._evseTargetAmps + idle._evseTargetAmps <= 32

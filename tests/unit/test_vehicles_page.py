@@ -39,7 +39,7 @@ def env(master):
 def master():
     reg = VehicleRegistry({})
     v = reg.getOrCreate(VIN, "TWC")
-    v.observe("name", "TestCar", "TeslaAPI")
+    v.observe("name", "TestCar", "OwnerAPI")
     v.claim("TeslaBLE", True, "paired")
     reg.beginPlugSession("8244")
     m = SimpleNamespace(
@@ -74,7 +74,7 @@ def render(m, error=""):
 def test_held_limit_reads_the_vin_store_after_adoption():
     m = master()
     vin2 = "5YJ3E1EA1KF000002"
-    v2 = m.vehicleRegistry.getOrCreate(vin2, "TeslaAPI")
+    v2 = m.vehicleRegistry.getOrCreate(vin2, "OwnerAPI")
     m.settings["chargeLimits"]["42"] = [85, 60]
     m.heldLimits.load()
     # a legacy numeric-ID entry shows once a vehicle list resolves it
@@ -99,7 +99,7 @@ def test_list_renders_registry_rows():
 
 def test_names_and_error_are_escaped():
     m = master()
-    m.vehicleRegistry.get(VIN).observe("name", "<script>x</script>", "TeslaAPI")
+    m.vehicleRegistry.get(VIN).observe("name", "<script>x</script>", "OwnerAPI")
     html = render(m, error="<b>bad</b>")
     assert "<script>x</script>" not in html and "<b>bad</b>" not in html
     assert "&lt;b&gt;bad&lt;/b&gt;" in html

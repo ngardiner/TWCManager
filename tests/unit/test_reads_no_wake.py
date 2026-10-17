@@ -25,7 +25,7 @@ def setup(ble_result, clock=time.time):
     # The API source observes into the registry; the stand-in must too.
     api.update_vehicle_data = Mock(
         side_effect=lambda vehicle, slot=None: vehicle.observe(
-            "batteryLevel", 50, "TeslaAPI"
+            "batteryLevel", 50, "OwnerAPI"
         )
         and True
     )
@@ -67,15 +67,15 @@ def test_api_source_checks_free_online_state_before_paid_vehicle_data():
 def test_status_deferral_counts_as_success_without_fetch():  # P13
     api, ble, reg = setup(None)
     api.update_vehicle_data = Mock(return_value=True)  # deferral path: no observe
-    reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
+    reg.get(VIN).observe("batteryLevel", 40, "OwnerAPI", at=0.0)
     state(reg).statusDeferral = time.time() + 1800
     assert api.update_charge(reg.get(VIN)) is True
 
 
 def test_update_location_zero_forces_a_fresh_read():  # P12
     api, ble, reg = setup(None)
-    reg.get(VIN).observe("lat", 1.0, "TeslaAPI")
-    reg.get(VIN).observe("lon", 2.0, "TeslaAPI")
+    reg.get(VIN).observe("lat", 1.0, "OwnerAPI")
+    reg.get(VIN).observe("lon", 2.0, "OwnerAPI")
     ble.get_location_state.return_value = {
         "latitude": 3.0,
         "longitude": 4.0,
@@ -97,7 +97,7 @@ def test_ble_failure_falls_to_api_without_waking():  # A6
 def test_all_sources_failing_reports_failure_even_with_stale_value():
     api, ble, reg = setup(None)
     api.update_vehicle_data = Mock(return_value=False)
-    reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
+    reg.get(VIN).observe("batteryLevel", 40, "OwnerAPI", at=0.0)
     assert api.update_charge(reg.get(VIN)) is False and reg.get(VIN).value("batteryLevel", 10000) == 40
 
 
@@ -143,7 +143,7 @@ def test_location_read_recomputes_at_home():
 
 def test_status_deferral_skips_the_online_check():
     api, ble, reg = setup(None)
-    reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
+    reg.get(VIN).observe("batteryLevel", 40, "OwnerAPI", at=0.0)
     state(reg).statusDeferral = time.time() + 1800
     assert api.update_charge(reg.get(VIN)) is True
     api.is_awake.assert_not_called()
@@ -168,7 +168,7 @@ def test_ble_read_observes_actual_current():
 
 def test_location_ignores_a_fix_time_older_than_the_position():
     api, ble, reg = setup(None)
-    reg.get(VIN).observe("gpsAsOf", 5, "TeslaAPI", at=1.0)
+    reg.get(VIN).observe("gpsAsOf", 5, "OwnerAPI", at=1.0)
     ble.get_location_state.return_value = {
         "latitude": 1.0,
         "longitude": 2.0,
@@ -227,7 +227,7 @@ def test_teslable_provider_reads_through_the_module(tmp_path):
 
 def test_ble_reply_with_no_values_falls_through_to_api():
     api, ble, reg = setup(None)
-    reg.get(VIN).observe("lat", 1.0, "TeslaAPI", at=0.0)
+    reg.get(VIN).observe("lat", 1.0, "OwnerAPI", at=0.0)
     ble.get_location_state.return_value = {
         "latitude": None,
         "longitude": None,
@@ -250,7 +250,7 @@ def test_read_stamped_like_the_previous_one_still_counts_as_fetched():
     api, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
     v = reg.get(VIN)
     v.observe("batteryLevel", 40, "TeslaBLE")
-    v.noteWrite("batteryLevel", 40, "TeslaAPI")  # equal stamp: not trusted
+    v.noteWrite("batteryLevel", 40, "OwnerAPI")  # equal stamp: not trusted
     state(reg).lastAPIAccessTime = 0
     assert api.update_charge(reg.get(VIN)) is True and reg.get(VIN).value("batteryLevel", 10000) == 61
     ble.get_charge_state.assert_called_once()
@@ -271,7 +271,7 @@ def test_a_status_deferral_ends_the_read_walk_before_home_assistant():  # 13b M1
     reg.get(VIN).attach("HomeAssistant", hv)
     reg.providerOrder.register(HomeAssistantProvider(ha))
     api.update_vehicle_data = Mock(return_value=True)
-    reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
+    reg.get(VIN).observe("batteryLevel", 40, "OwnerAPI", at=0.0)
     state(reg).statusDeferral = time.time() + 1800
     assert api.update_charge(reg.get(VIN)) is True
     api.is_awake.assert_not_called()

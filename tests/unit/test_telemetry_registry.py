@@ -54,7 +54,7 @@ def test_vin_keyed_telemetry_creates_registry_vehicle_and_observes_with_source()
 
 def test_name_match_against_registry_without_cloud_list():
     t, reg = make()
-    reg.getOrCreate(VIN, "TeslaBLE").observe("name", "TestCar", "TeslaAPI")
+    reg.getOrCreate(VIN, "TeslaBLE").observe("name", "TestCar", "OwnerAPI")
     assert t.updateVehicles("1", "TestCar", loadList=False) is True
     assert t.vehicles["1"] is reg.get(VIN)
 
@@ -228,11 +228,11 @@ def test_teslamate_reports_the_cars_own_ac_maximum(teslamate):
 def test_feed_vouches_for_a_value_the_api_reobserved(teslamate):  # ruling 3
     tm, api, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0")
-    reg.get(VIN).observe("lat", 37.0, "TeslaAPI")  # the cloud saw the same position after the feed
-    reg.get(VIN).observe("lon", -122.0, "TeslaAPI")
-    assert reg.get(VIN).latest("lat").source == "TeslaAPI"
+    reg.get(VIN).observe("lat", 37.0, "OwnerAPI")  # the cloud saw the same position after the feed
+    reg.get(VIN).observe("lon", -122.0, "OwnerAPI")
+    assert reg.get(VIN).latest("lat").source == "OwnerAPI"
     assert api.update_location(reg.get(VIN), 0) is True and not api.get_car_api.called
-    reg.get(VIN).observe("lat", 38.0, "TeslaAPI")  # a different value: the live feed still vouches (C1)
+    reg.get(VIN).observe("lat", 38.0, "OwnerAPI")  # a different value: the live feed still vouches (C1)
     assert api.update_location(reg.get(VIN), 0) is True and not api.get_car_api.called
     tm.mqttDisconnect(None, None, None, 7)  # feed down: the value ages
     api.update_location(reg.get(VIN), 0)
@@ -246,8 +246,8 @@ def test_feed_outage_then_recovery_pays_one_cloud_read(teslamate):  # C1
 
     def vehicleData(vehicle, slot=None):
         calls.append(1)
-        reg.get(VIN).observe("lat", 37.00000001, "TeslaAPI")  # the API's digits differ from TeslaMate's
-        reg.get(VIN).observe("lon", -122.0, "TeslaAPI")
+        reg.get(VIN).observe("lat", 37.00000001, "OwnerAPI")  # the API's digits differ from TeslaMate's
+        reg.get(VIN).observe("lon", -122.0, "OwnerAPI")
         return True
 
     api.update_vehicle_data = vehicleData
@@ -436,7 +436,7 @@ def test_retained_differing_value_after_own_write_waits_for_feed_lag(clocked):
     t, reg, now = clocked
     tm_msg(t, "display_name", "C", False)
     v = reg.get(VIN)
-    v.observe("chargeLimit", 60, "TeslaAPI", at=900.0)
+    v.observe("chargeLimit", 60, "OwnerAPI", at=900.0)
     v.noteWrite("chargeLimit", 100, "TeslaBLE")  # at 1000
     now["t"] = 1005.0
     tm_msg(t, "charge_limit_soc", "50", True)  # TeslaMate's pre-write value
@@ -483,8 +483,8 @@ def test_retained_flag_survives_parking():
     now = {"t": 1000.0}
     t, reg = make(clock=lambda: now["t"])
     t.vinFor = lambda vid: VIN
-    v = reg.getOrCreate(VIN, "TeslaAPI")
-    v.observe("name", "C", "TeslaAPI")
+    v = reg.getOrCreate(VIN, "OwnerAPI")
+    v.observe("name", "C", "OwnerAPI")
     now["t"] = 2000.0
     t.applyDataToVehicle("1", "charge_limit_soc", "80", retained=True)
     t.applyDataToVehicle("1", "display_name", "C", retained=True)
@@ -497,7 +497,7 @@ def test_forget_then_recreate_remaps_the_feed(clocked):
     tm_msg(t, "display_name", "C", False)
     old = reg.get(VIN)
     assert reg.forget(VIN)
-    new = reg.getOrCreate(VIN, "TeslaAPI")
+    new = reg.getOrCreate(VIN, "OwnerAPI")
     tm_msg(t, "charge_limit_soc", "70", False)
     assert t.vehicles["7"] is new and new.latest("chargeLimit").value == 70
     assert old.latest("chargeLimit") is None
@@ -543,7 +543,7 @@ def test_expired_car_is_not_revived_by_daily_retained_replay(clocked):
 
 def test_orphan_without_a_stored_name_or_vin_does_not_warn(caplog):
     t, reg = make()
-    v = reg.getOrCreate(VIN, "TeslaAPI")
+    v = reg.getOrCreate(VIN, "OwnerAPI")
     t.vehicles["1"] = v  # mapped, but no name was ever stored
     reg.forget(VIN)
     caplog.set_level(logging.WARNING)
@@ -576,7 +576,7 @@ def test_retained_change_published_after_the_echo_is_kept():  # probe D
 
 def test_teslamate_unmapped_vehicle_assumed_healthy(clocked):
     t, reg, now = clocked
-    other = reg.getOrCreate("5YJ3E1EA1KF000002", "TeslaAPI")
+    other = reg.getOrCreate("5YJ3E1EA1KF000002", "OwnerAPI")
     assert t.carHealthy(other) is True
 
 
@@ -611,7 +611,7 @@ def test_car_vins_reloaded_by_unmapped_retry(monkeypatch):
 def test_unmapped_vehicle_uses_its_car_health_by_vin(clocked):
     t, reg, now = clocked
     t.noteHealthy("7", "false")
-    assert t.carHealthy(reg.getOrCreate(VIN, "TeslaAPI")) is False
+    assert t.carHealthy(reg.getOrCreate(VIN, "OwnerAPI")) is False
 
 
 def test_fleet_retained_value_does_not_mean_online():

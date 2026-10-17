@@ -185,7 +185,7 @@ def fleetCarOffItsPoint(requests_mock, home):
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); car = api.registry.get(VIN).attachment("TeslaAPI")
     m.settings.update(homeLat=HOME[0], homeLon=HOME[1]); at = HOME if home else AWAY
     v.observe("twcVin", "8244", "TWC"); v.observe("twcVin", None, "TWC", seen=False)
-    m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaAPI")
+    m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "OwnerAPI")
     requests_mock.get(FLEET_CAR, json={"response": {"state": "online"}})
     requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"drive_state": {"latitude": at[0], "longitude": at[1], "shift_state": "D"},
                                                                     "charge_state": {"charge_limit_soc": 50}, "vehicle_state": {}}})

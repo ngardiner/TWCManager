@@ -237,15 +237,17 @@ class TeslaAPI:
     def providers(self):
         return [OwnerAPIProvider(self), FleetAPIProvider(self)]
 
-    def addVehicle(self, json):
-        # A listed car joins the registry with this module's record attached
+    def addVehicle(self, json, slot=None):
+        # A listed car joins the registry with this module's record attached;
+        # the listing slot (default: the read slot) is the sighting's source
         if "vin" not in json:
             return
+        source = self.sourceOf(slot or self.slotFor("read"))
         state = CarApiState()
         state.commandSigning = json.get("command_signing")
         try:
             vehicle = self.registry.getOrCreate(
-                json["vin"], "TeslaAPI", attach=("TeslaAPI", state)
+                json["vin"], source, attach=("TeslaAPI", state)
             )
         except ValueError:
             # The registry refuses a missing or malformed VIN.
@@ -257,7 +259,7 @@ class TeslaAPI:
         vehicle.claim("OwnerAPI", lambda: self.ownerCommandsAllowed(state), "listed")
         vehicle.claim("FleetAPI", lambda: self.fleetSlot.usable("command"), "listed")
         # A cloud account listing is a sighting.
-        vehicle.observe("name", json["display_name"] or vehicle.vin, "TeslaAPI")
+        vehicle.observe("name", json["display_name"] or vehicle.vin, source)
 
     def refreshTokenTypeKnown(self, token):
         # True when the refresh token's type can be told from the token
@@ -515,6 +517,10 @@ class TeslaAPI:
                 return slot
         return None
 
+    def sourceOf(self, slot):
+        # The registry source a slot's data is observed as: its provider's
+        return "FleetAPI" if slot is self.fleetSlot else "OwnerAPI"
+
     @property
     def readOnly(self):
         # True when no listed car can be sent commands. With an Owner token
@@ -599,7 +605,7 @@ class TeslaAPI:
                 self.updateCarApiLastErrorTime()
                 return False
             for car in listed:
-                self.addVehicle(car)
+                self.addVehicle(car, slot)
             self.resetCarApiLastErrorTime()
         # Outside the lock: its other slot's GET never holds it
         self.resolveHeldLimits(slot, listed)
@@ -1976,6 +1982,8 @@ class TeslaAPI:
         if now < car.statusDeferral:
             return True
 
+        slot = slot or self.slotFor("read")
+        source = self.sourceOf(slot)
         result, response = self.get_car_api(vehicle, path, slot=slot)
 
         if result:
@@ -1986,8 +1994,8 @@ class TeslaAPI:
                 missing = "charge_state missing from API response"
                 charge = response["charge_state"]
                 missing = "latitude/longitude missing from drive_state"
-                vehicle.observe("lat", drive["latitude"], "TeslaAPI")
-                vehicle.observe("lon", drive["longitude"], "TeslaAPI")
+                vehicle.observe("lat", drive["latitude"], source)
+                vehicle.observe("lon", drive["longitude"], source)
             except (KeyError, TypeError):
                 logger.error("update_vehicle_data: %s for %s" % (missing, vehicle.vin))
                 return False
@@ -1997,7 +2005,7 @@ class TeslaAPI:
             # carried-over value is not a fresh TeslaAPI reading.
             gpsAsOf = drive.get("gps_as_of") or 0
             if gpsAsOf:
-                vehicle.observe("gpsAsOf", gpsAsOf, "TeslaAPI")
+                vehicle.observe("gpsAsOf", gpsAsOf, source)
             gpsAge = (now - gpsAsOf) if gpsAsOf else None
             car.atHome = self.is_location_home(lat, lon, gpsAge)
 
@@ -2006,7 +2014,7 @@ class TeslaAPI:
             except (KeyError, TypeError):
                 vehicleName = None
             if vehicleName:
-                vehicle.observe("name", vehicleName, "TeslaAPI")
+                vehicle.observe("name", vehicleName, source)
 
             for key, field in (
                 ("charge_limit_soc", "chargeLimit"),
@@ -2022,7 +2030,7 @@ class TeslaAPI:
                 ("scheduled_charging_pending", "scheduledChargingPending"),
             ):
                 if key in charge:
-                    vehicle.observe(field, charge[key], "TeslaAPI")
+                    vehicle.observe(field, charge[key], source)
 
             if not car.atHome:
                 if self.is_far_from_home(lat, lon):

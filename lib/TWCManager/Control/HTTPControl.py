@@ -41,7 +41,6 @@ SOURCE_NAMES = {
     "TeslaMateVehicle": "TeslaMate",
     "FleetTelemetryMQTT": "Fleet Telemetry",
     "TeslaBLE": "BLE",
-    "TeslaAPI": "Tesla API",
     "OwnerAPI": "Owner API",
     "FleetAPI": "Fleet API",
     "HomeAssistant": "Home Assistant",

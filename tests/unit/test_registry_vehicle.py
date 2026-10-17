@@ -48,7 +48,7 @@ def test_observe_bumps_last_seen_unless_told_not_to():
     v.observe("chargeLimit", 80, "TeslaMateVehicle")
     assert (v.lastSeen, v.lastSeenSource) == (2000.0, "TeslaMateVehicle")
     c.t = 3000.0
-    v.observe("name", "Car", "TeslaAPI", seen=False)
+    v.observe("name", "Car", "OwnerAPI", seen=False)
     assert v.lastSeen == 2000.0 and v.name == "Car"
 
 
@@ -86,7 +86,7 @@ def test_registry_liveness_feeds_age_and_trusted():
     v.observe("chargeLimit", 80, "TeslaMateVehicle", at=1000.0)
     c.t = 1600.0
     assert v.age("chargeLimit") == 100.0
-    v.noteWrite("chargeLimit", 90, "TeslaAPI")
+    v.noteWrite("chargeLimit", 90, "OwnerAPI")
     c.t = 1700.0
     assert v.trusted("chargeLimit").value == 80
     assert v.age("name") is None
@@ -103,7 +103,7 @@ def test_rejected_older_stamp_keeps_last_seen_pair_consistent():
     v = Vehicle(VIN, VIN, registry=None, clock=c)
     c.t = 3000.0
     v.observe("chargeLimit", 80, "TeslaMateVehicle", at=2000.0)
-    v.observe("chargeLimit", 70, "TeslaAPI", at=1500.0)
+    v.observe("chargeLimit", 70, "OwnerAPI", at=1500.0)
     assert (v.lastSeen, v.lastSeenSource) == (2000.0, "TeslaMateVehicle")
 
 
@@ -176,9 +176,9 @@ def test_live_feed_vouches_for_an_equal_value_another_source_observed():  # P8/3
     reg = FeedReg(c)
     v = Vehicle(VIN, VIN, registry=reg, clock=c)
     v.observe("chargeLimit", 80, "Feed", at=100.0)
-    v.observe("chargeLimit", 80, "TeslaAPI", at=900.0)
+    v.observe("chargeLimit", 80, "OwnerAPI", at=900.0)
     c.t = 5000.0
-    assert v.latest("chargeLimit").source == "TeslaAPI"
+    assert v.latest("chargeLimit").source == "OwnerAPI"
     assert v.age("chargeLimit") == 0.0
     assert v.summary()["fields"]["chargeLimit"]["age"] == 0.0
     reg.live = False  # feed down: the API reading ages normally
@@ -231,13 +231,13 @@ def test_feed_outage_costs_one_cloud_read_not_one_per_window():  # C1 probe
 
             def fetch(self, vehicle, field, allowWake=False):
                 calls.append(c.t)
-                vehicle.observe("lat", cloudLat, "TeslaAPI")
+                vehicle.observe("lat", cloudLat, "OwnerAPI")
                 return True
 
         wire_reads(reg, Cloud())
         v = reg.getOrCreate(VIN, "test")
         v.observe("lat", 51.5, "TeslaMateVehicle", at=100.0)
-        assert v.read("lat", maxAge=0).source == "TeslaAPI"  # feed down
+        assert v.read("lat", maxAge=0).source == "OwnerAPI"  # feed down
         assert len(calls) == 1
         live["up"] = True  # feed back, car parked: no new latitude
         for step in range(1, 7):
@@ -252,7 +252,7 @@ def test_feed_vouch_resolves_own_write_after_feed_lag():
     c = Clock()
     v = Vehicle(VIN, VIN, registry=FeedReg(c), clock=c)
     v.observe("chargeLimit", 50, "Feed", at=100.0)
-    v.observe("chargeLimit", 50, "TeslaAPI", at=900.0)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=900.0)
     v.noteWrite("chargeLimit", 100, "TeslaBLE")  # at 1000
     c.t = 1003.0
     assert v.trusted("chargeLimit") is None
@@ -275,7 +275,7 @@ def test_sync_source_is_a_fresh_telemetry_state_else_teslaapi():
     assert v.syncSource == "TeslaMateVehicle"  # <= SYNC_TIMEOUT is fresh
     c.t += 1  # 3,601 s on an untracked feed
     assert v.syncSource == "TeslaAPI"
-    v.observe("state", "online", "TeslaAPI")
+    v.observe("state", "online", "OwnerAPI")
     assert v.syncSource == "TeslaAPI"
     assert Vehicle.SYNC_TIMEOUT == 3600
 
@@ -284,7 +284,7 @@ def test_telemetry_state_ages_only_telemetry():
     c = Clock()
     v = Vehicle(VIN, VIN, registry=_Untracked(), clock=c)
     assert v.telemetryState() == (None, None)
-    api = v.observe("state", "online", "TeslaAPI", at=900.0)
+    api = v.observe("state", "online", "OwnerAPI", at=900.0)
     assert v.telemetryState() == (api, None)
     tm = v.observe("state", "asleep", "FleetTelemetryMQTT", at=950.0)
     assert v.telemetryState() == (tm, 50.0)

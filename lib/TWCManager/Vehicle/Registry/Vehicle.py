@@ -173,6 +173,8 @@ class Vehicle:
 
     @property
     def syncSource(self) -> str:
+        # The module keeping the car current, never shown: the TeslaAPI
+        # module (either slot) when no telemetry feed is live
         obs, age = self.telemetryState()
         if age is not None and age <= self.SYNC_TIMEOUT:
             return obs.source
