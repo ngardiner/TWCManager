@@ -4,6 +4,7 @@
 # settings 0) and after Phase 4 Task 4 (offers on the control tick): the
 # rules moved, the values did not. tickThenBeat runs each version's order.
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -182,3 +183,124 @@ def test_a_twc_point_never_clears_a_vehicle_endpoints_rate():  # F13
     for _ in range(2):
         beat(m, s)
         assert rate(m) == (16, "distributor", False)
+
+
+# The start/stop gates of a protocol-2 TWC with a car key. Gate calls are
+# recorded, not made
+
+
+GATES = (
+    "stopCarsCharging",
+    "cancelStopCarsCharging",
+    "startCarsCharging",
+    "withdrawStartCharging",
+)
+
+
+def gated(m, twcid=b"\x82\x44", vin=VIN, protocol=2, **kw):
+    s = slave(m, twcid, vin=vin, **kw)
+    s.protocolVersion = protocol
+    for name in GATES:
+        setattr(m, name, Mock())
+    return s
+
+
+def calls(m):
+    # The gate calls since the last look, as (name, key)
+    out = []
+    for name in GATES:
+        out += [(name, c.args[0]) for c in getattr(m, name).call_args_list]
+        getattr(m, name).reset_mock()
+    return out
+
+
+def age(s, offered=0, amps=0):
+    s.timeLastAmpsOfferedChanged -= offered
+    s.timeReportedAmpsActualChangedSignificantly -= amps
+
+
+def test_a_car_drawing_over_4a_offered_zero_is_stopped_after_60s():
+    m = master(feed=3)
+    s = gated(m, actual=10.0)
+    beat(m, s)
+    assert s.lastAmpsOffered == 0
+    assert calls(m) == [("cancelStopCarsCharging", VIN)]  # the offer just changed
+    age(s, offered=61, amps=61)
+    beat(m, s)
+    assert calls(m) == [("stopCarsCharging", VIN)]
+
+
+def test_the_stop_waits_start_stop_delay_after_a_significant_amps_change():
+    m = master(feed=3)
+    s = gated(m, actual=10.0)
+    s.startStopDelay = 120
+    beat(m, s)
+    age(s, offered=61, amps=90)
+    calls(m)
+    beat(m, s)
+    assert calls(m) == [("cancelStopCarsCharging", VIN)]
+    age(s, amps=40)
+    beat(m, s)
+    assert calls(m) == [("stopCarsCharging", VIN)]
+
+
+def test_offered_at_least_the_minimum_and_not_drawing_starts_the_car():
+    m = master(feed=40)
+    s = gated(m, state=0x03, actual=0.0)
+    beat(m, s)
+    assert s.lastAmpsOffered >= s.minAmpsToOffer()
+    assert ("startCarsCharging", VIN) in calls(m)
+
+
+def test_an_error_state_is_not_started():
+    m = master(feed=40)
+    s = gated(m, state=0x02, actual=0.0)
+    beat(m, s)
+    assert s.lastAmpsOffered >= s.minAmpsToOffer()
+    names = [name for name, _ in calls(m)]
+    assert "startCarsCharging" not in names and "withdrawStartCharging" not in names
+
+
+def test_offered_below_the_minimum_withdraws_a_pending_start():
+    m = master(feed=3)
+    s = gated(m, state=0x03, actual=0.0)
+    beat(m, s)
+    assert s.lastAmpsOffered == 0
+    assert calls(m) == [("withdrawStartCharging", VIN)]
+
+
+def test_protocol_1_and_keyless_twcs_decide_nothing():
+    # Protocol 1: offered 0 while drawing (a stop), then not drawing (a
+    # withdraw), then offered the minimum (a start) at 2
+    m = master(feed=3)
+    s = gated(m, protocol=1, actual=10.0)
+    age(s, offered=61, amps=61)
+    beat(m, s)
+    beat(m, s, actual=0.0)
+    assert calls(m) == []
+    budget(m, 40)
+    beat(m, s)
+    names = [name for name, _ in calls(m)]
+    assert "startCarsCharging" not in names and "withdrawStartCharging" not in names
+    # Protocol 2 with no car key: nothing plugged in, so no session
+    m = master(feed=3)
+    s = gated(m, vin=None, state=0x00, actual=0.0)
+    beat(m, s)
+    budget(m, 40)
+    beat(m, s)
+    assert s.vehicleKey is None and calls(m) == []
+
+
+def test_no_gate_runs_during_the_mode_2_silence():
+    m = master(feed=3)
+    s = gated(m, actual=10.0)
+    beat(m, s)
+    assert calls(m) == [("cancelStopCarsCharging", VIN)]  # the offer just changed
+    m.settings["respondToSlaves"] = 0
+    m.settings["respondToSlavesExpiry"] = time.time() + 60
+    age(s, offered=61, amps=61)
+    tickThenBeat(m, s, 0x01, 40, 10.0)
+    assert calls(m) == []  # silent TWCs are not started or stopped
+    m.settings["respondToSlavesExpiry"] = time.time() - 1
+    beat(m, s)
+    assert calls(m) == [("stopCarsCharging", VIN)]

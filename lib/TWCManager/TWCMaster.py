@@ -535,7 +535,7 @@ class TWCMaster:
         now = time.time() if now is None else now
         points = self.distributeEVSEPower() if distribute else self.chargingPoints()
         # chargeStopMode 2 silences the heartbeat, and with it the replies:
-        # the offers hold and no stop is cancelled
+        # the offers hold, no stop is cancelled and no gate runs
         if (
             self.settings.get("respondToSlaves", 1) == 0
             and self.settings.get("respondToSlavesExpiry", now) > now
@@ -562,6 +562,25 @@ class TWCMaster:
             if key is not None and slave.offer.amps > 0:
                 # Power is on offer: a stop not yet delivered is moot
                 self.cancelStopCarsCharging(key)
+            gate = slave.chargeGate(now)
+            if gate == "cancelStop":
+                logger.debug(
+                    "Don't stop charging TWC: %s yet because: offer changed "
+                    "%ds ago (< 60) or actual amps changed %ds ago (< %d)",
+                    self.hex_str(slave.TWCID),
+                    now - slave.timeLastAmpsOfferedChanged,
+                    now - slave.timeReportedAmpsActualChangedSignificantly,
+                    slave.startStopDelay,
+                )
+            if gate and key is not None:
+                # chargeGate reads the key itself; None here would reach
+                # every car
+                {
+                    "stop": self.stopCarsCharging,
+                    "cancelStop": self.cancelStopCarsCharging,
+                    "start": self.startCarsCharging,
+                    "withdraw": self.withdrawStartCharging,
+                }[gate](key)
 
     def distributeEVSEPower(self) -> list:
         """Watt-based power distribution across charging points.
