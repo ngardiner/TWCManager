@@ -614,3 +614,22 @@ def test_a_restore_stamps_the_outside_value():                             # del
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaBLE")
     m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True); r.pass_()
     w = v.lastWrite("chargeLimit"); assert (w.value, w.source) == (90, "TeslaBLE") and prov(m, "TeslaBLE").calls[-1] == ("setChargeLimit", VIN, 90)
+
+
+def _info(caplog):
+    return [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+
+def test_a_limit_raise_logs_the_wake_and_its_outcome(caplog):
+    caplog.set_level("INFO"); m, r, v, c = setup(ble(O.Outcome(O.DONE), O.Outcome(O.DONE))); v.observe("chargeLimit", 50, "TeslaBLE")
+    m.desired.set(VIN, CHARGE_LIMIT, 70, "policy"); r.pass_()
+    assert "TeslaBLE wake for %s before setChargeLimit: done" % VIN in _info(caplog)
+    assert not any("no wake" in x for x in _info(caplog))
+
+def test_a_limit_raise_with_unknown_current_limit_logs_why_no_wake(caplog):
+    caplog.set_level("INFO"); m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.desired.set(VIN, CHARGE_LIMIT, 70, "policy"); r.pass_()
+    assert "TeslaBLE no wake for %s before setChargeLimit: current limit unknown" % VIN in _info(caplog)
+
+def test_a_stop_logs_neither_a_wake_nor_a_skip(caplog):
+    caplog.set_level("INFO"); m, r, v, c = setup(ble(O.Outcome(O.DONE))); v.observe("chargingState", "Charging", "TeslaBLE")
+    m.desired.set(VIN, CHARGING, False, "distributor"); r.pass_(); assert cmds(prov(m, "TeslaBLE")) == ["stopCharging"]
+    assert not any(" wake " in x for x in _info(caplog))
