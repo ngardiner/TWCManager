@@ -394,13 +394,14 @@ class VehicleReconciler(threading.Thread):
         # attempt read. A paid attempt reads only a value older than its
         # whole window (I3)
         blind = p in paid and rec.paidRetryDue
+        wake = wakes and (p.local or aspect != AMPS) and not blind
         attempt = Attempt(
             key,
             aspect,
             capability,
             d.value,
             p.name,
-            wake=wakes and (p.local or aspect != AMPS) and not blind,
+            wake=wake,
             maxAge=(
                 None
                 if aspect == AMPS or blind
@@ -411,9 +412,20 @@ class VehicleReconciler(threading.Thread):
             since=max(now, d.at),
             force=aspect == CHARGE_LIMIT
             and needsLiveRead(d.restore, k.value if k else None, held),
+            wakeSkipped=None if wake else self._whyNoWake(aspect, p, k, blind),
         )
         rec.inFlight = attempt
         return attempt
+
+    @staticmethod
+    def _whyNoWake(aspect, p, k, blind) -> str:
+        if blind:
+            return "blind paid retry"
+        if aspect == AMPS and not p.local:
+            return "billed provider never wakes for amps"
+        if aspect == CHARGE_LIMIT and k is None:
+            return "current limit unknown"
+        return "lower never wakes"
 
     def _startWanted(self, vehicle, config) -> bool:
         start = self.desired.get(vehicle.key, CHARGING)
