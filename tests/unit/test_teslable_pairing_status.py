@@ -4,6 +4,7 @@ import threading
 import pytest
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
+from tests.unit.vehicle_helpers import commands
 
 VIN = "5YJ3E1EA1KF000001"
 # What tesla-control prints once the car has taken an add-key request
@@ -39,10 +40,10 @@ def test_pairing_then_proof_makes_paired_and_managed():
     ble._run_command_with_timeout = Mock(return_value=(b"", SENT, 0))
     assert ble.peerWithVehicle(VIN) is True
     assert ble.bleStatus(VIN)["status"] == "pairing"
-    assert reg.get(VIN) is None or reg.get(VIN).tier == "observed"
+    assert reg.get(VIN) is None or not commands(reg.get(VIN))
     ble._run_command_with_timeout = Mock(return_value=(b"", b"done", 0))
     assert ble._sendCommand_internal(VIN, "ping") == "done"
-    assert ble.bleStatus(VIN)["status"] == "paired" and reg.get(VIN).tier == "managed"
+    assert ble.bleStatus(VIN)["status"] == "paired" and commands(reg.get(VIN))
     master.queue_background_task.assert_any_call({"cmd": "saveSettings"})
 
 
@@ -57,7 +58,7 @@ def test_refusal_drops_claim():
         )
     )
     assert ble._sendCommand_internal(VIN, "ping") is None
-    assert ble.bleStatus(VIN)["status"] == "refused" and reg.get(VIN).tier == "observed"
+    assert ble.bleStatus(VIN)["status"] == "refused" and not commands(reg.get(VIN))
 
 
 def test_state_read_success_proves_key():
@@ -93,7 +94,7 @@ def test_update_settings_reclaims_paired_vins():
     master.settings["Vehicles"][VIN]["ble"] = {"status": "paired", "since": 1.0}
     ble.scanForVehicles = Mock()
     ble.updateSettings()
-    assert reg.get(VIN).tier == "managed"
+    assert commands(reg.get(VIN))
 
 
 def test_update_settings_seeds_keyed_entries_as_unproven_and_paired_as_managed():  # ruling 6 / P9
@@ -112,10 +113,10 @@ def test_update_settings_seeds_keyed_entries_as_unproven_and_paired_as_managed()
     ble.scanForVehicles = Mock()
     ble.updateSettings()
     assert (
-        reg.get(VIN).tier == "observed"
+        not commands(reg.get(VIN))
         and reg.get(VIN).claims["TeslaBLE"].status == "unproven"
     )
-    assert reg.get("5YJ3E1EA1KF000002").tier == "managed"
+    assert commands(reg.get("5YJ3E1EA1KF000002"))
     assert "TeslaBLE" not in reg.get("5YJ3E1EA1KF000003").claims
     assert "ble" not in master.settings["Vehicles"][VIN]  # seeding writes nothing
 
@@ -253,7 +254,7 @@ def test_other_failures_leave_status_alone():
     ble._run_command_with_timeout = Mock(return_value=(b"", b"ble: timeout", 1))
     assert ble._sendCommand_internal(VIN, "ping") is None
     assert ble.bleStatus(VIN)["status"] == "paired"
-    assert reg.get(VIN).tier == "managed"
+    assert commands(reg.get(VIN))
 
 
 def test_state_read_refusal_drops_claim():
@@ -319,7 +320,7 @@ def test_new_record_created_for_unknown_vin():
     ble._setBleStatus(other, "paired")
     rec = master.settings["Vehicles"][other]
     assert rec["chargeSessions"] == 0 and rec["ble"]["status"] == "paired"
-    assert reg.get(other).tier == "managed"
+    assert commands(reg.get(other))
 
 
 def test_claimed_vin_reads_from_ble_first():
@@ -348,7 +349,7 @@ def test_pairing_is_an_unproven_claim():
     ble, reg, master = make()
     pair(ble)
     v = reg.get(VIN)
-    assert v.claims["TeslaBLE"].status == "unproven" and v.tier == "observed"
+    assert v.claims["TeslaBLE"].status == "unproven" and not commands(v)
 
 
 def test_refusal_inside_pairing_window_keeps_pairing():
@@ -379,7 +380,7 @@ def test_failed_repair_of_paired_car_keeps_paired():
     ble._run_command_with_timeout = Mock(return_value=(None, None, -9))
     assert ble.peerWithVehicle(VIN) is False
     assert ble.bleStatus(VIN)["status"] == "paired"
-    assert reg.get(VIN).tier == "managed"
+    assert commands(reg.get(VIN))
     attempt = ble.blePairingAttempt(VIN)
     assert attempt["ok"] is False and attempt["message"] and attempt["at"]
 
@@ -402,7 +403,7 @@ def test_repair_of_paired_car_keeps_paired_and_refusal_in_window_is_ignored():
     ble._run_command_with_timeout = Mock(return_value=(b"", REFUSED, 1))
     assert ble._sendCommand_internal(VIN, "ping") is None
     assert ble.bleStatus(VIN)["status"] == "paired"
-    assert reg.get(VIN).tier == "managed"
+    assert commands(reg.get(VIN))
 
 
 def test_paired_car_refused_outside_window_is_refused():
@@ -448,7 +449,7 @@ def test_unproven_only_car_ages_out_but_paired_does_not():
     for v in reg.vehicles():
         v.lastSeen -= 365 * 86400
     assert reg.expire() == [VIN]
-    assert reg.get("5YJ3E1EA1KF000002").tier == "managed"
+    assert commands(reg.get("5YJ3E1EA1KF000002"))
 
 
 def test_later_boot_does_not_recreate_expired_or_forgotten_car():
@@ -472,7 +473,7 @@ def test_later_boot_claims_held_and_paired_vins():
     ble.scanForVehicles = Mock()
     ble.updateSettings()
     assert reg.get(held).claims["TeslaBLE"].status == "unproven"
-    assert reg.get(paired).tier == "managed"
+    assert commands(reg.get(paired))
     assert "TeslaBLE" not in reg.get(refused).claims
 
 
@@ -505,7 +506,7 @@ def test_legacy_lowercase_record_is_found_by_upper_vin():
     assert ble.get_charge_state(VIN)["batteryLevel"] == 7
     assert list(master.settings["Vehicles"]) == [VIN.lower()]
     assert ble.bleStatus(VIN)["status"] == "paired"
-    assert reg.get(VIN).tier == "managed"
+    assert commands(reg.get(VIN))
 
 
 def test_pairing_failure_keeps_an_unproven_claim():

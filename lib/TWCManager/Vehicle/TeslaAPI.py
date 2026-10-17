@@ -553,13 +553,26 @@ class TeslaAPI:
         # refresh, a 412), Tesla lists the car with command_signing exactly
         # "off" (#659), and no Owner command to it has come back 403 since.
         # "required", no field, or any other value is read-only: fail closed
-        return (
-            car is not None
-            and self.ownerTokenHeld()
-            and "command" not in self.ownerSlot.refusedPurposes
-            and car.commandSigning == "off"
-            and not car.ownerCommandsRefused
-        )
+        return car is not None and self.ownerReadOnlyReason(car) is None
+
+    def ownerReadOnlyReason(self, car):
+        # Why the Owner token may not command the car, for the Vehicles page;
+        # None when it may.
+        if car is None or not self.ownerTokenHeld():
+            return "no Owner API token"
+        if "command" in self.ownerSlot.refusedPurposes:
+            return "Tesla refused commands with the token"
+        if car.commandSigning != "off":
+            return "car requires signed commands"
+        return "car refused an unsigned command" if car.ownerCommandsRefused else None
+
+    def fleetReadOnlyReason(self):
+        slot = self.fleetSlot
+        if slot.empty() or slot.tokenType != "fleet":
+            return "no Fleet API token"
+        if "command" in slot.refusedPurposes:
+            return "Tesla refused commands"
+        return "token lacks command scope"
 
     def loadVehicleList(self):
         # List the cars (attach their records) from the vehicle list of the read slot

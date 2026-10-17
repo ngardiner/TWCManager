@@ -12,6 +12,8 @@ from TWCManager.Control.HTTPControl import (
     addVehicleByVIN,
     canForgetVehicle,
     heldLimitText,
+    providerLines,
+    sourceName,
 )
 
 VIN = "5YJ3E1EA1KF000001"
@@ -25,6 +27,8 @@ def env(master):
         checkForUpdates=lambda: False,
         ageText=ageText,
         heldLimitText=lambda v: heldLimitText(master, v),
+        sourceName=sourceName,
+        providerLines=lambda v: providerLines(master, v),
         registry=master.vehicleRegistry,
         vehicles=master.vehicleRegistry.vehicles,
         canForget=lambda vin: canForgetVehicle(master, vin),
@@ -76,8 +80,8 @@ def test_held_limit_reads_the_vin_store_after_adoption():
     # a legacy numeric-ID entry shows once a vehicle list resolves it
     assert heldLimitText(m, v2) == "—"
     m.heldLimits.resolveLegacyIds({42: vin2})
-    assert heldLimitText(m, v2) == "85% (holding 60%)"
-    assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "90% (holding 80%)"
+    assert heldLimitText(m, v2) == "60% (car's own limit: 85%, restored when released)"
+    assert "80% (car's own limit: 90%" in heldLimitText(m, m.vehicleRegistry.get(VIN))
     m.heldLimits.remove(VIN)
     assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "—"
 
@@ -86,8 +90,9 @@ def test_list_renders_registry_rows():
     m = master()
     html = render(m)
     assert f"/vehicleDetail/{VIN}" in html and "TestCar" in html
-    assert "managed" in html
-    assert "TeslaBLE (paired)" in html and "90% (holding 80%)" in html
+    assert "BLE: paired" in html and "TeslaBLE" not in html
+    assert "80% (car&#39;s own limit: 90%, restored when released)" in html
+    assert "Charge limit set by TWCManager" in html and "Held limit" not in html
     assert "Unknown car on TWC 8244" in html and "Charge history" in html
     assert 'action="/vehicle/add"' in html
 
@@ -151,3 +156,45 @@ def test_add_vin_dedupes_settings_case_insensitively():
         lower
     ]
     assert m.settings["Vehicles"][lower]["chargeSessions"] == 7
+
+
+def test_providers_one_per_line_with_source_names_and_no_tier():
+    m = master()
+    v = m.vehicleRegistry.get(VIN)
+    v.claim("TeslaMateVehicle", False, "reports", keepsAlive=False)
+    v.claim("Gen3TWC", True, "")
+    v.observe("chargeLimit", 1, "FleetTelemetryMQTT")
+    html = render(m)
+    assert "BLE: paired<br>TeslaMate: reports, read-only<br>Gen3 Wall Connector: commands" in html
+    assert "via Fleet Telemetry" in html
+    assert "Tier" not in html and "Gen3TWC" not in html and "TeslaMateVehicle" not in html
+    assert sourceName("SomethingNew") == "SomethingNew"
+    assert sourceName("Gen2TWC") == "TWC" and sourceName("TeslaBLE") == "BLE"
+
+
+def test_provider_capability_text_for_tesla_cloud_and_ble():
+    m = master()
+    v = m.vehicleRegistry.get(VIN)
+    api = Mock()
+    api.ownerReadOnlyReason.return_value = "car requires signed commands"
+    api.fleetReadOnlyReason.return_value = "token lacks command scope"
+    m.getModuleByName = lambda n: api if n == "TeslaAPI" else None
+    v.claim("OwnerAPI", False, "listed")
+    v.claim("FleetAPI", False, "listed")
+    v.claim("TeslaBLE", False, "unproven", keepsAlive=False)
+    v.claim("HomeAssistant", True, "entities")
+    assert sorted(providerLines(m, v)) == [
+        "BLE: unproven",
+        "Fleet API: read-only (token lacks command scope)",
+        "Home Assistant: entities, commands",
+        "Owner API: read-only (car requires signed commands)",
+    ]
+    api.ownerReadOnlyReason.return_value = None
+    v.claim("OwnerAPI", True, "listed")
+    v.claim("FleetAPI", True, "listed")
+    v.claim("TeslaBLE", False, "paired")
+    assert sorted(providerLines(m, v))[:3] == [
+        "BLE: paired, read-only",
+        "Fleet API: commands",
+        "Home Assistant: entities, commands",
+    ] and "Owner API: commands" in providerLines(m, v)

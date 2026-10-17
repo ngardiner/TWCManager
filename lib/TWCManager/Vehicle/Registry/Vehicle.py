@@ -211,7 +211,7 @@ class Vehicle:
         got = order.read(self, field, allowWake, providers) if order else None
         return got if got is not None else self.latest(field)
 
-    # Claims and tier
+    # Claims
 
     def claim(
         self,
@@ -233,14 +233,6 @@ class Vehicle:
     def claims(self) -> Dict[str, Claim]:
         with self._lock:
             return dict(self._claims)
-
-    @property
-    def tier(self) -> str:
-        # Callables run outside the lock: they may call into other modules.
-        return self._tierOf([c.commands for c in self.claims.values()])
-
-    def _tierOf(self, commands: List[bool]) -> str:
-        return "managed" if not self.isAnonymous and any(commands) else "observed"
 
     # Attachments
 
@@ -267,7 +259,6 @@ class Vehicle:
             {"provider": c.provider, "status": c.status, "commands": c.commands}
             for c in self.claims.values()
         ]
-        tier = self._tierOf([c["commands"] for c in claims])
         if self.isAnonymous:
             point = self.key[5:]
         else:
@@ -289,7 +280,6 @@ class Vehicle:
             "name": self.name,
             "anonymous": self.isAnonymous,
             "userAsserted": self.userAsserted,
-            "tier": tier,
             "claims": claims,
             "point": point,
             "lastSeen": lastSeen,

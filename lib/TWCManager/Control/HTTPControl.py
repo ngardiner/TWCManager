@@ -37,13 +37,56 @@ def ageText(seconds):
     return "%d d ago" % (seconds // 86400)
 
 
+SOURCE_NAMES = {
+    "TeslaMateVehicle": "TeslaMate",
+    "FleetTelemetryMQTT": "Fleet Telemetry",
+    "TeslaBLE": "BLE",
+    "TeslaAPI": "Tesla API",
+    "OwnerAPI": "Owner API",
+    "FleetAPI": "Fleet API",
+    "HomeAssistant": "Home Assistant",
+    "Gen2TWC": "TWC",
+    "Gen3TWC": "Gen3 Wall Connector",
+}
+
+
+def sourceName(raw):
+    # Display only: internal names, logs and settings keep the class names.
+    return SOURCE_NAMES.get(raw, raw)
+
+
+def providerLines(master, vehicle):
+    """One line per provider claim: its source, any informative status, and
+    whether it can command the car or only read it (and why not, if known)."""
+    api = master.getModuleByName("TeslaAPI")
+    lines = []
+    for name, claim in vehicle.claims.items():
+        can = claim.commands
+        why = None
+        if not can and api and name == "OwnerAPI":
+            why = api.ownerReadOnlyReason(vehicle.attachment("TeslaAPI"))
+        elif not can and api and name == "FleetAPI":
+            why = api.fleetReadOnlyReason()
+        cap = "commands" if can else "read-only" + (" (%s)" % why if why else "")
+        if claim.status in ("paired", "unproven") and can == (claim.status == "paired"):
+            cap = ""  # the status already says it
+        status = "" if claim.status == "listed" else claim.status
+        lines.append(
+            "%s: %s" % (sourceName(name), ", ".join(filter(None, (status, cap))))
+        )
+    return lines
+
+
 def heldLimitText(master, vehicle):
     # Held limits are keyed by VIN; TeslaAPI's listing adopts a legacy
     # numeric-ID entry under the VIN.
     limit = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
     if limit is None:
         return "\u2014"
-    return "%s%% (holding %s%%)" % (limit.outside, limit.held)
+    return "%s%% (car's own limit: %s%%, restored when released)" % (
+        limit.held,
+        limit.outside,
+    )
 
 
 def vehicleLocalMgmt(master, op, vin):
@@ -343,6 +386,10 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(ageText=ageText)
             self.templateEnv.globals.update(
                 heldLimitText=lambda v: heldLimitText(master, v)
+            )
+            self.templateEnv.globals.update(sourceName=sourceName)
+            self.templateEnv.globals.update(
+                providerLines=lambda v: providerLines(master, v)
             )
             self.templateEnv.globals.update(registry=master.vehicleRegistry)
             self.templateEnv.globals.update(

@@ -1,6 +1,7 @@
 from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 from TWCManager.Vehicle.Registry.Vehicle import Vehicle
 from TWCManager.Vehicle.Registry.Fields import NOT_TRACKED
+from tests.unit.vehicle_helpers import commands
 
 VIN = "5YJ3E1EA1KF000001"
 
@@ -21,28 +22,22 @@ def test_vin_format():
     assert not isWellFormedVIN("0" * 17)  # legacy placeholder (M9)
 
 
-def test_identity_and_tier_default_observed():
+def test_identity_default_has_no_claims():
     v = Vehicle(VIN, VIN, registry=None)
-    assert (v.key, v.vin, v.isAnonymous, v.tier) == (VIN, VIN, False, "observed")
+    assert (v.key, v.vin, v.isAnonymous, v.claims) == (VIN, VIN, False, {})
     a = Vehicle("anon:1234", None, registry=None)
-    assert a.isAnonymous and a.tier == "observed"
+    assert a.isAnonymous and a.claims == {}
 
 
 def test_commanding_claim_makes_managed_and_callable_is_live():
     flag = {"ro": True}
     v = Vehicle(VIN, VIN, registry=None)
     v.claim("TeslaAPI", lambda: not flag["ro"], "listed")
-    assert v.tier == "observed"
+    assert not commands(v)
     flag["ro"] = False
-    assert v.tier == "managed"
-    assert v.dropClaim("TeslaAPI") is True and v.tier == "observed"
+    assert commands(v)
+    assert v.dropClaim("TeslaAPI") is True and not commands(v)
     assert v.dropClaim("TeslaAPI") is False
-
-
-def test_anonymous_never_managed():
-    a = Vehicle("anon:1234", None, registry=None)
-    a.claim("TeslaBLE", True)
-    assert a.tier == "observed"
 
 
 def test_observe_bumps_last_seen_unless_told_not_to():
@@ -67,7 +62,7 @@ def test_attachments_and_summary():
     v.observe("batteryLevel", 42, "TeslaBLE")
     c.t = 1010.0
     s = v.summary()
-    assert s["tier"] == "managed" and s["claims"] == [
+    assert "tier" not in s and commands(v) and s["claims"] == [
         {"provider": "TeslaBLE", "status": "paired", "commands": True}
     ]
     assert s["fields"]["batteryLevel"] == {
@@ -130,11 +125,11 @@ def test_raising_claim_counts_as_false():
 
     v = Vehicle(VIN, VIN, registry=None)
     v.claim("TeslaAPI", boom)
-    assert v.tier == "observed"
+    assert not commands(v)
     assert v.summary()["claims"][0]["commands"] is False
 
 
-def test_summary_tier_from_single_claim_evaluation():
+def test_summary_evaluates_a_claim_once():
     calls = []
 
     def once():
@@ -145,7 +140,7 @@ def test_summary_tier_from_single_claim_evaluation():
     v.claim("TeslaAPI", once)
     s = v.summary()
     assert len(calls) == 1
-    assert s["tier"] == "managed" and s["claims"][0]["commands"] is True
+    assert "tier" not in s and s["claims"][0]["commands"] is True
 
 
 def test_summary_field_age_is_liveness_aware():
