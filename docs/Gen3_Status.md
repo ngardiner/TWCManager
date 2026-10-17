@@ -51,6 +51,7 @@ which returns `vehicle_connected`, `vehicle_current_a`, `grid_v`,
 | RS485 adapter | A **second** USB-to-RS485 adapter, separate from the one used for Gen2 slaves.  Connected to the Gen3's Neurio meter terminals. |
 | Serial wiring | 2-wire RS485 between the adapter and the Gen3's Neurio header |
 | Network | The Gen3 must be reachable by IP for vitals readback |
+| Tesla account (optional) | To name the car on each Gen3, the Gen3 must be registered in the Tesla app, and TWCManager needs a token that can read energy data (a Fleet API token with the `energy_device_data` scope) |
 
 > **Note:** The Gen3 has a single RS485 header (vs the pair on the Gen2).
 > This header is used for the Neurio meter, not for TWC load-sharing.
@@ -61,15 +62,46 @@ which returns `vehicle_connected`, `vehicle_current_a`, `grid_v`,
 ## Multiple Gen3 units
 
 Multiple Gen3 TWCs sharing the same Neurio RS485 bus are supported.
-Each unit polls the same fake Neurio server and reads the same house
-load.  The distributor allocates the **total** Gen3 target to the sum of
-all units; since each unit self-limits by the same headroom they
-naturally share it equally (assuming identical fuse ratings).
+Each unit is its own target, as a Gen2 TWC is: the distributor budgets
+each unit (and the car on it) separately.  All units still poll the same
+fake Neurio server and read the same house load, so TWCManager picks the
+one house load at which the units with a target together draw the sum of
+their targets.  A car that draws less than its headroom (for example, a
+full battery) frees that share for the other units.  Units with
+different fuse ratings can end up drawing differently from their own
+targets.
 
 In practice, a mixed Gen2+Gen3 deployment runs two RS485 buses:
 
 - **Bus 1** (`/dev/ttyUSB0`, 9600 baud) - Gen2 TWC RS485 master/slave
 - **Bus 2** (`/dev/ttyUSB1`, 115200 baud) - Neurio emulator for Gen3
+
+---
+
+## Which car is on a Gen3
+
+The vitals API cannot say which car is connected.  A connect starts an
+anonymous session, and TWCManager names the car by a free read of your
+energy site's `live_status`, which lists each Wall Connector by DIN with
+the VIN of the car on it.  This needs the Gen3 registered in the Tesla app
+and a token that can read energy data.  A unit's optional `din` key fixes
+a wrong DIN guess.  Until the energy site names the car, a single known
+car that has just reported being plugged in is taken as the one at the
+unit.  See [Controller_Gen3TWCs.md](modules/Controller_Gen3TWCs.md#which-car-is-connected)
+for the rules.
+
+---
+
+## How a car on a Gen3 is commanded
+
+- **Charge rate** - set only through the unit's headroom.  TWCManager sends
+  no charge-rate command to a car on a Gen3, over BLE or the cloud.
+- **Charge limit and wake** - handled like any other car, through the vehicle
+  providers in order: local (Bluetooth LE) first, then the cloud.  The
+  Vehicle Command Policy and `providerSuppressions` settings apply
+  (see [Settings.md](Settings.md)).
+- **Stopping one car** - not possible through the unit while another Gen3
+  has a car connected; see Limitations.
 
 ---
 
@@ -83,8 +115,21 @@ In practice, a mixed Gen2+Gen3 deployment runs two RS485 buses:
   house load.  The Gen3's own minimum (6 A) and maximum (circuit limit)
   still apply and override TWCManager's target if it falls outside that
   range.
-- **Single Neurio instance** - All Gen3 units on the bus share one power
-  figure.  Per-unit allocation is not possible with this approach.
+- **No individual stop on a shared bus** - All Gen3 units on the bus read
+  one house-load figure.  Stopping a unit means presenting zero headroom,
+  which is only possible when no other unit holds a target.  While more
+  than one unit has a car connected, the Gen3 reports that it cannot stop
+  one car individually (`NO_INDIVIDUAL_STOP`): zeroing one unit's target
+  leaves that car free to keep drawing up to the shared headroom, and a
+  stop for that car is carried out by the car's own providers (Bluetooth LE
+  or the cloud), never through the Gen3 unit.  With a single occupied unit
+  the stop works through zero headroom.
+- **Unit-tested only** - Gen3 support has not been verified on hardware.
+  Still unverified: that a zero headroom stops a unit, the shared headroom
+  across several units, the `live_status` wall connector list (and its VIN
+  while a car is connected), the DIN format (`<part_number>--<serial_number>`
+  from `/api/1/version`), and how soon the energy site stops reporting a car
+  that has left.
 
 ---
 
