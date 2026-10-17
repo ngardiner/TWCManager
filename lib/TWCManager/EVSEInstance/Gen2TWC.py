@@ -23,21 +23,12 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     # Heartbeat states in which a car is plugged in
     PLUGGED_STATES = (0x01, 0x03, 0x04, 0x05, 0x08, 0x09)
 
-    # Set by ChargingPoint.setTargetPower each pass: the point has a car
-    # member, which owns the car's amps; the heartbeat then writes none
-    pointOwnsAmps = False
-
     def __init__(self, TWCID, maxAmps, config, master):
         # Backing stores for properties that shadow TWCSlave class attributes.
         # These must be initialised before TWCSlave.__init__ runs so that any
         # property setter triggered during super().__init__ has somewhere to write.
         self._gen2_isCharging = 0
         self._gen2_currentVIN = ""
-
-        # Per-EVSE amps target set by distributeEVSEPower() (Phase 4).
-        # When not None, send_master_heartbeat() uses this value directly
-        # instead of recomputing the per-car fair share.
-        self._evseTargetAmps = None
 
         TWCSlave.__init__(self, TWCID, maxAmps, config, master)
 
@@ -164,7 +155,7 @@ class Gen2TWC(EVSEInstance, TWCSlave):
 
     def minAmpsToOffer(self):
         # The per-TWC minAmps override replaces minAmpsPerTWC for this TWC,
-        # never below what the TWC can start a car at. The heartbeat zeroes
+        # never below what the TWC can start a car at. offerFor zeroes
         # any offer below this while no car charges.
         override = self._rangeOverride("minAmps")
         if override is None:
@@ -172,13 +163,13 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         return max(override, self.minAmpsTWCSupports)
 
     def layerFloorAmps(self):
-        # Mode 3 hands the rate to the car below this: the heartbeat's
+        # Mode 3 hands the rate to the car below this: offerFor's
         # literal 6 A handoff, never below the TWC's own minimum
         return max(6, self.minAmpsToOffer())
 
     @property
     def minAmps(self) -> float:
-        # What the heartbeat will really send, so an idle TWC's minimum
+        # What offerFor will really offer, so an idle TWC's minimum
         # reaches the wire
         return self.minAmpsToOffer()
 
@@ -211,12 +202,6 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     # ------------------------------------------------------------------
 
     def setTargetPower(self, watts: float) -> None:
-        """Convert watts to amps and store as the centralized amps target.
-
-        Sets ``_evseTargetAmps`` which send_master_heartbeat() picks up in
-        place of the per-car fair-share calculation, giving the centralized
-        distributor full control over this slave's charge rate.
-        """
-        amps = self.convertWattsToAmps(watts, self.currentVoltage)
-        self._evseTargetAmps = amps
-        self.lastAmpsDesired = amps  # kept for compatibility / logging
+        # The distributor's target in amps; the control tick makes the
+        # offer from it (TWCSlave.offerFor)
+        self.pointAmps = self.convertWattsToAmps(watts, self.currentVoltage)

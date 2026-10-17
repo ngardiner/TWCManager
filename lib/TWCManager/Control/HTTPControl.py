@@ -2020,16 +2020,6 @@ def CreateHTTPHandlerClass(master):
                     with master.settingsLock:
                         master.settings["enableDebugCommands"] = 0
 
-            if page == "debug":
-                checkboxes = [
-                    "spikeAmpsProactively",
-                    "spikeAmpsReactively",
-                ]
-                for checkbox in checkboxes:
-                    if checkbox not in self.fields:
-                        with master.settingsLock:
-                            master.settings[checkbox] = 0
-
             # Save Settings
             master.queue_background_task({"cmd": "saveSettings"})
 

@@ -18,7 +18,7 @@ def ep(ID, key=None, local=False, minW=1200, maxW=7680, wants=True, ro=False, oc
     e = MagicMock(); e.ID = ID; e.vehicleKey = key; e.isLocal = local; e.minPower = minW; e.maxPower = maxW
     e.wantsToCharge = wants; e.isReadOnly = ro; e.occupied = occupied; e.currentAmps = amps; e.currentVoltage = [240, 0, 0]
     e.currentVIN = key if key and not key.startswith("anon:") else ""; e.controllers = ["Gen2TWCs" if local else "VehicleEndpoints"]
-    if local: del e.pointOwnsAmps                                                  # a local member that does not layer (as a Gen3 unit)
+    if local: del e.pointAmps                                                      # a local member that does not layer (as a Gen3 unit)
     return e
 
 def test_grouping_is_by_vehicle_key_and_merge_count_may_be_one():
@@ -156,10 +156,10 @@ def test_stopped_car_and_its_endpoint_form_one_point_with_the_twc_minimum():    
     assert pt.minPower == s.minPower == 6 * 240
     m.distributeEVSEPower()
     # The TWC decides (M1): reporting no demand, it gets its idle offer, 0 (the TWC's hardware minimum)...
-    assert s._evseTargetAmps == 0 and setAmps(m) == []
+    assert s.pointAmps == 0 and setAmps(m) == []
     s.reportedAmpsActual = 5.5                                                   # ...the paused car takes it...
     m.distributeEVSEPower()
-    assert s._evseTargetAmps == 32 and setAmps(m) == []                         # ...and the full share follows
+    assert s.pointAmps == 32 and setAmps(m) == []                         # ...and the full share follows
 
 def test_lower_case_vin_on_the_twc_groups_with_the_endpoint():                     # 2
     m = real(); s = stoppedTwc(m, VIN.lower()); car(m, VIN, "Stopped")
@@ -170,27 +170,27 @@ def test_lower_case_vin_on_the_twc_groups_with_the_endpoint():                  
 def test_mode_1_budget_below_the_twc_floor_offers_zero_and_no_fleet_send():        # 3
     m = real(mode=1); s = stoppedTwc(m); car(m, VIN, "Stopped"); budget(m, 5)   # 1200 W: the car's 5 A, under the TWC's 6 A
     m.distributeEVSEPower()
-    assert s._evseTargetAmps == 0 and setAmps(m) == []
+    assert s.pointAmps == 0 and setAmps(m) == []
 
 def test_mode_2_named_twc_holds_the_target_and_the_car_carries_the_rate():        # 4 (slim Task 12b; final review I1)
     m = real(mode=2); s = m.newSlave(b"\x82\x44", 80); s.currentVIN = VIN; s.reportedAmpsMax = 32; car(m, VIN, "Charging"); budget(m, 20)
     assert m.modules["VehicleEndpoints"]["ref"].allEVSEs[0].provider == "FleetAPI"   # mode 2: the endpoint is writable over Fleet
     m.distributeEVSEPower()
-    assert setAmps(m) == [{"vin": VIN, "amps": 20}] and s._evseTargetAmps == 20 and s.pointOwnsAmps
+    assert setAmps(m) == [{"vin": VIN, "amps": 20}] and s.pointAmps == 20
     s.receive_slave_heartbeat(bytearray([0x01, 0x0C, 0x80, 0x03, 0xE8, 0x00, 0x00]))   # charging, 32 A max, 10 A actual
     assert m.desired.get(VIN, AMPS).by == "distributor"                         # one writer: the heartbeat writes no rate
 
 def test_twc_point_sets_the_twc_target_and_never_the_endpoint():                   # 5
     m = real(); s = stoppedTwc(m); car(m, VIN, "Stopped"); budget(m, 20); e = endpoint(m, VIN)
     s.reportedAmpsMax = 20                                                       # the TWC echoes its offer: it wants power
-    m.distributeEVSEPower(); assert s._evseTargetAmps == 20                     # water-fill
+    m.distributeEVSEPower(); assert s.pointAmps == 20                     # water-fill
     s.reportedAmpsMax = 0
     m.vehicleRegistry.get(VIN).observe("chargingState", "Complete", "OwnerAPI")
-    m.distributeEVSEPower(); assert s._evseTargetAmps == 0                      # nobody wants power: the idle offer
+    m.distributeEVSEPower(); assert s.pointAmps == 0                      # nobody wants power: the idle offer
     car(m, VIN2, "Charging"); budget(m, 32)
-    m.distributeEVSEPower(); assert s._evseTargetAmps == 0                      # zero-out: VIN2 takes all 32 A
+    m.distributeEVSEPower(); assert s.pointAmps == 0                      # zero-out: VIN2 takes all 32 A
     budget(m, 40)
-    m.distributeEVSEPower(); assert s._evseTargetAmps == 0                      # zero-out loop with room: the idle offer
+    m.distributeEVSEPower(); assert s.pointAmps == 0                      # zero-out loop with room: the idle offer
     assert all(c.args[0] == 0 for c in e.setTargetPower.call_args_list)      # the car never gets a rate (a 0 withdraws one)
     assert [a["vin"] for a in setAmps(m)] == [VIN2]
 
@@ -199,7 +199,7 @@ def test_car_on_no_twc_is_its_own_point_and_queues_amps():                      
     car(m, VIN2, "Charging"); car(m, VIN, "Charging"); budget(m, 40)
     assert sorted(p.ID for p in m.chargingPoints()) == ["Point-" + VIN, "Point-" + VIN2]
     m.distributeEVSEPower()
-    assert setAmps(m) == [{"vin": VIN, "amps": 20}] and s._evseTargetAmps == 20
+    assert setAmps(m) == [{"vin": VIN, "amps": 20}] and s.pointAmps == 20
 
 @pytest.mark.parametrize("mode", [1, 2, 3])
 def test_correlated_gen3_car_joins_the_gen3_point_and_queues_no_amps(mode):         # 7; the unit's target feeds one shared headroom
@@ -214,7 +214,7 @@ def test_gen2_at_00_with_a_sleeping_car_is_two_points_as_before_task_10():      
     m = real(); s = m.newSlave(b"\x82\x44", 80); car(m, VIN, "Stopped"); budget(m, 40)
     assert s.vehicleKey is None and [p.ID for p in m.chargingPoints()] == ["Point-Gen2TWC-8244", "Point-" + VIN]
     m.distributeEVSEPower()
-    assert [a["vin"] for a in setAmps(m)] == [VIN] and s._evseTargetAmps == 0
+    assert [a["vin"] for a in setAmps(m)] == [VIN] and s.pointAmps == 0
 
 # Fix round 1 (review I1): a stale Gen2 lastVIN must not put two TWCs in one point
 
@@ -233,7 +233,7 @@ def test_two_twcs_claiming_one_car_stay_separate_points_within_budget():
         assert sorted(p.ID for p in m.chargingPoints()) == ["Point-" + VIN, "Point-Gen2TWC-8245"]
         assert len(pointsHolding(m, VIN)) == 1
         for _ in range(3): m.distributeEVSEPower()
-        assert s1._evseTargetAmps + s2._evseTargetAmps <= 40 and setAmps(m) == []
+        assert s1.pointAmps + s2.pointAmps <= 40 and setAmps(m) == []
 
 def test_twc_offers_never_exceed_the_budget_or_wiring_across_point_shapes():
     def serving(s, vin): s.currentVIN = vin; s.reportedState = 0x01; s.reportedAmpsMax = 32
@@ -249,7 +249,7 @@ def test_twc_offers_never_exceed_the_budget_or_wiring_across_point_shapes():
             m = real(); car(m, VIN, "Charging"); car(m, VIN2, "Stopped"); budget(m, amps)
             for i, (make, vin) in enumerate(shape): make(m.newSlave(bytes([0x82, 0x44 + i]), 80), vin)
             for _ in range(2): m.distributeEVSEPower()
-            offers = [s._evseTargetAmps for s in twcs(m)]
+            offers = [s.pointAmps for s in twcs(m)]
             assert sum(offers) <= min(amps, CONFIG["config"]["wiringMaxAmpsAllTWCs"]) + 1e-9, (shape, amps, offers)
             claimed = {v.upper() for _, v in shape if v}                                   # a car on no TWC still queues its own amps
             assert not [a for a in setAmps(m) if a["vin"] in claimed] and all(len(pointsHolding(m, v)) <= 1 for v in (VIN, VIN2))
@@ -266,23 +266,23 @@ def asleepUnderSixAmps(m, twcVolts, carMax=None):
 
 def test_a_car_read_under_the_sleep_pilot_still_gets_the_share():
     m = real(); s = asleepUnderSixAmps(m, 243)
-    m.distributeEVSEPower(); assert s._evseTargetAmps == pytest.approx(48 * 240 / 243)
+    m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(48 * 240 / 243)
     m.vehicleRegistry.get(VIN).observe("chargeCurrentRequestMax", 32, "TeslaBLE")    # the car's own maximum binds
-    m.distributeEVSEPower(); assert s._evseTargetAmps == pytest.approx(32)
+    m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(32)
 
 def test_members_are_compared_at_the_points_voltage():
     # A car whose own maximum is the TWC's minimum, priced at 240 V against the TWC's measured volts
     for volts in (240, 241, 243):
         m = real(); s = asleepUnderSixAmps(m, volts, carMax=6)
         (pt,) = m.chargingPoints(); assert pt.maxPower == pt.minPower == 6 * volts
-        m.distributeEVSEPower(); assert s._evseTargetAmps == pytest.approx(6), volts
+        m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(6), volts
 
 def refusalsLogged(caplog, carMax=None, amps=48, wiring=48):
     TWCMaster._refusedPointLogged.clear(); caplog.clear()
     m = real(); s = asleepUnderSixAmps(m, 243, carMax); m.config["config"]["wiringMaxAmpsAllTWCs"] = wiring; budget(m, amps)
     with caplog.at_level(logging.INFO):
         for _ in range(3): m.distributeEVSEPower()
-    assert s._evseTargetAmps == 0
+    assert s.pointAmps == 0
     return [r.getMessage() for r in caplog.records if "its limits leave it none" in r.getMessage()]
 
 def test_a_named_plugged_car_refused_by_its_point_is_logged_once(caplog):

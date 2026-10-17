@@ -68,4 +68,4 @@ def test_policy_amps_reach_the_twc_unchanged():
     e = _evse()
     e.setTargetPower.side_effect = twc.setTargetPower
     _master([e], 16, [twc], THREE_PHASE_400).distributeEVSEPower()
-    assert twc._evseTargetAmps == 16
+    assert twc.pointAmps == 16

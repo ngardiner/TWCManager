@@ -1207,18 +1207,6 @@ while True:
                         % (maxAmps, senderID[0], senderID[1], hex_str(sign))
                     )
 
-                    if maxAmps >= 80:
-                        # U.S. chargers need a spike to 21A to cancel a 6A
-                        # charging limit imposed in an Oct 2017 Tesla car
-                        # firmware update. See notes where
-                        # spikeAmpsToCancel6ALimit is used.
-                        master.setSpikeAmps(21)
-                    else:
-                        # EU chargers need a spike to only 16A.  This value
-                        # comes from a forum post and has not been directly
-                        # tested.
-                        master.setSpikeAmps(16)
-
                     if senderID == fakeTWCID:
                         logger.info(
                             "Slave TWC %02X%02X reports same TWCID as master.  "

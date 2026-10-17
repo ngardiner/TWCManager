@@ -35,7 +35,7 @@ Examples of the configuration of these protocols:
 
 ## Per-TWC amps range
 
-By default every slave TWC is offered between minAmpsPerTWC (never less than the TWC itself supports) and its wiring maximum. The distributor gives an idle TWC a target of 0 and counts nothing against the budget. On the wire the TWC is offered 0 when no car is charging (a Gen2 treats 0 as its hardware minimum); when another car is charging and there is at least minAmpsPerTWC of power per car, it is offered its hardware minimum (usually 6 A), so it can see a car plug in. Brief overshoot is fine: the configured limit is already the 80% continuous rating and the next cycle rebalances. A charging TWC whose share would fall below its minimum is stopped (offered 0). To set a different range for one TWC, add `controller.Gen2TWCs` to config.json:
+By default every slave TWC is offered between minAmpsPerTWC (never less than the TWC itself supports) and its wiring maximum. The distributor gives an idle TWC a target of 0 and counts nothing against the budget. On every control tick (about once a second) the TWC is offered 0 when no car is charging (a Gen2 treats 0 as its hardware minimum); when another car is charging and there is at least minAmpsPerTWC of power per car, it is offered its hardware minimum (usually 6 A), so it can see a car plug in. Brief overshoot is fine: the configured limit is already the 80% continuous rating and the next cycle rebalances. A charging TWC whose share would fall below its minimum is stopped (offered 0). To set a different range for one TWC, add `controller.Gen2TWCs` to config.json:
 
 ```json
 "controller.Gen2TWCs": {
