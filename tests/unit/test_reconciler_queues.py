@@ -23,7 +23,10 @@ def one_shot(cap, provider="TeslaBLE"):
 
 def reconciler(*providers):
     Run._badReturns.clear()      # warn-once state is per process
-    m, o = make_order({}, *providers); m.providerOrder = o; m.vehicleRegistry.getOrCreate(VIN, "t")
+    m, o = make_order({}, *providers); m.providerOrder = o
+    # A known current limit (any channel): no limit is sent without one. An
+    # hour old, so a write with a maxAge still reads first
+    m.vehicleRegistry.getOrCreate(VIN, "t").observe("chargeLimit", 90, "TeslaMateVehicle", at=time.time() - 3600)
     m.desired = DesiredStore(); m.heldLimits.get.return_value = None
     m.reconciler = r = VehicleReconciler(m); return m, r
 

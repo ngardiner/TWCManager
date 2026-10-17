@@ -475,10 +475,6 @@ class VehicleReconciler(threading.Thread):
             attempt.restore,
             believed.value if believed is not None else None,
             self._held(vehicle),
-            # A free provider always sends, so a free channel that cannot
-            # reach the car fails a real request and starts the paid
-            # fallback timer; a paid one never sends blind
-            sendWhenUnknown=_tier(provider, attempt.capability) < TIER_BILLED,
         )
         if decision.saveNow is not None:
             self._save(vehicle, *decision.saveNow)

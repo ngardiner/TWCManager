@@ -71,12 +71,12 @@ def test_held_limit_reads_the_vin_store_after_adoption():
     m = master()
     vin2 = "5YJ3E1EA1KF000002"
     v2 = m.vehicleRegistry.getOrCreate(vin2, "TeslaAPI")
-    m.settings["chargeLimits"] = {"42": [85, -1]}
+    m.settings["chargeLimits"]["42"] = [85, 60]
     m.heldLimits.load()
     # a legacy numeric-ID entry shows once a vehicle list resolves it
     assert heldLimitText(m, v2) == "—"
     m.heldLimits.resolveLegacyIds({42: vin2})
-    assert heldLimitText(m, v2) == "85% (restored)"
+    assert heldLimitText(m, v2) == "85% (holding 60%)"
     assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "90% (holding 80%)"
     m.heldLimits.remove(VIN)
     assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "—"

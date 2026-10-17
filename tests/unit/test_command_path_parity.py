@@ -564,9 +564,8 @@ def test_telemetry_limit_change_is_adopted(requests_mock):
         r, c, 3600, step=30, each=lambda: m.setPolicyLimit(50, transition=False)
     )  # the policy re-enforces every pass
     assert len(b.runs) == 1 and m.desired.get(VIN, CHARGE_LIMIT).value == 80
-    assert (
-        m.heldLimits.get(VIN) == HeldLimit(80, None) and requests_mock.call_count == 0
-    )
+    # adopted: nothing held, so no entry
+    assert m.heldLimits.get(VIN) is None and requests_mock.call_count == 0
 
 
 # Row 8: BLE + Fleet; the app starts a car the heartbeat stopped

@@ -92,11 +92,11 @@ def listing(*cars):
     return json.dumps({"count": len(cars), "response": [{"id": i, "vin": v, "display_name": None} for i, v in cars]})
 
 def test_legacy_ids_resolve_once_from_the_first_vehicle_list(requests_mock, caplog):
-    api, m = legacyApi({"chargeLimits": {VIN: [80, -1], "11": [90, 50], "22": 85, "33": [70, 60]},
-                        "heldLimits": {"id:44": {"outside": 75, "held": None}, VIN4: {"outside": 66, "held": None}}},
-                       owner_token(), fleet_token())
-    assert m.heldLimits.get(VIN) == HeldLimit(80, None)                       # VIN keys at load
-    assert m.settings["chargeLimits"] == {"11": [90, 50], "22": 85, "33": [70, 60]} and m.heldLimits.waiting()
+    saved = {VIN: [80, 50], "11": [90, 50], "22": [85, 55], "33": [70, 60], "44": [75, 60], VIN4: [66, 55], "55": 80}
+    api, m = legacyApi({"chargeLimits": dict(saved)}, owner_token(), fleet_token())
+    assert m.heldLimits.get(VIN) == HeldLimit(80, 50)                         # VIN keys at load
+    del saved["55"]                                                           # holds nothing: no entry, no warning
+    assert m.settings["chargeLimits"] == saved and m.heldLimits.waiting()     # the IDs wait where they were
     owner = requests_mock.get(OWNER_API_URL[:-8] + "products", text=listing((11, VIN2), (33, VIN4)))
     fleet = requests_mock.get(FLEET_NA_URL, text=listing((22, VIN3)))           # Owner and Fleet: different accounts
     m.tasks.clear()
@@ -104,9 +104,8 @@ def test_legacy_ids_resolve_once_from_the_first_vehicle_list(requests_mock, capl
     with caplog.at_level(1), caplog.at_level(1, logger=teslaapi.logger.name):    # every level: INFO8/DEBUG lines too
         assert api.loadVehicleList() is True
     assert (owner.call_count, fleet.call_count) == (1, 1)
-    assert m.settings["heldLimits"] == {VIN: {"outside": 80, "held": None}, VIN2: {"outside": 90, "held": 50},
-                                        VIN3: {"outside": 85, "held": None}, VIN4: {"outside": 66, "held": None}}   # the store's own VIN4 wins
-    assert "chargeLimits" not in m.settings and not m.heldLimits.waiting() and m.tasks == [{"cmd": "saveSettings"}]
+    assert m.settings["chargeLimits"] == {VIN: [80, 50], VIN2: [90, 50], VIN3: [85, 55], VIN4: [66, 55]}   # the loaded VIN4 wins
+    assert not m.heldLimits.waiting() and m.tasks == [{"cmd": "saveSettings"}]
     warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warned) == 1 and "44" in warned[0] and "75%" in warned[0]       # unmatched: dropped, one warning naming the ID and its limit
     assert any("33" in r.getMessage() and "70%" in r.getMessage() and VIN4 in r.getMessage() for r in caplog.records if r.levelno == logging.INFO)   # the discard is logged (M5)
@@ -123,15 +122,15 @@ def test_a_failed_second_list_defers_the_drop(requests_mock):
     api, m = legacyApi({"chargeLimits": {"11": [90, 50]}}, owner_token(), fleet_token())
     requests_mock.get(OWNER_API_URL[:-8] + "products", text=listing((12, VIN2)))
     requests_mock.get(FLEET_NA_URL, status_code=500, text="{}")
-    assert api.loadVehicleList() is True and m.heldLimits.waiting() and "chargeLimits" in m.settings
+    assert api.loadVehicleList() is True and m.heldLimits.waiting() and "11" in m.settings["chargeLimits"]
     requests_mock.get(FLEET_NA_URL, text=listing((11, VIN3)))                  # the next checkCharge retries: free calls only
-    api.updateChargeAtHome(); assert m.heldLimits.get(VIN3) == HeldLimit(90, 50) and "chargeLimits" not in m.settings
+    api.updateChargeAtHome(); assert m.heldLimits.get(VIN3) == HeldLimit(90, 50) and m.settings["chargeLimits"] == {VIN3: [90, 50]}
     assert [q.method for q in requests_mock.request_history] == ["GET"] * 4
 
 def test_an_unresolved_id_survives_a_restart():
-    settings = {"chargeLimits": {VIN: [80, -1], "11": [90, 50]}}
+    settings = {"chargeLimits": {VIN: [80, 60], "11": [90, 50]}}
     api, m = legacyApi(settings); saved = json.loads(json.dumps(m.settings))
-    api2, m2 = legacyApi(saved); assert m2.heldLimits.waiting() and m2.heldLimits.get(VIN) == HeldLimit(80, None)
+    api2, m2 = legacyApi(saved); assert m2.heldLimits.waiting() and m2.heldLimits.get(VIN) == HeldLimit(80, 60)
 
 def test_vehicle_list_loads_without_any_legacy_command(requests_mock):       # C1, paid counted
     master = FakeMaster(); master.vehicleRegistry = VehicleRegistry({}); api = new_api(master=master); api.storeToken(fleet_token())
@@ -149,9 +148,23 @@ def test_rules_need_no_sentinel():
     assert re.findall(r"-1(?!\d)|lastApplied", source) == []
     from tests.unit.test_charge_limit_rules import CASES, call
     for case in CASES:                                                         # the ported table is the oracle
-        _, limit, current, saved, unknown, send, saveNow, saveOnSuccess, settled = case
-        d = call(limit, current, saved, unknown)
+        _, limit, current, saved, send, saveNow, saveOnSuccess, settled = case
+        d = call(limit, current, saved)
         assert (d.send, d.saveNow, d.saveOnSuccess, d.settled) == (send, saveNow, saveOnSuccess, settled), case[0]
+
+def test_forgetting_a_vehicle_drops_its_held_limit():                         # forgotten means forgotten
+    m, s = make(); m.vehicleRegistry.getOrCreate(VIN, "t"); m.heldLimits.set(VIN, 90, 50); m.heldLimits.set(VIN2, 80, 60)
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.vehicleRegistry.forget(VIN)
+    assert m.settings["chargeLimits"] == {VIN2: [80, 60]} and m.desired.peek(VIN) is None
+
+def test_ble_never_sets_a_limit_it_cannot_read_but_another_channel_s_reading_will_do():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); b = prov(m, "TeslaBLE")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
+    assert b.calls == [] and VIN not in m.settings.get("chargeLimits", {})   # no source knows the limit: nothing sent
+    for _ in range(3): c.t += 3600; r.pass_()
+    assert b.calls == []                                                     # still nothing, however often it retries
+    c.t += 3600; v.observe("chargeLimit", 90, "TeslaMateVehicle"); r.pass_()
+    assert b.calls == [("setChargeLimit", VIN, 50)] and m.heldLimits.get(VIN) == HeldLimit(90, 50)
 
 def test_a_satisfied_restore_removes_the_held_record():                    # ledger c6
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 90, "TeslaBLE")

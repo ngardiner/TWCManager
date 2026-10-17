@@ -39,7 +39,7 @@ def test_app_set_limit_is_adopted_and_becomes_outside():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); v.observe("chargeLimit", 90, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
     c.t += 10; v.observe("chargeLimit", 80, "TeslaMateVehicle")
     assert r.pass_() == 0 and m.desired.get(VIN, CHARGE_LIMIT).value == 80 and m.desired.get(VIN, CHARGE_LIMIT).adopted
-    assert m.heldLimits.get(VIN) == HeldLimit(80, None) and len(prov(m, "TeslaBLE").calls) == 1
+    assert m.heldLimits.get(VIN) is None and len(prov(m, "TeslaBLE").calls) == 1   # adopted: nothing held, no entry
     for _ in range(3): assert r.pass_() == 0                                  # adopted once: the read is not newer than the adoption
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); assert r.pass_() == 0                     # not undone until a decision
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy", decision=True); assert r.pass_() == 1 and m.heldLimits.get(VIN) == HeldLimit(80, 50)
@@ -47,7 +47,9 @@ def test_app_set_limit_is_adopted_and_becomes_outside():
 def test_adopted_float_is_saved_as_an_int():                                 # ledger L26
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); v.observe("chargeLimit", 90, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
     c.t += 10; v.observe("chargeLimit", 80.0, "HomeAssistant"); assert r.pass_() == 0
-    assert m.heldLimits.get(VIN) == HeldLimit(80, None) and type(m.settings["heldLimits"][VIN]["outside"]) is int
+    assert m.heldLimits.get(VIN) is None and VIN not in m.settings["chargeLimits"]   # adopted: nothing held
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy", decision=True); r.pass_()
+    assert m.settings["chargeLimits"][VIN] == [80, 50] and type(m.settings["chargeLimits"][VIN][0]) is int
 
 def test_a_confirming_read_is_not_adopted_when_desired_changes():
     m, r, v, c = setup(ble(O.Outcome(O.DONE), O.Outcome(O.DONE))); v.observe("chargeLimit", 90, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
@@ -67,7 +69,8 @@ def test_no_wake_to_lower_wake_to_raise_never_for_a_restore():
     c.t += 400; v.observe("chargeLimit", 50, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 70, "policy", decision=True); r.pass_()
     assert names(p)[1:] == ["wake", "setChargeLimit"]
     c.t += 400; v.observe("chargeLimit", 70, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", decision=True, restore=True); r.pass_()
-    assert names(p)[3:] == ["setChargeLimit"] and m.heldLimits.get(VIN) == HeldLimit(90, None)   # a restore raises without a wake
+    assert names(p)[3:] == ["setChargeLimit"] and m.heldLimits.get(VIN) is None   # a restore raises without a wake
+    assert VIN not in m.settings["chargeLimits"]                             # restored: nothing held, no entry
 
 def test_fleet_waits_for_ble_to_time_out_and_is_sent_once():                # Review Focus 1, paid counted
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); v.observe("chargeLimit", 90, "TeslaAPI")
@@ -86,6 +89,7 @@ def test_ble_only_install_keeps_retrying_ble_at_the_retry_cadence():
 
 def test_restore_to_an_absent_car_retries_hourly_and_never_wakes():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE))); b = prov(m, "TeslaBLE"); m.heldLimits.set(VIN, 90, 50)
+    v.observe("chargeLimit", 50, "TeslaMateVehicle")                            # the last known limit, from another channel
     m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True); r.pass_()
     assert [x[0] for x in b.calls] == ["setChargeLimit"]; c.t += 3599; r.pass_(); assert len(b.calls) == 1
     c.t += 1; r.pass_(); assert len(b.calls) == 2 and not any(x[0] == "wake" for x in b.calls)
@@ -129,10 +133,11 @@ def test_unknown_ble_output_is_a_retryable_failure():                       # le
     c.t += RETRY[CHARGE_LIMIT]; r.pass_(); assert len(prov(m, "TeslaBLE").calls) == 2
 
 def test_a_free_channel_that_cannot_reach_the_car_still_starts_the_paid_timer():   # carry (d), paid counted
-    # A free provider with no read of the limit sends anyway (never a rules
-    # UNREACHABLE), so its real failure marks the channel
+    # A free provider sends with the limit known from another channel, so its
+    # real failure marks the channel
     free = ScriptedProvider("FreeCloud", 4, False, [O.Outcome(O.UNREACHABLE)], tier=C.CLOUD_FREE)
     m, r, v, c = setup(free, fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI")
+    v.observe("chargeLimit", 90, "TeslaMateVehicle")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
     assert free.calls == [("setChargeLimit", VIN, 50)] and m.desired.free(VIN).failingSince == 1000.0 and f.calls == []
     c.t += PAID_AFTER[CHARGE_LIMIT] - 1; v.observe("chargeLimit", 90, "TeslaAPI"); r.pass_(); assert f.calls == []
@@ -140,8 +145,8 @@ def test_a_free_channel_that_cannot_reach_the_car_still_starts_the_paid_timer():
     for _ in range(10): c.t += 600; r.pass_()
     assert len(cmds(f)) == 1
     a = Attempt(VIN, CHARGE_LIMIT, C.SET_CHARGE_LIMIT, 60, "FreeCloud", False, None, False, c())
-    assert r.beforeWrite(v, a, free, None) == (60, None)                     # unknown limit: free sends
-    assert r.beforeWrite(v, a._replace(provider="FleetAPI"), f, None)[1].kind == O.UNREACHABLE   # paid never sends blind
+    assert r.beforeWrite(v, a, free, None)[1].kind == O.UNREACHABLE         # unknown limit: free never sends blind
+    assert r.beforeWrite(v, a._replace(provider="FleetAPI"), f, None)[1].kind == O.UNREACHABLE   # nor paid
 
 def test_failed_paid_call_retries_once_then_waits_for_a_newer_reading_or_a_new_value():   # Review Focus 2, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "500"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "TeslaAPI")
@@ -249,7 +254,7 @@ def test_a_rules_settled_restore_clears_the_desire_and_does_not_loop():
     m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 80, "TeslaBLE")   # hand-set before a restart: no write stamp
     m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
     assert r.pass_() == 1 and prov(m, "TeslaBLE").calls == [] and m.desired.get(VIN, CHARGE_LIMIT) is None
-    assert m.heldLimits.get(VIN) == HeldLimit(80, None)
+    assert m.heldLimits.get(VIN) is None                                      # hand-set limit stands: nothing held
     for _ in range(5): assert r.pass_() == 0                                                   # real clock, no busy loop
 
 def test_a_satisfied_outcome_without_a_stamp_is_not_resent_until_new_evidence():   # N1, paid repeat counted

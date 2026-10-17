@@ -2,7 +2,7 @@
 # decideChargeLimit is pure: no I/O, no master. The reconciler's beforeWrite
 # runs it on the worker after the read, then saves, sends or settles as it
 # says. The saved record is a HeldLimit (HeldLimits.py): None is nothing
-# saved, held None is "we hold none".
+# held; a save with held None removes the record.
 from typing import NamedTuple, Optional
 
 from .Desired import CHARGE_LIMIT, CHARGING
@@ -49,17 +49,15 @@ def _clamped(limit):
 
 
 def decideChargeLimit(
-    desired, restore: bool, current, held: Optional[HeldLimit], sendWhenUnknown=False
+    desired, restore: bool, current, held: Optional[HeldLimit]
 ) -> ChargeLimitDecision:
     """Decide how to apply `desired` (50-100), or with restore=True how to
     put back the normal limit.
 
-    current: the car's limit now, or None if it could not be read.
+    current: the car's limit now, from any source, or None if no source
+        knows it: then nothing is sent, by any provider, and nothing is
+        decided (the reconciler retries).
     held: the HeldLimit saved for the car, or None.
-    sendWhenUnknown: what an unknown current limit means. False (a cloud
-        provider): don't risk changing a limit we cannot see; nothing is
-        decided. True (a free provider): send anyway, keeping any saved
-        normal limit.
 
     The rules, with the current limit known:
     - We hold no limit (nothing saved, or held None): the car's limit is
@@ -74,7 +72,7 @@ def decideChargeLimit(
     ours = held.held if held is not None else None
     target = None if restore else _clamped(desired)
 
-    if current is None and not sendWhenUnknown:
+    if current is None:
         return ChargeLimitDecision(
             None, None, None, False, "could not read the current limit; nothing sent"
         )
@@ -82,23 +80,6 @@ def decideChargeLimit(
     if restore and held is None:
         return ChargeLimitDecision(
             None, None, None, True, "no saved normal limit; nothing to restore"
-        )
-
-    if current is None:
-        if restore:
-            return ChargeLimitDecision(
-                outside,
-                None,
-                HeldLimit(outside, None),
-                False,
-                "restore to %s%% (current limit unknown)" % outside,
-            )
-        return ChargeLimitDecision(
-            target,
-            None,
-            HeldLimit(target if held is None else outside, target),
-            False,
-            "set %s%% (current limit unknown)" % target,
         )
 
     handSet = ours is not None and current != ours

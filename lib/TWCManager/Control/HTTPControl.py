@@ -43,8 +43,6 @@ def heldLimitText(master, vehicle):
     limit = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
     if limit is None:
         return "\u2014"
-    if limit.held is None:
-        return "%s%% (restored)" % limit.outside
     return "%s%% (holding %s%%)" % (limit.outside, limit.held)
 
 
