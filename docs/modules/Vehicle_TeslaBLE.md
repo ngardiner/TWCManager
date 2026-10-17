@@ -70,8 +70,8 @@ BLE being a local wireless technology introduces a number of considerations. The
 
 * *I tried to use the ```teslaControlPath``` setting to call a script which then goes on to call tesla-control. After a period of time, TWCManager background tasks seem to get stuck. Why?
 
-The tesla-control CLI interface has a number of failure cases in which it will hang indefinitely. We work around this by terminating the process after 10 seconds of inactivity, however this does not kill the entire process tree. If you are running the command through some sort of wrapper, it will become zombified whilst the tesla-control command will remain.
+The tesla-control CLI interface has a number of failure cases in which it will hang indefinitely. We work around this by terminating the process after 15 seconds of inactivity (the `commandTimeout` setting), however this does not kill the entire process tree. If you are running the command through some sort of wrapper, it will become zombified whilst the tesla-control command will remain.
 
-If you are attempting to wrap the tesla-control command and want to confirm that this is the issue, perform a ``ps aux | grep tesla-control``` and look for a process which was spawned more than 10 seconds ago.
+If you are attempting to wrap the tesla-control command and want to confirm that this is the issue, perform a ``ps aux | grep tesla-control``` and look for a process which was spawned more than 15 seconds ago.
 
-You can work around this with a similar timeout in the wrapper script, eg ```timeout 9 tesla-control $@```
+You can work around this with a similar timeout in the wrapper script, eg ```timeout 14 tesla-control $@```
