@@ -392,3 +392,23 @@ def test_a_twc_with_no_car_key_rates_and_lifts_nothing():  # was TestVehicleChar
         assert s.vehicleKey is None
         m.controlPass()
         assert s.offer.amps > 0 and m.desired.keys() == [] and not s.vehicleRateRaised
+
+
+# The start/stop gates run on the tick
+
+
+def test_the_heartbeat_decides_no_charging():
+    src = inspect.getsource(TWCSlave.send_master_heartbeat)
+    for gone in ("CarsCharging", "StartCharging"):
+        assert gone not in src, gone
+
+
+def test_no_gate_acts_before_the_first_offer():
+    # A reply alone decides nothing: the gates wait for the tick's offer
+    m = pureGen2(feed=40, slaves=0)
+    m.withdrawStartCharging = Mock()
+    s = charging(m, actual=0.0)
+    s.protocolVersion, s.currentVIN = 2, VIN
+    assert s.offer is None and s.chargeGate(time.time()) is None
+    s.send_master_heartbeat()
+    assert not m.withdrawStartCharging.called
