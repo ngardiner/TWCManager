@@ -306,14 +306,12 @@ def wakeUps(requests_mock):
     return sum(q.url.endswith("/wake_up") for q in requests_mock.request_history)
 
 
-def offlineWake(requests_mock, m, r, c, want, seconds=1800, online=59):
+def offlineWake(requests_mock, m, r, c, want, seconds=1800, online=59, api=FLEET):
     # Runs want() every pass for seconds; wake_up answers offline and the car
     # comes online online s after it. Returns {"wake": t, "online": t, "sent":
     # t}: the wake, the car online, the first command
-    car = FleetCar(requests_mock, limit=50)
-    requests_mock.post(
-        FLEET + VIN + "/wake_up", json={"response": {"state": "offline"}}
-    )
+    car = FleetCar(requests_mock, limit=50, api=api)
+    requests_mock.post(api + VIN + "/wake_up", json={"response": {"state": "offline"}})
     seen = {}
 
     def each():
@@ -430,7 +428,7 @@ def test_every_billed_wake_holds_the_next(requests_mock):
     # makes the next one, inside WAKE_CHECK, a free "wake held", no wake_up
     from TWCManager.Vehicle.Reconcile.Reconciler import WAKE_CHECK
 
-    m, r, v, c, api = install(fleet=True, owner=True)
+    m, r, v, c, api = install(fleet=True, owner=True, signing="off")
     wakers = [
         p
         for p in m.providerOrder.providers()
@@ -438,9 +436,9 @@ def test_every_billed_wake_holds_the_next(requests_mock):
         and p.cost(C.WAKE).tier >= C.TIER_BILLED
         and p.ready(v, C.WAKE)
     ]
-    assert wakers
+    assert sorted(p.name for p in wakers) == ["FleetAPI", "OwnerAPI"]
     for p in wakers:
-        m, r, v, c, api = install(fleet=True, owner=True)
+        m, r, v, c, api = install(fleet=True, owner=True, signing="off")
         p = m.providerOrder.provider(p.name)
         requests_mock.reset_mock()
         requests_mock.get(
@@ -475,6 +473,21 @@ def test_fleet_only_car_online_after_an_offline_wake_gets_the_start(requests_moc
         "charge_start"
     ]
     assert car.charge["charging_state"] == "Charging"
+
+
+def test_owner_off_car_online_after_an_offline_wake_gets_the_limit(requests_mock):
+    # Row 4b for a car listed command_signing "off" on an Owner token: its
+    # wake takes the same hold, so the same single wake, all of it free
+    m, r, v, c, api = install(owner=True, signing="off", held=(90, 50))
+    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    car, seen = offlineWake(
+        requests_mock, m, r, c, lambda: None, seconds=3600, api=OWNER
+    )
+    assert seen["sent"] - seen["online"] <= 150 and wakeUps(requests_mock) == 1
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert car.charge["charge_limit_soc"] == 80 and paid(requests_mock) == (0, 0, 0)
+    assert counts(requests_mock)["other"] == 0
 
 
 # Row 1: pure Gen2, no vehicle module; the heartbeat stops and starts
