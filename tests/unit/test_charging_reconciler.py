@@ -6,14 +6,16 @@ import threading
 import time
 from unittest.mock import Mock, call
 
+import pytest
+
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT, CHARGING
+from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
 from TWCManager.Vehicle.Reconcile.Reconciler import LIMIT_THEN_START_GAP, PAID_AFTER, PROBE_AFTER, RETRY
 from tests.unit.gen2_helpers import drive
 from tests.unit.reconcile_helpers import AWAY, HOME, ScriptedProvider, placeAt
 from tests.unit.teslatokens import fleet_token, new_api
-from tests.unit.test_limit_reconciler import VIN, ble, cmds, fleet, setup
+from tests.unit.test_limit_reconciler import VIN, ble, cmds, fleet, prov, setup
 
 def onTwc(m, v):
     v.observe("twcVin", "8244", "TWC"); s = slave(m); s.currentVIN = VIN; return s
@@ -196,7 +198,7 @@ def test_an_offer_starts_the_car_from_the_heartbeat():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = onTwc(m, v); v.observe("chargingState", "Stopped", "TeslaBLE")
     m.setMaxAmpsToDivideAmongSlaves(32); drive(m, s, amps_actual=0.0, amps_max=32); drive(m, s, amps_actual=0.0, amps_max=32)   # the TWC echoes its offer
     assert m.desired.get(VIN, CHARGING).value is True and r.pass_() == 2                # and mode 1's once-per-session lift, as main's raise
-    assert cmds(m.providerOrder.provider("TeslaBLE")) == ["startCharging", "setAmps"]
+    assert cmds(m.providerOrder.provider("TeslaBLE")) == ["setAmps", "startCharging"]   # the rate before the start (Task 4b)
 
 def test_twc_current_alone_never_restops_a_car_with_vehicle_reads():        # Review Focus 4
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); onTwc(m, v); b = m.providerOrder.provider("TeslaBLE"); v.observe("chargingState", "Charging", "TeslaBLE")
@@ -228,7 +230,7 @@ FLEET_CAR = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
 def calls(requests_mock, part):
     return [q for q in requests_mock.request_history if q.url.split("?")[0].endswith(part)]
 
-def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True, read=True):
+def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True, read=True, twc=True):
     # A Fleet-only car on the TWC: a real TeslaAPI with a Fleet token, the
     # car on its list, every Tesla request mocked
     m, r, v, c = setup(clock=False)
@@ -239,7 +241,7 @@ def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True, read=Tr
     for p in api.providers(): m.providerOrder.register(p)
     if listed:
         api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); placeAt(m, v)
-    onTwc(m, v)
+    if twc: onTwc(m, v)
     if read: v.observe("chargingState", "Stopped", "FleetAPI")
     requests_mock.get(FLEET_CAR, json={"response": {"state": state}})
     requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"charge_state": {"charging_state": "Stopped", "charge_limit_soc": 90},
@@ -472,3 +474,25 @@ def test_a_fleet_command_for_one_car_sends_nothing_for_another_listed_car(reques
     assert [len(calls(requests_mock, x)) for x in ("charge_start", "set_charge_limit", "charge_stop")] == [1, 1, 1]
     assert not any(VIN2 in q.url for q in requests_mock.request_history)                          # no command, read or wake for B
     assert (b.firstChargeNeededTime, b.lastChargeNeededTime, b.delayNextWakeAttempt) == held
+
+# The rate before the start (Task 4b): a start goes at the rate it should
+# run at, so a solar-tracking car does not overshoot first; a stop never
+# waits behind a rate. Off a TWC, so the car carries its own rate
+
+@pytest.mark.parametrize("make", [ble, fleet])
+def test_a_start_goes_after_the_rate_due_on_the_same_pass(make):               # paid counted
+    m, r, v, c = setup(make(O.Outcome(O.DONE))); p = prov(m, make().name); v.observe("chargingState", "Stopped", p.name)
+    m.desired.set(VIN, AMPS, 10, "distributor"); m.startCarsCharging(VIN)
+    assert r.pass_() == 2 and cmds(p) == ["setAmps", "startCharging"]
+
+def test_a_real_fleet_start_goes_after_the_rate_due_on_the_same_pass(requests_mock):   # paid counted
+    m, r, v, c, api = fleetOnTwc(requests_mock, twc=False)
+    m.desired.set(VIN, AMPS, 10, "distributor"); m.startCarsCharging(VIN)
+    for _ in range(3): r.pass_(); time.sleep(0.01)
+    assert [q.url.split("/")[-1] for q in requests_mock.request_history if q.method == "POST"] == ["set_charging_amps", "charge_start"]
+
+@pytest.mark.parametrize("make", [ble, fleet])
+def test_a_stop_never_waits_behind_the_rate_due_on_the_same_pass(make):        # paid counted
+    m, r, v, c = setup(make(O.Outcome(O.DONE))); p = prov(m, make().name); v.observe("chargingState", "Charging", p.name)
+    m.desired.set(VIN, AMPS, 10, "distributor"); m.stopCarsCharging(VIN)
+    assert r.pass_() == 2 and cmds(p) == ["stopCharging", "setAmps"]

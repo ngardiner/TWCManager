@@ -1225,7 +1225,8 @@ def test_restart_with_the_car_plugged_in_and_asleep_gets_the_scheduled_limit(
     )  # plugged in, asleep, no VIN; the TWC echoes its last offer
     # BASE's order again (Phase 4 Task 4): the tick's offer follows the
     # reply in the same beat, so the lift is desired with the first reply,
-    # as at BASE, and goes before the start (held by the limit gap)
+    # as at BASE, and goes before the start (held by the limit gap; the
+    # reconciler plans a rate before a start, Task 4b)
     assert [(cmd, args) for vin, cmd, args in b.runs] == [
         ("wake", None),
         ("charging-set-limit", 70),
