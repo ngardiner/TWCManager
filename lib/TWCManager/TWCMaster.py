@@ -132,7 +132,7 @@ class TWCMaster:
         # Desired vehicle state, and the reconciler that converges cars on
         # it; all on the registry's time.time clock
         self.desired = DesiredStore()
-        self.vehicleRegistry.removed = self.desired.forget
+        self.vehicleRegistry.removed = self._vehicleRemoved
         self.reconciler = VehicleReconciler(self)
         # The policy's charge limit; None while it sets none
         self.policyLimit = None
@@ -1175,7 +1175,7 @@ class TWCMaster:
                 if key not in self.settings:
                     self.settings[key] = value
             registryBlob = self.settings.get("vehicleRegistry")
-        # Migrates the legacy chargeLimits key; dict work under the lock only
+        # Normalises chargeLimits; dict work under the lock only
         self.heldLimits.load()
         # load() tolerates a missing or corrupt blob
         self.vehicleRegistry.load(registryBlob)
@@ -1631,6 +1631,11 @@ class TWCMaster:
         except Exception as e:
             logger.warning("Vehicle registry pending check failed: %s", e)
             return False
+
+    def _vehicleRemoved(self, key):
+        # Forgotten means forgotten: its desired state and held limit go
+        self.desired.forget(key)
+        self.heldLimits.remove(key)
 
     def expireVehicles(self):
         # Forget unclaimed, unasserted vehicles unseen past the forget window
