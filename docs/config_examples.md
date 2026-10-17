@@ -14,8 +14,7 @@ In some cases, solar installations may be limited in export tariffs by an electr
 
 
 ```
-  "minAmpsPerTWC": 6,
-  "greenEnergyFlexAmps": 5
+  "minAmpsPerTWC": 6
 ```
 
    * Via the web interface, set a Consumption Offset in watts of 5000W
@@ -23,7 +22,7 @@ In some cases, solar installations may be limited in export tariffs by an electr
 This will have the following effect:
 
    * Charging will not *start* until the generated energy is at least 20A (```minAmpsPerTWC``` being 6A and after the 5kW of consumption offset that we have configured).
-   * Once charging has started, ```greenEnergyFlexAmps``` controls how low the generation can go without charging stopping. As ```greenEnergyFlexAmps``` is set to 5, this means that the generation can get as low as 16A without charging stopping (to account for cloud or conditions changing, or appliance loads). This ensures that we are always exporting at least 16A of the 20A exportable energy. 
+   * Flex current is not supported from 1.4.0 (```greenEnergyFlexAmps``` is accepted but ignored), so charging stops once generation drops below the start threshold.
 
 The below shows an illustration of how this configuration improves the effeciency of this setup, by starting charging after the orange band (which is 5kW of generation) and stopping it at the same point at the end of the day. This results in avoiding the loss of exports between the orange (5kW) and green (5kW + 6A minAmpsPerTWC) bands.
 

@@ -53,13 +53,18 @@ class VehicleEndpoints(EVSEController):
         slave's key is None or anonymous; blind when such a slave reports a
         plugged state (non-00) or draws power, so it might be serving any
         car. An occupied Gen3 that can't name its car (anonymous, or no
-        key at all) could be serving any account car, so it blinds too. A
-        failed scan fails closed.
+        key at all) could be serving any account car, so it blinds too. So
+        does a Gen2 install (an RS-485 interface loaded) with no slave
+        linked: at startup, after a slave times out, or with a dead adapter.
+        A failed scan fails closed.
         """
         blind = False
         unknown = False
         try:
-            for slave in self.master.getSlaveTWCs():
+            slaves = self.master.getSlaveTWCs()
+            if not slaves and self.master.getModulesByType("Interface"):
+                blind = unknown = True
+            for slave in slaves:
                 if not _unknownKey(getattr(slave, "vehicleKey", None)):
                     continue
                 unknown = True

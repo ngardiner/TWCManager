@@ -56,7 +56,6 @@ class Policy:
             "condition": ["gte", "lt", "lte", "ne"],
             "value": ["settings.sunrise", "settings.sunset", "tm_hour", 2],
             "background_task": "checkGreenEnergy",
-            "allowed_flex": "config.greenEnergyFlexAmps",
             "charge_limit": "config.greenEnergyLimit",
         },
         # If all else fails (ie no other policy match), we will charge at
@@ -79,7 +78,6 @@ class Policy:
             "condition": ["eq"],
             "value": [3],
             "background_task": "checkGreenEnergy",
-            "allowed_flex": "config.greenEnergyFlexAmps",
             "charge_limit": "config.greenEnergyLimit",
         },
     ]
@@ -282,9 +280,6 @@ class Policy:
                     self.policyValue(policy["charge_amps"])
                 )
                 logger.debug("Charge at %.2f" % self.policyValue(policy["charge_amps"]))
-
-        # Set flex, if any
-        self.master.setAllowedFlex(self.policyValue(policy.get("allowed_flex", 0)))
 
         # If a background task is defined for this policy, queue it
         bgt = policy.get("background_task", None)

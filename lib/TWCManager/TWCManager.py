@@ -39,6 +39,7 @@ import traceback
 import datetime
 import yaml
 import threading
+from TWCManager.ControlTick import ControlTick
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
 from TWCManager.Vehicle.Reconcile.Targets import onArrival, onDeparture
@@ -772,25 +773,6 @@ logger.info(
 # install has no vehicle modules and registers nothing new.
 registerProviders(master)
 
-# Auto-register VehicleEndpoints when TeslaAPI is available.
-# This enables the centralized watt-based power distribution across both
-# Gen2 TWC slaves and at-home vehicles (Phase 4, ported from #483). BLE-only
-# and HomeAssistant-only installs keep the per-slave path.
-if master.getModuleByName("TeslaAPI") is not None:
-    try:
-        from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
-
-        master.registerModule(
-            {
-                "name": "VehicleEndpoints",
-                "ref": VehicleEndpoints(master),
-                "type": "EVSEController",
-            }
-        )
-        logger.info("Registered VehicleEndpoints EVSEController")
-    except Exception as _e:
-        logger.warning("Could not register VehicleEndpoints: %s", _e)
-
 # Auto-register Gen3TWCs controller when enabled in config.
 # Starts a Neurio Modbus RTU server on the configured serial port so that
 # Gen3 Tesla Wall Connectors can be controlled via fake house-load registers.
@@ -833,6 +815,10 @@ backgroundTasksThread.start()
 # the reconciler's own workers so slow BLE retries never block this thread
 # or the background thread.
 master.reconciler.start()
+# The control pass and housekeeping run on their own ~1 s tick, so the
+# serial loop only services RS-485
+master.controlTick = ControlTick(master)
+master.controlTick.start()
 # The Tesla API vehicle list loads here (a free call), so the cloud
 # providers can carry commands before any arrival
 master.queue_background_task({"cmd": "checkCharge"})
@@ -944,11 +930,6 @@ while True:
                 if time.time() - master.getTimeLastTx() >= 1.0:
                     # It's been about a second since our last heartbeat.
                     if master.countSlaveTWC() > 0:
-                        # Run centralized EVSE power distribution once per
-                        # full round-robin cycle (when index wraps to 0).
-                        if idxSlaveToSendNextHeartbeat == 0:
-                            master.distributeEVSEPower()
-
                         slaveTWC = master.getSlaveTWC(idxSlaveToSendNextHeartbeat)
                         if time.time() - slaveTWC.timeLastRx > config.get(
                             "interfaces", {}
@@ -1000,10 +981,6 @@ while True:
                 )
                 master.send_slave_linkready()
 
-        # See if there's any message from the web interface.
-        if master.getModuleByName("WebIPCControl"):
-            master.getModuleByName("WebIPCControl").processIPC()
-
         # If it has been more than 2 minutes since the last kWh value,
         # queue the command to request it from slaves
         if config["config"]["fakeMaster"] == 1 and (
@@ -1016,12 +993,6 @@ while True:
         # response, and if we haven't queried more than 5 times already for this
         # slave TWC, repeat the query
         master.retryVINQuery()
-
-        # Hourly, forget vehicles no one has claimed or seen for the window.
-        # Housekeeping, so not gated on fakeMaster.
-        if (time.time() - master.lastVehicleExpiry) > 3600:
-            master.lastVehicleExpiry = time.time()
-            master.queue_background_task({"cmd": "expireVehicles"})
 
         ########################################################################
         # See if there's an incoming message on the input interface.
@@ -1954,8 +1925,10 @@ while True:
         # The 5 s sleep was deliberate; don't report it as a main loop stall.
         timeLastLoopTop = time.time()
 
-# Stop policy evaluation first so it doesn't queue new work while we drain.
+# Stop policy evaluation and the control tick first (the tick joins), so
+# neither queues new work while we drain.
 master.getModuleByName("Policy").stop()
+master.controlTick.stop()
 
 # Whole shutdown must finish inside systemd's 90 s stop timeout.
 shutdownDeadline = time.time() + 80

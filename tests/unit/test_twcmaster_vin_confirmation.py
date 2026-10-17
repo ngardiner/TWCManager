@@ -69,11 +69,11 @@ def test_charging_session_begins_and_ends_anonymous_vehicle(master):
     s.isCharging = 0
     s.chargingDroppedBelowThresholdTime = 0
     master.getSlaveTWCs = Mock(return_value=[s])
-    master.num_cars_charging_now()
+    master.observeChargingSessions()
     assert master.vehicleRegistry.get("anon:8244") is not None
     s.reportedAmpsActual = 0.0
     s.chargingDroppedBelowThresholdTime = 1  # long ago
-    master.num_cars_charging_now()
+    master.observeChargingSessions()
     assert master.vehicleRegistry.get("anon:8244") is None
 
 

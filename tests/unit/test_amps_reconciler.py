@@ -10,7 +10,7 @@ from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Reconcile.Reconciler import MIN_SEND_GAP, RETRY
-from tests.unit.gen2_helpers import drive as heartbeat
+from tests.unit.gen2_helpers import drive as heartbeat, offersThenBeat
 from tests.unit.test_limit_reconciler import VIN, ble, cmds, fleet, setup
 
 def point(m, v, mode, car=True):
@@ -65,11 +65,11 @@ def test_mode_2_twc_target_never_drops_below_the_floor():
 def test_mode_2_car_carries_and_the_twc_offers_its_max():
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); pt, s = point(m, v, 2); pt.setTargetPower(10 * 240)
     assert s._evseTargetAmps == 10 and m.desired.get(VIN, AMPS).value == 10
-    heartbeat(m, s, 10.0); assert s.lastAmpsOffered == 10                                  # unconfirmed: the TWC holds the target (final review I1)
+    offersThenBeat(m, s, 0x04, 0, 10.0); assert s.lastAmpsOffered == 10                                  # unconfirmed: the TWC holds the target (final review I1)
     r.pass_(); assert f.calls == [("setAmps", VIN, 10)]                                    # TWC not an amps path under mode 2: Fleet, no wake, no read first
-    pt.setTargetPower(10 * 240); heartbeat(m, s, 10.0); assert s.lastAmpsOffered == s.wiringMaxAmps   # the car's rate landed: the TWC offers its max
+    pt.setTargetPower(10 * 240); offersThenBeat(m, s, 0x04, 0, 10.0); assert s.lastAmpsOffered == s.wiringMaxAmps   # the car's rate landed: the TWC offers its max
     c.t += 1; v.observe("chargeCurrentRequest", 32, "TeslaMateVehicle")                    # a newer reading disagrees: hold the target again
-    heartbeat(m, s, 10.0); assert s.lastAmpsOffered == 10
+    offersThenBeat(m, s, 0x04, 0, 10.0); assert s.lastAmpsOffered == 10
 
 def test_zero_offer_withdraws_the_cars_rate_but_not_a_lift():
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE))); pt, s = point(m, v, 2); pt.setTargetPower(10 * 240)
@@ -80,13 +80,13 @@ def test_twc_only_point_keeps_the_heartbeat_path_under_mode_2():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); pt, s = point(m, v, 2, car=False); pt.setTargetPower(10 * 240)
     assert s._evseTargetAmps == 10 and not s.pointOwnsAmps and m.desired.get(VIN, AMPS) is None   # the heartbeat's mode-2 branch sets the car's amps
     s._queueChargeRate(10); assert m.desired.get(VIN, AMPS).value == 10 and m.desired.get(VIN, AMPS).by == "heartbeat"
-    heartbeat(m, s, 10.0); assert s.lastAmpsOffered == 10                                  # the heartbeat's own rate, unconfirmed: the TWC holds it (I1)
-    r.pass_(); heartbeat(m, s, 10.0); assert s.lastAmpsOffered == s.wiringMaxAmps         # delivered over BLE: the TWC offers its max
+    offersThenBeat(m, s, 0x04, 0, 10.0); assert s.lastAmpsOffered == 10                                  # the heartbeat's own rate, unconfirmed: the TWC holds it (I1)
+    r.pass_(); offersThenBeat(m, s, 0x04, 0, 10.0); assert s.lastAmpsOffered == s.wiringMaxAmps         # delivered over BLE: the TWC offers its max
 
 def test_heartbeat_does_not_write_amps_for_a_point_with_a_vehicle_member():
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); pt, s = point(m, v, 3); pt.setTargetPower(4 * 240)
-    heartbeat(m, s, amps_actual=4.0); assert m.desired.get(VIN, AMPS).value == 4 and m.desired.get(VIN, AMPS).by == "distributor"   # no "heartbeat" write, no lift
-    s.pointOwnsAmps = False; heartbeat(m, s, amps_actual=4.0); assert m.desired.get(VIN, AMPS).by == "lift"             # the TWC branch's raise, now unguarded
+    offersThenBeat(m, s, 0x04, 0, 4.0); assert m.desired.get(VIN, AMPS).value == 4 and m.desired.get(VIN, AMPS).by == "distributor"   # no "heartbeat" write, no lift
+    s.pointOwnsAmps = False; offersThenBeat(m, s, 0x04, 0, 4.0); assert m.desired.get(VIN, AMPS).by == "lift"             # the TWC branch's raise, now unguarded
 
 def test_fleet_never_sets_a_rate_the_twc_covers_but_carries_a_lift():          # paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); pt, s = point(m, v, 3)
@@ -104,7 +104,7 @@ def test_legacy_heartbeat_path_sets_desired_and_the_lift_once():
 def test_a_session_end_resets_the_once_per_session_lift():
     m, r, v, c = setup(); s = m.getSlaveTWCs()[0]; s.vehicleRateRaised = True
     s.isCharging = 1; s.reportedAmpsActual = 0; s.chargingDroppedBelowThresholdTime = time.time() - 10
-    m.num_cars_charging_now(); assert s.isCharging == 0 and not s.vehicleRateRaised
+    m.observeChargingSessions(); assert s.isCharging == 0 and not s.vehicleRateRaised
 
 def test_user_changed_amps_are_resent_on_the_next_reading_under_mode_2():   # as main: overridden
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); b = prov(m, "TeslaBLE"); pt, s = point(m, v, 2); pt.setTargetPower(20 * 240); r.pass_()
@@ -184,8 +184,9 @@ def test_a_car_that_leaves_the_anonymous_set_loses_the_heartbeat_rate():  # I2
 
 def test_heartbeat_withdraws_its_rate_when_the_offer_drops_below_the_minimum():   # M2
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE))); s = m.getSlaveTWCs()[0]; s.currentVIN = VIN; m.settings["chargeRateControl"] = "2"
+    heartbeat(m, s, amps_actual=0.0)                                                     # heard from: the tick targets it
     s._queueChargeRate(10); assert m.desired.get(VIN, AMPS).value == 10
-    m.setMaxAmpsToDivideAmongSlaves(0); heartbeat(m, s, amps_actual=0.0); assert m.desired.get(VIN, AMPS) is None
+    m.setMaxAmpsToDivideAmongSlaves(0); m.controlPass(); heartbeat(m, s, amps_actual=0.0); assert m.desired.get(VIN, AMPS) is None
     m.desired.set(VIN, AMPS, 32, "lift", lift=True); heartbeat(m, s, amps_actual=0.0); assert m.desired.get(VIN, AMPS).lift   # a lift survives
 
 # Fix round 1 (12b review I1, M4)

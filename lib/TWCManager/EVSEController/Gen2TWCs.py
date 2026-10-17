@@ -31,8 +31,9 @@ class Gen2TWCs(EVSEController):
 
     @property
     def allEVSEs(self) -> list:
-        """Return the current list of Gen2TWC slave instances from TWCMaster."""
-        return self.master.getSlaveTWCs()
+        """The slaves heard from: one that has not replied yet reports
+        nothing (00, 0 A), so it is offered nothing either."""
+        return [s for s in self.master.getSlaveTWCs() if s.heardFrom]
 
     @property
     def maxPower(self) -> float:

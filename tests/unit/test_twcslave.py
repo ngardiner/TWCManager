@@ -324,23 +324,6 @@ class TestTWCSlaveConfiguration:
         master.getModuleByName = Mock(return_value=None)
         return master
     
-    def test_slave_use_flex_amps_to_start_charge(self, mock_master):
-        """Test useFlexAmpsToStartCharge configuration."""
-        from TWCManager.TWCSlave import TWCSlave
-        
-        config = {
-            "config": {
-                "wiringMaxAmpsPerTWC": 6,
-                "useFlexAmpsToStartCharge": True,
-                "startStopDelay": 60,
-                "fakeMaster": False,
-            }
-        }
-        
-        slave = TWCSlave(bytearray(b"AB"), 80, config, mock_master)
-        
-        assert slave.useFlexAmpsToStartCharge is True
-    
     def test_slave_api_control_default(self, mock_master):
         """Test slave API control defaults to False."""
         from TWCManager.TWCSlave import TWCSlave

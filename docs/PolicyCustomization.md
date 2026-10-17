@@ -121,19 +121,9 @@ Custom policies can be latched using the `latch_period` attribute.
 
 ## Flexibility
 
-The Track Green Energy policy attempts to send only excess power to the car.
-However, on cloudy days, this power might be inconsistent.  Setting an amount of
-Flex current permits the policy to continue charging at the minimum rate,
-drawing up to the specified amount from the grid, even if Green Energy becomes
-insufficient temporarily.
-
-The policy will stop charging if available power drops too low even with the
-flex, and will not wake a car to start charging until there is sufficient power
-without considering the flex.
-
-Flex for the Track Green Energy policy can be set using the
-`greenEnergyFlexAmps` value; custom policies can include an `allowed_flex`
-attribute.
+Flex current (`greenEnergyFlexAmps`, `useFlexAmpsToStartCharge` and a policy's
+`allowed_flex` attribute) is not supported from 1.4.0. The keys are still
+accepted, but ignored.
 
 ## Webhooks
 
@@ -210,9 +200,6 @@ The values in a policy definition are:
   is in effect (optional)
 - `latch_period`:  If the conditions for this policy are ever matched, treat
   them as matched for this many minutes, even if they change. (optional)
-- `allowed_flex`:  If the available current is reduced below the minimum for
-  charging, continue to supply the minimum.  Only useful for policies where the
-  charge amps vary.
 - `webhooks`:  An object containing desired webhooks for the policy.  See above.
 
 ### Policy Values

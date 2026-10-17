@@ -99,11 +99,6 @@ def test_correlated_car_joins_its_gen3_point():
     (pt,) = groupEndpoints(Mock(), [g, car]); pt.setTargetPower(2400)
     g.setTargetPower.assert_called_once_with(2400); car.setTargetPower.assert_not_called()
 
-def test_pure_gen2_leaves_distributor_off():                         # Review Focus 2
-    idle = ep("Gen2TWC-8245", None, local=True, wants=False)
-    distributor([ChargingPoint(Mock(), "Gen2TWC-8245", [idle])], 40, controllers=("Gen2TWCs",)).distributeEVSEPower()
-    idle.setTargetPower.assert_not_called()
-
 def test_no_type_knowledge_left():
     import subprocess
     from pathlib import Path
@@ -126,6 +121,10 @@ def real(mode=1, gen3=False):
     modules = {"TeslaAPI": carapi, "Policy": policy}; m.getModuleByName = lambda n: modules.get(n)
     m.registerModule({"name": "VehicleEndpoints", "ref": VehicleEndpoints(m), "type": "EVSEController"})
     m.providerOrder.register(fleet())
+    newSlave = m.newSlave
+    def heard(*args):                                                            # the slaves these tests set by hand have replied
+        s = newSlave(*args); s.heardFrom = True; return s
+    m.newSlave = heard
     if gen3:
         with patch.object(Gen3TWCs, "_start_server"): ctl = Gen3TWCs(m)
         ctl.setHouseWatts = Mock(); modules["Gen3TWCs"] = ctl
