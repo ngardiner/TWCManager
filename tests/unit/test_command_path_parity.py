@@ -20,14 +20,9 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
-from TWCManager.Vehicle.Reconcile.Reconciler import (
-    MIN_SEND_GAP,
-    PAID_AFTER,
-    RESTORE_RETRY,
-    RETRY,
-)
+from TWCManager.Vehicle.Reconcile.Reconciler import PAID_AFTER, RESTORE_RETRY, RETRY
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
-from tests.unit.gen2_helpers import drive as heartbeat
+from tests.unit.gen2_helpers import drive as heartbeat, offersThenBeat
 from tests.unit.reconcile_helpers import AWAY, HOME, placeAt
 from tests.unit.teslatokens import fleet_token, new_api, owner_token
 from tests.unit.test_limit_reconciler import VIN, setup
@@ -894,12 +889,12 @@ def test_mode_3_fleet_only_below_floor(requests_mock):
     pt.setTargetPower(4 * 240)
     passes(r, c, 60)
     assert (
-        amps(requests_mock) == [4, 4] and s._evseTargetAmps == 6
+        amps(requests_mock) == [4, 4] and s.pointAmps == 6
     )  # the low-amps repeat; the TWC holds its floor
     pt.setTargetPower(10 * 240)
     passes(r, c, 600, each=lambda: pt.setTargetPower(10 * 240))
     assert (
-        amps(requests_mock) == [4, 4, 32] and s._evseTargetAmps == 10
+        amps(requests_mock) == [4, 4, 32] and s.pointAmps == 10
     )  # back on the TWC; the car (at 4) is lifted once
     assert paid(requests_mock) == (0, 0, 3)
 
@@ -1084,7 +1079,7 @@ def test_mode_2_undeliverable_rate_pays_twice(requests_mock):
     pt.setTargetPower(10 * 240)
     passes(r, c, 3600, each=lambda: pt.setTargetPower(10 * 240))
     assert (
-        amps(requests_mock) == [10, 10] and s._evseTargetAmps == 10
+        amps(requests_mock) == [10, 10] and s.pointAmps == 10
     )  # one send, one blind retry; the TWC keeps the target (final review I1)
 
 
@@ -1103,7 +1098,7 @@ def test_mode_2_twc_holds_the_target_until_the_car_rate_lands(requests_mock):
 
         def cycle():
             pt.setTargetPower(10 * 240)
-            heartbeat(m, s, 10.0)
+            offersThenBeat(m, s, 0x04, 0.0, 10.0)  # the target set by hand
             offers.append(s.lastAmpsOffered)
 
         passes(r, c, 3600, each=cycle)
@@ -1173,7 +1168,7 @@ def test_anonymous_stop_fans_out_as_main(requests_mock):
     )  # no read: the stop needs none on a car known charging
 
 
-# Row 25 (slim Task 12b _anonCars): a VIN-less Gen2 in mode 2 sets the rate
+# Row 25 (slim Task 12b anonymous fan-out): a VIN-less Gen2 in mode 2 sets the rate
 
 
 def test_vinless_rate_goes_to_the_plugged_in_car_only(requests_mock):
@@ -1225,37 +1220,24 @@ def test_restart_with_the_car_plugged_in_and_asleep_gets_the_scheduled_limit(
     m.setMaxAmpsToDivideAmongSlaves(32)
     m.setPolicyLimit(50, transition=True)  # Non Scheduled, after the restart
     m.setPolicyLimit(70, transition=True)  # 00:00: Scheduled Charging
-    sentAt = []
-    run = b._sendCommand_internal
-
-    def timed(vin, command, args=None):
-        sentAt.append((command, c.t))
-        return run(vin, command, args)
-
-    b._sendCommand_internal = timed
     passes(
         r, c, 600, each=lambda: heartbeat(m, s, 0.0, state=0x03, amps_max=32)
     )  # plugged in, asleep, no VIN; the TWC echoes its last offer
-    # INTENTIONALLY CHANGED (d), Phase 4 Task 3: the tick targets the slave
-    # one beat after its first reply, so the lift and the start are desired
-    # together after the limit gap and go in the reconciler's aspect order
-    # (start, then amps); at BASE the lift went before the start
+    # BASE's order again (Phase 4 Task 4): the tick's offer follows the
+    # reply in the same beat, so the lift is desired with the first reply,
+    # as at BASE, and goes before the start (held by the limit gap)
     assert [(cmd, args) for vin, cmd, args in b.runs] == [
         ("wake", None),
         ("charging-set-limit", 70),
         ("wake", None),
-        ("charging-start", None),
-        ("wake", None),
         ("charging-set-amps", 32),
+        ("wake", None),
+        ("charging-start", None),
     ]
-    times = dict(sentAt)
-    assert (
-        0 <= times["charging-set-amps"] - times["charging-start"] < MIN_SEND_GAP[AMPS]
-    )  # the lift still follows within one send gap
     assert m.heldLimits.get(VIN) == HeldLimit(
         100, 70
-    )  # the limit first, then main's start and the BLE lift (main's rate
-    # broadcast): TeslaMate's "Complete" predates the raise
+    )  # the limit first, then the BLE lift (main's rate broadcast), then
+    # main's start: TeslaMate's "Complete" predates the raise
     assert (
         requests_mock.call_count == 0
     )  # nothing paid, nothing free: presence came from TeslaMate

@@ -3,6 +3,7 @@
 from TWCManager.EVSEController.Gen2TWCs import Gen2TWCs
 from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
+from TWCManager.TWCSlave import OfferContext
 from collections import deque
 from datetime import datetime, timedelta
 import json
@@ -88,7 +89,6 @@ class TWCMaster:
     slaveTWCs = {}
     slaveTWCRoundRobin = []
     stopTimeout = datetime.max
-    spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
     treatGenerationAsGridDelivery = False
     TWCID = None
@@ -532,8 +532,34 @@ class TWCMaster:
         every install: Gen2, Gen3 and vehicle-only alike. With no charging
         endpoint the distributor finds nothing to do.
         """
-        if distribute:
-            self._points = self.distributeEVSEPower()
+        now = time.time() if now is None else now
+        points = self.distributeEVSEPower() if distribute else self.chargingPoints()
+        ctx = OfferContext(
+            self.getMaxAmpsToDivideAmongSlaves(),
+            self.num_cars_charging_now(),
+            int(self.settings.get("chargeRateControl", 1)),
+            self.getTotalAmpsInUse(),
+            {
+                bytes(e.TWCID): p.confirmed()
+                for p in points
+                for e in p.localEndpoints
+                if hasattr(e, "pointAmps")
+            },
+        )
+        # chargeStopMode 2 silences the heartbeat, and with it the replies
+        silent = (
+            self.settings.get("respondToSlaves", 1) == 0
+            and self.settings.get("respondToSlavesExpiry", now) > now
+        )
+        for slave in self.getSlaveTWCs():
+            if not slave.heardFrom:
+                # Not heard from yet: no offer, so its heartbeat says nothing
+                continue
+            slave.offer = slave.offerFor(slave.pointAmps, ctx, now)
+            key = slave.vehicleKey
+            if key is not None and slave.offer.amps > 0 and not silent:
+                # Power is on offer: a stop not yet delivered is moot
+                self.cancelStopCarsCharging(key)
 
     def distributeEVSEPower(self) -> list:
         """Watt-based power distribution across charging points.
@@ -541,8 +567,8 @@ class TWCMaster:
         The one distributor for every install. It allocates per charging
         point: a TWC and the car it serves are one point, budgeted once.
         After this method runs:
-        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it.
-          With a car member, ChargingPoint splits the rate by
+        - Gen2TWC.pointAmps is set; controlPass makes the offer from it and
+          the RS485 heartbeat sends that. ChargingPoint splits the rate by
           chargeRateControl and owns the car's amps. A slave not yet heard
           from is no endpoint (Gen2TWCs.allEVSEs) and gets no target.
         - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
@@ -851,9 +877,6 @@ class TWCMaster:
             data["chargeNowAmps"] = self.settings["chargeNowAmps"]
         return data
 
-    def getSpikeAmps(self):
-        return self.spikeAmpsToCancel6ALimit
-
     def getTimeLastTx(self):
         return self.getInterfaceModule().timeLastTx
 
@@ -985,9 +1008,10 @@ class TWCMaster:
         # When subtractChargerLoad is enabled, remove the charger's own draw
         # from consumptionA here (incremental step), consistent with what
         # getGenerationOffset() does for the de-novo step below.  Without this,
-        # the spike-to-cancel-6A-limit temporarily drives consumptionA far above
-        # generationA, making newOffer go deeply negative and clamping the result
-        # to 0 A even though net available power is still positive.
+        # a charger drawing above its share (a car ramping up, or a brief
+        # overshoot) drives consumptionA far above generationA, making
+        # newOffer go deeply negative and clamping the result to 0 A even
+        # though net available power is still positive.
         if self.subtractChargerLoad:
             chargerA = float(self.convertWattsToAmps(self.getChargerLoad()))
             consumptionA = max(0.0, consumptionA - chargerA)
@@ -1355,7 +1379,7 @@ class TWCMaster:
                         self.recordVehicleSessionEnd(slaveTWC)
                         self._plugSession(slaveTWC, False)
                         # The next session lifts the car's own rate again
-                        slaveTWC._resetVehicleRateRaised()
+                        slaveTWC.plugSessions += 1
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
                 elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES or (
@@ -1986,9 +2010,6 @@ class TWCMaster:
     def setScheduledAmpsFlexStart(self, enabled):
         with self.settingsLock:
             self.settings["scheduledAmpsFlexStart"] = enabled
-
-    def setSpikeAmps(self, amps):
-        self.spikeAmpsToCancel6ALimit = amps
 
     def snapHistoryData(self):
         snaptime = self.nextHistorySnap

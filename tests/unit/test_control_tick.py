@@ -1,6 +1,7 @@
 # tests/unit/test_control_tick.py: a ~1 s control tick runs the one
 # distributor for every install with a Gen2 slave; flex is gone (Phase 4,
 # Task 3). Real TWCMaster and Gen2TWC throughout.
+import inspect
 import logging
 import re
 import time
@@ -10,6 +11,8 @@ from unittest.mock import Mock, patch
 from TWCManager.ControlTick import ControlTick
 from TWCManager.EVSEInstance.ChargingPoint import ChargingPoint
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.TWCSlave import TWCSlave
+from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from tests.unit.gen2_helpers import tickThenBeat
 from tests.unit.test_charging_points import VIN, VIN2, car, real, setAmps
 from tests.unit.test_gen2twc_provider import CONFIG
@@ -19,7 +22,7 @@ LAUNCHER = Path(__file__).resolve().parents[2] / "lib" / "TWCManager" / "TWCMana
 
 
 def target(s):
-    return s._evseTargetAmps
+    return s.pointAmps
 
 
 def pureGen2(feed, config=None, slaves=2):
@@ -123,17 +126,27 @@ def test_get_status_does_not_start_a_session():  # HTTP thread
 def test_restart_with_a_car_charging_never_offers_zero():  # Review Focus 1
     m = pureGen2(feed=40, slaves=0)
     m.settings["chargeRateControl"] = 1
-    m.settings["spikeAmpsProactively"] = m.settings["spikeAmpsReactively"] = 0
     s = m.newSlave(b"\x82\x44", 80)  # its linkready
     s.protocolVersion = 2
     s.send_master_heartbeat()
     m.controlPass()  # not heard from yet: no offer
-    assert not s.heardFrom and target(s) is None
+    assert not s.heardFrom and s.offer is None
     iface = tickThenBeat(m, s, 0x01, 40, 32)  # the first reply: charging at 32 A
-    assert bytes(iface.send.call_args.args[0][6:15]) == bytes(9)  # no command, never 0 A
-    tickThenBeat(m, s, 0x01, 40, 32)
-    hb = iface.send.call_args.args[0][6:15]
-    assert ((hb[1] << 8) + hb[2]) / 100 == 32
+    assert s.offer.amps == 32
+    for _ in range(2):
+        hb = iface.send.call_args.args[0][6:15]
+        assert hb[0] == 0x09 and ((hb[1] << 8) + hb[2]) / 100 == 32  # never 0 A
+        tickThenBeat(m, s, 0x01, 40, 32)
+
+
+def test_heartbeat_before_the_first_tick_sends_no_change():  # Review Focus 1
+    m = pureGen2(feed=40, slaves=0)
+    s = m.newSlave(b"\x82\x44", 80)
+    s.protocolVersion, s.reportedAmpsActual = 2, 32.0
+    assert s.offer is None
+    s.send_master_heartbeat()
+    iface = m.getModulesByType("Interface")[0]["ref"]
+    assert bytes(iface.send.call_args.args[0][6:15]) == bytes(9)
 
 
 def test_a_gen3_only_install_is_controlled():  # (g) intended fix
@@ -208,7 +221,7 @@ def test_an_unheard_slave_gets_no_offer():  # F9
     m = pureGen2(feed=40, slaves=1)
     quiet = m.newSlave(b"\x82\x60", 80)
     m.controlPass()
-    assert target(quiet) is None and target(m.getSlaveTWCs()[0]) == 32
+    assert quiet.offer is None and m.getSlaveTWCs()[0].offer.amps == 32
 
 
 def waitFor(cond, timeout=5.0):
@@ -266,3 +279,116 @@ def test_the_serial_loop_no_longer_distributes_or_processes_ipc():
     assert shutdown.index("master.controlTick.stop()") < shutdown.index(
         "master.reconciler.stop()"
     )
+
+
+# Task 4: offers are computed on the tick; charging points own car amps
+
+
+def test_the_lift_survives_a_session_end_racing_the_tick():
+    # The serial thread only counts sessions and the tick only records the
+    # session it lifted, so a session end between passes is never lost
+    m = real()
+    m.getMaxAmpsToDivideAmongSlaves = lambda: 20
+    m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
+    s = charging(m, actual=10.0)
+    s.currentVIN, s.plugSessions, s.liftedSession = VIN, 3, 3
+    assert s.vehicleRateRaised
+    m.controlPass()
+    assert m.desired.get(VIN, AMPS) is None  # lifted this session already
+    s.isCharging, s.chargingDroppedBelowThresholdTime = 1, time.time() - 10
+    s.reportedState, s.reportedAmpsActual = 0x04, 0.0
+    m.observeChargingSessions()  # the serial thread ends session 3
+    assert s.plugSessions == 4 and not s.vehicleRateRaised
+    m.controlPass()
+    d = m.desired.get(VIN, AMPS)
+    assert d.lift and d.value == 32 and s.liftedSession == 4
+
+
+def test_no_offer_or_cancel_for_an_unheard_slave():  # F9
+    m = pureGen2(feed=40, slaves=0)
+    m.cancelStopCarsCharging = Mock()
+    heard = charging(m, actual=10.0)
+    heard.currentVIN = VIN
+    quiet = m.newSlave(b"\x82\x60", 80)
+    quiet.currentVIN = VIN2
+    m.controlPass()
+    assert quiet.offer is None and heard.offer.amps == 32
+    m.cancelStopCarsCharging.assert_called_once_with(VIN)
+
+
+def test_no_stop_cancel_during_the_mode_2_silence():  # F7
+    m = pureGen2(feed=40, slaves=0)
+    m.cancelStopCarsCharging = Mock()
+    s = charging(m, actual=10.0)
+    s.currentVIN = VIN
+    m.settings["respondToSlaves"] = 0
+    m.settings["respondToSlavesExpiry"] = time.time() + 60
+    m.controlPass()
+    assert s.offer.amps == 32 and not m.cancelStopCarsCharging.called
+    m.settings["respondToSlavesExpiry"] = time.time() - 1
+    m.controlPass()
+    m.cancelStopCarsCharging.assert_called_once_with(VIN)
+
+
+def test_wiring_cap_is_rechecked_when_others_draw_more():  # (e)
+    m = pureGen2(feed=40, config={"wiringMaxAmpsAllTWCs": 48})
+    s, other = m.getSlaveTWCs()
+    m.controlPass()
+    assert s.offer.amps == 20  # 20 drawn elsewhere: 40 of 48
+    other.reportedAmpsActual = 40.0
+    m.controlPass()
+    assert s.offer.amps == 8  # the same target, re-capped: 48 - 40
+
+
+def test_green_policy_does_not_hold_a_car_below_the_minimum():  # (f)
+    m = pureGen2(feed=10, slaves=0)
+    m.getModuleByName("Policy").policyIsGreen.return_value = True
+    s = charging(m, actual=10.0)
+    s.isCharging = 1
+    m.controlPass()
+    assert s.offer.amps == 10
+    m.getMaxAmpsToDivideAmongSlaves = lambda: 3
+    m.controlPass()
+    assert s.offer.amps == 0  # the stop rule at once, never a held 6 A
+
+
+def test_spike_settings_are_ignored():  # (a)
+    m = pureGen2(feed=12, slaves=0)
+    m.settings["spikeAmpsProactively"] = m.settings["spikeAmpsReactively"] = 1
+    s = charging(m, actual=6.0)
+    sent = []
+    for _ in range(5):
+        s.timeLastAmpsOfferedChanged -= 10
+        hb = tickThenBeat(m, s, 0x01, 6, 6.0).send.call_args.args[0][6:15]
+        sent.append(((hb[1] << 8) + hb[2]) / 100)
+    assert sent == [12] * 5  # never the 16 or 21 A spike
+
+
+def test_no_car_amps_code_left_in_the_slave():
+    for name in (
+        "_setCarAmps",
+        "_clearCarAmps",
+        "_carRateConfirmed",
+        "_queueChargeRate",
+        "_requestVehicleRateRaise",
+        "_anonCars",
+        "APIcontrol",
+    ):
+        assert not hasattr(TWCSlave, name), name
+    assert "APIcontrol" not in inspect.getsource(TWCSlave)
+
+
+def test_receive_writes_no_offer():
+    src = inspect.getsource(TWCSlave.receive_slave_heartbeat)
+    for gone in ("offer", "lastAmpsOffered =", "desired."):
+        assert gone not in src, gone
+
+
+def test_a_twc_with_no_car_key_rates_and_lifts_nothing():  # was TestVehicleChargeRateDesired
+    for mode in (1, 2):
+        m = real(mode=mode)
+        m.getMaxAmpsToDivideAmongSlaves = lambda: 20
+        s = charging(m, actual=10.0)
+        assert s.vehicleKey is None
+        m.controlPass()
+        assert s.offer.amps > 0 and m.desired.keys() == [] and not s.vehicleRateRaised

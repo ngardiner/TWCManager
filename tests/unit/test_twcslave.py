@@ -282,12 +282,6 @@ class TestTWCSlaveAmpsTracking:
         
         assert slave.lastAmpsOffered == 32
     
-    def test_slave_last_amps_desired(self, slave):
-        """Test slave last amps desired."""
-        slave.lastAmpsDesired = 16
-        
-        assert slave.lastAmpsDesired == 16
-    
     def test_slave_history_avg_amps(self, slave):
         """Test slave history average amps."""
         slave.historyAvgAmps = 25.5
@@ -312,34 +306,6 @@ class TestTWCSlaveAmpsTracking:
         slave.timeReportedAmpsActualChangedSignificantly = current_time
         
         assert slave.timeReportedAmpsActualChangedSignificantly == current_time
-
-
-class TestTWCSlaveConfiguration:
-    """Test TWCSlave configuration handling."""
-    
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.getModuleByName = Mock(return_value=None)
-        return master
-    
-    def test_slave_api_control_default(self, mock_master):
-        """Test slave API control defaults to False."""
-        from TWCManager.TWCSlave import TWCSlave
-        
-        config = {
-            "config": {
-                "wiringMaxAmpsPerTWC": 6,
-                "useFlexAmpsToStartCharge": False,
-                "startStopDelay": 60,
-                "fakeMaster": False,
-            }
-        }
-        
-        slave = TWCSlave(bytearray(b"AB"), 80, config, mock_master)
-        
-        assert slave.APIcontrol is False
 
 
 class TestAmpsHeartbeat:
@@ -387,49 +353,6 @@ class TestAmpsHeartbeat:
 
 class TestVehicleChargeRateDesired:
     """The car's rate is desired state, never a command from the serial thread."""
-
-    @pytest.fixture
-    def slave(self):
-        from TWCManager.TWCSlave import TWCSlave
-        from TWCManager.Vehicle.Reconcile.Desired import DesiredStore
-
-        master = Mock()
-        master.getModuleByName = Mock(return_value=None)
-        master.desired = DesiredStore()
-        config = {
-            "config": {
-                "wiringMaxAmpsPerTWC": 32,
-                "useFlexAmpsToStartCharge": False,
-                "startStopDelay": 60,
-                "fakeMaster": False,
-            }
-        }
-        s = TWCSlave(bytearray(b"AB"), 80, config, master)
-        s.vehicleKey = "5YJ3E1EA1KF000001"
-        return s
-
-    def test_queue_charge_rate_sets_desired(self, slave):
-        from TWCManager.Vehicle.Reconcile.Desired import AMPS
-
-        slave._queueChargeRate(16.7)
-        d = slave.master.desired.get(slave.vehicleKey, AMPS)
-        assert (d.value, d.by, d.lift) == (16, "heartbeat", False)
-
-    def test_raise_sets_a_lift_and_the_flag_at_once(self, slave):
-        from TWCManager.Vehicle.Reconcile.Desired import AMPS
-
-        slave._requestVehicleRateRaise()
-        d = slave.master.desired.get(slave.vehicleKey, AMPS)
-        assert (d.value, d.by, d.lift) == (32, "lift", True)
-        assert slave.vehicleRateRaised is True
-        slave._resetVehicleRateRaised()
-        assert slave.vehicleRateRaised is False
-
-    def test_no_car_key_sets_nothing_and_raises_no_flag(self, slave):
-        slave.vehicleKey = None
-        slave._requestVehicleRateRaise()
-        assert slave.master.desired.keys() == [] and slave.vehicleRateRaised is False
-
     def test_heartbeat_code_never_calls_set_charge_rate_inline(self):
         import inspect
         from TWCManager.TWCSlave import TWCSlave

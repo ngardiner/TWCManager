@@ -81,7 +81,7 @@ class Gen2TWCProvider(Provider):
             return None
         if self.chargeRateControl() == 3:
             # Mode 3 hands the rate to the vehicle below 6 A
-            # (TWCSlave.send_master_heartbeat), and the TWC never offers
+            # (TWCSlave.offerFor, ChargingPoint), and the TWC never offers
             # below its own minimum; below the floor the next provider
             # carries the target
             return (slave.layerFloorAmps(), slave.maxOfferAmps)
