@@ -1,7 +1,7 @@
 import json
 import logging
+import threading
 import time
-from threading import RLock
 
 import jwt
 import requests
@@ -74,56 +74,57 @@ class TeslaTokenSlot:
         self.source = ""
         self.pausedUntil = 0
         self.changes = 0
-        # Tesla refresh tokens are single-use. Held across a refresh and any
-        # other change to the tokens, so two threads never spend the same
-        # refresh token (#690).
-        self.lock = RLock()
+        # A leaf: setTokens, clear and restore write the slot under it and a
+        # refresh claims the slot under it, so one refresh token is spent once
+        self._cond = threading.Condition()
+        self._refreshing = False
+        self._lastRefresh = None
+        self._claimedAt = None
 
     def setTokens(
-        self, accessToken, refreshToken=None, expireTime=None, source="pasted"
+        self,
+        accessToken,
+        refreshToken=None,
+        expireTime=None,
+        source="pasted",
+        claimed=None,
     ):
+        # setTokens, clear and restore return whether they wrote. With
+        # claimed (the changes count a refresh began at) they write only if
+        # the tokens have not changed since (a paste, a sync, a clear): a late
+        # answer, even a 401 for the old refresh token, never overwrites them.
         decoded = decodeToken(accessToken) if accessToken else None
         exp = decoded.get("exp") if decoded else None
         if not isinstance(exp, (int, float)) or isinstance(exp, bool):
             exp = None
         scp = decoded.get("scp") if decoded else None
-        if isinstance(scp, list) and all(isinstance(x, str) for x in scp):
-            self.scopes = frozenset(scp)
-        else:
-            self.scopes = None
-        self.scopeErrorsLogged = set()
-        self.refusedPurposes = set()
-        self.accessToken = accessToken
-        if accessToken:
-            self.tokenType, self.baseURL, self.verifyCert = self.classify(accessToken)
-        else:
-            self.tokenType, self.baseURL, self.verifyCert = "", "", True
-        if refreshToken is not None:
-            self.refreshToken = refreshToken
+        if not (isinstance(scp, list) and all(isinstance(x, str) for x in scp)):
+            scp = None
+        # classify logs, so it runs before the lock is taken
+        route = self.classify(accessToken) if accessToken else ("", "", True)
         if source == "synced":
             # The sync source owns the refresh token; never hold it.
-            self.refreshToken = ""
-            expireTime = exp
+            refreshToken, expireTime = "", exp
         if expireTime is None:
             expireTime = exp if exp is not None else time.time() + DEFAULT_LIFETIME
-        self.expireTime = expireTime
-        self.source = source
-        self.pausedUntil = 0
-        self.changes += 1
+        with self._cond:
+            if claimed is not None and claimed != self.changes:
+                return False
+            self.scopes = None if scp is None else frozenset(scp)
+            self.scopeErrorsLogged = set()
+            self.refusedPurposes = set()
+            self.accessToken = accessToken
+            self.tokenType, self.baseURL, self.verifyCert = route
+            if refreshToken is not None:
+                self.refreshToken = refreshToken
+            self.expireTime = expireTime
+            self.source = source
+            self.pausedUntil = 0
+            self.changes += 1
+            return True
 
-    def clear(self):
-        self.accessToken = ""
-        self.refreshToken = ""
-        self.expireTime = 0
-        self.tokenType = ""
-        self.baseURL = ""
-        self.verifyCert = True
-        self.source = ""
-        self.scopes = None
-        self.scopeErrorsLogged = set()
-        self.refusedPurposes = set()
-        self.pausedUntil = 0
-        self.changes += 1
+    def clear(self, claimed=None):
+        return self.restore((None, "", "", 0, "", "", True, "", 0), claimed)
 
     def empty(self, now=None):
         now = time.time() if now is None else now
@@ -208,10 +209,38 @@ class TeslaTokenSlot:
 
     def refresh(self, now=None):
         # Returns "success", "rejected" (Tesla answered but gave no tokens),
-        # "unreachable" (no response) or "not_configured".
-        if not self.refreshToken:
+        # "unreachable" (no response) or "not_configured". One refresh runs
+        # per slot at a time, its POST outside the lock: a refresh token is
+        # single-use, so a concurrent caller waits for, and shares, its result.
+        # A caller whose tokens changed after that refresh began (a paste)
+        # refreshes its own tokens once it ends.
+        with self._cond:
+            while self._refreshing:
+                same = self.changes == self._claimedAt
+                if not self._cond.wait_for(
+                    lambda: not self._refreshing, REFRESH_TIMEOUT + 5
+                ):
+                    return "unreachable"
+                if same:
+                    return self._lastRefresh
+            self._refreshing = True
+            self._claimedAt = claimed = self.changes
+            token, clientID = self.refreshToken, self.clientID
+        result = "rejected"
+        try:
+            result = self._refreshOnce(now, claimed, token, clientID)
+        finally:
+            with self._cond:
+                self._refreshing, self._lastRefresh = False, result
+                self._cond.notify_all()
+        return result
+
+    def _refreshOnce(self, now, claimed, token, clientID):
+        # token and clientID are read with the claim: a paste after it must
+        # not spend its single-use token on a refresh that will be discarded
+        if not token:
             return "not_configured"
-        if not self.clientID:
+        if not clientID:
             logger.error(
                 "Cannot refresh Tesla token: no teslaApiClientID configured. "
                 "Register a Fleet API app and set teslaApiClientID in config.json."
@@ -220,9 +249,9 @@ class TeslaTokenSlot:
         now = time.time() if now is None else now
         headers = {"accept": "application/json", "Content-Type": "application/json"}
         data = {
-            "client_id": self.clientID,
+            "client_id": clientID,
             "grant_type": "refresh_token",
-            "refresh_token": self.refreshToken,
+            "refresh_token": token,
             "scope": "offline_access",
         }
         req = None
@@ -241,7 +270,8 @@ class TeslaTokenSlot:
                     logging.INFO2,
                     "ERROR: Can't access Tesla car via API.  Please supply fresh tokens.",
                 )
-                self.clear()
+                if not self.clear(claimed) and self.accessToken:
+                    return "success"
             return "unreachable" if req is None else "rejected"
         except ValueError:
             logger.log(logging.INFO2, "Error parsing API Token Refresh Response")
@@ -255,13 +285,14 @@ class TeslaTokenSlot:
 
         try:
             logger.log(logging.INFO4, "Car API auth response received")
-            self.setTokens(
+            applied = self.setTokens(
                 response["access_token"],
                 response["refresh_token"],
                 now + response["expires_in"],
                 self.source,
+                claimed,
             )
-            return "success"
+            return "success" if applied or self.accessToken else "rejected"
         except Exception as e:
             logger.warning(
                 "Error processing token refresh response: %s", type(e).__name__
@@ -281,21 +312,25 @@ class TeslaTokenSlot:
             self.pausedUntil,
         )
 
-    def restore(self, snap):
-        (
-            self.scopes,
-            self.accessToken,
-            self.refreshToken,
-            self.expireTime,
-            self.tokenType,
-            self.baseURL,
-            self.verifyCert,
-            self.source,
-            self.pausedUntil,
-        ) = snap
-        self.scopeErrorsLogged = set()
-        self.refusedPurposes = set()
-        self.changes += 1
+    def restore(self, snap, claimed=None):
+        with self._cond:
+            if claimed is not None and claimed != self.changes:
+                return False
+            (
+                self.scopes,
+                self.accessToken,
+                self.refreshToken,
+                self.expireTime,
+                self.tokenType,
+                self.baseURL,
+                self.verifyCert,
+                self.source,
+                self.pausedUntil,
+            ) = snap
+            self.scopeErrorsLogged = set()
+            self.refusedPurposes = set()
+            self.changes += 1
+            return True
 
     def status(self, now=None):
         held = bool(self.accessToken)

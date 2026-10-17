@@ -1,3 +1,4 @@
+import threading
 import time
 
 import jwt
@@ -355,3 +356,147 @@ def test_refresh_never_logs_an_exceptions_text(stage, requests_mock, caplog, mon
     caplog.set_level(1)
     assert s.refresh() == "rejected"
     assert "RuntimeError" in caplog.text and new not in caplog.text
+
+
+# One refresh per slot at a time (#690)
+
+
+def refreshing_slot(requests_mock, answer):
+    # A login slot holding refresh token r1 whose refresh POST runs answer
+    s = owner_slot()
+    s.setTokens(owner_token(), "r1", source="login")
+    return s, requests_mock.post(AUTH_TOKEN_URL, **answer(s))
+
+
+def test_concurrent_refreshes_spend_the_refresh_token_once(requests_mock):
+    gate = threading.Event()
+    new = owner_token(jti="new")
+
+    def slow(request, context):
+        gate.wait(2)
+        return {"access_token": new, "refresh_token": "r2", "expires_in": 28800}
+
+    s, hit = refreshing_slot(requests_mock, lambda s: {"json": slow})
+    results = []
+    ts = [threading.Thread(target=lambda: results.append(s.refresh())) for _ in range(3)]
+    [t.start() for t in ts]
+    time.sleep(0.2)
+    gate.set()
+    [t.join(5) for t in ts]
+    assert hit.call_count == 1 and results == ["success"] * 3
+    assert s.refreshToken == "r2" and s.accessToken == new
+
+
+def test_a_refresh_answer_after_a_paste_is_discarded(requests_mock):
+    pasted = owner_token(jti="pasted")
+
+    def answer(s):
+        def paste_then_answer(request, context):
+            s.setTokens(pasted, "rp")
+            return {"access_token": owner_token(jti="late"), "refresh_token": "r2", "expires_in": 28800}
+
+        return {"json": paste_then_answer}
+
+    s, hit = refreshing_slot(requests_mock, answer)
+    assert s.refresh() == "success" and hit.call_count == 1
+    assert s.accessToken == pasted and s.refreshToken == "rp"
+
+
+def test_a_refresh_answer_after_a_clear_is_rejected(requests_mock):
+    def answer(s):
+        def clear_then_answer(request, context):
+            s.clear()
+            return {"access_token": owner_token(jti="late"), "refresh_token": "r2", "expires_in": 28800}
+
+        return {"json": clear_then_answer}
+
+    s, _ = refreshing_slot(requests_mock, answer)
+    assert s.refresh() == "rejected" and s.accessToken == "" and s.refreshToken == ""
+
+
+def test_a_401_after_a_paste_does_not_clear_the_pasted_token(requests_mock):  # F10
+    pasted = owner_token(jti="pasted")
+
+    def answer(s):
+        def paste_then_refuse(request, context):
+            s.setTokens(pasted, "rp")
+            context.status_code = 401
+            return {}
+
+        return {"json": paste_then_refuse}
+
+    s, _ = refreshing_slot(requests_mock, answer)
+    assert s.refresh() == "success"
+    assert s.accessToken == pasted and s.refreshToken == "rp"
+
+
+def test_a_paste_just_after_the_claim_does_not_change_what_is_posted(requests_mock):
+    # The paste lands between the claim and the POST body being built
+    pasted = owner_token(jti="pasted")
+    s, hit = refreshing_slot(
+        requests_mock,
+        lambda s: {"json": {"access_token": owner_token(jti="late"), "refresh_token": "r2", "expires_in": 28800}},
+    )
+    original = s._refreshOnce
+
+    def paste_then_refresh(*args):
+        s.setTokens(pasted, "rp")
+        return original(*args)
+
+    s._refreshOnce = paste_then_refresh
+    assert s.refresh() == "success" and hit.call_count == 1
+    assert hit.last_request.json()["refresh_token"] == "r1"
+    assert s.accessToken == pasted and s.refreshToken == "rp"
+
+
+def held_elsewhere(s):
+    # Whether another thread finds the slot's lock taken right now
+    out = []
+
+    def probe():
+        got = s._cond.acquire(blocking=False)
+        if got:
+            s._cond.release()
+        out.append(not got)
+
+    t = threading.Thread(target=probe)
+    t.start()
+    t.join(2)
+    return out[0]
+
+
+def test_no_lock_is_held_during_the_post(requests_mock):
+    seen = []
+
+    def answer(s):
+        def probe(request, context):
+            seen.append(held_elsewhere(s))
+            return {"access_token": owner_token(jti="n"), "refresh_token": "r2", "expires_in": 100}
+
+        return {"json": probe}
+
+    s, _ = refreshing_slot(requests_mock, answer)
+    assert s.refresh() == "success" and seen == [False]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda s, snap: s.restore(snap),
+        lambda s, snap: s.setTokens(owner_token(jti="other"), "r9"),
+        lambda s, snap: s.clear(),
+    ],
+    ids=["restore", "setTokens", "clear"],
+)
+def test_slot_mutators_take_the_slot_lock(mutate):  # F10
+    s = owner_slot()
+    s.setTokens(owner_token(), "r1")
+    snap = s.snapshot()
+    before = s.changes
+    with s._cond:
+        t = threading.Thread(target=mutate, args=(s, snap))
+        t.start()
+        t.join(0.2)
+        assert t.is_alive() and s.changes == before
+    t.join(2)
+    assert not t.is_alive() and s.changes == before + 1

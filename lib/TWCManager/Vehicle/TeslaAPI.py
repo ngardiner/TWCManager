@@ -283,26 +283,15 @@ class TeslaAPI:
         # slot holds no refresh token, so it never refreshes.
         for slot in (self.ownerSlot, self.fleetSlot):
             if slot.needsRefresh():
-                self.refreshSlot(slot, ifNeeded=True)
+                logger.log(logging.INFO8, "Attempting token refresh")
+                self.refreshSlot(slot)
 
-    def refreshSlot(self, slot, saveOnFailure=True, ifNeeded=False):
+    def refreshSlot(self, slot, saveOnFailure=True):
         # Refreshes one slot's tokens. Returns slot.refresh()'s result:
         # "success", "rejected", "unreachable" or "not_configured".
         # saveOnFailure=False leaves saving a failure's state to the caller.
-        # ifNeeded=True skips the refresh unless the token is due for one.
-        spending = slot.refreshToken
-        with slot.lock:
-            if slot.refreshToken != spending:
-                # Another thread refreshed, pasted or cleared the token while
-                # this one waited; spending the old one again would fail.
-                return "success" if slot.accessToken else "not_configured"
-            if ifNeeded and not slot.needsRefresh():
-                return "success"
-            if ifNeeded:
-                logger.log(logging.INFO8, "Attempting token refresh")
-            return self._refreshSlotLocked(slot, saveOnFailure)
-
-    def _refreshSlotLocked(self, slot, saveOnFailure):
+        # The slot runs one refresh at a time and shares its result, so a
+        # single-use refresh token is spent once.
         result = slot.refresh()
         if result == "success":
             self.master.queue_background_task({"cmd": "saveSettings"})
@@ -337,13 +326,13 @@ class TeslaAPI:
         # slot). A transport error is logged and carried by its type alone,
         # never its text (it can hold the header).
         while True:
-            sent = slot.accessToken
+            sent = slot.changes
             try:
                 req = getattr(requests, method)(
                     slot.baseURL[: -len("vehicles")] + path,
                     headers={
                         "accept": "application/json",
-                        "Authorization": "Bearer " + sent,
+                        "Authorization": "Bearer " + slot.accessToken,
                     },
                     json=body,
                     verify=slot.verifyCert,
@@ -392,45 +381,47 @@ class TeslaAPI:
             self._refuseWallConnectors(slot, status)
             return Outcome(REFUSED, str(status))
         label = slot.kind.capitalize()
+        if status == 401 and sent is not None and slot.changes != sent:
+            # Another thread refreshed, replaced or cleared the token (sent:
+            # slot.changes when the request went out) while the request was
+            # out: the 401 was for the old one, so the new one is sent once,
+            # and a cleared slot sends nothing
+            return _REFRESHED if slot.accessToken else Outcome(REFUSED, "401")
         if status == 401:
-            with slot.lock:
-                if sent is not None and slot.accessToken != sent:
-                    # Another thread refreshed or replaced the token while
-                    # this request was out (#689): send again with the new
-                    # one rather than clear it.
-                    return _REFRESHED if slot.accessToken else Outcome(REFUSED, "401")
-                if (
-                    refresh
-                    and "expired" in body
-                    and slot.source != "synced"
-                    and slot.refreshToken
-                ):
-                    result = self.refreshSlot(slot)
-                    if result == "success":
-                        return _REFRESHED
-                    if result == "unreachable":
-                        return Outcome(UNREACHABLE, "token refresh")
-                    if paid and not slot.empty():
-                        # Expired and the refresh failed (a 5xx, no client ID):
-                        # the tokens are kept, as refresh() alone clears on a
-                        # 401, but no later round pays for another 401. A
-                        # successful refresh (setTokens) lifts the refusal.
-                        logger.error(
-                            "Tesla %s API token has expired and could not be "
-                            "refreshed (%s); not sending commands with it until "
-                            "it is refreshed or replaced." % (label, result)
-                        )
-                        slot.refuse("command")
-                    return Outcome(REFUSED, "401")
-                # Retrying a bad token might make Tesla block remote access to
-                # the car: nothing more is sent with it until the user supplies
-                # fresh tokens
-                logger.error(
-                    "Tesla %s API token was rejected (HTTP 401); removing it." % label
-                )
-                slot.clear()
-                self.master.queue_background_task({"cmd": "saveSettings"})
+            if (
+                refresh
+                and "expired" in body
+                and slot.source != "synced"
+                and slot.refreshToken
+            ):
+                result = self.refreshSlot(slot)
+                if result == "success":
+                    return _REFRESHED
+                if result == "unreachable":
+                    return Outcome(UNREACHABLE, "token refresh")
+                if paid and not slot.empty():
+                    # Expired and the refresh failed (a 5xx, no client ID):
+                    # the tokens are kept, as refresh() alone clears on a
+                    # 401, but no later round pays for another 401. A
+                    # successful refresh (setTokens) lifts the refusal.
+                    logger.error(
+                        "Tesla %s API token has expired and could not be "
+                        "refreshed (%s); not sending commands with it until "
+                        "it is refreshed or replaced." % (label, result)
+                    )
+                    slot.refuse("command")
                 return Outcome(REFUSED, "401")
+            # Retrying a bad token might make Tesla block remote access to
+            # the car: nothing more is sent with it until the user supplies
+            # fresh tokens
+            if not slot.clear(sent):
+                # Changed since the check above: not the token refused
+                return _REFRESHED if slot.accessToken else Outcome(REFUSED, "401")
+            logger.error(
+                "Tesla %s API token was rejected (HTTP 401); removing it." % label
+            )
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            return Outcome(REFUSED, "401")
         if owner:
             refused = self.ownerRefusal(vehicle, status, body)
             if refused is not None:
@@ -1093,10 +1084,6 @@ class TeslaAPI:
         if self.syncedSlotLocked(slot):
             self.logSyncedSlotLocked(slot)
             return "token_sync"
-        with slot.lock:
-            return self._pasteRefreshTokenLocked(slot, token)
-
-    def _pasteRefreshTokenLocked(self, slot, token):
         previous = slot.snapshot()
         previousErrors = (self.carApiLastErrorTime, self.errorCount)
         slot.clear()
@@ -1149,8 +1136,7 @@ class TeslaAPI:
         slot = self.slotOfType(kind)
         if slot is None:
             return False
-        with slot.lock:
-            slot.clear()
+        slot.clear()
         self.master.queue_background_task({"cmd": "saveSettings"})
         return True
 
@@ -1223,8 +1209,7 @@ class TeslaAPI:
         if source != "synced" and self.syncedSlotLocked(slot):
             self.logSyncedSlotLocked(slot)
             return "token_sync"
-        with slot.lock:
-            slot.setTokens(accessToken, refreshToken, expireTime, source)
+        slot.setTokens(accessToken, refreshToken, expireTime, source)
         return "success"
 
     def migrateSavedTokens(self, settings, syncConfigured):

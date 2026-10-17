@@ -393,3 +393,36 @@ def test_login_form_shown_for_expired_synced_fleet_token():
     assert get_main() is False
     api.storeToken(fleet_token(), "", "synced")
     assert get_main() is True
+
+
+def test_a_refresh_token_pasted_during_a_refresh_is_sent(requests_mock):  # #690
+    # A background refresh of r1 is in flight when the user pastes a new
+    # refresh token: the paste must POST its own token, not share r1's answer
+    import threading
+
+    posted, inFlight, gate = [], threading.Event(), threading.Event()
+
+    def answer(request, context):
+        sent = request.json()["refresh_token"]
+        posted.append(sent)
+        if sent == "r1":
+            inFlight.set()
+            gate.wait(2)
+        tag = "old" if sent == "r1" else "pasted"
+        return {"access_token": fleet_token(jti=tag), "refresh_token": "r-" + tag, "expires_in": 28800}
+
+    requests_mock.post(FLEET_REFRESH_URL, json=answer)
+    api = new_api()
+    api.fleetSlot.setTokens(fleet_token(), "r1", source="login")
+    background = threading.Thread(target=api.fleetSlot.refresh)
+    background.start()
+    assert inFlight.wait(2)
+    results = []
+    paste = threading.Thread(target=lambda: results.append(api.savePastedToken(OPAQUE_REFRESH)))
+    paste.start()
+    time.sleep(0.2)
+    gate.set()
+    background.join(5)
+    paste.join(5)
+    assert results == ["success"] and posted == ["r1", OPAQUE_REFRESH]
+    assert api.fleetSlot.refreshToken == "r-pasted" and api.fleetSlot.source == "pasted"
