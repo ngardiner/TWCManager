@@ -3,7 +3,7 @@
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
 from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
 from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
-from TWCManager.TWCSlave import OfferContext
+from TWCManager.TWCSlave import Offer, OfferContext
 from collections import deque
 from datetime import datetime, timedelta
 import json
@@ -575,6 +575,19 @@ class TWCMaster:
                     "start": self.startCarsCharging,
                     "withdraw": self.withdrawStartCharging,
                 }[gate](key)
+
+    def withdrawOffers(self) -> None:
+        # The control pass keeps failing, so stop offering power: a Gen2 TWC
+        # gets a 0 offer (its idle minimum) and a Gen3 unit a 0 target. A car
+        # that carries its own rate keeps its last commanded rate; only the
+        # AMPS desire is cleared. Slaves first, so a failing chargingPoints()
+        # cannot leave them on a stale offer
+        for slave in self.getSlaveTWCs():
+            if slave.heardFrom:
+                slave.offer = Offer(0, 0)
+        for point in self.chargingPoints():
+            if not point.isReadOnly:
+                point.setTargetPower(0)
 
     def distributeEVSEPower(self) -> list:
         """Watt-based power distribution across charging points.
