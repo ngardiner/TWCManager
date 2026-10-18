@@ -1,8 +1,6 @@
-# tests/unit/test_offer_characterization.py: what a Gen2 TWC is offered on
-# the wire, and which car amps its charging point writes, on the default
-# (distributor) path. These pass at 1029809b (offers in the heartbeat, spike
-# settings 0) and after Phase 4 Task 4 (offers on the control tick): the
-# rules moved, the values did not. tickThenBeat runs each version's order.
+# What a Gen2 TWC is offered on the wire, and which car amps its charging
+# point writes, on the default (distributor) path. tickThenBeat runs a
+# slave's reply, the control pass and the heartbeat in that order.
 import time
 from unittest.mock import Mock
 
@@ -146,7 +144,7 @@ def test_mode_1_lift_goes_once_per_session_for_a_twc_only_point():
 
 
 @pytest.mark.parametrize("member", [False, True])
-def test_a_mode_2_to_1_switch_mid_session_lifts_again(member):  # F6
+def test_a_mode_2_to_1_switch_mid_session_lifts_again(member):
     m = master(mode=1, feed=20)
     if member:
         car(m, VIN, "Charging")
@@ -164,7 +162,7 @@ def test_a_mode_2_to_1_switch_mid_session_lifts_again(member):  # F6
     assert rate(m) == (32, "lift", True)
 
 
-def test_a_twc_point_never_clears_a_vehicle_endpoints_rate():  # F13
+def test_a_twc_point_never_clears_a_vehicle_endpoints_rate():
     # An anonymous TWC at 00 (not blind) rates its fan-out in mode 2. Once
     # VIN is named by the other TWC it leaves that fan-out, and its own
     # VehicleEndpoint (on the other TWC's point) holds a "distributor" rate,
