@@ -27,7 +27,7 @@ class WallConnectorVinReader:
     # After this many polls in a row name no car, poll this often instead
     SLOW_AFTER = 10
     SLOW_POLL_SECONDS = 600.0
-    # A connect edge asks at once, but never twice inside this (I7)
+    # A connect edge asks at once, but never twice inside this
     EDGE_MIN_GAP = 30.0
 
     def __init__(self, master, order, clock=time.time):

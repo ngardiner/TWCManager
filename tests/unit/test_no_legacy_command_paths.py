@@ -64,3 +64,31 @@ def test_one_distributor_entry():
                 if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "distributeEVSEPower":
                     callers.append((path.name, fn.name))
     assert callers == [("TWCMaster.py", "controlPass")]
+
+
+def test_code_comments_name_no_phase_or_issue():
+    # Comments say why the code is as it is; phases and issue or PR numbers
+    # belong in commit messages. Comments and docstrings only: CSS colours
+    # in HTML strings are not references
+    import ast
+    import io
+    import re
+    import tokenize
+
+    pattern = re.compile(r"Phase \d|#\d{3,}")
+    found = []
+    for path in sorted((REPO / "lib").rglob("*.py")):
+        src = path.read_text()
+        texts = [
+            (tok.start[0], tok.string)
+            for tok in tokenize.generate_tokens(io.StringIO(src).readline)
+            if tok.type == tokenize.COMMENT
+        ]
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc:
+                    texts.append((node.body[0].lineno, doc))
+        rel = path.relative_to(REPO)
+        found += ["%s:%d" % (rel, line) for line, text in texts if pattern.search(text)]
+    assert found == []

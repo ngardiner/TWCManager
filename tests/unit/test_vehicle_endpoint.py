@@ -28,7 +28,7 @@ def provider(e):
 
 def slave(key=None, amps=0.0, state=0x00): return SimpleNamespace(vehicleKey=key, reportedAmpsActual=amps, reportedState=state)
 
-def test_read_only_when_no_amps_candidate_and_ble_only_excludes_fleet():   # A17
+def test_read_only_when_no_amps_candidate_and_ble_only_excludes_fleet():
     m = master({"commandPolicy": "ble_only"}, fleet()); e = VehicleEndpoint(car(m, VIN1), m.providerOrder, m)
     assert e.isReadOnly and provider(e) == ""
     m2 = master({}, fleet()); e2 = VehicleEndpoint(car(m2, VIN1), m2.providerOrder, m2)
@@ -54,7 +54,7 @@ def test_state_from_registry_values_without_reads():
     assert e.wantsToCharge and e.occupied is True and e.maxPower == 32 * 240   # the pilot is not the car's limit
     v.observe("chargeCurrentRequestMax", 16, "OwnerAPI"); assert e.maxPower == 16 * 240
 
-def test_set_target_power_sets_desired_amps():                            # slim Task 12b
+def test_set_target_power_sets_desired_amps():
     from TWCManager.Vehicle.Reconcile.Desired import AMPS, DesiredStore
     m = master({}, fleet()); m.desired = DesiredStore(); e = VehicleEndpoint(car(m, VIN1), m.providerOrder, m)
     e.setTargetPower(0); assert m.desired.get(VIN1, AMPS) is None
@@ -71,7 +71,7 @@ def test_lists_at_home_api_cars_and_keeps_blind_rules():
     m.getSlaveTWCs = lambda: [slave(key=VIN1)]
     assert sorted(e.currentVIN for e in vehicleEndpoints(m)) == [VIN1, VIN2]                                      # named TWC: grouping merges, not exclusion
 
-def test_last_vin_plugged_twc_keeps_other_cars_listed():                           # Review Focus 5 / I5
+def test_last_vin_plugged_twc_keeps_other_cars_listed():
     m = master({}, fleet()); car(m, VIN1); car(m, VIN2)
     m.getSlaveTWCs = lambda: [slave(key=VIN1, state=0x03)]                      # stopped car: currentVIN cleared, lastVIN attributed
     assert sorted(e.currentVIN for e in vehicleEndpoints(m)) == [VIN1, VIN2]
@@ -82,7 +82,7 @@ def test_empty_without_tesla_api():
     m = master({}, ble()); m.getModuleByName = lambda n: None; car(m, VIN1)
     assert vehicleEndpoints(m) == []
 
-def test_anonymous_car_on_a_gen3_is_blind_but_a_correlated_one_is_not():           # G3
+def test_anonymous_car_on_a_gen3_is_blind_but_a_correlated_one_is_not():
     m = master({}, fleet()); car(m, VIN1); carapi = m.getModuleByName("TeslaAPI")
     gen3 = Mock(); gen3.devices = lambda: [SimpleNamespace(occupied=True, vehicleKey="anon:Gen3TWC-10.0.0.1")]
     m.getModuleByName = lambda n: {"TeslaAPI": carapi, "Gen3TWCs": gen3}.get(n)
@@ -90,7 +90,7 @@ def test_anonymous_car_on_a_gen3_is_blind_but_a_correlated_one_is_not():        
     gen3.devices = lambda: [SimpleNamespace(occupied=True, vehicleKey=VIN1)]
     assert [e.currentVIN for e in vehicleEndpoints(m)] == [VIN1]
 
-def test_occupied_gen3_without_a_vehicle_key_is_blind():                           # Task 10 review
+def test_occupied_gen3_without_a_vehicle_key_is_blind():
     m = master({}, fleet()); car(m, VIN1); carapi = m.getModuleByName("TeslaAPI")
     gen3 = Mock(); gen3.devices = lambda: [SimpleNamespace(occupied=True, vehicleKey=None)]
     m.getModuleByName = lambda n: {"TeslaAPI": carapi, "Gen3TWCs": gen3}.get(n)
@@ -98,7 +98,7 @@ def test_occupied_gen3_without_a_vehicle_key_is_blind():                        
     gen3.devices = lambda: [SimpleNamespace(occupied=None, vehicleKey=None), SimpleNamespace(occupied=False, vehicleKey=None)]
     assert [e.currentVIN for e in vehicleEndpoints(m)] == [VIN1]
 
-def test_a_car_only_ble_can_serve_is_writable_over_ble():                          # Task 10 review
+def test_a_car_only_ble_can_serve_is_writable_over_ble():
     for m in (master({}, ble()), master({"commandPolicy": "ble_only"}, ble(), fleet())):
         e = VehicleEndpoint(car(m, VIN1), m.providerOrder, m)
         assert not e.isReadOnly and provider(e) == "TeslaBLE"

@@ -300,7 +300,7 @@ class Policy:
         # to stop charging via the API. Only apply it when we are actually trying
         # to stop charging (maxAmps == 0); otherwise a stale override from a
         # previous stop attempt would incorrectly cap the limit when charging
-        # resumes (closes #586).
+        # resumes.
         chargeAmps = self.master.getMaxAmpsToDivideAmongSlaves()
         if self.limitOverride and chargeAmps == 0:
             currentCharge = (

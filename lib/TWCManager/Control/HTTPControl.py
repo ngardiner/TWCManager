@@ -136,9 +136,9 @@ def _vehicleRecordKey(vehicles, vin):
 
 
 def canForgetVehicle(master, vin):
-    """Phase 1's narrow Forget: a car the user added by VIN that no provider
-    has attached to and whose BLE key was never proven (a mistyped VIN).
-    Forgetting anything else is Phase 6: a provider would bring it back."""
+    """Forget is narrow: a car the user added by VIN that no provider has
+    attached to and whose BLE key was never proven (a mistyped VIN). A
+    provider would bring anything else back."""
     if not isinstance(vin, str) or not isWellFormedVIN(vin):
         return False
     vehicle = master.vehicleRegistry.get(vin)
@@ -189,7 +189,7 @@ class ThreadingSimpleServerIPv4(ThreadingMixIn, HTTPServer):
 
 def createServer(port, handler):
     # Listen on IPv6 (which also accepts IPv4 on a dual-stack host), falling
-    # back to IPv4 only on a host with IPv6 disabled (#721). Any other error,
+    # back to IPv4 only on a host with IPv6 disabled. Any other error,
     # such as the port being in use, is raised to the caller.
     try:
         return ThreadingSimpleServer(("::", port), handler)
@@ -1927,10 +1927,8 @@ def CreateHTTPHandlerClass(master):
                             self.getFieldValue(key)
                         )
 
-                # During Phase 1 (backwards compatibility) for the new scheduling
-                # UI, after writing the settings in the inteded new format, we then
-                # write back to the existing settings nodes so that it is backwards
-                # compatible.
+                # The new scheduling format is also written back to the older
+                # settings nodes, which other code still reads.
 
                 # Green Energy Tracking
                 master.settings["hourResumeTrackGreenEnergy"] = int(

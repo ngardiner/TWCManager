@@ -81,7 +81,7 @@ class ProviderOrder:
     ) -> List[Provider]:
         # localRule False: readiness only. A lift or the debug page's rate
         # must reach the car even where the TWC covers the rate, since the
-        # TWC cannot lift the car's own current limit (#660)
+        # TWC cannot lift the car's own current limit
         found = [
             p for p in self.ordered(capability) if self._ready(p, vehicle, capability)
         ]
@@ -165,7 +165,7 @@ class ProviderOrder:
             logger.debug("Debug %s for %s: no reconciler", command, vin)
             return False
         # Readiness only for a rate (localRule False): the TWC cannot lift
-        # the car's own current limit (#660). A TWC provider (no module) is
+        # the car's own current limit. A TWC provider (no module) is
         # never written from the HTTP thread; the distributor owns its target
         provider = next(
             (

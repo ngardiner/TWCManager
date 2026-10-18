@@ -88,7 +88,7 @@ class Gen2TWCProvider(Provider):
         return (slave.minAmps, slave.maxOfferAmps)
 
     def setAmps(self, vin: str, amps: int) -> Outcome:
-        # Publishes a target the serial loop sends on the next heartbeat
+        # Publishes a target: the control tick offers it, the heartbeat sends it
         slave = self._slaveForKey(vin)
         if slave is None:
             return Outcome(UNSUPPORTED, "no slave")
