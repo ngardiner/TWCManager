@@ -125,7 +125,7 @@ class ChargingPoint(EVSEInstance):
                 e.setTargetPower(watts)
             return
         # A car member's rate goes through its endpoint; a car only the TWC
-        # names gets the "heartbeat" rate, as BASE's heartbeat wrote it
+        # names gets the "heartbeat" rate
         desired, members = self.master.desired, {e.vehicleKey for e in cars}
         mine = [k for k in self._carKeys() if k not in members]
 
@@ -157,7 +157,7 @@ class ChargingPoint(EVSEInstance):
         if twc and (not car or amps >= floor):
             local.setTargetPower(watts)
             for e in cars:
-                # The TWC carries: the car keeps no rate of ours (M4)
+                # The TWC carries: the car keeps no rate of ours
                 e.setTargetPower(0)
             if local.vehicleRateRaised:
                 return
@@ -174,7 +174,7 @@ class ChargingPoint(EVSEInstance):
         # The car carries: the next return to the TWC may lift again. With
         # a car member the TWC holds the target, never below the handoff
         # floor; offerFor lifts it to its maximum once the car's rate is
-        # confirmed (final review I1)
+        # confirmed
         local.liftedSession = None
         local.setTargetPower(
             local.convertAmpsToWatts(max(floor, amps)) if cars else watts
@@ -191,8 +191,8 @@ class ChargingPoint(EVSEInstance):
 
 
 def anonymousCars(master, slave) -> list:
-    # As main's vehicle-less rate, paid once: the plugged-in cars, else
-    # vehicles[0]
+    # The cars an anonymous session rates, paid once: the plugged-in
+    # cars, else vehicles[0]
     plugged, cars = slave.pluggedCars()
     if plugged:
         return plugged

@@ -1,6 +1,6 @@
 # The TeslaAPI module's two token slots as two providers. The Owner API reads
 # for free, and commands and wakes only a car Tesla lists with
-# command_signing "off" (#659), and ranks first (canCommand). The Fleet API
+# command_signing "off", and ranks first (canCommand). The Fleet API
 # bills each vehicle_data, command and wake, so it reads only when the Owner
 # slot cannot (slotFor("read")). Neither does I/O to answer ready or
 # available. Both read the energy site's Wall Connector VINs for free, Owner
@@ -113,7 +113,7 @@ class _TeslaAPIProvider(Provider):
             and self.carapi.canCommand(vehicle, getattr(self.carapi, self.slotName))
             and self.carapi.onlineState(vehicle, now=self.clock()) is False
         ):
-            # As main: an asleep car is not charging; settled, never sent (N2)
+            # An asleep car is not charging: settled, never sent
             return Outcome(SATISFIED, "asleep, not charging")
         return self._command(vin, "charge_stop")
 
@@ -137,7 +137,7 @@ class _TeslaAPIProvider(Provider):
 
 
 class OwnerAPIProvider(_TeslaAPIProvider):
-    # Commands only a car Tesla lists with command_signing "off" (#659):
+    # Commands only a car Tesla lists with command_signing "off":
     # free, but paced as Fleet (OWNER_COMMAND)
     name = "OwnerAPI"
     rank = 4

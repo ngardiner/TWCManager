@@ -301,7 +301,7 @@ def refreshTokens(master):
     # Every 5 minutes, refresh the Tesla API tokens even if no vehicle
     # command has run recently, so read-only features like Storm Watch
     # don't rely on a charge/wake command to keep them alive. A POST of up
-    # to 10 s, so here, never on the serial loop (#690).
+    # to 10 s, so here, never on the serial loop.
     try:
         carapi = master.getModuleByName("TeslaAPI")
         if carapi:
@@ -323,7 +323,7 @@ def background_tasks_thread(master):
                 if task["cmd"] == "checkArrival":
                     onArrival(master)
                     # A free vehicle list load; refreshes cars at home, as
-                    # an arrival always has
+                    # an arrival does
                     master.updateChargeAtHome()
                 elif task["cmd"] == "checkCharge":
                     master.updateChargeAtHome()

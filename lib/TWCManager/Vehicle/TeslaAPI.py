@@ -38,7 +38,7 @@ _REFRESHED = Outcome(DONE, "refreshed")
 # Tesla refused an Owner API command or wake for one car: it wants signed
 # commands (noteOwnerCommandRefused)
 _SIGNING_REQUIRED = Outcome(REFUSED, "signing required")
-# Tesla takes no Owner API commands at all any more: no Owner command or wake
+# Tesla takes no Owner API commands at all: no Owner command or wake
 # goes to any car (noteOwnerCommandsRetired)
 _OWNER_RETIRED = Outcome(REFUSED, "owner commands retired")
 
@@ -59,7 +59,7 @@ class CarApiState:
     delayNextWakeAttempt = 0
     online = None  # the free online check: True, False, None (no answer)
     onlineCheckedAt = 0  # ... reused for 120 s from here
-    # As listed: Owner API commands only for "off" (#659). The latch is set
+    # As listed: Owner API commands only for "off". The latch is set
     # by a 403 to one (noteOwnerCommandRefused)
     commandSigning = None
     ownerCommandsRefused = False
@@ -101,7 +101,7 @@ class TeslaAPI:
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
         "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
         # Not a Fleet region: the Owner API used by TeslaMate tokens. It reads,
-        # and commands only a car that takes unsigned commands (#659).
+        # and commands only a car that takes unsigned commands.
         # fleetRegions() leaves it out of every region list and lookup.
         "OwnerAPI": "https://owner-api.teslamotors.com/api/1/vehicles",
     }
@@ -254,7 +254,7 @@ class TeslaAPI:
             return
         # Each claim follows its slot live, so a token pasted or synced after
         # the listing manages the car without a re-list; the Owner claim also
-        # follows this car's signing (#659)
+        # follows this car's signing
         vehicle.claim("OwnerAPI", lambda: self.ownerCommandsAllowed(state), "listed")
         vehicle.claim("FleetAPI", lambda: self.fleetSlot.usable("command"), "listed")
         # A cloud account listing is a sighting.
@@ -529,7 +529,7 @@ class TeslaAPI:
         # True when the Owner token may command the car (its CarApiState):
         # the token is not refused commands (an expired one that could not
         # refresh, a 412), Tesla lists the car with command_signing exactly
-        # "off" (#659), and no Owner command to it has come back 403 since.
+        # "off", and no Owner command to it has come back 403 since.
         # "required", no field, or any other value is read-only: fail closed
         return car is not None and self.ownerReadOnlyReason(car) is None
 
@@ -592,7 +592,7 @@ class TeslaAPI:
 
     def loadList(self):
         # The vehicle list (a free call) loads here, and held limits waiting
-        # on it resolve: the cloud providers serve only listed cars (C1)
+        # on it resolve: the cloud providers serve only listed cars
         if self.registry.attached("TeslaAPI"):
             self.resolveHeldLimits()
         elif not self.getCarApiRetryRemaining():
@@ -619,7 +619,7 @@ class TeslaAPI:
         # Held limits older releases keyed by vehicle ID move under the VIN
         # (free calls, only while any wait). Owner and Fleet may be different
         # accounts: every usable slot's list counts, and a list that failed
-        # defers it to the next check (I9)
+        # defers it to the next check
         held = getattr(self.master, "heldLimits", None)
         if not isinstance(held, HeldLimits) or not held.waiting():
             return
@@ -637,7 +637,7 @@ class TeslaAPI:
         # One free GET of the slot's vehicle list: the listed cars; None when
         # the slot refused (it is cleared or paused, with no API error
         # backoff, so the next poll can use the other slot at once); False on
-        # any other failure. The Owner API no longer lists vehicles under
+        # any other failure. The Owner API does not list vehicles under
         # /vehicles (it answers 412 "only available on fleetapi"); /products
         # still does, with energy sites that addVehicle skips (no VIN).
         path = "products" if slot.tokenType == "owner" else "vehicles"
@@ -1603,7 +1603,7 @@ class TeslaAPI:
             self.resetCarApiLastErrorTime()
             self._wakeSettled(car)
             # The wake's answer replaces the cached "asleep": the read that
-            # follows it goes out (C1)
+            # follows it goes out
             car.online, car.onlineCheckedAt = True, now
             # A command sent at once after a wake can fail with
             # could_not_wake_buses; let the car settle
@@ -1867,7 +1867,7 @@ class TeslaAPI:
                     return False, None
                 # Transient errors (vehicle unavailable, operation_timedout,
                 # etc.) retry after a short delay, without incrementing
-                # errorCount into the full exponential backoff (closes #377).
+                # errorCount into the full exponential backoff.
                 logger.log(
                     logging.INFO8,
                     "Transient error for %s: %s.  Will retry shortly."
@@ -1884,8 +1884,8 @@ class TeslaAPI:
     def _readFresh(self, vehicle, field, maxAge):
         # Reads field through the registry cascade (BLE, then the cloud API;
         # never a wake). Success is a newer observation, one within maxAge,
-        # or an API status deferral (which reports stored values unfetched,
-        # as update_vehicle_data always has). A stale value handed back after
+        # or an API status deferral (which reports stored values unfetched).
+        # A stale value handed back after
         # every source failed is a failure.
         car = vehicle.attachment("TeslaAPI")
         before = vehicle.latest(field)

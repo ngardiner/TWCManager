@@ -184,12 +184,12 @@ class TWCMaster:
 
     def withdrawStartCharging(self, vin):
         # A start not wanted any more (too little on offer): its desire goes;
-        # its record stays for the next start (I4)
+        # its record stays for the next start
         for v in self._chargeTargets(vin, START_CHARGING):
             self.desired.clearIf(v.key, CHARGING, True)
 
     def _chargeTargets(self, vin, capability):
-        # As main: a named car; for an anonymous point, a mode-1 start or
+        # A named car; for an anonymous point, a mode-1 start or
         # stop and a mode-3 start went unaddressed (broadcastVehicles)
         targets = targetsFor(self, vin or None, capability)
         mode = int(self.settings.get("chargeStopMode", 1))
@@ -205,7 +205,7 @@ class TWCMaster:
     def _wantCharging(self, vin, value):
         capability = START_CHARGING if value else STOP_CHARGING
         for v in self._chargeTargets(vin, capability):
-            # The same value withdrawn earlier keeps its record inside main's
+            # The same value withdrawn earlier keeps its record inside the
             # 60 s gate, unless the car has reported since its last send
             rec = self.desired.record(v.key, CHARGING)
             keep = rec.lastSentAt > 0 and not newerReading(v, CHARGING, rec.lastSentAt)
@@ -588,12 +588,6 @@ class TWCMaster:
           from is no endpoint (chargingPoints) and gets no target.
         - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
         - A car on no TWC has desired amps (VehicleEndpoint.setTargetPower).
-
-        A point not wanting power (an idle TWC) gets a target of 0 and counts
-        nothing against the budget.  On the wire, TWCSlave offers it 0 when no
-        car is charging (a Gen2 treats 0 as its hardware minimum) and its
-        hardware minimum when another car charges with at least
-        minAmpsPerTWC of power per car, so it can see a car plug in.
 
         Returns the charging points it built.
         """
@@ -1900,7 +1894,7 @@ class TWCMaster:
     def setGeneration(self, source, value):
         # Some EMS modules report generation as a negative value (e.g. -5000W
         # means 5000W generated). Negate such values so the rest of the code
-        # always works with positive generation watts (closes #442).
+        # always works with positive generation watts.
         if value < 0:
             value = -value
         self.generationValues[source] = value
@@ -2060,7 +2054,7 @@ class TWCMaster:
     def stopRespondingToSlaves(self):
         # Every slave stops charging once we go quiet; resumes after a minute.
         # The expiry first: the serial thread reads both without the lock, and
-        # a 0 seen with the old expiry would be reset at once (M1)
+        # a 0 seen with the old expiry would be reset at once
         with self.settingsLock:
             self.settings["respondToSlavesExpiry"] = time.time() + 60
             self.settings["respondToSlaves"] = 0

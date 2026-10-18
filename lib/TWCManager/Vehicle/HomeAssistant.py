@@ -215,7 +215,7 @@ class HomeAssistant:
 
         self._rest_lock = threading.Lock()
 
-        # The host only: a URL can carry userinfo or a query token (M8)
+        # The host only: a URL can carry userinfo or a query token
         host = urlsplit(self.url).hostname
         logger.info("HomeAssistant vehicle module initialising, host=%s", host)
 

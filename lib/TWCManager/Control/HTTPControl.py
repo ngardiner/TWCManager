@@ -135,9 +135,9 @@ def _vehicleRecordKey(vehicles, vin):
 
 
 def canForgetVehicle(master, vin):
-    """Phase 1's narrow Forget: a car the user added by VIN that no provider
-    has attached to and whose BLE key was never proven (a mistyped VIN).
-    Forgetting anything else is Phase 6: a provider would bring it back."""
+    """Forget is narrow: a car the user added by VIN that no provider has
+    attached to and whose BLE key was never proven (a mistyped VIN). A
+    provider would bring anything else back."""
     if not isinstance(vin, str) or not isWellFormedVIN(vin):
         return False
     vehicle = master.vehicleRegistry.get(vin)
@@ -1909,10 +1909,8 @@ def CreateHTTPHandlerClass(master):
                             self.getFieldValue(key)
                         )
 
-                # During Phase 1 (backwards compatibility) for the new scheduling
-                # UI, after writing the settings in the inteded new format, we then
-                # write back to the existing settings nodes so that it is backwards
-                # compatible.
+                # The new scheduling format is also written back to the older
+                # settings nodes, which other code still reads.
 
                 # Green Energy Tracking
                 master.settings["hourResumeTrackGreenEnergy"] = int(

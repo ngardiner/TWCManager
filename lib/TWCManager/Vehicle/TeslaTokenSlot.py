@@ -149,7 +149,7 @@ class TeslaTokenSlot:
         # Whether this kind of token can serve the purpose for every car.
         # An Owner token serves reads and energy; it commands only a car
         # that takes unsigned commands, which TeslaAPI.canCommand
-        # decides per car (#659), so no command purpose is granted here.
+        # decides per car, so no command purpose is granted here.
         if self.kind == "owner":
             return purpose in ("read", "energy")
         return self.missingScope(purpose) is None

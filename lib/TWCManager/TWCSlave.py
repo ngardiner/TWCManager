@@ -152,8 +152,7 @@ class TWCSlave:
         return self.liftedSession == self.plugSessions
 
     def offerFor(self, target, ctx, now):
-        # The control tick's offer for a distributor target: BASE's
-        # heartbeat rules, without the 6 A spike or Track Green dampening
+        # The control tick's offer for a distributor target
         if self.lastAmpsOffered < 0:
             self.lastAmpsOffered = self.reportedAmpsMax
         minOffer, n = self.minAmpsToOffer(), ctx.carsCharging
@@ -167,7 +166,7 @@ class TWCSlave:
                 desired = self.minAmpsTWCSupports
         elif ctx.mode == 2 or (ctx.mode == 3 and desired < 6):
             # The car carries the rate: the TWC offers its maximum once the
-            # car believes the rate, never before (final review I1)
+            # car believes the rate, never before
             confirmed = ctx.confirmed.get(bytes(self.TWCID))
             desired = self.wiringMaxAmps if confirmed else int(desired)
         else:

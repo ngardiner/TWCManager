@@ -278,8 +278,8 @@ class Gen3TWCs:
         self.vinReader.apply(self.devices())
 
     def _supply(self):
-        """(phases, voltage) of the first device, as the published value
-        has always used."""
+        """(phases, voltage) of the first device, which the published
+        value uses."""
         devices = self.devices()
         if not devices:
             return 1, float(
