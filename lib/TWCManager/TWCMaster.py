@@ -41,6 +41,25 @@ from TWCManager.Vehicle.Reconcile.Targets import (
 logger = LoggerFactory.get_logger("Master", "Master")
 
 
+# A fresh install's settings, and the keys every loaded settings file gets
+DEFAULT_SETTINGS = {
+    "chargeNowAmps": 0,
+    "chargeStopMode": "1",
+    "chargeNowTimeEnd": 0,
+    "homeLat": 10000,
+    "homeLon": 10000,
+    "hourResumeTrackGreenEnergy": -1,
+    "kWhDelivered": 119,
+    "nonScheduledAmpsMax": 0,
+    "respondToSlaves": 1,
+    "scheduledAmpsDaysBitmap": 0x7F,
+    "scheduledAmpsEndHour": -1,
+    "scheduledAmpsMax": 0,
+    "scheduledAmpsStartHour": -1,
+    "sendServerTime": 0,
+}
+
+
 class TWCMaster:
     backgroundTasksQueue = queue.Queue()
     backgroundTasksCmds = {}
@@ -67,22 +86,7 @@ class TWCMaster:
     overrideMasterHeartbeatData = b""
     protocolVersion = 2
     releasedModules = []
-    settings = {
-        "chargeNowAmps": 0,
-        "chargeStopMode": "1",
-        "chargeNowTimeEnd": 0,
-        "homeLat": 10000,
-        "homeLon": 10000,
-        "hourResumeTrackGreenEnergy": -1,
-        "kWhDelivered": 119,
-        "nonScheduledAmpsMax": 0,
-        "respondToSlaves": 1,
-        "scheduledAmpsDaysBitmap": 0x7F,
-        "scheduledAmpsEndHour": -1,
-        "scheduledAmpsMax": 0,
-        "scheduledAmpsStartHour": -1,
-        "sendServerTime": 0,
-    }
+    settings = dict(DEFAULT_SETTINGS)
     slaveHeartbeatData = bytearray(
         [0x01, 0x0F, 0xA0, 0x0F, 0xA0, 0x00, 0x00, 0x00, 0x00]
     )
@@ -143,22 +147,7 @@ class TWCMaster:
         # hour after startup, once providers have reclaimed their cars, so a
         # persisted car Fleet still lists is not expired and re-created.
         self.lastVehicleExpiry = time.time()
-        self.settings = {
-            "chargeNowAmps": 0,
-            "chargeStopMode": "1",
-            "chargeNowTimeEnd": 0,
-            "homeLat": 10000,
-            "homeLon": 10000,
-            "hourResumeTrackGreenEnergy": -1,
-            "kWhDelivered": 119,
-            "nonScheduledAmpsMax": 0,
-            "respondToSlaves": 1,
-            "scheduledAmpsDaysBitmap": 0x7F,
-            "scheduledAmpsEndHour": -1,
-            "scheduledAmpsMax": 0,
-            "scheduledAmpsStartHour": -1,
-            "sendServerTime": 0,
-        }
+        self.settings = dict(DEFAULT_SETTINGS)
         self.advanceHistorySnap()
         if config["config"].get("maxAmpsAllowedFromGrid", None) is None:
             self.setLimitAmpsToDivideAmongSlaves(
@@ -1145,24 +1134,9 @@ class TWCMaster:
         backupFileName = fileName + ".backup"
 
         if not os.path.exists(fileName):
-            # Initialize with class defaults if file doesn't exist
+            # No file yet: a fresh install
             with self.settingsLock:
-                self.settings = {
-                    "chargeNowAmps": 0,
-                    "chargeStopMode": "1",
-                    "chargeNowTimeEnd": 0,
-                    "homeLat": 10000,
-                    "homeLon": 10000,
-                    "hourResumeTrackGreenEnergy": -1,
-                    "kWhDelivered": 119,
-                    "nonScheduledAmpsMax": 0,
-                    "respondToSlaves": 1,
-                    "scheduledAmpsDaysBitmap": 0x7F,
-                    "scheduledAmpsEndHour": -1,
-                    "scheduledAmpsMax": 0,
-                    "scheduledAmpsStartHour": -1,
-                    "sendServerTime": 0,
-                }
+                self.settings = dict(DEFAULT_SETTINGS)
             return
 
         # Read and parse the file(s) into a local with no lock held; the
@@ -1214,27 +1188,11 @@ class TWCMaster:
                 "If this is the case, you may need to locate the old config file and migrate some settings manually."
             )
 
-        # Step 1b - Merge loaded settings with defaults to ensure all required keys exist
-        defaults = {
-            "chargeNowAmps": 0,
-            "chargeStopMode": "1",
-            "chargeNowTimeEnd": 0,
-            "homeLat": 10000,
-            "homeLon": 10000,
-            "hourResumeTrackGreenEnergy": -1,
-            "kWhDelivered": 119,
-            "nonScheduledAmpsMax": 0,
-            "respondToSlaves": 1,
-            "scheduledAmpsDaysBitmap": 0x7F,
-            "scheduledAmpsEndHour": -1,
-            "scheduledAmpsMax": 0,
-            "scheduledAmpsStartHour": -1,
-            "sendServerTime": 0,
-        }
+        # Step 1b - every default key exists
         with self.settingsLock:
             if loaded is not None:
                 self.settings = loaded
-            for key, value in defaults.items():
+            for key, value in DEFAULT_SETTINGS.items():
                 if key not in self.settings:
                     self.settings[key] = value
             registryBlob = self.settings.get("vehicleRegistry")
