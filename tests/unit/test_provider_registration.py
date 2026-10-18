@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
@@ -105,10 +106,8 @@ def test_other_policies_keep_reading_over_ble(policy):
 def test_no_vehicle_modules_registers_only_gen2():
     m = TWCMaster("AB", CONFIG)
     assert registerProviders(m) == ["Gen2TWC"]
-    # Every install registers both controllers; without TeslaAPI the
-    # vehicle side lists no endpoint
-    assert [c["name"] for c in m.getModulesByType("EVSEController")] == ["Gen2TWCs", "VehicleEndpoints"]
-    assert m.modules["VehicleEndpoints"]["ref"].allEVSEs == []
+    # Without TeslaAPI the vehicle side lists no endpoint
+    assert m.getModulesByType("EVSEController") == [] and vehicleEndpoints(m) == []
 
 def test_default_boot_registers_unconfigured_modules_that_never_command():
     # A config with no vehicle sections still loads TeslaAPI and HomeAssistant
@@ -121,7 +120,7 @@ def test_default_boot_registers_unconfigured_modules_that_never_command():
     for cap in sorted(C.COMMANDS):
         assert [p.name for p in m.providerOrder.candidates(v, cap) if not p.local] == []
     assert m.providerOrder.candidates(None, C.READ_WALL_CONNECTOR_VINS) == []
-    assert [c["name"] for c in m.getModulesByType("EVSEController")] == ["Gen2TWCs", "VehicleEndpoints"]
+    assert m.getModulesByType("EVSEController") == []
 
 def test_one_failing_module_does_not_stop_the_others(caplog):
     m = Mock(); m.settings = {}; m.config = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)

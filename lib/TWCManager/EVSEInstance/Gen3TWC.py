@@ -1,5 +1,5 @@
 """
-EVSEInstance implementation for Tesla Wall Connector Generation 3 devices.
+A Tesla Wall Connector Generation 3 as a charging endpoint.
 
 Gen3 TWCs are self-contained units with their own Wi-Fi connectivity and a
 local HTTP API.  They do not participate in the TWC RS485 master/slave
@@ -7,7 +7,7 @@ protocol.  Instead, they self-regulate charge current by polling a Neurio
 Modbus energy meter to measure available headroom on the circuit.
 
 TWCManager controls a Gen3 by manipulating a *fake* Neurio server
-(Gen3TWCs EVSEController) to present a synthetic house load that creates
+(Gen3TWCs) to present a synthetic house load that creates
 exactly the headroom we want the TWC to charge at.
 
 State readback uses the Gen3 HTTP vitals endpoint::
@@ -66,6 +66,10 @@ class Gen3TWC(EVSEInstance):
 
     # Seconds within which a car's plug-in observation correlates it
     CORRELATE_WINDOW = 120.0
+    # Vitals carry no VIN (currentVIN stays "")
+    isReadOnly = False
+    isLocal = True
+    controllers = ["Gen3TWCs"]
 
     def __init__(self, device_cfg: dict, controller: "Gen3TWCs", master):
         """
@@ -297,10 +301,6 @@ class Gen3TWC(EVSEInstance):
         """True when the last vitals fetch succeeded (cached)."""
         return self._vitals_ok
 
-    # ------------------------------------------------------------------
-    # EVSEInstance: identity
-    # ------------------------------------------------------------------
-
     @property
     def ID(self) -> str:
         return f"Gen3TWC-{self._ip}"
@@ -317,22 +317,6 @@ class Gen3TWC(EVSEInstance):
     def phases(self) -> int:
         return self._phases
 
-    # ------------------------------------------------------------------
-    # EVSEInstance: capabilities
-    # ------------------------------------------------------------------
-
-    @property
-    def isReadOnly(self) -> bool:
-        return False
-
-    @property
-    def isLocal(self) -> bool:
-        return True
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: state
-    # ------------------------------------------------------------------
-
     @property
     def occupied(self):
         if not self._vitals_ok:
@@ -344,12 +328,6 @@ class Gen3TWC(EVSEInstance):
         registry = self._registry()
         vehicle = None if registry is None else registry.vehicleAt(self.pointId)
         return None if vehicle is None else vehicle.key
-
-    @property
-    def isCharging(self) -> bool:
-        v = self.vitals
-        state = v.get("evse_state", "")
-        return str(state).lower() == "charging"
 
     @property
     def wantsToCharge(self) -> bool:
@@ -381,14 +359,6 @@ class Gen3TWC(EVSEInstance):
         ]
 
     @property
-    def currentPower(self) -> float:
-        return self.convertAmpsToWatts(self.currentAmps, self.currentVoltage)
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: power limits
-    # ------------------------------------------------------------------
-
-    @property
     def minPower(self) -> float:
         # Gen3 minimum pilot is 6 A (IEC 61851)
         return self.convertAmpsToWatts(6, self.currentVoltage)
@@ -396,23 +366,6 @@ class Gen3TWC(EVSEInstance):
     @property
     def maxPower(self) -> float:
         return self.convertAmpsToWatts(self._fuse_amps, self.currentVoltage)
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: optional properties
-    # ------------------------------------------------------------------
-
-    @property
-    def currentVIN(self) -> str:
-        # Gen3 vitals do not expose VIN; return empty string.
-        return ""
-
-    @property
-    def controllers(self) -> list:
-        return ["Gen3TWCs"]
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: control
-    # ------------------------------------------------------------------
 
     def setTargetPower(self, watts: float) -> None:
         """Record this unit's own target; the controller turns every unit's

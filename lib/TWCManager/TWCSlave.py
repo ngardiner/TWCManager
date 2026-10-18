@@ -223,12 +223,12 @@ class TWCSlave:
             amps = self.wiringMaxAmps
         return amps
 
-    def chargeGate(self, now):
-        # The tick's start/stop for this protocol-2 TWC's car, once offered.
-        # A drawing car offered 0 stops once the offer is 60 s old and its
-        # draw startStopDelay steady: a cut mid-negotiation could strand it,
-        # the offer may rise meanwhile, and fewer cycles spare the relay
-        key = self.vehicleKey
+    def chargeGate(self, now, key) -> Optional[str]:
+        # The tick's start/stop for key, this protocol-2 TWC's car, once
+        # offered. A drawing car offered 0 stops once the offer is 60 s old
+        # and its draw startStopDelay steady: a cut mid-negotiation could
+        # strand it, the offer may rise meanwhile, and fewer cycles spare
+        # the relay
         if self.protocolVersion != 2 or key is None or self.offer is None:
             return None
         offered, actual = self.offer.amps, self.reportedAmpsActual

@@ -24,10 +24,6 @@ class ChargingPoint(EVSEInstance):
         self.key = key
         self.endpoints = list(endpoints)
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     @property
     def localEndpoints(self) -> list:
         return [e for e in self.endpoints if e.isLocal]
@@ -36,79 +32,27 @@ class ChargingPoint(EVSEInstance):
     def vehicleEndpoints(self) -> list:
         return [e for e in self.endpoints if not e.isLocal]
 
-    def _preferLocal(self) -> list:
-        return self.localEndpoints or self.endpoints
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: identity
-    # ------------------------------------------------------------------
-
     @property
     def ID(self) -> str:
         return "Point-" + self.key
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: capabilities
-    # ------------------------------------------------------------------
 
     @property
     def isReadOnly(self) -> bool:
         return all(e.isReadOnly for e in self.endpoints)
 
     @property
-    def isLocal(self) -> bool:
-        return any(e.isLocal for e in self.endpoints)
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: state
-    # ------------------------------------------------------------------
-
-    @property
-    def isCharging(self) -> bool:
-        return any(e.isCharging for e in self.endpoints)
-
-    @property
     def wantsToCharge(self) -> bool:
         # The TWC's own report decides when there is one: the registry's
         # chargingState can be stale for a car that has finished
-        return any(e.wantsToCharge for e in self._preferLocal())
-
-    @property
-    def occupied(self):
-        states = [e.occupied for e in self.endpoints]
-        if any(s is True for s in states):
-            return True
-        if states and all(s is False for s in states):
-            return False
-        return None
-
-    @property
-    def currentAmps(self) -> float:
-        consider = self._preferLocal()
-        if not consider:
-            return 0.0
-        return sum(e.currentAmps for e in consider) / len(consider)
+        return any(e.wantsToCharge for e in self.localEndpoints or self.endpoints)
 
     @property
     def currentVoltage(self) -> list:
-        consider = self._preferLocal()
-        if not consider:
-            return [0, 0, 0]
+        consider = self.localEndpoints or self.endpoints
         columns = list(zip(*[e.currentVoltage for e in consider]))
         if not columns:
             return [0, 0, 0]
         return [sum(col) / len(col) for col in columns]
-
-    @property
-    def currentPower(self) -> float:
-        consider = self._preferLocal()
-        if not consider:
-            return 0.0
-        return sum(e.currentPower for e in consider) / len(consider)
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: power limits
-    # ------------------------------------------------------------------
 
     def _atPointVoltage(self, limit, pick) -> float:
         # Members are compared in amps and priced at the point's voltage.
@@ -131,17 +75,6 @@ class ChargingPoint(EVSEInstance):
         # The binding member limits the point
         return self._atPointVoltage(lambda e: e.maxPower, min)
 
-    # ------------------------------------------------------------------
-    # EVSEInstance: optional properties
-    # ------------------------------------------------------------------
-
-    @property
-    def currentVIN(self) -> str:
-        for e in self.endpoints:
-            if e.currentVIN:
-                return e.currentVIN.upper()
-        return ""
-
     @property
     def vehicleKey(self):
         return self.key
@@ -154,10 +87,6 @@ class ChargingPoint(EVSEInstance):
                 if c not in seen:
                     seen.append(c)
         return seen
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: control
-    # ------------------------------------------------------------------
 
     def carriers(self) -> Tuple[bool, bool]:
         # (the TWC carries the rate, the car carries it), by chargeRateControl

@@ -2,6 +2,7 @@
 # distributor for every install with a Gen2 slave; flex is gone (Phase 4,
 # Task 3). Real TWCMaster and Gen2TWC throughout.
 import inspect
+import json
 import logging
 import re
 import time
@@ -10,6 +11,7 @@ from unittest.mock import Mock, patch
 
 from TWCManager.ControlTick import ControlTick
 from TWCManager.EVSEInstance.ChargingPoint import ChargingPoint
+from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.TWCSlave import TWCSlave
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
@@ -26,8 +28,8 @@ def target(s):
 
 
 def pureGen2(feed, config=None, slaves=2):
-    # A pure-Gen2 install: no TeslaAPI module (TeslaAPI disabled), so
-    # VehicleEndpoints lists nothing; the slaves are charging and heard from
+    # A pure-Gen2 install: no TeslaAPI module (TeslaAPI disabled), so no
+    # car is listed; the slaves are charging and heard from
     cfg = dict(
         CONFIG,
         config=dict(
@@ -174,7 +176,7 @@ def test_a_vehicle_only_install_is_controlled():  # (h) intended fix
     assert setAmps(m) == [{"vin": VIN, "amps": 20}]
 
 
-def test_a_gen2_install_with_no_slave_linked_sends_no_amps():  # review I1
+def test_a_gen2_install_with_no_slave_linked_sends_no_amps():
     # An RS-485 interface is loaded but no slave has linked (startup, a
     # timed-out slave, a dead adapter): the TWC might serve the car, so the
     # car gets no endpoint and no rate
@@ -184,7 +186,7 @@ def test_a_gen2_install_with_no_slave_linked_sends_no_amps():  # review I1
     m.getMaxAmpsToDivideAmongSlaves = lambda: 20
     for _ in range(3):
         m.controlPass()
-    assert setAmps(m) == [] and m.modules["VehicleEndpoints"]["ref"].allEVSEs == []
+    assert setAmps(m) == [] and vehicleEndpoints(m) == []
     s = m.newSlave(b"\x82\x44", 80)  # it links and replies: 00, 0 A
     m.controlPass()
     assert [p.ID for p in m.chargingPoints()] == ["Point-Gen2TWC-8244", "Point-" + VIN]
@@ -267,7 +269,6 @@ def test_the_serial_loop_no_longer_distributes_or_processes_ipc():
     loop = loop[: loop.index("except KeyboardInterrupt:")]
     for gone in ("distributeEVSEPower", "processIPC", "expireVehicles", "controlPass"):
         assert gone not in loop, gone
-    assert "VehicleEndpoints" not in src  # registered by TWCMaster itself
     start = src.index("master.controlTick = ControlTick(master)")
     assert src.index("master.reconciler.start()") < start < src.index(
         "master.controlTick.start()"
@@ -426,6 +427,29 @@ def test_no_gate_acts_before_the_first_offer():
     m.withdrawStartCharging = Mock()
     s = charging(m, actual=0.0)
     s.protocolVersion, s.currentVIN = 2, VIN
-    assert s.offer is None and s.chargeGate(time.time()) is None
-    s.send_master_heartbeat()
-    assert not m.withdrawStartCharging.called
+    assert s.offer is None and s.chargeGate(time.time(), VIN) is None
+    s.heardFrom = False
+    m.controlPass()
+    assert s.offer is None and not m.withdrawStartCharging.called
+
+
+def test_retired_settings_keys_load_and_are_ignored(tmp_path):
+    # Flex and the 6 A spike settings still load from old files; nothing
+    # reads them. 10 A over two cars is 5 A each, below the 6 A minimum,
+    # where flex let both charge
+    def offers(retired):
+        extra = {"greenEnergyFlexAmps": 4, "useFlexAmpsToStartCharge": True}
+        m = pureGen2(feed=10, config=dict(extra if retired else {}, settingsPath=str(tmp_path / str(retired))))
+        (tmp_path / str(retired)).mkdir()
+        spike = {"spikeAmpsProactively": 1, "spikeAmpsReactively": 1}
+        (tmp_path / str(retired) / "settings.json").write_text(json.dumps(dict(spike if retired else {}, chargeRateControl=1)))
+        carapi, lookup = Mock(enabled=Mock(return_value=False)), m.getModuleByName
+        carapi.migrateSavedTokens.return_value = False
+        m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else lookup(n)
+        m.loadSettings()
+        assert ("spikeAmpsProactively" in m.settings) is retired
+        m.controlPass()
+        return [(s.offer.amps, s.pointAmps) for s in m.getSlaveTWCs()]
+
+    # One car gets the 10 A, the other a stop: no flex share for either
+    assert offers(True) == offers(False) == [(0, 0), (10, 10)]

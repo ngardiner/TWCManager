@@ -12,22 +12,20 @@ def _evse(max_power, min_power=1200):
     e.maxPower = max_power
     e.minPower = min_power
     e.controllers = ["Gen2TWCs"]
-    # Listed as slaves too: no voltage measured, so defaultVoltage applies
-    e.voltsPhaseA = e.voltsPhaseB = e.voltsPhaseC = 0
     return e
 
 
 def _master(evses, amps):
     m = TWCMaster.__new__(TWCMaster)
-    m.config = {"config": {"defaultVoltage": 240, "numberOfPhases": 1}}
-    ctrl = MagicMock()
-    ctrl.maxPower = 100000
-    # The registered controllers (every install), and slaves countSlaveTWC sees
-    m.slaveTWCRoundRobin = list(evses)
-    m.getModulesByType = lambda t: [
-        {"name": "Gen2TWCs", "ref": ctrl},
-        {"name": "VehicleEndpoints", "ref": ctrl},
-    ]
+    # Wiring for 400 A: no budget but the feed binds
+    m.config = {
+        "config": {
+            "defaultVoltage": 240,
+            "numberOfPhases": 1,
+            "wiringMaxAmpsAllTWCs": 400,
+        }
+    }
+    m.getModuleByName = lambda n: None
     m.chargingPoints = lambda: evses
     m.getMaxAmpsToDivideAmongSlaves = lambda: amps
     return m

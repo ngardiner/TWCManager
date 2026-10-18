@@ -51,10 +51,15 @@ def test_null_voltage_falls_back_to_default():
     assert endpoint().currentVoltage == [230, 230, 230]
 
 
-def test_null_actual_current_reads_as_zero():
-    e = endpoint()
-    assert e.currentAmps == 0
-    assert e.currentPower == 0
+def test_a_null_current_never_stands_in_for_charging():
+    # Nothing reads a car's own actualCurrent. Its one reader is Belief's
+    # stand-in for a car no vehicle source describes, which reads the TWC's
+    # current: a null there is no reading, never 0 A or a TypeError
+    from TWCManager.Vehicle.Reconcile.Belief import _standIn
+
+    vehicle = endpoint().vehicle
+    vehicle.observe("actualCurrent", None, "Gen2TWC")
+    assert _standIn(vehicle) is None
 
 
 def test_power_limits_for_unplugged_car():
@@ -72,4 +77,3 @@ def test_implausibly_low_voltage_still_falls_back(voltage):
 def test_reported_voltage_is_used_while_charging():
     e = endpoint(chargingState="Charging", voltage=240, phases=1, actualCurrent=10)
     assert e.currentVoltage == [240, 0, 0]
-    assert e.currentPower == 10 * 240
