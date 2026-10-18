@@ -7,7 +7,6 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 from TWCManager.TWCMaster import TWCMaster
 from tests.unit.test_gen2twc_provider import CONFIG
 from tests.unit.test_provider_order import fleet
@@ -42,9 +41,6 @@ def real(minAmps, ranges=None, feed=40):
     iface = Mock()
     modules = {"TeslaAPI": carapi, "Policy": policy}
     m.getModuleByName = lambda n: modules.get(n)
-    m.registerModule(
-        {"name": "VehicleEndpoints", "ref": VehicleEndpoints(m), "type": "EVSEController"}
-    )
     m.registerModule({"name": "Dummy", "ref": iface, "type": "Interface"})
     m.providerOrder.register(fleet())
     m.getMaxAmpsToDivideAmongSlaves = lambda: feed

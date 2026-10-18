@@ -1,8 +1,8 @@
 #! /usr/bin/python3
 
-from TWCManager.EVSEController.Gen2TWCs import Gen2TWCs
-from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
+from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
+from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
 from TWCManager.TWCSlave import OfferContext
 from collections import deque
 from datetime import datetime, timedelta
@@ -167,13 +167,6 @@ class TWCMaster:
 
         # Register ourself as a module, allows lookups via the Module architecture
         self.registerModule({"name": "master", "ref": self, "type": "Master"})
-
-        # The distributor's controllers: RS485 slaves, and the cars an
-        # enabled TeslaAPI places at home (none without one)
-        for controller in (Gen2TWCs(self), VehicleEndpoints(self)):
-            self.registerModule(
-                {"name": controller.name, "ref": controller, "type": "EVSEController"}
-            )
 
     def addkWhDelivered(self, kWh):
         self.settings["kWhDelivered"] = self.settings.get("kWhDelivered", 0) + kWh
@@ -514,18 +507,31 @@ class TWCMaster:
                 matched.append({"name": module, "ref": modinfo["ref"]})
         return matched
 
-    def getAllEVSEs(self) -> list:
-        """Return all EVSEInstance objects from every registered EVSEController."""
-        evses = []
-        for module in self.getModulesByType("EVSEController"):
-            evses.extend(module["ref"].allEVSEs)
-        return evses
-
     def chargingPoints(self) -> list:
-        """Every endpoint grouped into charging points by the car it serves."""
-        from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
+        # Every endpoint, grouped by the car it serves. A slave that has not
+        # replied yet reports nothing (00, 0 A), so it is offered nothing
+        gen3 = self.getModuleByName("Gen3TWCs")
+        endpoints = (
+            [s for s in self.getSlaveTWCs() if s.heardFrom]
+            + vehicleEndpoints(self)
+            + (gen3.allEVSEs if gen3 else [])
+        )
+        return groupEndpoints(self, endpoints)
 
-        return groupEndpoints(self, self.getAllEVSEs())
+    def _budgets(self) -> dict:
+        # Watts each group of endpoints may draw in all: the wiring for the
+        # Gen2 slaves, the fuses for the Gen3 units; each car limits itself
+        cfg = self.config["config"]
+        budgets = {
+            "Gen2TWCs": cfg.get("wiringMaxAmpsAllTWCs", 6)
+            * cfg.get("defaultVoltage", 240)
+            * cfg.get("numberOfPhases", 1),
+            "VehicleEndpoints": float("inf"),
+        }
+        gen3 = self.getModuleByName("Gen3TWCs")
+        if gen3 is not None:
+            budgets["Gen3TWCs"] = gen3.maxPower
+        return budgets
 
     def controlPass(self, now=None, distribute=True) -> None:
         """The control tick's pass (ControlTick, fakeMaster 1 only), for
@@ -563,7 +569,7 @@ class TWCMaster:
             if key is not None and slave.offer.amps > 0:
                 # Power is on offer: a stop not yet delivered is moot
                 self.cancelStopCarsCharging(key)
-            gate = slave.chargeGate(now)
+            gate = slave.chargeGate(now, key)
             if gate == "cancelStop":
                 logger.debug(
                     "Don't stop charging TWC: %s yet because: offer changed "
@@ -573,9 +579,7 @@ class TWCMaster:
                     now - slave.timeReportedAmpsActualChangedSignificantly,
                     slave.startStopDelay,
                 )
-            if gate and key is not None:
-                # chargeGate reads the key itself; None here would reach
-                # every car
+            if gate:
                 {
                     "stop": self.stopCarsCharging,
                     "cancelStop": self.cancelStopCarsCharging,
@@ -592,7 +596,7 @@ class TWCMaster:
         - Gen2TWC.pointAmps is set; controlPass makes the offer from it and
           the RS485 heartbeat sends that. ChargingPoint splits the rate by
           chargeRateControl and owns the car's amps. A slave not yet heard
-          from is no endpoint (Gen2TWCs.allEVSEs) and gets no target.
+          from is no endpoint (chargingPoints) and gets no target.
         - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
         - A car on no TWC has desired amps (VehicleEndpoint.setTargetPower).
 
@@ -603,13 +607,7 @@ class TWCMaster:
         minAmpsPerTWC of power per car, so it can see a car plug in.
 
         Returns the charging points it built.
-
-        Ported from ngardiner/TWCManager#483 (MikeBishop).
         """
-        controllers = self.getModulesByType("EVSEController")
-        if not controllers:
-            return []
-
         points = self.chargingPoints()
         wants_power = [p for p in points if p.wantsToCharge and not p.isReadOnly]
 
@@ -623,11 +621,9 @@ class TWCMaster:
 
         if wants_power:
             # Per-controller remaining power budgets and point counts
-            controller_budgets: dict = {}
+            controller_budgets = self._budgets()
             controller_counts: dict = {}
-            for mod in controllers:
-                name = mod["name"]
-                controller_budgets[name] = mod["ref"].maxPower
+            for name in controller_budgets:
                 controller_counts[name] = sum(
                     1 for p in wants_power if name in p.controllers
                 )
@@ -699,7 +695,12 @@ class TWCMaster:
         # left it nothing. With a plugged, named car that is a missed charge,
         # so it is said at INFO, at most hourly per point.
         now = time.time()
-        if not point.currentVIN or point.occupied is not True:
+        vins = [
+            e.vehicleKey
+            for e in point.endpoints
+            if e.vehicleKey and not isAnonKey(e.vehicleKey)
+        ]
+        if not vins or not any(e.occupied is True for e in point.endpoints):
             return
         if now - self._refusedPointLogged.get(point.ID, 0) < 3600:
             return
@@ -707,7 +708,7 @@ class TWCMaster:
         logger.info(
             "%s: %s is plugged in, but its limits leave it none of %d W",
             point.ID,
-            point.currentVIN,
+            vins[0],
             available,
         )
 
