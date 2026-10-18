@@ -879,6 +879,8 @@ signal.signal(signal.SIGTERM, sigterm_to_keyboard_interrupt)
 logger.info("Starting main event loop...")
 logger.info("=" * 70)
 
+# Gen3-only and vehicle-only installs load no interface: no bus to service
+hasBus = bool(master.getModulesByType("Interface"))
 timeLastLoopTop = time.time()
 while True:
     try:
@@ -902,6 +904,8 @@ while True:
         if now - timeLastLoopTop > 1.0:
             logger.warning("Main loop stalled for %.1fs", now - timeLastLoopTop)
         timeLastLoopTop = now
+        if not hasBus:
+            continue
 
         # Messages other threads queued, sent while the bus is quiet
         master.flushRS485()
@@ -1947,8 +1951,9 @@ while master.backgroundTasksQueue.unfinished_tasks > 0:
     time.sleep(0.1)
 
 # Send what the drains queued (a mode-3 stop), then close the input module
-master.flushRS485()
-master.getInterfaceModule().close()
+if hasBus:
+    master.flushRS485()
+    master.getInterfaceModule().close()
 
 # Backstop: any stray non-daemon thread (paho, future modules) would otherwise
 # keep the interpreter alive until systemd SIGKILLs us. Exit now that shutdown
