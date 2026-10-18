@@ -414,10 +414,27 @@ def test_no_stop_cancel_during_the_mode_2_silence():
     m.settings["respondToSlaves"] = 0
     m.settings["respondToSlavesExpiry"] = time.time() + 60
     m.controlPass()
-    assert s.offer.amps == 32 and not m.cancelStopCarsCharging.called
+    assert s.offer is None and not m.cancelStopCarsCharging.called
     m.settings["respondToSlavesExpiry"] = time.time() - 1
     m.controlPass()
+    assert s.offer.amps == 32
     m.cancelStopCarsCharging.assert_called_once_with(VIN)
+
+
+def test_offers_and_their_status_hold_during_the_mode_2_silence():
+    m = pureGen2(feed=40, slaves=1)
+    status = Mock()
+    m.registerModule({"name": "Status", "ref": status, "type": "Status"})
+    (s,) = m.getSlaveTWCs()
+    m.controlPass(now=1000)
+    held = (s.offer, s.lastAmpsOffered, s.timeLastAmpsOfferedChanged)
+    status.reset_mock()
+    m.settings["respondToSlaves"] = 0
+    m.settings["respondToSlavesExpiry"] = 2000
+    m.getMaxAmpsToDivideAmongSlaves = lambda: 10
+    m.controlPass(now=1010)
+    assert (s.offer, s.lastAmpsOffered, s.timeLastAmpsOfferedChanged) == held
+    assert not status.setStatus.called
 
 
 def test_wiring_cap_is_rechecked_when_others_draw_more():

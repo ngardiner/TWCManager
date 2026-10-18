@@ -529,6 +529,13 @@ class TWCMaster:
         """
         now = time.time() if now is None else now
         points = self.distributeEVSEPower() if distribute else self.chargingPoints()
+        # chargeStopMode 2 silences the heartbeat, and with it the replies:
+        # the offers hold, no stop is cancelled and no gate runs
+        if (
+            self.settings.get("respondToSlaves", 1) == 0
+            and self.settings.get("respondToSlavesExpiry", now) > now
+        ):
+            return
         ctx = OfferContext(
             self.getMaxAmpsToDivideAmongSlaves(),
             self.num_cars_charging_now(),
@@ -541,20 +548,12 @@ class TWCMaster:
                 if hasattr(e, "pointAmps")
             },
         )
-        # chargeStopMode 2 silences the heartbeat, and with it the replies:
-        # no stop is cancelled and no gate runs then
-        silent = (
-            self.settings.get("respondToSlaves", 1) == 0
-            and self.settings.get("respondToSlavesExpiry", now) > now
-        )
         for slave in self.getSlaveTWCs():
             if not slave.heardFrom:
                 # Not heard from yet: no offer, so its heartbeat says nothing
                 continue
             slave.offer = slave.offerFor(slave.pointAmps, ctx, now)
             key = slave.vehicleKey
-            if silent:
-                continue
             if key is not None and slave.offer.amps > 0:
                 # Power is on offer: a stop not yet delivered is moot
                 self.cancelStopCarsCharging(key)

@@ -292,9 +292,10 @@ def test_protocol_1_and_keyless_twcs_decide_nothing():
 def test_no_gate_runs_during_the_mode_2_silence():
     m = master(feed=3)
     s = gated(m, actual=10.0)
+    beat(m, s)
+    assert calls(m) == [("cancelStopCarsCharging", VIN)]  # the offer just changed
     m.settings["respondToSlaves"] = 0
     m.settings["respondToSlavesExpiry"] = time.time() + 60
-    tickThenBeat(m, s, 0x01, 40, 10.0)
     age(s, offered=61, amps=61)
     tickThenBeat(m, s, 0x01, 40, 10.0)
     assert calls(m) == []  # silent TWCs are not started or stopped
