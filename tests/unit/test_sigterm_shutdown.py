@@ -56,7 +56,9 @@ def _retarget(node, tmp):
     return node
 
 
-def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
+def _runThenSigterm(tmp_path, configure=None, settle=0.0):
+    """Boot TWCManager on the test config, let the main loop run for settle
+    seconds, SIGTERM it and return (exit code, output)."""
     if os.path.exists("/etc/twcmanager/config.json"):
         pytest.skip("/etc/twcmanager/config.json exists; cannot control config")
 
@@ -69,6 +71,8 @@ def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
     # Keep the run hermetic: no MQTT clients dialing 127.0.0.1:1883.
     for section in ("control", "sources", "status"):
         cfg[section]["MQTT"]["enabled"] = False
+    if configure:
+        configure(cfg)
     (tmp_path / "config.json").write_text(json.dumps(cfg))
 
     env = dict(os.environ)
@@ -109,6 +113,7 @@ def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
         if "Starting main event loop" not in output():
             proc.kill()
             pytest.fail("main loop never started; output:\n" + output())
+        time.sleep(settle)
 
         proc.send_signal(signal.SIGTERM)
         try:
@@ -119,15 +124,31 @@ def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
             t.join(5)
             pytest.fail("shutdown hung after SIGTERM; output:\n" + output())
         t.join(5)
-        out = output()
-        assert rc == 0, "exit code %r; output:\n%s" % (rc, out)
-        assert "Exiting after background tasks complete" in out, out
-        assert "Shutdown complete" in out, out
+        return rc, output()
     finally:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
         proc.stdout.close()
+
+
+def test_sigterm_exits_promptly_despite_non_daemon_thread(tmp_path):
+    rc, out = _runThenSigterm(tmp_path)
+    assert rc == 0, "exit code %r; output:\n%s" % (rc, out)
+    assert "Exiting after background tasks complete" in out, out
+    assert "Shutdown complete" in out, out
+
+
+def test_an_install_with_no_interface_runs_and_shuts_down_cleanly(tmp_path):
+    # Gen3-only and vehicle-only installs load no interface module
+    def noInterface(cfg):
+        for name in ("Dummy", "RS485", "TCP"):
+            cfg["interface"].setdefault(name, {})["enabled"] = False
+
+    rc, out = _runThenSigterm(tmp_path, noInterface, settle=3.0)
+    assert rc == 0, "exit code %r; output:\n%s" % (rc, out)
+    assert "Traceback" not in out and "Unhandled Exception" not in out, out
+    assert "Shutdown complete" in out, out
 
 
 def test_main_loop_exits_when_a_handler_swallows_the_interrupt():
