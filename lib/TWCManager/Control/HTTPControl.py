@@ -1573,10 +1573,6 @@ def CreateHTTPHandlerClass(master):
 
             self.fields = urllib.parse.parse_qs(self.post_data.decode("utf-8"))
 
-            if self.url.path == "/debug/save":
-                self.process_save_settings("debug")
-                return
-
             if self.url.path == "/debug/saveToggle":
                 self.process_save_settings("debug_toggle")
                 return
