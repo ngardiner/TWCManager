@@ -100,18 +100,6 @@
     </form>
 
     <p>&nbsp;</p>
-    <form method=POST action='/debug/save'>
-    <h3>Advanced Settings</h3>
-    These advanced settings can alter the way that the TWCManager operates, potentially causing the behaviour to change. Modifying these settings will be the most likely reason that something will work abnormally in your setup.
-    <table>
-      <tr>
-        <th>Setting</th>
-        <th colspan = 2>Options</th>
-        <th>More Detail</th>
-      </tr>
-    </table>
-
-    <p>&nbsp;</p>
     <h3>Debug Information</h3>
     <table>
       <tr>
@@ -119,8 +107,5 @@
         <td>{{ master.backgroundTasksQueue.qsize() }}
       </tr>
     </table>
-
-    <p>&nbsp;</p>
-    <input class='btn btn-outline-success' type=submit value='Save Settings' />
   </body>
 </html>
