@@ -132,15 +132,15 @@ def _blindTWCs(master) -> Tuple[bool, bool]:
     plugged state (non-00) or draws power, so it might be serving any
     car. An occupied Gen3 that can't name its car (anonymous, or no
     key at all) could be serving any account car, so it blinds too. So
-    does a Gen2 install (an RS-485 interface loaded) with no slave
-    linked: at startup, after a slave times out, or with a dead adapter.
-    A failed scan fails closed.
+    does an open Gen2 link with no slave linked (at startup, or after a
+    slave times out); a closed link controls no TWC. A failed scan fails
+    closed.
     """
     blind = False
     unknown = False
     try:
         slaves = master.getSlaveTWCs()
-        if not slaves and master.getModulesByType("Interface"):
+        if not slaves and master.busUp():
             blind = unknown = True
         for slave in slaves:
             if not _unknownKey(getattr(slave, "vehicleKey", None)):

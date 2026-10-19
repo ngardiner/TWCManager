@@ -710,12 +710,24 @@ class TWCMaster:
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]
 
+    def busUp(self):
+        bus = self.getModulesByType("Interface")
+        return bool(bus) and getattr(bus[0]["ref"], "connected", True)
+
     def sendRS485(self, msg):
         # Any thread: a write in the middle of a slave's reply corrupts both
         self._outbox.append(msg)
 
     def flushRS485(self):
-        # Serial thread only
+        # Serial thread only. A closed link drops them: sent late, a stop could
+        # reach a car that should be charging by then
+        if not self.busUp():
+            if self._outbox:
+                logger.info(
+                    "Dropped %d RS-485 messages: the link is closed", len(self._outbox)
+                )
+                self._outbox.clear()
+            return 0
         sent = 0
         while self._outbox:
             self.getInterfaceModule().send(self._outbox.popleft())

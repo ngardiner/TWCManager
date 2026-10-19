@@ -17,6 +17,7 @@ def master(settings=None, *providers, slaves=()):
     carapi = Mock(); carapi.enabled.return_value = True; carapi.locate.return_value = None
     m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves)
     m.getModulesByType = lambda t: []                                            # no RS-485 interface loaded
+    m.busUp = lambda: False
     return m
 
 def car(m, vin, atHome=True):
@@ -114,6 +115,14 @@ def test_a_failed_scan_fails_closed():
     gen3 = Mock(); gen3.devices = broken                                          # the Gen3 walk is inside the same guard
     m.getModuleByName = lambda n: {"TeslaAPI": carapi, "Gen3TWCs": gen3}.get(n)
     assert vehicleEndpoints(m) == []
+
+def test_no_slave_linked_blinds_only_while_the_gen2_link_is_open():
+    m = master({}, fleet()); car(m, VIN1)
+    m.busUp = lambda: True                                                       # open, nothing linked yet
+    assert _blindTWCs(m) == (True, True) and vehicleEndpoints(m) == []
+    m.busUp = lambda: False                                                      # closed: it controls no TWC
+    assert _blindTWCs(m) == (False, False)
+    assert [e.currentVIN for e in vehicleEndpoints(m)] == [VIN1]
 
 def test_just_below_power_flowing_is_not_blind():
     m = master({}, fleet()); car(m, VIN1)

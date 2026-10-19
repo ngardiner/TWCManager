@@ -2,6 +2,7 @@
 # master's outbox, which only the serial loop flushes (a write in the middle
 # of a slave's reply corrupts both messages)
 import ast
+import logging
 import os
 import random
 import re
@@ -274,3 +275,45 @@ def test_a_valid_vin_is_recorded_and_a_bad_one_requeried():
     master.queue_background_task.assert_called_once_with(
         {"cmd": "getVehicleVIN", "slaveTWC": s.TWCID, "vinPart": 0}
     )
+
+
+# The serial loop services the Gen2 link only while it is open
+
+
+def test_the_bus_is_up_only_while_an_interface_is_open():
+    m = TWCMaster(b"\x77\x77", CONFIG)
+    assert not m.busUp()  # no interface loaded
+    iface = Mock()
+    m.registerModule({"name": "Dummy", "ref": iface, "type": "Interface"})
+    assert m.busUp()
+    iface.connected = False
+    assert not m.busUp()
+
+
+def test_the_serial_loop_skips_a_closed_link_and_retries_it():
+    source = _read(LAUNCHER)
+    loop = source.index("while True:\n    try:")
+    gate = source.index("if not master.busUp():", loop)
+    assert gate < source.index("master.flushRS485()", loop)
+    assert source.index("master.getInterfaceModule().connect()", gate) < source.index(
+        "continue", gate
+    )
+
+
+def test_messages_queued_while_the_link_is_closed_are_dropped(caplog):
+    # Sent late, a stop could reach a car that should be charging by then
+    m, iface = masterWithTwoSlaves()
+    iface.connected = False
+    m.sendStopCommand()
+    with caplog.at_level(logging.INFO):
+        assert m.flushRS485() == 0
+    assert "Dropped 2" in caplog.text
+    iface.connected = True
+    assert m.flushRS485() == 0
+    iface.send.assert_not_called()
+
+
+def test_the_closed_link_branch_drops_the_outbox():
+    source = _read(LAUNCHER)
+    gate = source.index("if not master.busUp():")
+    assert source.index("master.flushRS485()", gate) < source.index("continue", gate)

@@ -10,10 +10,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
+import serial
 
 from TWCManager.ControlTick import ControlTick
 from TWCManager.EVSEInstance.ChargingPoint import ChargingPoint
 from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
+from TWCManager.Interface.RS485 import RS485
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.TWCSlave import Offer, TWCSlave
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
@@ -184,10 +186,43 @@ def test_a_vehicle_only_install_is_controlled():
     assert setAmps(m) == [{"vin": VIN, "amps": 20}]
 
 
+def defaultGen2Link(m):
+    # The shipped config: the Gen2 link on /dev/ttyUSB0, where nothing is
+    m.config["interface"] = {"RS485": {"enabled": True, "port": "/dev/ttyUSB0"}}
+    gone = serial.serialutil.SerialException("no such device")
+    with patch.object(serial, "serial_for_url", side_effect=gone):
+        link = RS485(m)
+    m.registerModule({"name": "RS485", "ref": link, "type": "Interface"})
+    assert not link.connected
+
+
+def test_a_gen3_only_install_with_default_config_is_controlled():
+    m = real(gen3=True)
+    defaultGen2Link(m)
+    gen3 = m.modules["Gen3TWCs"]["ref"]
+    gen3.setUnitTarget = Mock()
+    car(m, VIN, "Charging")  # away from the idle Gen3, on a mobile connector
+    (u,) = gen3.devices()
+    vitals(u, False, 0.0, state="idle")
+    m.getMaxAmpsToDivideAmongSlaves = lambda: 20
+    m.controlPass()
+    gen3.setUnitTarget.assert_called_once_with(u.ID, 0)
+    assert setAmps(m) == [{"vin": VIN, "amps": 20}]
+
+
+def test_a_vehicle_only_install_with_default_config_is_controlled():
+    m = real()
+    defaultGen2Link(m)
+    car(m, VIN, "Charging")
+    m.getMaxAmpsToDivideAmongSlaves = lambda: 20
+    m.controlPass()
+    assert setAmps(m) == [{"vin": VIN, "amps": 20}]
+
+
 def test_a_gen2_install_with_no_slave_linked_sends_no_amps():
-    # An RS-485 interface is loaded but no slave has linked (startup, a
-    # timed-out slave, a dead adapter): the TWC might serve the car, so the
-    # car gets no endpoint and no rate
+    # The RS-485 link is open but no slave has linked (startup, a timed-out
+    # slave): the TWC might serve the car, so the car gets no endpoint and
+    # no rate
     m = real()
     m.registerModule({"name": "RS485", "ref": Mock(), "type": "Interface"})
     car(m, VIN, "Charging")

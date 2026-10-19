@@ -151,6 +151,21 @@ def test_an_install_with_no_interface_runs_and_shuts_down_cleanly(tmp_path):
     assert "Shutdown complete" in out, out
 
 
+def test_an_absent_gen2_adapter_does_not_stop_startup(tmp_path):
+    # Gen3-only and vehicle-only installs leave the Gen2 link enabled
+    port = str(tmp_path / "ttyUSB0")
+
+    def noAdapter(cfg):
+        cfg["interface"]["Dummy"]["enabled"] = False
+        cfg["interface"]["RS485"].update(enabled=True, port=port)
+
+    rc, out = _runThenSigterm(tmp_path, noAdapter, settle=3.0)
+    assert rc == 0, "exit code %r; output:\n%s" % (rc, out)
+    assert out.count("No Gen2 TWCs can be controlled") == 1 and port in out, out
+    assert "Traceback" not in out and "Unhandled Exception" not in out, out
+    assert "Shutdown complete" in out, out
+
+
 def test_main_loop_exits_when_a_handler_swallows_the_interrupt():
     # Backstop: SIGTERM also sets a flag that the catch-all checks, so an
     # except clause that fails while KeyboardInterrupt is in flight can't
