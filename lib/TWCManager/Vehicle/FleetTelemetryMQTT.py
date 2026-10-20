@@ -86,14 +86,7 @@ class FleetTelemetryMQTT(TelmetryBase):
         if len(topic) > 3 and topic[2] == "v":
             newSyncState = "online"
             if topic[3] == "Gear":
-                if payload in (
-                    "R",
-                    "N",
-                    "D",
-                    "ShiftStateR",
-                    "ShiftStateN",
-                    "ShiftStateD",
-                ):
+                if payload in ("ShiftStateR", "ShiftStateN", "ShiftStateD"):
                     newSyncState = "driving"
                 elif syncState == "driving":
                     syncState = None

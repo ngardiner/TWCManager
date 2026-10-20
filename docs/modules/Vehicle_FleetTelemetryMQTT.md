@@ -115,6 +115,8 @@ Once your Telsa Fleet Telemetry Server is running you need to register it with y
 
 TWCManager does not require many data points to function. All data is only sent to the telemetry server when it changes but never more often than the configured `interval_seconds`. You can add more <a href="https://developer.tesla.com/docs/fleet-api/fleet-telemetry/available-data">available data</a> from your car if you need it for other purposes.
 
+The `minimum_delta` values (ChargerVoltage 50, ChargeAmps 1, ChargeCurrentRequest 1, ACChargingPower 0.5, BatteryLevel 1, Location 30 metres) mean the car does not report changes finer than TWCManager uses, which sends fewer messages without losing anything that presence or rating uses. `minimum_delta` applies to numeric fields only and needs firmware 2024.44.32 or later. Cars always send typed values (numbers, booleans, prefixed enum names), so `prefer_typed` is always on.
+
 Save the config below to `fleet-telemetry-config.json`
 
 * Replace `TESLA_VIN1` and `TESLA_VIN2` with the VIN(s) of your car(s)
@@ -134,7 +136,8 @@ Save the config below to `fleet-telemetry-config.json`
         "ca": "-----BEGIN CERTIFICATE-----\nMIICETCCAZegAwIBAgIUV6uzlujiD32rb9vQO9jMvk6JWiIwCgYIKoZIzj0EAwIw\nHTEbMBkGA1UEAwwSTW91bnQgS25vd2xlZGdlIENBMB4XDTI1MDMwMTE2MzUyMFoX\nDTQ1MDIyNDE2MzUyMFowHTEbMBkGA1UEAwwSTW91bnQgS25vd2xlZGdlIENBMHYw\nEAYHKoZIzj0CAQYFK4EEACIDYgAEEfUrjGY1irTQfhw4pOINzOiBSaKoGZwFGo+M\nLK7qQNj1jp3dbx65tS53CtIqjDVL+Gmt9EqLAoSnzxtUGjiZi7uFgLfeUOzeP3vX\n4DxeIezfDLgU0NH4KJcDhnZM9ln6o4GXMIGUMAwGA1UdEwQFMAMBAf8wHQYDVR0O\nBBYEFBzwtrkUd6cnUaa+QMs1DHyvW1qbMFgGA1UdIwRRME+AFBzwtrkUd6cnUaa+\nQMs1DHyvW1qboSGkHzAdMRswGQYDVQQDDBJNb3VudCBLbm93bGVkZ2UgQ0GCFFer\ns5bo4g99q2/b0DvYzL5OiVoiMAsGA1UdDwQEAwIBBjAKBggqhkjOPQQDAgNoADBl\nAjEAyblL768SxxDqkNpGKHdn6aO+idhV/3j+eYdktJRJ2avqOT3rbwY8zjj5lXuv\nfFN1AjBnvcQBzIiUG5rLd4itSKl4FQkHMbCkOUNbqBlu8aT9YusMeMsfTq63KSc5\ns142lUE=\n-----END CERTIFICATE-----",
         "fields": {
             "Location": {
-                "interval_seconds": 60
+                "interval_seconds": 60,
+                "minimum_delta": 30
             },
             "Gear": {
                 "interval_seconds": 60
@@ -143,16 +146,19 @@ Save the config below to `fleet-telemetry-config.json`
                 "interval_seconds": 60
             },
             "ChargeAmps": {
-                "interval_seconds": 60
+                "interval_seconds": 60,
+                "minimum_delta": 1
             },
             "ChargerVoltage": {
-                "interval_seconds": 60
+                "interval_seconds": 60,
+                "minimum_delta": 50
             },
             "ChargerPhases": {
                 "interval_seconds": 60
             },
             "ChargeCurrentRequest": {
-                "interval_seconds": 60
+                "interval_seconds": 60,
+                "minimum_delta": 1
             },
             "FastChargerPresent": {
                 "interval_seconds": 60
@@ -164,13 +170,15 @@ Save the config below to `fleet-telemetry-config.json`
                 "interval_seconds": 60
             },
             "ACChargingPower": {
-                "interval_seconds": 60
+                "interval_seconds": 60,
+                "minimum_delta": 0.5
             },
             "ChargeCurrentRequestMax": {
                 "interval_seconds": 60
             },
             "BatteryLevel": {
-                "interval_seconds": 60
+                "interval_seconds": 60,
+                "minimum_delta": 1
             },
             "ChargeLimitSoc": {
                 "interval_seconds": 60

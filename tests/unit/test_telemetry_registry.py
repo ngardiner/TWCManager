@@ -162,12 +162,12 @@ def test_fleet_telemetry_topic_id_is_the_vin():
     assert t.vinFor(VIN) == VIN and FleetTelemetryMQTT.events["syncState"][0] == "state"
 
 
-def test_fleet_telemetry_charge_current_request_is_the_cars_request():   # slim Task 12b
+def test_fleet_telemetry_charge_current_request_is_the_cars_request():  # slim Task 12b
     t, reg = make(FleetTelemetryMQTT)
     t.applyDataToVehicle(VIN, "ChargeCurrentRequest", "16")
     obs = reg.get(VIN).latest("chargeCurrentRequest")
     assert (obs.value, obs.source) == (16, "FleetTelemetryMQTT")
-    assert reg.get(VIN).latest("availableCurrent") is None   # never the pilot
+    assert reg.get(VIN).latest("availableCurrent") is None  # never the pilot
 
 
 def test_fleet_telemetry_topic_id_that_is_not_a_vin_maps_to_none():  # I3
@@ -236,11 +236,15 @@ def test_teslamate_reports_the_cars_own_ac_maximum(teslamate):
 def test_feed_vouches_for_a_value_the_api_reobserved(teslamate):  # ruling 3
     tm, api, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0")
-    reg.get(VIN).observe("lat", 37.0, "OwnerAPI")  # the cloud saw the same position after the feed
+    reg.get(VIN).observe(
+        "lat", 37.0, "OwnerAPI"
+    )  # the cloud saw the same position after the feed
     reg.get(VIN).observe("lon", -122.0, "OwnerAPI")
     assert reg.get(VIN).latest("lat").source == "OwnerAPI"
     assert reg.get(VIN).read("lat", 0) is not None and not api.get_car_api.called
-    reg.get(VIN).observe("lat", 38.0, "OwnerAPI")  # a different value: the live feed still vouches (C1)
+    reg.get(VIN).observe(
+        "lat", 38.0, "OwnerAPI"
+    )  # a different value: the live feed still vouches (C1)
     assert reg.get(VIN).read("lat", 0) is not None and not api.get_car_api.called
     tm.mqttDisconnect(None, None, None, 7)  # feed down: the value ages
     reg.get(VIN).read("lat", 0)
@@ -254,7 +258,9 @@ def test_feed_outage_then_recovery_pays_one_cloud_read(teslamate):  # C1
 
     def vehicleData(vehicle, slot=None):
         calls.append(1)
-        reg.get(VIN).observe("lat", 37.00000001, "OwnerAPI")  # the API's digits differ from TeslaMate's
+        reg.get(VIN).observe(
+            "lat", 37.00000001, "OwnerAPI"
+        )  # the API's digits differ from TeslaMate's
         reg.get(VIN).observe("lon", -122.0, "OwnerAPI")
         return True
 
@@ -379,7 +385,7 @@ def test_fleet_state_transitions_use_registry_state():
             None, None, Mock(topic="telemetry/" + VIN + path, payload=payload)
         )
 
-    msg("/v/Gear", b'"D"')
+    msg("/v/Gear", b'"ShiftStateD"')
     assert (v.value("state"), v.latest("state").source) == (
         "driving",
         "FleetTelemetryMQTT",
@@ -703,7 +709,7 @@ def test_fleet_derives_no_state_from_retained_values():
 
     msg("/connectivity", b'{"Status": "DISCONNECTED"}', False)
     msg("/v/DetailedChargeState", b'"DetailedChargeStateCharging"', True)
-    msg("/v/Gear", b'"D"', True)
+    msg("/v/Gear", b'"ShiftStateD"', True)
     assert v.value("state") == "offline"
 
 
