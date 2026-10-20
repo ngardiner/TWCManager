@@ -42,6 +42,10 @@ _SIGNING_REQUIRED = Outcome(REFUSED, "signing required")
 # goes to any car (noteOwnerCommandsRetired)
 _OWNER_RETIRED = Outcome(REFUSED, "owner commands retired")
 
+# What a Fleet API request costs, by endpoint (vehicles/{vin}/<endpoint>)
+_PAID = {"vehicle_data": 0.002, "wake_up": 0.02, "command": 0.001}
+_PAID_PATH = re.compile(r"/(vehicle_data|wake_up|command/\w+)$")
+
 
 class CarApiState:
     """TeslaAPI's own bookkeeping for one car the account lists, attached to
@@ -345,6 +349,14 @@ class TeslaAPI:
                 logging.INFO8,
                 "Car API %s %s: HTTP %s" % (method, path, req.status_code),
             )
+            paid = _PAID_PATH.search(path.split("?")[0])
+            if paid and slot is self.fleetSlot:
+                # Never the URL, which holds the VIN
+                kind = paid.group(1).replace("/", ":")
+                logger.info(
+                    "Tesla %s paid request: %s ($%.3f)"
+                    % (slot.tokenType, kind, _PAID[kind.split(":")[0]])
+                )
             outcome = self._classify(
                 slot, req.status_code, purpose, req.text, vehicle, tries > 0, sent
             )

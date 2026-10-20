@@ -393,7 +393,7 @@ class TeslaMateVehicle(TelmetryBase):
         if self.mqtt_prefix:
             subscription += self.mqtt_prefix + "/"
         subscription += "cars/+/"
-        for topic in list(self.events.keys()) + ["healthy"]:
+        for topic in list(self.events.keys()) + ["geofence", "healthy"]:
             topic = subscription + topic
             logger.log(logging.INFO5, "Subscribe to " + topic)
             res = client.subscribe(topic, qos=1)
@@ -412,6 +412,14 @@ class TeslaMateVehicle(TelmetryBase):
         if topic[0] == "teslamate" and topic[1] == "cars":
             if topic[3] == "healthy":
                 self.noteHealthy(topic[2], payload)
+            elif topic[3] == "geofence":
+                # Logged only: no decision reads it
+                self.logChange(
+                    topic[2],
+                    self.vehicleNames.get(topic[2], topic[2]),
+                    "geofence",
+                    payload,
+                )
             else:
                 self.applyDataToVehicle(
                     topic[2],

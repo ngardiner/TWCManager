@@ -525,8 +525,7 @@ class VehicleReconciler(threading.Thread):
         if isinstance(outcome, BaseException):
             # A queue's run raised past _run (SystemExit)
             outcome = Outcome(ERROR, type(outcome).__name__)
-        logger.log(
-            logging.INFO if attempt.aspect is None else logging.DEBUG,
+        logger.info(
             "%s %s for %s via %s: %s %s",
             attempt.aspect or "Debug",
             attempt.capability,

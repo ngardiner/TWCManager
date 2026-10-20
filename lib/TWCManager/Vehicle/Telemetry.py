@@ -8,6 +8,9 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("Telemetry", "Vehicle")
 
+# Fields whose changes are logged: what the next presence analysis needs
+_LOGGED = {"pluggedIn", "state"}
+
 
 class TelmetryBase:
     client = None
@@ -55,6 +58,8 @@ class TelmetryBase:
         # load), and those already warned about as unmappable.
         self.orphanedIds = set()
         self.warnedUnmapped = set()
+        # (car, field) -> the last value logged for it
+        self.loggedValues = {}
         self.registry = VehicleRegistry.forMaster(master)
 
         self.config = master.config
@@ -247,9 +252,18 @@ class TelmetryBase:
             del self.vehicles[vehicle_id]
         return True
 
+    def logChange(self, car, label, field, value):
+        # One line per change of a car's value, the first sighting included
+        old = self.loggedValues.get((car, field))
+        if value != old:
+            self.loggedValues[(car, field)] = value
+            logger.info("%s: %s %s -> %s", label, field, old, value)
+
     def _observe(self, vehicle, field, value, retained=False):
         source = self.__class__.__name__
         if not retained:
+            if field in _LOGGED:
+                self.logChange(vehicle.key, vehicle.name, field, value)
             vehicle.observe(field, value, source)
             if source not in vehicle.claims:
                 # Listed on the car's provider list; it commands nothing and
