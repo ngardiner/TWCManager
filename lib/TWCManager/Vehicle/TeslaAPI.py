@@ -19,14 +19,7 @@ from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
     OwnerAPIProvider,
 )
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
-from TWCManager.Vehicle.Reconcile.Outcome import (
-    DONE,
-    ERROR,
-    REFUSED,
-    SATISFIED,
-    UNREACHABLE,
-    Outcome,
-)
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
@@ -34,13 +27,13 @@ from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
 # _classify refreshed an expired token: the request is sent once more
-_REFRESHED = Outcome(DONE, "refreshed")
+_REFRESHED = O.Outcome(O.DONE, "refreshed")
 # Tesla refused an Owner API command or wake for one car: it wants signed
 # commands (noteOwnerCommandRefused)
-_SIGNING_REQUIRED = Outcome(REFUSED, "signing required")
+_SIGNING_REQUIRED = O.Outcome(O.REFUSED, "signing required")
 # Tesla takes no Owner API commands at all: no Owner command or wake
 # goes to any car (noteOwnerCommandsRetired)
-_OWNER_RETIRED = Outcome(REFUSED, "owner commands retired")
+_OWNER_RETIRED = O.Outcome(O.REFUSED, "owner commands retired")
 
 # What a Fleet API request costs, by endpoint (vehicles/{vin}/<endpoint>)
 _PAID = {"vehicle_data": 0.002, "wake_up": 0.02, "command": 0.001}
@@ -342,7 +335,7 @@ class TeslaAPI:
                     timeout=timeout,
                 )
             except requests.exceptions.RequestException as e:
-                return None, Outcome(ERROR, type(e).__name__)
+                return None, O.Outcome(O.ERROR, type(e).__name__)
             tries -= 1
             logger.log(
                 logging.INFO8,
@@ -367,7 +360,7 @@ class TeslaAPI:
                 return req, outcome
             tries = min(tries - 1, 1)
             if tries < 1:
-                return req, Outcome(REFUSED, "401")
+                return req, O.Outcome(O.REFUSED, "401")
 
     def _classify(
         self, slot, status, purpose, body, vehicle=None, refresh=True, sent=None
@@ -392,16 +385,16 @@ class TeslaAPI:
             return self.ownerRefusal(vehicle, status, body) if owner else None
         if purpose == "energy":
             if status not in (401, 403, 410, 412):
-                return Outcome(ERROR, str(status))
+                return O.Outcome(O.ERROR, str(status))
             self._refuseWallConnectors(slot, status)
-            return Outcome(REFUSED, str(status))
+            return O.Outcome(O.REFUSED, str(status))
         label = slot.kind.capitalize()
         if status == 401 and sent is not None and slot.changes != sent:
             # Another thread refreshed, replaced or cleared the token (sent:
             # slot.changes when the request went out) while the request was
             # out: the 401 was for the old one, so the new one is sent once,
             # and a cleared slot sends nothing
-            return _REFRESHED if slot.accessToken else Outcome(REFUSED, "401")
+            return _REFRESHED if slot.accessToken else O.Outcome(O.REFUSED, "401")
         if status == 401:
             if (
                 refresh
@@ -413,7 +406,7 @@ class TeslaAPI:
                 if result == "success":
                     return _REFRESHED
                 if result == "unreachable":
-                    return Outcome(UNREACHABLE, "token refresh")
+                    return O.Outcome(O.UNREACHABLE, "token refresh")
                 if paid and not slot.empty():
                     # Expired and the refresh failed (a 5xx, no client ID):
                     # the tokens are kept, as refresh() alone clears on a
@@ -425,18 +418,18 @@ class TeslaAPI:
                         "it is refreshed or replaced." % (label, result)
                     )
                     slot.refuse("command")
-                return Outcome(REFUSED, "401")
+                return O.Outcome(O.REFUSED, "401")
             # Retrying a bad token might make Tesla block remote access to
             # the car: nothing more is sent with it until the user supplies
             # fresh tokens
             if not slot.clear(sent):
                 # Changed since the check above: not the token refused
-                return _REFRESHED if slot.accessToken else Outcome(REFUSED, "401")
+                return _REFRESHED if slot.accessToken else O.Outcome(O.REFUSED, "401")
             logger.error(
                 "Tesla %s API token was rejected (HTTP 401); removing it." % label
             )
             self.master.queue_background_task({"cmd": "saveSettings"})
-            return Outcome(REFUSED, "401")
+            return O.Outcome(O.REFUSED, "401")
         if owner:
             refused = self.ownerRefusal(vehicle, status, body)
             if refused is not None:
@@ -445,8 +438,8 @@ class TeslaAPI:
             slot.reportScopeRefused(purpose, refused=True)
             if purpose == "wake":
                 # Not REFUSED, which would exclude Fleet for commands too
-                return Outcome(UNREACHABLE, "wake refused")
-            return Outcome(REFUSED, "403")
+                return O.Outcome(O.UNREACHABLE, "wake refused")
+            return O.Outcome(O.REFUSED, "403")
         if paid and status == 412:
             # A token kind Tesla will keep refusing commands (e.g. a
             # registration it lacks): no paid command or wake is sent with
@@ -456,7 +449,7 @@ class TeslaAPI:
                 "with this token until it is replaced." % label
             )
             slot.refuse("command")
-            return Outcome(REFUSED, "412")
+            return O.Outcome(O.REFUSED, "412")
         if not paid and status in (403, 410, 412):
             # A 412 ("only available on fleetapi") will keep coming, so it
             # holds until the token changes
@@ -466,16 +459,16 @@ class TeslaAPI:
                 "for reads %s." % (label, status, hold)
             )
             slot.pause(latch=status == 412)
-            return Outcome(REFUSED, str(status))
+            return O.Outcome(O.REFUSED, str(status))
         if status == 408:
-            return Outcome(UNREACHABLE, "408")
+            return O.Outcome(O.UNREACHABLE, "408")
         if status == 429:
             # Explicitly told to back off
             car = vehicle.attachment("TeslaAPI") if vehicle else None
             target = car or self
             target.errorCount = max(30, target.errorCount)
             self.updateCarApiLastErrorTime(car)
-        return Outcome(ERROR, str(status))
+        return O.Outcome(O.ERROR, str(status))
 
     def tokenRoute(self, token):
         # (tokenType, baseURL, verifyCert) for an access token: where its
@@ -672,7 +665,7 @@ class TeslaAPI:
         # After a refresh the list is not sent again: the next poll is
         req, outcome = self._request(slot, "get", path, "list", tries=2)
         if outcome is not None:
-            return None if outcome.kind == REFUSED else False
+            return None if outcome.kind == O.REFUSED else False
         try:
             listed = json.loads(req.text)
             cars = listed["response"][: listed["count"]]
@@ -781,7 +774,7 @@ class TeslaAPI:
                 self._refuseWallConnectors(slot, 404)
                 return None
             if outcome is not None:
-                if outcome.kind == REFUSED:
+                if outcome.kind == O.REFUSED:
                     return None
                 continue
             try:
@@ -1442,14 +1435,14 @@ class TeslaAPI:
 
     def command(
         self, vehicle, name: str, body: Optional[dict] = None, *, slot
-    ) -> Outcome:
+    ) -> O.Outcome:
         # One command (name, e.g. "set_charge_limit") to vehicle with slot,
         # the provider's own, when canCommand lets it
         car = vehicle.attachment("TeslaAPI")
         if not self.canCommand(vehicle, slot):
-            return Outcome(REFUSED, "no command token")
+            return O.Outcome(O.REFUSED, "no command token")
         if self.getCarApiRetryRemaining(car, now=self.now()):
-            return Outcome(UNREACHABLE, "backoff")
+            return O.Outcome(O.UNREACHABLE, "backoff")
         outcome, response = self._paidPost(vehicle, slot, "command/" + name, body)
         if outcome is None:
             reason = response.get("reason") or ""
@@ -1457,14 +1450,14 @@ class TeslaAPI:
                 # Only a short reason code is carried or logged
                 reason = "not accepted" if reason else ""
             if response.get("result") is True:
-                outcome = Outcome(DONE)
+                outcome = O.Outcome(O.DONE)
             elif reason in self.COMMAND_SATISFIED_REASONS:
-                outcome = Outcome(SATISFIED, reason)
+                outcome = O.Outcome(O.SATISFIED, reason)
             elif reason in self.COMMAND_UNREACHABLE_REASONS:
-                outcome = Outcome(UNREACHABLE, reason)
+                outcome = O.Outcome(O.UNREACHABLE, reason)
             else:
-                outcome = Outcome(ERROR, reason or "not accepted")
-            if outcome.kind in (DONE, SATISFIED):
+                outcome = O.Outcome(O.ERROR, reason or "not accepted")
+            if outcome.kind in (O.DONE, O.SATISFIED):
                 # The car answered: it is awake (_ready reads this)
                 car.lastAPIAccessTime = self.now()
         logger.log(
@@ -1494,7 +1487,7 @@ class TeslaAPI:
             if not isinstance(response, dict):
                 raise TypeError("response")
         except (ValueError, KeyError, TypeError) as e:
-            return Outcome(ERROR, type(e).__name__), None
+            return O.Outcome(O.ERROR, type(e).__name__), None
         return None, response
 
     def wakeDue(self, car, now=None) -> bool:
@@ -1518,17 +1511,17 @@ class TeslaAPI:
             return False
         return True
 
-    def wakeOutcome(self, vehicle, now=None, *, slot) -> Outcome:
+    def wakeOutcome(self, vehicle, now=None, *, slot) -> O.Outcome:
         # Wakes vehicle with slot (as for command), but only after the free
         # online check (vehicles/{vin}, cached 120 s) says it is not online
         # and wakeDue allows it. One wake_up at most.
         now = self.now() if now is None else now
         car = vehicle.attachment("TeslaAPI")
         if not self.canCommand(vehicle, slot):
-            return Outcome(REFUSED, "no command token")
+            return O.Outcome(O.REFUSED, "no command token")
         if self.getCarApiRetryRemaining(car, now=now):
             # Told to back off: not even the free check
-            return Outcome(UNREACHABLE, "backoff")
+            return O.Outcome(O.UNREACHABLE, "backoff")
         self._askChargeNeed(car, now)
         # The command slot's account, unless it cannot read; the Owner API
         # answers the same free check
@@ -1536,16 +1529,16 @@ class TeslaAPI:
         awake = self.onlineState(vehicle, slot=checkSlot, now=now)
         if awake:
             self._wakeSettled(car)
-            return Outcome(SATISFIED, "online")
+            return O.Outcome(O.SATISFIED, "online")
         if awake is None:
             # No free answer (no read token, an error): never wake blind
-            return Outcome(UNREACHABLE, "online check failed")
+            return O.Outcome(O.UNREACHABLE, "online check failed")
         if slot is self.fleetSlot and not slot.usable("wake"):
             # Tesla refused a wake with this token (403): no wake_up until
             # the token changes. Checked after the free online check, so an
             # online car still gets its command. An Owner 403 latches the
             # car instead (ownerCommandsAllowed)
-            return Outcome(UNREACHABLE, "wake refused")
+            return O.Outcome(O.UNREACHABLE, "wake refused")
         if car.firstChargeNeededTime == 0:
             car.firstChargeNeededTime = now
             if self.wakeDelayMins:
@@ -1556,13 +1549,13 @@ class TeslaAPI:
                     + " minutes"
                 )
         if not self.wakeDue(car, now):
-            return Outcome(UNREACHABLE, "wake held")
+            return O.Outcome(O.UNREACHABLE, "wake held")
 
         # The wake hold is measured from here
         car.lastAPIAccessTime = now
         outcome, response = self._paidPost(vehicle, slot, "wake_up", purpose="wake")
         if outcome in (
-            Outcome(UNREACHABLE, "wake refused"),
+            O.Outcome(O.UNREACHABLE, "wake refused"),
             _SIGNING_REQUIRED,
             _OWNER_RETIRED,
         ):
@@ -1581,7 +1574,7 @@ class TeslaAPI:
             # A command sent at once after a wake can fail with
             # could_not_wake_buses; let the car settle
             time.sleep(5)
-            return Outcome(DONE)
+            return O.Outcome(O.DONE)
 
         # Every failed wake waits WAKE_RETRY_SECONDS before the next: rapid
         # retries cost $0.02 each and do not help an asleep or offline car
@@ -1590,11 +1583,11 @@ class TeslaAPI:
         car.delayNextWakeAttempt = self.WAKE_RETRY_SECONDS
         if state in ("asleep", "waking", "offline"):
             self.resetCarApiLastErrorTime()
-            outcome = Outcome(UNREACHABLE, state)
+            outcome = O.Outcome(O.UNREACHABLE, state)
         elif outcome is None:
             # HTTP 200 with an unexpected state
             self.updateCarApiLastErrorTime(car)
-            outcome = Outcome(ERROR, "state")
+            outcome = O.Outcome(O.ERROR, "state")
         logger.info(
             "Car API wake %s failed (%s %s). Will try again in %d seconds."
             % (vehicle.name, outcome.kind, outcome.detail, car.delayNextWakeAttempt)

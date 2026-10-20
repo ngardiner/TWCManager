@@ -30,13 +30,7 @@ import websockets
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Presence import homeCars
 from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
-from TWCManager.Vehicle.Reconcile.Outcome import (
-    DONE,
-    ERROR,
-    REFUSED,
-    UNREACHABLE,
-    Outcome,
-)
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("V_HASS", "Vehicle")
@@ -504,7 +498,7 @@ class HomeAssistant:
                 )
                 return None
 
-    def _post_service(self, domain: str, service: str, data: dict) -> Outcome:
+    def _post_service(self, domain: str, service: str, data: dict) -> O.Outcome:
         # The one place a service call is made. Never logs a response body.
         url = f"{self.rest_base}/services/{domain}/{service}"
         with self._rest_lock:
@@ -513,11 +507,11 @@ class HomeAssistant:
                 resp.raise_for_status()
             except requests.exceptions.Timeout:
                 logger.warning("HA: timeout calling %s.%s (10s)", domain, service)
-                return Outcome(UNREACHABLE, "timeout")
+                return O.Outcome(O.UNREACHABLE, "timeout")
             except requests.exceptions.HTTPError as e:
                 status = getattr(e.response, "status_code", None)
                 if status is None:
-                    return Outcome(ERROR, type(e).__name__)
+                    return O.Outcome(O.ERROR, type(e).__name__)
                 if status in (401, 403):
                     if not self._refusalLogged:
                         self._refusalLogged = True
@@ -526,9 +520,9 @@ class HomeAssistant:
                             "check the long-lived token",
                             status,
                         )
-                    return Outcome(REFUSED, str(status))
+                    return O.Outcome(O.REFUSED, str(status))
                 logger.warning("HA: HTTP %s calling %s.%s", status, domain, service)
-                return Outcome(ERROR, str(status))
+                return O.Outcome(O.ERROR, str(status))
             except Exception as exc:
                 logger.warning(
                     "HA: failed calling %s.%s: %s",
@@ -536,10 +530,10 @@ class HomeAssistant:
                     service,
                     type(exc).__name__,
                 )
-                return Outcome(ERROR, type(exc).__name__)
+                return O.Outcome(O.ERROR, type(exc).__name__)
         self._refusalLogged = False
         logger.debug("HA: service call %s.%s succeeded", domain, service)
-        return Outcome(DONE)
+        return O.Outcome(O.DONE)
 
     # ------------------------------------------------------------------
     # Aggregate helpers

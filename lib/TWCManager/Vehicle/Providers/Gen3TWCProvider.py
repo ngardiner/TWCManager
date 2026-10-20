@@ -6,13 +6,7 @@
 from typing import Optional, Tuple
 
 from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
-from .Capability import (
-    LOCAL,
-    NO_INDIVIDUAL_STOP,
-    SET_AMPS,
-    START_CHARGING,
-    STOP_CHARGING,
-)
+from . import Capability as C
 from .Provider import Provider
 
 
@@ -23,9 +17,9 @@ class Gen3TWCProvider(Provider):
     worker = "local"
     module = None
     DECLARATIONS = {
-        SET_AMPS: LOCAL,
-        START_CHARGING: LOCAL,
-        STOP_CHARGING: LOCAL,
+        C.SET_AMPS: C.LOCAL,
+        C.START_CHARGING: C.LOCAL,
+        C.STOP_CHARGING: C.LOCAL,
     }
     SUPPRESSED = {}
 
@@ -54,7 +48,7 @@ class Gen3TWCProvider(Provider):
     def limitations(self, vehicle):
         occupied = [u for u in self.controller.devices() if u.occupied is True]
         if len(occupied) > 1:
-            return frozenset({NO_INDIVIDUAL_STOP})
+            return frozenset({C.NO_INDIVIDUAL_STOP})
         return frozenset()
 
     def _onUnit(self, vin, act) -> Outcome:

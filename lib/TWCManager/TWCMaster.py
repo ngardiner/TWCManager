@@ -22,11 +22,7 @@ from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry, isAnonKey
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
-from TWCManager.Vehicle.Providers.Capability import (
-    READ_CHARGE,
-    START_CHARGING,
-    STOP_CHARGING,
-)
+from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile.Belief import newerReading
@@ -174,7 +170,7 @@ class TWCMaster:
         # Drops a stop not yet delivered: the desire and any queued attempt.
         # A start is never cancelled. Returns how many desires were cleared
         cleared = 0
-        for v in self._chargeTargets(vin, STOP_CHARGING):
+        for v in self._chargeTargets(vin, C.STOP_CHARGING):
             cleared += self.desired.clearIf(v.key, CHARGING, False)
             self.reconciler.cancel(v.key)
         return cleared
@@ -182,7 +178,7 @@ class TWCMaster:
     def withdrawStartCharging(self, vin):
         # A start not wanted any more (too little on offer): its desire goes;
         # its record stays for the next start
-        for v in self._chargeTargets(vin, START_CHARGING):
+        for v in self._chargeTargets(vin, C.START_CHARGING):
             self.desired.clearIf(v.key, CHARGING, True)
 
     def _chargeTargets(self, vin, capability):
@@ -193,14 +189,14 @@ class TWCMaster:
         if (
             len(targets) == 1
             and targets[0].isAnonymous
-            and (mode == 1 or mode == 3 and capability == START_CHARGING)
+            and (mode == 1 or mode == 3 and capability == C.START_CHARGING)
         ):
             # The anonymous car itself has no candidate in these modes
             targets = Presence.candidates(self, capability)
         return targets
 
     def _wantCharging(self, vin, value):
-        capability = START_CHARGING if value else STOP_CHARGING
+        capability = C.START_CHARGING if value else C.STOP_CHARGING
         for v in self._chargeTargets(vin, capability):
             # The same value withdrawn earlier keeps its record inside the
             # 60 s gate, unless the car has reported since its last send
@@ -471,8 +467,8 @@ class TWCMaster:
             if (
                 module is None
                 or id(module) in seen
-                or order.suppressions.suppressed(p, READ_CHARGE)
-                or not p.available(READ_CHARGE)
+                or order.suppressions.suppressed(p, C.READ_CHARGE)
+                or not p.available(C.READ_CHARGE)
             ):
                 continue
             seen.add(id(module))
@@ -667,7 +663,7 @@ class TWCMaster:
             point.setTargetPower(0)
             offers.append((point, 0))
         # The targets just set, by each car a point serves or fans out to
-        self.offered = {k: w for p, w in offers for k in (p.vehicleKey, *p._carKeys())}
+        self.offered = {k: w for p, w in offers for k in (p.vehicleKey, *p.carKeys)}
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(

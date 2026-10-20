@@ -55,7 +55,7 @@ def why(m, v):
 
 def test_nothing_known_is_presumed():
     m, r, v, c = home()
-    assert P.presence(m, v) == P.PRESUMED and P.homeForLimits(m, v)
+    assert P.presence(m, v) == P.PRESUMED and P.presence(m, v) != P.NOT_HOME
     assert P.inside(m, v) is None and not P.pluggedNow(m, v)
 
 

@@ -1,16 +1,15 @@
 # Which car is on a Gen3 TWC, from the energy site: the free live_status
 # lists each Wall Connector on the account by DIN, with the VIN of the car
-# connected to it. Asked on a Gen3 connect edge and then once a minute while
-# a Gen3 session is anonymous or holds only a plug-in guess; never once the
-# cloud VIN names the session. A cloud VIN outranks the guess.
+# connected to it. Asked on a Gen3 connect edge, then once a minute while a
+# session is anonymous or holds only a plug-in guess. A cloud VIN outranks
+# the guess.
 #
 # Unverified on hardware: that live_status carries wall_connectors with a
-# vin while a car is connected (the tesla-fleet-api npm types say so), and
-# that a unit's DIN is <part_number>--<serial_number> from its local
-# /api/1/version (the din device key overrides it).
+# vin while a car is connected, and that a unit's DIN is
+# <part_number>--<serial_number> from /api/1/version (the din device key
+# overrides it).
 #
-# Background thread only (Gen3TWCs.noteVitals); never under a lock. The
-# reader's own state is touched from that one thread.
+# Background thread only (Gen3TWCs.noteVitals); never under a lock.
 import logging
 import time
 import traceback

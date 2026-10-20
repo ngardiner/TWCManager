@@ -4,16 +4,7 @@
 from typing import Optional, Tuple
 
 from ..Reconcile.Outcome import UNSUPPORTED, Outcome
-from .Capability import (
-    HA_BILLED,
-    READ_CHARGE,
-    SET_AMPS,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-    COMMANDS,
-    WAKE,
-)
+from . import Capability as C
 from .Provider import CLOUD_SUPPRESSED, Provider, carAmpsRange
 
 # What Home Assistant's entities can report
@@ -26,7 +17,7 @@ class HomeAssistantProvider(Provider):
     name = "HomeAssistant"
     rank = 6
     local = False
-    DECLARATIONS = dict.fromkeys((COMMANDS - {WAKE}) | {READ_CHARGE}, HA_BILLED)
+    DECLARATIONS = dict.fromkeys((C.COMMANDS - {C.WAKE}) | {C.READ_CHARGE}, C.HA_BILLED)
     SUPPRESSED = CLOUD_SUPPRESSED
     FIELDS = HA_FIELDS
 
@@ -47,11 +38,11 @@ class HomeAssistantProvider(Provider):
         hv = vehicle.attachment("HomeAssistant")
         if hv is None:
             return False
-        if capability == SET_AMPS:
+        if capability == C.SET_AMPS:
             return bool(hv.has_charge_current_number)
-        if capability in (START_CHARGING, STOP_CHARGING):
+        if capability in (C.START_CHARGING, C.STOP_CHARGING):
             return bool(hv.has_charge_switch)
-        if capability == SET_CHARGE_LIMIT:
+        if capability == C.SET_CHARGE_LIMIT:
             return bool(hv.has_charge_limit_number)
         return True
 

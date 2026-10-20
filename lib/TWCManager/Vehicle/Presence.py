@@ -219,10 +219,6 @@ def presence(master, v) -> str:
     return decide(master, v)[0]
 
 
-def homeForLimits(master, v) -> bool:
-    return presence(master, v) != NOT_HOME
-
-
 def pluggedHere(master, v) -> bool:
     return presence(master, v) == HOME and pluggedNow(master, v)
 
@@ -357,7 +353,7 @@ def attribute(master, pointId, source, offered=None, actual=0) -> Optional[str]:
 
 def homeCars(master, attachment) -> List[Tuple[Any, Any]]:
     pairs = master.vehicleRegistry.attached(attachment)
-    return [(v, a) for v, a in pairs if homeForLimits(master, v)]
+    return [(v, a) for v, a in pairs if presence(master, v) != NOT_HOME]
 
 
 def learnHome(master, vehicle, lat, lon) -> bool:

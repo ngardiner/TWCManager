@@ -1,19 +1,13 @@
-# The held-limit store: per VIN we hold a limit on, the charge limit the
-# car had outside our control ("outside") and the one we hold it at
-# ("held"). Persisted as older releases did, in settings["chargeLimits"] as
-# {VIN: [outside, held]}. A car we hold nothing on has no entry: a limit is
-# only ever sent with the car's current limit known, which then is its
-# normal limit, so nothing needs the old one. load() drops the older
-# releases' entries holding nothing (an int, or held -1, 0 or None).
+# The held-limit store: per VIN we hold a limit on, the charge limit the car
+# had outside our control ("outside") and the one we hold it at ("held"),
+# persisted in settings["chargeLimits"] as {VIN: [outside, held]}. A car we
+# hold nothing on has no entry, since a limit is only sent with the car's
+# current limit known. Older releases' entries holding nothing are dropped
+# on load, and ones keyed by the numeric vehicle ID wait there until the
+# first vehicle list names the car (resolveLegacyIds).
 #
-# The Tesla API path of older releases keyed entries by the numeric vehicle
-# ID. One pass migrates them: load() normalises the VIN keys and leaves the
-# IDs where they are, waiting; the first vehicle list that names a car makes
-# resolveLegacyIds() re-key each ID to its VIN or drop it with a warning.
-#
-# Every method reads master.settings and master.settingsLock on each call:
-# loadSettings replaces the settings dict. Only dict work happens under the
-# lock; saves are queued to the background thread after it is released.
+# Every method reads master.settings and settingsLock afresh, because
+# loadSettings replaces the dict. Saves are queued after the lock is released.
 import logging
 import math
 from typing import Any, Dict, FrozenSet, List, NamedTuple, Optional, Tuple

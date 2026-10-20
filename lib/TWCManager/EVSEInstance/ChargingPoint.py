@@ -1,12 +1,9 @@
 """
-A charging point: the endpoints that serve one car, grouped by vehicle key.
-
-A TWC and the car it serves are one point however many endpoints can see the
-car, so the distributor budgets the car once. A point without a local member
-sends the target to its vehicle endpoints. A Gen2 TWC splits the rate with
-its car by chargeRateControl (carriers): with car members, or the car the
-TWC names; any other local member (a Gen3 unit, whose target feeds one
-shared headroom) carries the whole target.
+A charging point: the endpoints that serve one car, grouped by vehicle key,
+so the distributor budgets the car once however many endpoints see it. A
+Gen2 TWC splits the rate with its car by chargeRateControl; any other local
+member (a Gen3 unit, whose target feeds one shared headroom) carries the
+whole target.
 """
 
 from typing import List, Tuple
@@ -21,6 +18,9 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import canonicalKey, isAnonKey
 
 
 class ChargingPoint(EVSEInstance):
+    # The cars setTargetPower rated this pass; finding them may scan them all
+    carKeys = None
+
     def __init__(self, master, key: str, endpoints: List[EVSEInstance]):
         self.master = master
         self.key = key
@@ -110,7 +110,7 @@ class ChargingPoint(EVSEInstance):
 
     def confirmed(self) -> bool:
         # Every car carrying our rate believes it: a read, or a delivered write
-        keys = self._carKeys()
+        keys = self._carKeys() if self.carKeys is None else self.carKeys
         reg, desired = self.master.vehicleRegistry, self.master.desired
         for k in keys:
             d, v = desired.get(k, AMPS), reg.get(k)
@@ -119,6 +119,7 @@ class ChargingPoint(EVSEInstance):
         return bool(keys)
 
     def setTargetPower(self, watts: float) -> None:
+        self.carKeys = self._carKeys()
         local = self.localEndpoints[0] if self.localEndpoints else None
         cars = [e for e in self.vehicleEndpoints if not e.isReadOnly]
         if not hasattr(local, "pointAmps"):
@@ -130,7 +131,7 @@ class ChargingPoint(EVSEInstance):
         # A car member's rate goes through its endpoint; a car only the TWC
         # names gets the "heartbeat" rate
         desired, members = self.master.desired, {e.vehicleKey for e in cars}
-        mine = [k for k in self._carKeys() if k not in members]
+        mine = [k for k in self.carKeys if k not in members]
 
         def withdraw(keys):
             # Only our own rate: never a lift, nor a car endpoint's

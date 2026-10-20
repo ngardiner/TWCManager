@@ -3,14 +3,7 @@
 # boot) are both tried; a refused key has dropped its claim, so it is not.
 from typing import Optional, Tuple
 
-from .Capability import (
-    ALL,
-    CHARGE_FIELDS,
-    COMMANDS,
-    LOCAL,
-    LOCATION_FIELDS,
-    READ_CHARGE,
-)
+from . import Capability as C
 from ..Reconcile.Outcome import Outcome
 from .Provider import Provider, carAmpsRange
 
@@ -20,10 +13,10 @@ class TeslaBLEProvider(Provider):
     rank = 2
     local = True
     worker = "ble"
-    DECLARATIONS = dict.fromkeys(COMMANDS | {READ_CHARGE}, LOCAL)
+    DECLARATIONS = dict.fromkeys(C.COMMANDS | {C.READ_CHARGE}, C.LOCAL)
     # api_only blocks BLE commands and BLE reads alike
-    SUPPRESSED = {"api_only": ALL}
-    FIELDS = CHARGE_FIELDS | LOCATION_FIELDS
+    SUPPRESSED = {"api_only": C.ALL}
+    FIELDS = C.CHARGE_FIELDS | C.LOCATION_FIELDS
 
     def __init__(self, ble, master):
         self.ble = ble
@@ -43,7 +36,7 @@ class TeslaBLEProvider(Provider):
         return carAmpsRange(vehicle, self.master)
 
     def _get(self, vin: str, field: str) -> Optional[dict]:
-        if field not in LOCATION_FIELDS:
+        if field not in C.LOCATION_FIELDS:
             return self.ble.get_charge_state(vin)
         loc = self.ble.get_location_state(vin)
         if loc is None:

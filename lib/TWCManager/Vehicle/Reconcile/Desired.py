@@ -1,33 +1,15 @@
-# Desired state per car and aspect, the attempt record the reconciler keeps
-# for each and one free-channel record per car. Decision-makers write here;
-# the reconciler converges the car on it. Only the charge limit is adopted
-# from the car; charging and amps are stateless. Every stamp is the
-# registry's clock domain (time.time). The store's lock is a leaf: it is
-# never held while calling a provider, the registry, settings, a queue or
-# changed.
+# Desired state per car and aspect, with the attempt record the reconciler
+# keeps for each and one free-channel record per car. Only the charge limit
+# is adopted from the car; charging and amps are stateless. The store's lock
+# is a leaf: never held while calling a provider, the registry, settings, a
+# queue or changed.
 import logging
 import threading
 import time
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-from ..Providers.Capability import (
-    SET_AMPS,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-)
-from .Outcome import (
-    EXCLUDING,
-    HELD,
-    QUEUE_DETAILS,
-    REFUSED,
-    RETRYABLE,
-    SETTLED,
-    UNREACHABLE,
-    UNSUPPORTED,
-    Outcome,
-    isNotSent,
-)
+from ..Providers import Capability as C
+from . import Outcome as O
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
@@ -49,11 +31,11 @@ FIELD_FOR = {
 
 def CAPABILITY_FOR(aspect, value) -> str:
     if aspect == CHARGE_LIMIT:
-        return SET_CHARGE_LIMIT
+        return C.SET_CHARGE_LIMIT
     if aspect == CHARGING:
-        return START_CHARGING if value is True else STOP_CHARGING
+        return C.START_CHARGING if value is True else C.STOP_CHARGING
     if aspect == AMPS:
-        return SET_AMPS
+        return C.SET_AMPS
     raise ValueError("unknown aspect %r" % (aspect,))
 
 
@@ -133,7 +115,7 @@ class AttemptRecord:
         self.__dict__.update(self._FRESH)
         # UNSUPPORTED can depend on the value (amps outside a range); a
         # refusal does not
-        self.excluded = {p: k for p, k in self.excluded.items() if k != UNSUPPORTED}
+        self.excluded = {p: k for p, k in self.excluded.items() if k != O.UNSUPPORTED}
 
     def exclude(self, provider: str, kind: str) -> None:
         self.excluded[provider] = kind
@@ -311,7 +293,7 @@ class DesiredStore:
             record = state.records.get(aspect) if state else None
             if record is None or record.inFlight is not attempt:
                 return False
-            if outcome.detail in QUEUE_DETAILS:
+            if outcome.detail in O.QUEUE_DETAILS:
                 # The attempt never ran
                 record.inFlight = None
                 return True
@@ -323,7 +305,7 @@ class DesiredStore:
                 and want.value == attempt.value
                 and attempt.since >= want.at
             )
-            held = outcome.detail.startswith(HELD)
+            held = outcome.detail.startswith(O.HELD)
             if current:
                 # A hold sent nothing: the desire waits for newer evidence
                 record.heldAt = now if held else None
@@ -333,8 +315,8 @@ class DesiredStore:
                 record.lastOutcomeAt = now
                 record.lastProvider = attempt.provider
                 record.unread += outcome.detail.startswith("rules: could not read")
-            sent = not isNotSent(outcome)
-            if sent and outcome.kind not in EXCLUDING:
+            sent = not O.isNotSent(outcome)
+            if sent and outcome.kind not in O.EXCLUDING:
                 # Even for a replaced desire: a start still in flight when
                 # the desire flips spaces the stop. An excluding outcome
                 # changed nothing on the car: the fallback need not wait
@@ -345,7 +327,7 @@ class DesiredStore:
                 else:
                     # One blind retry, after the desire's first paid request
                     # failed; never after a failed wake
-                    retry = outcome.kind in RETRYABLE
+                    retry = outcome.kind in O.RETRYABLE
                     failedWake = retry and outcome.detail.startswith("wake ")
                     record.paidRetryDue = (
                         record.paidSends == 0 and retry and not failedWake
@@ -353,24 +335,26 @@ class DesiredStore:
                     record.wakeCheckBy = attempt.provider if failedWake else None
                     record.paidSends += 1
                     # A failed wake (an HTTP error too) never reached the car
-                    record.paidReached |= outcome.kind != UNREACHABLE and not failedWake
+                    record.paidReached |= (
+                        outcome.kind != O.UNREACHABLE and not failedWake
+                    )
                     record.paidAt = now
-            if current and outcome.kind in SETTLED and not held:
+            if current and outcome.kind in O.SETTLED and not held:
                 record.settledAt = now
             if paid or held:
                 pass
-            elif outcome.kind in SETTLED or outcome.detail == "pairing":
+            elif outcome.kind in O.SETTLED or outcome.detail == "pairing":
                 # Inside the pairing window the car answers, refusing the key
                 # until the card is tapped: the channel works, and the paid
                 # fallback waits
                 state.free.success(now)
             elif sent and (
                 # A failure of the free channel needs a request to it
-                outcome.kind in RETRYABLE
-                or outcome.kind == REFUSED
+                outcome.kind in O.RETRYABLE
+                or outcome.kind == O.REFUSED
             ):
                 state.free.failure(now)
-            if outcome.kind == REFUSED or (current and outcome.kind in EXCLUDING):
+            if outcome.kind == O.REFUSED or (current and outcome.kind in O.EXCLUDING):
                 # UNSUPPORTED can depend on the value: a superseded one's not
                 record.exclude(attempt.provider, outcome.kind)
             # Last: plan reads the record without the lock once this is None

@@ -17,14 +17,7 @@ import threading
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
-from TWCManager.Vehicle.Reconcile.Outcome import (
-    DONE,
-    ERROR,
-    REFUSED,
-    SATISFIED,
-    UNREACHABLE,
-    Outcome,
-)
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Registry.VIN import (
     isWellFormedVIN,
     storedBleStatus,
@@ -283,18 +276,18 @@ class TeslaBLE:
             if self._inPairingWindow(vin):
                 # The owner has not tapped the key card yet: the claim is
                 # kept, and the next try may prove the key
-                return Outcome(ERROR, "pairing")
-            return Outcome(REFUSED, "key")
+                return O.Outcome(O.ERROR, "pairing")
+            return O.Outcome(O.REFUSED, "key")
         if self._storedStatus(vin)["status"] == "refused":
-            return Outcome(REFUSED, "key")
+            return O.Outcome(O.REFUSED, "key")
         if output is None:
-            return Outcome(UNREACHABLE, "no reply")
+            return O.Outcome(O.UNREACHABLE, "no reply")
         reason = self._satisfiedReason(output)
         if reason is not None:
-            return Outcome(SATISFIED, reason)
+            return O.Outcome(O.SATISFIED, reason)
         if self.parseCommandOutput(output):
-            return Outcome(DONE)
-        return Outcome(ERROR, self._errorCategory(output))
+            return O.Outcome(O.DONE)
+        return O.Outcome(O.ERROR, self._errorCategory(output))
 
     @_serialized
     def peerWithVehicle(self, vin):
@@ -1012,8 +1005,8 @@ class TeslaBLE:
     # tesla-control has no scan subcommand; the car advertises the local
     # name bleLocalName(vin), which BlueZ's bluetoothctl reports while
     # scanning. Scans share the adapter with tesla-control, so they run
-    # under _bleLock on the background-task thread; the HTTP thread only
-    # queues a request.
+    # under _bleLock (the background task's and the ping's alike); the HTTP
+    # thread only queues a request.
 
     @staticmethod
     def bleLocalName(vin):

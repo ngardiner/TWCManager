@@ -5,11 +5,7 @@
 from typing import List, Optional
 
 from .. import Presence
-from ..Providers.Capability import (
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-)
+from ..Providers import Capability as C
 from ..Registry.Fields import READ_MAX_AGE
 from .Desired import CHARGE_LIMIT, RELEASE
 
@@ -19,13 +15,13 @@ def presentVehicles(master, capability) -> List:
     return [
         v
         for v in master.vehicleRegistry.vehicles()
-        if (not v.isAnonymous or capability in (START_CHARGING, STOP_CHARGING))
-        and Presence.homeForLimits(master, v)
+        if (not v.isAnonymous or capability in (C.START_CHARGING, C.STOP_CHARGING))
+        and Presence.presence(master, v) != Presence.NOT_HOME
         and order.candidates(v, capability)
     ]
 
 
-def targetsFor(master, vin: Optional[str], capability=STOP_CHARGING) -> List:
+def targetsFor(master, vin: Optional[str], capability=C.STOP_CHARGING) -> List:
     # A targeted command names its car, present or not
     if vin:
         vehicle = master.vehicleRegistry.get(vin)
@@ -52,7 +48,7 @@ def applyPolicyLimit(master, limit: Optional[int], decision: bool) -> int:
     # Every car that may be here; applicable decides at send. A car seen
     # leaving gets its restore instead
     touched = 0
-    for vehicle in presentVehicles(master, SET_CHARGE_LIMIT):
+    for vehicle in presentVehicles(master, C.SET_CHARGE_LIMIT):
         if vehicle.vin and Presence.departed(master, vehicle) is None:
             _apply(master, vehicle, limit, decision)
             touched += 1
@@ -64,7 +60,7 @@ def onArrival(master, vehicle) -> None:
     # A plug-in here is a decision for this car alone: it ends an adopted
     # value. The plug is checked now, not taken from the event
     if vehicle.vin and Presence.pluggedHere(master, vehicle):
-        if master.providerOrder.candidates(vehicle, SET_CHARGE_LIMIT):
+        if master.providerOrder.candidates(vehicle, C.SET_CHARGE_LIMIT):
             _apply(master, vehicle, master.policyLimit, decision=True)
 
 

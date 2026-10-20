@@ -127,3 +127,18 @@ def test_an_unnamed_session_outlasts_a_waking_00_and_departs_no_one(
     beats(m, s, c, 120, 0x00, 0.0)  # it left
     assert m.vehicleRegistry.vehicleAt("8244") is None
     assert "anon:8244 departs" not in caplog.text
+
+
+def test_an_anonymous_point_finds_its_cars_once_per_pass(rig, monkeypatch):
+    from TWCManager.EVSEInstance import ChargingPoint
+
+    m, v, c, s = rig
+    beats(m, s, c, 20, 0x03, 32.0)
+    assert s.vehicleKey == "anon:8244"
+    calls = []
+    real = ChargingPoint.candidates
+    monkeypatch.setattr(
+        ChargingPoint, "candidates", lambda *a: calls.append(a) or real(*a)
+    )
+    m.controlPass()
+    assert len(calls) == 1 and "anon:8244" in m.offered

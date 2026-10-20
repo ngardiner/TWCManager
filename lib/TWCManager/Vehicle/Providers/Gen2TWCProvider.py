@@ -6,13 +6,7 @@
 # (master.sendRS485), a target is published for the heartbeat.
 from typing import Optional, Tuple
 
-from .Capability import (
-    DISRUPTIVE,
-    LOCAL,
-    SET_AMPS,
-    START_CHARGING,
-    STOP_CHARGING,
-)
+from . import Capability as C
 from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
 from ..Registry.VehicleRegistry import canonicalKey
 from .Provider import Provider
@@ -25,9 +19,9 @@ class Gen2TWCProvider(Provider):
     worker = "local"
     module = None
     DECLARATIONS = {
-        SET_AMPS: LOCAL,
-        START_CHARGING: LOCAL,
-        STOP_CHARGING: DISRUPTIVE,
+        C.SET_AMPS: C.LOCAL,
+        C.START_CHARGING: C.LOCAL,
+        C.STOP_CHARGING: C.DISRUPTIVE,
     }
     SUPPRESSED = {}
 
@@ -55,13 +49,13 @@ class Gen2TWCProvider(Provider):
         return int(self._settings().get("chargeRateControl", 1))
 
     def ready(self, vehicle, capability) -> bool:
-        if capability == SET_AMPS:
+        if capability == C.SET_AMPS:
             # Mode 2 hands the rate to the vehicle
             return self.chargeRateControl() != 2 and self.slaveFor(vehicle) is not None
-        if capability == STOP_CHARGING:
+        if capability == C.STOP_CHARGING:
             # Off by default: only chargeStopMode selects a disruptive stop
             return self.stopMode() in (2, 3) and self.slaveFor(vehicle) is not None
-        if capability == START_CHARGING:
+        if capability == C.START_CHARGING:
             # Mode 2's start is to answer slaves again. It undoes only a stop
             # this provider delivered, never a BLE or cloud stop. No slave
             # needed: one ages out about 26 s after we go quiet
