@@ -237,7 +237,7 @@ class VehicleRegistry:
             self._removed([key])
             # Older stamps never displace newer ones, so the car's own
             # newer values survive the merge.
-            for field, obs in anon._fields.snapshot().items():
+            for field, obs in anon.snapshot().items():
                 v.observe(field, obs.value, obs.source, at=obs.at)
         # One car per point: the one it names now
         for other in self._attributedTo(pointId):

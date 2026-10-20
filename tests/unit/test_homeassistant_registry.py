@@ -153,7 +153,7 @@ def test_ha_down_is_a_failed_read_and_cascade_continues():
 
     class Next(Provider):
         name, rank, FIELDS = "Next", 7, frozenset({"batteryLevel"})
-        DECLARATIONS = {C.READ_CHARGE: C.Declaration(C.HA_BILLED)}
+        DECLARATIONS = {C.READ_CHARGE: C.HA_BILLED}
         ready = lambda self, v, c: True
 
         def fetch(self, v, f, allowWake=False):

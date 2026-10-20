@@ -192,7 +192,7 @@ class TestCheckChargeRefreshesEachModuleOnce:
             SUPPRESSED = {"api_only": C.ALL}
 
             def declarations(self):
-                return {C.READ_CHARGE: C.Declaration(C.LOCAL)}
+                return {C.READ_CHARGE: C.LOCAL}
 
         master = Mock()
         master.config = {}

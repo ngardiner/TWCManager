@@ -13,8 +13,22 @@ from TWCManager.Vehicle.Reconcile.Outcome import ERROR, Outcome
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 
+
+def settled(store, key, aspect) -> bool:
+    # The desire's attempt record settled at or after the desire
+    state = store.peek(key)
+    desired = state and state.desired.get(aspect)
+    record = state and state.records.get(aspect)
+    return bool(
+        desired
+        and record
+        and record.settledAt is not None
+        and record.settledAt >= desired.at
+    )
+
+
 # Every command at the local tier; pass tier= to declare them at another cost
-COMMAND_CAPS = {capability: C.Declaration(C.LOCAL) for capability in C.COMMANDS}
+COMMAND_CAPS = {capability: C.LOCAL for capability in C.COMMANDS}
 
 
 # Presence from events, as live: home is set and TeslaMate's free
@@ -71,10 +85,7 @@ class ScriptedProvider(Provider):
             "TeslaBLE": "ble",
         }.get(name, "cloud")
         if tier is not None:
-            caps = {
-                capability: declaration._replace(cost=tier)
-                for capability, declaration in caps.items()
-            }
+            caps = dict.fromkeys(caps, tier)
         self._caps = dict(caps)
         self._amps = amps
         self.module = module
@@ -98,7 +109,7 @@ class ScriptedProvider(Provider):
         # Makes the provider fetch field as value (READ_CHARGE, at its own
         # locality's free tier unless cost says otherwise), counting fetches
         cost = cost or (C.LOCAL if self.local else C.CLOUD_FREE)
-        self._caps = dict(self._caps, **{C.READ_CHARGE: C.Declaration(cost)})
+        self._caps = dict(self._caps, **{C.READ_CHARGE: cost})
         self.FIELDS, self.readValue, self.fetched = frozenset({field}), value, 0
         return self
 

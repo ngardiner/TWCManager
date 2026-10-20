@@ -94,10 +94,9 @@ def _tagged(outcome, prefix) -> Outcome:
     return outcome._replace(detail=(prefix + outcome.detail).rstrip())
 
 
-def workerOf(master, providerName) -> str:
-    # An unregistered provider counts as cloud
-    provider = master.providerOrder.provider(providerName)
-    return "cloud" if provider is None else getattr(provider, "worker", "cloud")
+def workerOf(provider) -> str:
+    # An unregistered provider (None) counts as cloud
+    return getattr(provider, "worker", "cloud")
 
 
 def _call(provider, capability, vin, value):
@@ -171,14 +170,12 @@ def runAttempt(reconciler, attempt) -> Outcome:
         read = field is not None and attempt.maxAge is not None
         if read:
             # Only the providers on this provider's own worker
-            worker = getattr(provider, "worker", "cloud")
+            worker = workerOf(provider)
             vehicle.read(
                 field,
                 attempt.maxAge,
                 providers=[
-                    p
-                    for p in master.providerOrder.providers()
-                    if getattr(p, "worker", "cloud") == worker
+                    p for p in master.providerOrder.providers() if workerOf(p) == worker
                 ],
                 force=attempt.force,
             )

@@ -6,27 +6,13 @@ from typing import Optional, Tuple
 from .Capability import (
     ALL,
     CHARGE_FIELDS,
+    COMMANDS,
     LOCAL,
     LOCATION_FIELDS,
     READ_CHARGE,
-    SET_AMPS,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-    WAKE,
-    Declaration,
 )
 from ..Reconcile.Outcome import Outcome
-from .Provider import Provider, vehicleMaxAmps
-
-CAPABILITIES = (
-    READ_CHARGE,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-    SET_AMPS,
-    WAKE,
-)
+from .Provider import Provider, carAmpsRange
 
 
 class TeslaBLEProvider(Provider):
@@ -34,7 +20,7 @@ class TeslaBLEProvider(Provider):
     rank = 2
     local = True
     worker = "ble"
-    DECLARATIONS = {capability: Declaration(LOCAL) for capability in CAPABILITIES}
+    DECLARATIONS = dict.fromkeys(COMMANDS | {READ_CHARGE}, LOCAL)
     # api_only blocks BLE commands and BLE reads alike
     SUPPRESSED = {"api_only": ALL}
     FIELDS = CHARGE_FIELDS | LOCATION_FIELDS
@@ -47,17 +33,14 @@ class TeslaBLEProvider(Provider):
     def ready(self, vehicle, capability) -> bool:
         # Called from the distributor: reads the claim only, never settings
         # (settingsLock) or the adapter (_bleLock)
-        if vehicle is None or capability not in CAPABILITIES:
+        if vehicle is None or not self.declares(capability):
             return False
         return bool(vehicle.vin) and "TeslaBLE" in vehicle.claims
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
-        # Vehicle amps run 1..max, never 0. Never None for a ready vehicle:
-        # the order would read that as no local path and let Fleet bill.
-        if vehicle is None:
-            return None
-        configConfig = (getattr(self.master, "config", None) or {}).get("config")
-        return (1, vehicleMaxAmps(vehicle, configConfig or {}))
+        # Never None for a ready vehicle: the order would read that as no
+        # local path and let Fleet bill.
+        return carAmpsRange(vehicle, self.master)
 
     def _get(self, vin: str, field: str) -> Optional[dict]:
         if field not in LOCATION_FIELDS:

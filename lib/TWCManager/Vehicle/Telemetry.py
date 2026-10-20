@@ -335,6 +335,15 @@ class TelmetryBase:
         # retry timer thread, never the MQTT thread.
         pass
 
+    def _attach(self, vehicle_id, vehicle, label):
+        self.vehicles[vehicle_id] = vehicle
+        self.orphanedIds.discard(vehicle_id)
+        self.warnedUnmapped.discard(vehicle_id)
+        logger.info(
+            f"Vehicle {label} telemetry being provided by {self.__class__.__name__}"
+        )
+        return True
+
     def updateVehicles(self, vehicle_id, vehicle_name, loadList=True, retained=False):
         # Attaches the telemetry car id to a registry vehicle, by VIN where
         # the feed knows it, else by name. A retained message (or a replay of
@@ -360,13 +369,7 @@ class TelmetryBase:
             if vehicle is not None:
                 if vehicle_name:
                     self._observe(vehicle, "name", vehicle_name, retained)
-                self.vehicles[vehicle_id] = vehicle
-                self.orphanedIds.discard(vehicle_id)
-                self.warnedUnmapped.discard(vehicle_id)
-                logger.info(
-                    f"Vehicle {vehicle_name or vin} telemetry being provided by {source}"
-                )
-                return True
+                return self._attach(vehicle_id, vehicle, vehicle_name or vin)
 
         if not vehicle_name:
             return False
@@ -381,11 +384,7 @@ class TelmetryBase:
                 vehicle = self.registry.findByName(vehicle_name)
 
         if vehicle is not None:
-            self.vehicles[vehicle_id] = vehicle
-            self.orphanedIds.discard(vehicle_id)
-            self.warnedUnmapped.discard(vehicle_id)
-            logger.info(f"Vehicle {vehicle_name} telemetry being provided by {source}")
-            return True
+            return self._attach(vehicle_id, vehicle, vehicle_name)
 
         # Once per car id at WARNING; the retries that follow at DEBUG.
         level = logging.DEBUG if vehicle_id in self.warnedUnmapped else logging.WARNING

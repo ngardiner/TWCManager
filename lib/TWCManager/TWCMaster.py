@@ -19,9 +19,8 @@ import requests
 import bisect
 import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Vehicle.Registry import VehicleRegistry
-from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
-from TWCManager.Vehicle.Providers import ProviderOrder
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry, isAnonKey
+from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 from TWCManager.Vehicle.Providers.Capability import (
     READ_CHARGE,

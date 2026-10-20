@@ -152,7 +152,7 @@ class VehicleReconciler(threading.Thread):
         return all([q.waitDrained(deadline) for q in (self.cloud, self.ble)])
 
     def submit(self, attempt) -> bool:
-        worker = Run.workerOf(self.master, attempt.provider)
+        worker = Run.workerOf(self.master.providerOrder.provider(attempt.provider))
         if worker == "local":
             # No I/O: only a request the heartbeat sends
             self.report(attempt, self._run(attempt))
@@ -365,9 +365,8 @@ class VehicleReconciler(threading.Thread):
             # No paid send reached the car: a reading shows it awake, a start
             # will wake it, or the arm ended on a failed wake. At most two
             # more sends, once per desire, each with the normal wake and read.
-            # Written without the store's lock: a newDesire()
-            # racing it can inherit rearmed and lose a retry, never gain a
-            # paid send
+            # Written without the store's lock: a racing newDesire() can
+            # inherit rearmed and lose a retry, never gain a paid send
             rec.paidSends = 0
             rec.rearmed = True
             rec.paidRetryDue = False

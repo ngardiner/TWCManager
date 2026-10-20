@@ -219,7 +219,8 @@ def test_healthy_teslamate_car_reads_without_api_calls(teslamate):  # ruling 1
     tm, api, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0", battery_level="61")
     assert reg.get(VIN).read("lat", 0) is not None  # maxAge 0: the feed vouches for now
-    assert api.update_charge(reg.get(VIN)) is True
+    api.update_charge(reg.get(VIN))
+    assert reg.get(VIN).value("batteryLevel", 10000) == 61
     assert not api.get_car_api.called
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
 

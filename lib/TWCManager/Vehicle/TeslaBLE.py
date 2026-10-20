@@ -25,7 +25,11 @@ from TWCManager.Vehicle.Reconcile.Outcome import (
     UNREACHABLE,
     Outcome,
 )
-from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
+from TWCManager.Vehicle.Registry.VIN import (
+    isWellFormedVIN,
+    storedBleStatus,
+    vehicleRecordKey,
+)
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("TeslaBLE", "Vehicle")
@@ -950,31 +954,17 @@ class TeslaBLE:
             logger.debug(f"BLE status update failed: {type(e).__name__}")
 
     def _settingsKey(self, vin):
-        """The settings["Vehicles"] key for this VIN, matched without regard
-        to case (older releases stored form VINs as typed); upper case for a
-        VIN not stored yet."""
+        """The settings["Vehicles"] key for this VIN; upper case for a VIN not
+        stored yet."""
         if not isinstance(vin, str):
             return vin
         with self.master.settingsLock:
-            vehicles = self.master.settings.get("Vehicles") or {}
-            if vin in vehicles:
-                return vin
-            upper = vin.upper()
-            if upper in vehicles:
-                return upper
-            for key in list(vehicles):
-                if isinstance(key, str) and key.upper() == upper:
-                    return key
-        return upper
+            key = vehicleRecordKey(self.master.settings.get("Vehicles") or {}, vin)
+        return key or vin.upper()
 
     def _storedStatus(self, vin):
-        vin = self._settingsKey(vin)
         with self.master.settingsLock:
-            rec = (self.master.settings.get("Vehicles") or {}).get(vin)
-            ble = rec.get("ble") if isinstance(rec, dict) else None
-            if isinstance(ble, dict) and ble.get("status"):
-                return {"status": ble["status"], "since": ble.get("since")}
-        return {"status": "unpaired", "since": None}
+            return storedBleStatus(self.master.settings.get("Vehicles") or {}, vin)
 
     def bleStatus(self, vin):
         """Pairing status for the vehicle page.

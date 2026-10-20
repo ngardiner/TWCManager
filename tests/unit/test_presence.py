@@ -22,6 +22,7 @@ from tests.unit.reconcile_helpers import (
     ScriptedProvider,
     bleAnswers,
     placeAt,
+    settled,
 )
 from tests.unit.teslatokens import FLEET_NA_URL, fleet_token, new_api
 from tests.unit.test_limit_reconciler import VIN, ble, prov, setup
@@ -739,7 +740,7 @@ def test_a_restores_own_ble_reply_re_applies_nothing():
         later(c, 60)
         m.setPolicyLimit(50, transition=False)
         m.reconciler.pass_()
-    assert len(p.calls) == 1 and m.desired.settled(VIN, CHARGE_LIMIT)
+    assert len(p.calls) == 1 and settled(m.desired, VIN, CHARGE_LIMIT)
 
 
 def test_a_plug_or_a_newer_arrival_cancels_a_pending_restore():

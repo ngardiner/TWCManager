@@ -11,8 +11,8 @@ class Stub(Provider):
 
     def declarations(self):
         return {
-            C.SET_AMPS: C.Declaration(C.LOCAL),
-            C.WAKE: C.Declaration(C.FLEET_WAKE),
+            C.SET_AMPS: C.LOCAL,
+            C.WAKE: C.FLEET_WAKE,
         }
 
     def ampsRange(self, vehicle):
@@ -38,7 +38,7 @@ def test_provider_defaults_and_declarations():
     p = Stub()
     assert p.declares(C.SET_AMPS) and not p.declares(C.READ_CHARGE)
     assert p.cost(C.WAKE) == C.FLEET_WAKE and p.cost(C.READ_CHARGE) is None
-    assert p.declarations()[C.WAKE] == C.Declaration(C.FLEET_WAKE)
+    assert p.declarations()[C.WAKE] == C.FLEET_WAKE
     assert p.ready(None, C.SET_AMPS) is False
     assert not hasattr(Provider, "attempts")                      # retries are the reconciler's
     assert p.limitations(None) == frozenset()

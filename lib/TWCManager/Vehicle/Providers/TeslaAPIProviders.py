@@ -26,9 +26,8 @@ from .Capability import (
     START_CHARGING,
     STOP_CHARGING,
     WAKE,
-    Declaration,
 )
-from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
+from .Provider import CLOUD_SUPPRESSED, Provider, carAmpsRange
 
 # The Tesla command each capability sends, for the read-only line
 TESLA_COMMAND = {
@@ -38,9 +37,6 @@ TESLA_COMMAND = {
     SET_AMPS: "set_charging_amps",
     WAKE: "wake_up",
 }
-
-# The reader paces it: a connect edge, then one poll a minute
-WALL_CONNECTOR_VINS = Declaration(CLOUD_FREE)
 
 
 class _TeslaAPIProvider(Provider):
@@ -70,9 +66,7 @@ class _TeslaAPIProvider(Provider):
         )
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
-        if vehicle is None:
-            return None
-        return (1, vehicleMaxAmps(vehicle, self.carapi.master.config["config"]))
+        return carAmpsRange(vehicle, self.carapi.master)
 
     # Command methods: one request each (set_charging_amps below 5 A
     # excepted, as TeslaPy #42), classified by TeslaAPI.command. Each sends
@@ -142,14 +136,16 @@ class OwnerAPIProvider(_TeslaAPIProvider):
     name = "OwnerAPI"
     rank = 4
     local = False
+    # The site read is paced by its reader: a connect edge, then one poll a
+    # minute
     DECLARATIONS = {
-        READ_CHARGE: Declaration(CLOUD_FREE),
-        SET_CHARGE_LIMIT: Declaration(OWNER_COMMAND),
-        START_CHARGING: Declaration(OWNER_COMMAND),
-        STOP_CHARGING: Declaration(OWNER_COMMAND),
-        SET_AMPS: Declaration(OWNER_COMMAND),
-        WAKE: Declaration(OWNER_COMMAND),
-        READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
+        READ_CHARGE: CLOUD_FREE,
+        SET_CHARGE_LIMIT: OWNER_COMMAND,
+        START_CHARGING: OWNER_COMMAND,
+        STOP_CHARGING: OWNER_COMMAND,
+        SET_AMPS: OWNER_COMMAND,
+        WAKE: OWNER_COMMAND,
+        READ_WALL_CONNECTOR_VINS: CLOUD_FREE,
     }
     SUPPRESSED = CLOUD_SUPPRESSED
 
@@ -188,13 +184,13 @@ class FleetAPIProvider(_TeslaAPIProvider):
     rank = 5
     local = False
     DECLARATIONS = {
-        READ_CHARGE: Declaration(FLEET_DATA),
-        SET_CHARGE_LIMIT: Declaration(FLEET_COMMAND),
-        START_CHARGING: Declaration(FLEET_COMMAND),
-        STOP_CHARGING: Declaration(FLEET_COMMAND),
-        SET_AMPS: Declaration(FLEET_COMMAND),
-        WAKE: Declaration(FLEET_WAKE),
-        READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
+        READ_CHARGE: FLEET_DATA,
+        SET_CHARGE_LIMIT: FLEET_COMMAND,
+        START_CHARGING: FLEET_COMMAND,
+        STOP_CHARGING: FLEET_COMMAND,
+        SET_AMPS: FLEET_COMMAND,
+        WAKE: FLEET_WAKE,
+        READ_WALL_CONNECTOR_VINS: CLOUD_FREE,
     }
     SUPPRESSED = CLOUD_SUPPRESSED
 

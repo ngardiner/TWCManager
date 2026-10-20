@@ -4,7 +4,7 @@ from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
 from TWCManager.Vehicle.Reconcile.Reconciler import MIN_SEND_GAP, PAID_AFTER, PROBE_AFTER, RETRY, VehicleReconciler
-from tests.unit.reconcile_helpers import Clock, ScriptedProvider, inline
+from tests.unit.reconcile_helpers import Clock, ScriptedProvider, inline, settled
 from tests.unit.test_gen2twc_provider import VIN, make as make_master
 
 def setup(*providers, clock=True, here=True):
@@ -33,12 +33,12 @@ def test_limit_is_sent_once_and_recorded_as_held():
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
     assert r.pass_() == 1 and prov(m, "TeslaBLE").calls == [("setChargeLimit", VIN, 50)]
     assert m.heldLimits.get(VIN) == HeldLimit(90, 50) and v.believed("chargeLimit").value == 50
-    assert r.pass_() == 0 and m.desired.settled(VIN, CHARGE_LIMIT)                            # satisfied by our own write
+    assert r.pass_() == 0 and settled(m.desired, VIN, CHARGE_LIMIT)                            # satisfied by our own write
 
 def test_default_clocks_share_one_domain():                                  # production clocks, no fake
     m, r, v, c = setup(ble(O.Outcome(O.DONE), O.Outcome(O.DONE)), clock=False); v.observe("chargeLimit", 50, "TeslaBLE"); v.observe("chargingState", "Stopped", "TeslaBLE")
     m.desired.set(VIN, CHARGE_LIMIT, 90, "policy"); m.desired.set(VIN, CHARGING, True, "distributor")
-    assert r.pass_() == 1 and m.desired.settled(VIN, CHARGE_LIMIT) and m.desired.get(VIN, CHARGING) is not None
+    assert r.pass_() == 1 and settled(m.desired, VIN, CHARGE_LIMIT) and m.desired.get(VIN, CHARGING) is not None
     assert r.pass_() == 0                                                     # inside the 5 s start gap, measured on one clock
     w = v.lastWrite("chargeLimit"); assert abs(w.at - time.time()) < 5 and abs(m.desired.record(VIN, CHARGE_LIMIT).settledAt - w.at) < 5
 
@@ -337,8 +337,8 @@ def test_a_limit_changed_while_in_flight_sends_the_new_value():             # C1
         return send(vin, limit)
     f.setChargeLimit = midFlight; m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
     c.t += MIN_SEND_GAP[CHARGE_LIMIT]
-    assert not m.desired.settled(VIN, CHARGE_LIMIT) and r.pass_() == 1 and [x[2] for x in f.calls if x[0] != "wake"] == [50, 60]
-    assert m.desired.settled(VIN, CHARGE_LIMIT) and m.heldLimits.get(VIN) == HeldLimit(90, 60)
+    assert not settled(m.desired, VIN, CHARGE_LIMIT) and r.pass_() == 1 and [x[2] for x in f.calls if x[0] != "wake"] == [50, 60]
+    assert settled(m.desired, VIN, CHARGE_LIMIT) and m.heldLimits.get(VIN) == HeldLimit(90, 60)
 
 def test_a_stop_set_after_a_start_s_wake_held_goes_on_the_first_pass():    # I1
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "wake held"), O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
@@ -414,7 +414,7 @@ def test_a_start_waits_for_an_unsettled_limit():                           # N1 
     assert names(f) == ["wake", "setChargeLimit", "wake", "startCharging"]   # the limit carries the start's wake
 
 def test_a_limit_no_provider_can_deliver_never_holds_a_start():
-    m, r, v, c = setup(ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)], caps={C.START_CHARGING: C.Declaration(C.FLEET_COMMAND), C.WAKE: C.Declaration(C.FLEET_WAKE)}))
+    m, r, v, c = setup(ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)], caps={C.START_CHARGING: C.FLEET_COMMAND, C.WAKE: C.FLEET_WAKE}))
     f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")
     assert r.pass_() == 1 and names(f) == ["wake", "startCharging"]
@@ -430,7 +430,7 @@ def test_a_desire_set_during_a_pass_still_counts_its_paid_sends():         # N2,
 
 def ha(*outs, caps=(C.SET_CHARGE_LIMIT, C.START_CHARGING, C.STOP_CHARGING)):
     # Billed, never wakes
-    return ScriptedProvider("HomeAssistant", 6, False, list(outs), caps={cap: C.Declaration(C.HA_BILLED) for cap in caps})
+    return ScriptedProvider("HomeAssistant", 6, False, list(outs), caps={cap: C.HA_BILLED for cap in caps})
 
 def calls_named(p, name): return [x for x in p.calls if x[0] == name]
 

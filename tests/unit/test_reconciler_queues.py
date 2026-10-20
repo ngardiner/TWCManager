@@ -87,7 +87,7 @@ def test_read_before_write_satisfied_skips_the_command():
     submit(r, attempt(maxAge=300)); assert reports == [("TeslaBLE", O.SATISFIED, "read")] and p.calls == []
 
 def test_disruptive_stop_and_satisfied_start_are_not_stamped():
-    g = ScriptedProvider("Gen2TWC", 0, True, [O.Outcome(O.DONE)], caps={C.STOP_CHARGING: C.Declaration(C.DISRUPTIVE)}); m, r, reports = setup(g)
+    g = ScriptedProvider("Gen2TWC", 0, True, [O.Outcome(O.DONE)], caps={C.STOP_CHARGING: C.DISRUPTIVE}); m, r, reports = setup(g)
     submit(r, attempt(C.STOP_CHARGING, False, "Gen2TWC", CHARGING)); assert kinds(reports) == [O.DONE] and m.vehicleRegistry.get(VIN).lastWrite("chargingState") is None
     b = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.SATISFIED, "complete")]); m, r, reports = setup(b)
     submit(r, attempt(C.START_CHARGING, True, "TeslaBLE", CHARGING)); assert m.vehicleRegistry.get(VIN).lastWrite("chargingState") is None
@@ -111,7 +111,7 @@ def test_one_shots_never_replace_each_other():
     assert entryKey(one_shot(C.WAKE)) != entryKey(one_shot(C.WAKE)) and entryKey(attempt()) == (VIN, CHARGE_LIMIT)
 
 def test_debug_command_submits_a_one_shot_past_a_twc():
-    t = ScriptedProvider("Gen2TWC", 0, True, [O.Outcome(O.DONE)], caps={C.SET_AMPS: C.Declaration(C.LOCAL)}, amps=(6, 32)); t.module = None
+    t = ScriptedProvider("Gen2TWC", 0, True, [O.Outcome(O.DONE)], caps={C.SET_AMPS: C.LOCAL}, amps=(6, 32)); t.module = None
     p = ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)]); m, r, reports = setup(t, p)
     assert m.providerOrder.debugCommand("setChargeRate", VIN, '{"charge_rate": "12"}') is True and p.calls == [("setAmps", VIN, 12)] and t.calls == []
     assert m.providerOrder.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}") is False and reports[-1][1] == O.DONE
@@ -294,7 +294,7 @@ def test_one_shot_outcome_is_logged_at_info(caplog):
     assert "Debug wake for %s via FleetAPI: unreachable timeout" % VIN in caplog.text and p.calls == [("wake", VIN, None)]
 
 def test_local_providers_run_inline_even_when_workers_are_threaded():
-    g = ScriptedProvider("Gen2TWC", 0, True, [O.Outcome(O.DONE)], caps={C.STOP_CHARGING: C.Declaration(C.DISRUPTIVE)}); m, r, reports = setup(g, inline_=False)
+    g = ScriptedProvider("Gen2TWC", 0, True, [O.Outcome(O.DONE)], caps={C.STOP_CHARGING: C.DISRUPTIVE}); m, r, reports = setup(g, inline_=False)
     assert submit(r, attempt(C.STOP_CHARGING, False, "Gen2TWC", CHARGING)) is True and kinds(reports) == [O.DONE] and pending(r) == 0
     assert r.cloud._thread is None
 
@@ -404,7 +404,7 @@ def test_no_callback_lists_or_test_modes_in_lib():
     assert not hasattr(VehicleCommandQueue, "_entries") and "inline" not in inspect.signature(VehicleCommandQueue).parameters
     assert not hasattr(VehicleCommandQueue, "summary") and not hasattr(Run, "Workers") and not hasattr(Run, "RateLimits")
     assert not hasattr(DesiredStore, "onChange") and not hasattr(DesiredStore, "followRegistry") and not hasattr(VehicleRegistry, "onRemove")
-    assert not hasattr(C, "RateLimit") and "rateLimit" not in C.Declaration._fields
+    assert not hasattr(C, "RateLimit") and "rateLimit" not in C.Cost._fields
 
 def test_the_store_and_the_registry_each_call_one_callable_outside_their_locks():
     m, r = reconciler(); woke = []; r.wake = lambda *a: woke.append(a)

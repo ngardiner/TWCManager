@@ -19,7 +19,11 @@ import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Control.APIValidator import APIValidator
-from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
+from TWCManager.Vehicle.Registry.VIN import (
+    isWellFormedVIN,
+    storedBleStatus,
+    vehicleRecordKey,
+)
 from TWCManager.Vehicle.Presence import HOME, presence
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
@@ -112,7 +116,7 @@ def addVehicleByVIN(master, vin):
     vin = vehicle.vin
     with master.settingsLock:
         known = master.settings.setdefault("Vehicles", {})
-        if not any(k.upper() == vin for k in known):
+        if vehicleRecordKey(known, vin) is None:
             # addedByVIN: Forget may remove this record (and its key).
             known[vin] = {
                 "chargeSessions": 0,
@@ -128,14 +132,6 @@ def addVehicleByVIN(master, vin):
     return "/vehicleDetail/" + vin
 
 
-def _vehicleRecordKey(vehicles, vin):
-    # settings["Vehicles"] keys may be in any case (as _settingsKey).
-    for key in list(vehicles):
-        if isinstance(key, str) and key.upper() == vin:
-            return key
-    return None
-
-
 def canForgetVehicle(master, vin):
     """Forget is narrow: a car the user added by VIN that no provider has
     attached to and whose BLE key was never proven (a mistyped VIN). A
@@ -147,9 +143,7 @@ def canForgetVehicle(master, vin):
         return False
     with master.settingsLock:
         vehicles = master.settings.get("Vehicles") or {}
-        rec = vehicles.get(_vehicleRecordKey(vehicles, vehicle.vin))
-        ble = rec.get("ble") if isinstance(rec, dict) else None
-        return not (isinstance(ble, dict) and ble.get("status") == "paired")
+        return storedBleStatus(vehicles, vehicle.vin)["status"] != "paired"
 
 
 def forgetVehicle(master, vin):
@@ -164,7 +158,7 @@ def forgetVehicle(master, vin):
         return "/vehicleDetail/" + vin
     with master.settingsLock:
         vehicles = master.settings.get("Vehicles") or {}
-        key = _vehicleRecordKey(vehicles, vin)
+        key = vehicleRecordKey(vehicles, vin)
         rec = vehicles.get(key)
         # Only a record Add-by-VIN made, and only while it holds no charge
         # history: history is not ours to drop. The record holds the

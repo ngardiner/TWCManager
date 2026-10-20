@@ -224,7 +224,7 @@ def test_feed_outage_costs_one_cloud_read_not_one_per_window():  # C1 probe
         class Cloud(Provider):
             name = "OwnerAPI"
             FIELDS = frozenset({"lat"})
-            DECLARATIONS = {C.READ_CHARGE: C.Declaration(C.CLOUD_FREE)}
+            DECLARATIONS = {C.READ_CHARGE: C.CLOUD_FREE}
 
             def ready(self, vehicle, capability):
                 return True

@@ -12,7 +12,6 @@ from .Capability import (
     SET_AMPS,
     START_CHARGING,
     STOP_CHARGING,
-    Declaration,
 )
 from .Provider import Provider
 
@@ -24,9 +23,9 @@ class Gen3TWCProvider(Provider):
     worker = "local"
     module = None
     DECLARATIONS = {
-        SET_AMPS: Declaration(LOCAL),
-        START_CHARGING: Declaration(LOCAL),
-        STOP_CHARGING: Declaration(LOCAL),
+        SET_AMPS: LOCAL,
+        START_CHARGING: LOCAL,
+        STOP_CHARGING: LOCAL,
     }
     SUPPRESSED = {}
 
@@ -64,9 +63,6 @@ class Gen3TWCProvider(Provider):
             return Outcome(UNSUPPORTED, "no unit")
         act(unit)
         return Outcome(DONE)
-
-    def setAmps(self, vin: str, amps: int) -> Outcome:
-        return self._onUnit(vin, lambda u: u.setTargetPower(u.convertAmpsToWatts(amps)))
 
     def stopCharging(self, vin: str) -> Outcome:
         # A zero headroom: a normal local stop (unverified on hardware). The

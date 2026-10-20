@@ -12,7 +12,6 @@ from .Capability import (
     SET_AMPS,
     START_CHARGING,
     STOP_CHARGING,
-    Declaration,
 )
 from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
 from ..Registry.VehicleRegistry import canonicalKey
@@ -26,9 +25,9 @@ class Gen2TWCProvider(Provider):
     worker = "local"
     module = None
     DECLARATIONS = {
-        SET_AMPS: Declaration(LOCAL),
-        START_CHARGING: Declaration(LOCAL),
-        STOP_CHARGING: Declaration(DISRUPTIVE),
+        SET_AMPS: LOCAL,
+        START_CHARGING: LOCAL,
+        STOP_CHARGING: DISRUPTIVE,
     }
     SUPPRESSED = {}
 
@@ -86,14 +85,6 @@ class Gen2TWCProvider(Provider):
             # carries the target
             return (slave.layerFloorAmps(), slave.maxOfferAmps)
         return (slave.minAmps, slave.maxOfferAmps)
-
-    def setAmps(self, vin: str, amps: int) -> Outcome:
-        # Publishes a target: the control tick offers it, the heartbeat sends it
-        slave = self._slaveForKey(vin)
-        if slave is None:
-            return Outcome(UNSUPPORTED, "no slave")
-        slave.setTargetPower(slave.convertAmpsToWatts(amps))
-        return Outcome(DONE)
 
     def startCharging(self, vin: str) -> Outcome:
         # Answer slaves again (the heartbeat reads the setting)

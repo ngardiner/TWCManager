@@ -183,10 +183,3 @@ def test_mode_3_stop_is_queued_for_the_serial_loop():
     # Queued for the serial loop; nothing is written here
     assert p.stopCharging(VIN) == O.Outcome(O.DONE, "queued")
     assert [msg[:2] for msg in m._outbox] == [b"\xfc\xb2"]
-
-
-def test_set_amps_publishes_a_target_for_the_heartbeat():
-    m, s = make()
-    p = m.providerOrder.provider("Gen2TWC")
-    s.currentVIN = VIN
-    assert p.setAmps(VIN, 16).kind == O.DONE and s.pointAmps == 16

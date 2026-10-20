@@ -1,4 +1,5 @@
 import base64
+from contextlib import closing
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 from hashlib import sha256
@@ -120,13 +121,17 @@ class TeslaMateVehicle(TelmetryBase):
         ):
             return {}
         try:
-            conn = psycopg2.connect(
-                host=self.__db_host,
-                database=self.__db_name,
-                user=self.__db_user,
-                password=self.__db_pass,
-                connect_timeout=5,
-            )
+            with closing(
+                psycopg2.connect(
+                    host=self.__db_host,
+                    database=self.__db_name,
+                    user=self.__db_user,
+                    password=self.__db_pass,
+                    connect_timeout=5,
+                )
+            ) as conn, closing(conn.cursor()) as cur:
+                cur.execute("SELECT id, vin FROM cars")
+                rows = cur.fetchall()
         except Exception as e:
             # The error type only: a driver message can name the host or user.
             logger.info(
@@ -134,21 +139,6 @@ class TeslaMateVehicle(TelmetryBase):
                 type(e).__name__,
             )
             return {}
-        try:
-            cur = conn.cursor()
-            try:
-                cur.execute("SELECT id, vin FROM cars")
-                rows = cur.fetchall()
-            finally:
-                cur.close()
-        except Exception as e:
-            logger.info(
-                "TeslaMate car VINs not loaded (%s); matching cars by name",
-                type(e).__name__,
-            )
-            return {}
-        finally:
-            conn.close()
         return {str(car_id): vin for car_id, vin in rows if car_id is not None and vin}
 
     def refreshIdentities(self):

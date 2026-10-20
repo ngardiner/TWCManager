@@ -1821,30 +1821,6 @@ class TeslaAPI:
         self.updateCarApiLastErrorTime(car)
         return False, None
 
-    def _readFresh(self, vehicle, field, maxAge):
-        # Reads field through the registry cascade (BLE, then the cloud API;
-        # never a wake). Success is a newer observation, one within maxAge,
-        # or an API status deferral (which reports stored values unfetched).
-        # A stale value handed back after
-        # every source failed is a failure.
-        car = vehicle.attachment("TeslaAPI")
-        before = vehicle.latest(field)
-        obs = vehicle.read(field, maxAge=maxAge)
-        if obs is None:
-            return None
-        # Each observe stores a new Observation, so identity says a reading
-        # landed during the read without comparing clocks.
-        fetched = obs is not before
-        if not (
-            fetched or vehicle.age(field) <= maxAge or time.time() < car.statusDeferral
-        ):
-            return None
-        if fetched and obs.source == "TeslaBLE":
-            # A BLE reply proves the car awake, as an API reply does in
-            # get_car_api.
-            car.lastAPIAccessTime = time.time()
-        return obs
-
     def update_vehicle_data(self, vehicle, slot=None):
         car = vehicle.attachment("TeslaAPI")
         path = (
@@ -1939,4 +1915,9 @@ class TeslaAPI:
         return result
 
     def update_charge(self, vehicle):
-        return self._readFresh(vehicle, "batteryLevel", READ_MAX_AGE) is not None
+        # The registry cascade, never a wake. A new BLE reading (a new
+        # Observation) proves the car awake, as an API reply does
+        before = vehicle.latest("batteryLevel")
+        obs = vehicle.read("batteryLevel", maxAge=READ_MAX_AGE)
+        if obs is not None and obs is not before and obs.source == "TeslaBLE":
+            vehicle.attachment("TeslaAPI").lastAPIAccessTime = time.time()

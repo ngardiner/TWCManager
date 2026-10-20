@@ -14,7 +14,7 @@ class P(Provider):
         self.name, self.rank, self.local, self._caps, self._ready, self._amps = name, rank, local, caps, ready, amps
         self.calls = []; self.module = Mock()          # the debug page skips module-less (TWC) providers
         if readTier is not None:
-            self._caps = dict(self._caps, **{C.READ_CHARGE: C.Declaration(C.Cost(readTier))})
+            self._caps = dict(self._caps, **{C.READ_CHARGE: C.Cost(readTier)})
     def declarations(self): return self._caps
     def ready(self, vehicle, cap): return self._ready
     def ampsRange(self, vehicle): return self._amps
@@ -22,13 +22,13 @@ class P(Provider):
     def wake(self, vin): self.calls.append(("wake", vin)); return self._result
     _result = True
 
-def twc(ready=True, amps=(6, 32)):  return P("Gen2TWC", 0, True, {C.SET_AMPS: C.Declaration(C.LOCAL)}, ready, amps)
+def twc(ready=True, amps=(6, 32)):  return P("Gen2TWC", 0, True, {C.SET_AMPS: C.LOCAL}, ready, amps)
 def ble(ready=True):
-    b = P("TeslaBLE", 2, True, {C.SET_AMPS: C.Declaration(C.LOCAL), C.WAKE: C.Declaration(C.LOCAL)}, ready, (1, 32), readTier=0)
+    b = P("TeslaBLE", 2, True, {C.SET_AMPS: C.LOCAL, C.WAKE: C.LOCAL}, ready, (1, 32), readTier=0)
     b.SUPPRESSED = {"api_only": C.ALL}; return b                  # the real provider's table; the others keep the locality rule
 def owner():          return P("OwnerAPI", 4, False, {}, readTier=1)
-def fleet(ready=True): return P("FleetAPI", 5, False, {C.SET_AMPS: C.Declaration(C.FLEET_COMMAND), C.WAKE: C.Declaration(C.FLEET_WAKE)}, ready, (1, 32), readTier=2)
-def ha(ready=True):   return P("HomeAssistant", 6, False, {C.SET_AMPS: C.Declaration(C.HA_BILLED)}, ready, (1, 32), readTier=2)
+def fleet(ready=True): return P("FleetAPI", 5, False, {C.SET_AMPS: C.FLEET_COMMAND, C.WAKE: C.FLEET_WAKE}, ready, (1, 32), readTier=2)
+def ha(ready=True):   return P("HomeAssistant", 6, False, {C.SET_AMPS: C.HA_BILLED}, ready, (1, 32), readTier=2)
 
 def master(settings=None, config=None):
     m = Mock(); m.settings = settings or {}; m.config = config or {}

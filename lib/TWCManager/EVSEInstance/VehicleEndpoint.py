@@ -16,12 +16,8 @@ from TWCManager.Vehicle.Presence import pluggedHere, telemetrySaysPlugged
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
-from TWCManager.Vehicle.Reconcile.Belief import known
+from TWCManager.Vehicle.Reconcile.Belief import POWER_FLOWING_AMPS, known
 from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
-
-# A TWC drawing at least this is charging a car: the threshold at which
-# TWCSlave flags isCharging and queries the VIN
-POWER_FLOWING_AMPS = 1.0
 
 
 class VehicleEndpoint(EVSEInstance):
