@@ -245,7 +245,7 @@ def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True, read=Tr
     if read: v.observe("chargingState", "Stopped", "FleetAPI")
     requests_mock.get(FLEET_CAR, json={"response": {"state": state}})
     requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"charge_state": {"charging_state": "Stopped", "charge_limit_soc": 90},
-                                                                    "drive_state": {"latitude": 1.0, "longitude": 2.0}, "vehicle_state": {}}})
+                                                                    "drive_state": {"latitude": HOME[0], "longitude": HOME[1]}, "vehicle_state": {}}})
     requests_mock.post(re.compile(r".*/command/.*"), json={"response": {"result": True, "reason": ""}})
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "online"}})
     return m, r, v, c, api
@@ -275,6 +275,7 @@ def test_a_fleet_only_car_is_stopped_once_the_list_loads(requests_mock):    # C1
     from tests.unit.teslatokens import FLEET_NA_URL
     m, r, v, c, api = fleetOnTwc(requests_mock, listed=False)
     requests_mock.get(FLEET_NA_URL, json={"response": [{"id": 1, "vin": VIN, "display_name": "Car"}], "count": 1})
+    requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"charge_state": {"charging_state": "Charging"}}})   # the car at home is read, still charging
     v.observe("chargingState", "Charging", "FleetAPI"); m.stopCarsCharging(VIN); r.pass_()
     assert calls(requests_mock, "charge_stop") == [] and m.desired.record(VIN, CHARGING).lastOutcome is None   # not listed: no candidate yet
     api.updateChargeAtHome(); r.pass_()

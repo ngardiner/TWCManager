@@ -216,6 +216,7 @@ def test_home_assistant_after_a_failed_fleet_rate_spends_from_the_same_paid_budg
 
 def test_the_paid_budget_is_per_car():                                      # paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "500"))); f = prov(m, "FleetAPI"); v2 = m.vehicleRegistry.getOrCreate(VIN2, "t")
+    v2.observe("pluggedIn", True, "Gen3TWC")
     e, e2 = VehicleEndpoint(v, m.providerOrder, m), VehicleEndpoint(v2, m.providerOrder, m)
     e.setTargetPower(10 * 240); r.pass_(); c.t += RETRY[AMPS]; r.pass_(); c.t += RETRY[AMPS]; r.pass_()
     assert [x[1] for x in f.calls] == [VIN, VIN]                              # VIN's budget is spent

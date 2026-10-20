@@ -199,14 +199,17 @@ def test_delayed_tasks_with_equal_due_times_do_not_compare_dicts(queued):
 
 def test_a_confirmed_vin_learns_home_from_the_cars_fresh_fix_without_io(master):
     # recordVehicleVIN runs on the RS-485 thread: home is learned from the
-    # registry alone, never by reading the car
+    # registry alone, never by reading the car. A BLE fix: one from the cloud
+    # read before the VIN read may predate the drive home
     api = Mock()
     master.getModuleByName = Mock(
         side_effect=lambda n: api if n == "TeslaAPI" else None
     )
     v = master.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
-    v.observe("lat", 39.0, "TeslaMateVehicle")
-    v.observe("lon", -84.0, "TeslaMateVehicle")
+    master.settings.update(homeLat=39.0, homeLon=-84.0)
+    v.observe("lat", 39.0, "TeslaBLE")
+    v.observe("lon", -84.0, "TeslaBLE")
+    master.settings.update(homeLat=10000, homeLon=10000)
     master.recordVehicleVIN(slave(VIN))
     assert master.getHomeLatLon() == [39.0, -84.0] and api.mock_calls == []
     master.queue_background_task.assert_any_call({"cmd": "saveSettings"})

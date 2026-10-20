@@ -26,7 +26,11 @@ def reconciler(*providers):
     m, o = make_order({}, *providers); m.providerOrder = o
     # A known current limit (any channel): no limit is sent without one. An
     # hour old, so a write with a maxAge still reads first
-    m.vehicleRegistry.getOrCreate(VIN, "t").observe("chargeLimit", 90, "TeslaMateVehicle", at=time.time() - 3600)
+    v = m.vehicleRegistry.getOrCreate(VIN, "t")
+    v.observe("chargeLimit", 90, "TeslaMateVehicle", at=time.time() - 3600)
+    # Plugged in at home: every message applies
+    v.observe("pluggedIn", True, "Gen3TWC")
+    v.mark("plugIn", time.time())
     m.desired = DesiredStore(); m.heldLimits.get.return_value = None
     m.reconciler = r = VehicleReconciler(m); return m, r
 

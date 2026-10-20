@@ -5,15 +5,24 @@ import functools
 import logging
 import re
 import time
+import urllib.parse
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+
+import pytest
 
 from TWCManager.Vehicle import Presence as P
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT
 from TWCManager.Vehicle.Registry.Fields import Observation
-from tests.unit.reconcile_helpers import AWAY, HOME, ScriptedProvider, placeAt
+from tests.unit.reconcile_helpers import (
+    AWAY,
+    HOME,
+    ScriptedProvider,
+    bleAnswers,
+    placeAt,
+)
 from tests.unit.teslatokens import FLEET_NA_URL, fleet_token, new_api
 from tests.unit.test_limit_reconciler import VIN, ble, prov, setup
 from tests.unit.test_teslable_pairing_status import scanner
@@ -23,7 +32,7 @@ TM = "TeslaMateVehicle"
 
 
 def home(*providers):
-    m, r, v, c = setup(*providers)
+    m, r, v, c = setup(*providers, here=False)
     m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
     return m, r, v, c
 
@@ -140,7 +149,7 @@ def test_another_vin_at_the_point_clears_the_old_cars_twc_vin():
 
 
 def test_a_fix_while_a_twc_names_the_car_teaches_home():
-    m, r, v, c = setup()
+    m, r, v, c = setup(here=False)
     m.queue_background_task = Mock()
     twcNames(m, v, c)
     v.observe("lat", AWAY[0], TM)
@@ -321,19 +330,59 @@ def test_counts_include_presumed_cars():
     assert [x.vin for x, _ in P.homeCars(m, "TeslaAPI")] == [VIN, VIN2]
 
 
+def fix(v):
+    return v.latest("lat"), v.latest("lon")
+
+
 def test_home_is_learned_only_from_a_twc_named_car_with_a_fresh_fix():
-    m, r, v, c = setup()
+    m, r, v, c = setup(here=False)
     m.queue_background_task = Mock()
-    assert P.learnHome(m, v) is False  # no fix
+    assert P.learnHome(m, v, *fix(v)) is False  # no fix
     placeAt(m, v, AWAY)
     m.settings.update(homeLat=10000, homeLon=10000)
     later(c, P.HOME_FIX_MAX_AGE + 1)
-    assert P.learnHome(m, v) is False  # stale
+    assert P.learnHome(m, v, *fix(v)) is False  # stale
     placeAt(m, v, AWAY)
     m.settings.update(homeLat=10000, homeLon=10000)
-    assert P.learnHome(m, v) is True and m.getHomeLatLon() == list(AWAY)
-    assert P.learnHome(m, v) is False  # already inside
+    assert P.learnHome(m, v, *fix(v)) is True and m.getHomeLatLon() == list(AWAY)
+    assert P.learnHome(m, v, *fix(v)) is False  # already inside
     m.queue_background_task.assert_any_call({"cmd": "saveSettings"})
+
+
+def bleFix(m, v, at, gpsAsOf):
+    from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
+
+    ble = Mock()
+    loc = {"latitude": at[0], "longitude": at[1], "gpsAsOf": gpsAsOf}
+    ble.get_location_state.return_value = loc
+    return TeslaBLEProvider(ble, m).fetch(v, "lat")
+
+
+def test_a_ble_fix_moves_home_only_while_its_gps_time_is_fresh():
+    m, r, v, c = home()
+    m.queue_background_task = Mock()
+    later(c, 5 * 3600)
+    assert bleFix(m, v, AWAY, c.t - 5 * 3600)  # GPS frozen since then
+    assert m.getHomeLatLon() == list(HOME)
+    later(c)
+    assert bleFix(m, v, AWAY, c.t - 5)
+    assert m.getHomeLatLon() == list(AWAY)
+
+
+def test_a_fresh_fix_outside_moves_home_when_a_twc_reads_the_cars_vin(monkeypatch):
+    m, r, v, c = home()
+    m.queue_background_task = Mock()
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    s.reportedState, s.currentVIN = 0x03, VIN
+    placeAt(m, v, AWAY)
+    later(c, P.HOME_FIX_MAX_AGE + 1)
+    m.recordVehicleVIN(s)
+    assert m.getHomeLatLon() == list(HOME)  # stale by the time it is named
+    placeAt(m, v, AWAY)
+    later(c)
+    m.recordVehicleVIN(s)
+    assert m.getHomeLatLon() == list(AWAY) and P.presence(m, v) == P.HOME
 
 
 def fleetCars(requests_mock, m):
@@ -365,7 +414,7 @@ def fleetCars(requests_mock, m):
 
 
 def test_update_charge_at_home_reads_only_home_cars(requests_mock):
-    m, r, v, c = setup(clock=False)
+    m, r, v, c = setup(clock=False, here=False)
     m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
     api = fleetCars(requests_mock, m)
     placeAt(m, v, HOME)  # VIN2: presumed
@@ -374,8 +423,26 @@ def test_update_charge_at_home_reads_only_home_cars(requests_mock):
     assert [url.split("/")[-2] for url in read] == [VIN]
 
 
+@pytest.mark.parametrize("gpsAge, moved", [(5 * 3600, False), (5, True)])
+def test_a_fleet_fix_with_a_stale_gps_time_never_seeds_home(
+    requests_mock, gpsAge, moved
+):
+    m, r, v, c = setup(here=False)
+    api = fleetCars(requests_mock, m)
+    m.queue_background_task = Mock()
+    m.settings.update(homeLat=10000, homeLon=10000)
+    twcNames(m, v, c)
+    later(c, 5 * 3600)
+    drive = {"latitude": AWAY[0], "longitude": AWAY[1], "gps_as_of": c.t - gpsAge}
+    data = {"drive_state": drive, "charge_state": {}, "vehicle_state": {}}
+    url = FLEET_NA_URL + "/" + VIN + "/vehicle_data"
+    requests_mock.get(url, json={"response": data})
+    assert api.update_vehicle_data(v) is True
+    assert m.getHomeLatLon() == (list(AWAY) if moved else [10000, 10000])
+
+
 def test_away_cars_keep_the_status_deferral_ladder():
-    m, r, v, c = setup(clock=False)
+    m, r, v, c = setup(clock=False, here=False)
     api = new_api(master=m)
     api.addVehicle({"id": 1, "vin": VIN, "display_name": None})
     car = v.attachment("TeslaAPI")
@@ -413,3 +480,456 @@ def test_policy_wide_apply_skips_a_departed_car_on_every_channel(requests_mock):
     r.pass_()
     assert prov(m, "TeslaBLE").calls == [("setChargeLimit", VIN, 70)]
     assert requests_mock.call_count == 0
+
+
+# One applicability rule per message
+
+
+def car(state, plugged=False, gone=None, back=None, held=False):
+    # A car in the given state; gone/back: the leaving and arriving marks
+    m, r, v, c = home()
+    if plugged:
+        v.observe("pluggedIn", True, "Gen3TWC", at=c.t - 50)
+    if gone is not None:
+        v.mark("unplug", c.t + gone)
+    if back is not None:
+        v.mark("driveEnd", c.t + back)
+    if state == P.HOME:
+        v.mark("contact", c.t + 100)
+    elif state == P.NOT_HOME:
+        placeAt(m, v, AWAY)
+    elif state == "driving":
+        v.observe("state", "driving", TM)
+    elif state == "inside, not parked":
+        placeAt(m, v, HOME)
+        v.observe("shiftState", "SNA", TM)
+    elif state == "presumed, plugged":
+        v.mark("absent", c.t + 10)  # out of BLE range since the plug-in
+    elif state == "presumed after an unplug":
+        v.mark("contact", c.t + 20)
+        v.mark("driveStart", c.t + 30)
+    if held:
+        m.heldLimits.set(VIN, 90, 50)
+    return m, v
+
+
+def test_applicability_every_cell():
+    start, limit, amps = C.START_CHARGING, C.SET_CHARGE_LIMIT, C.SET_AMPS
+    plugged, presumedPlugged = "plugged in", "presumed, plugged"
+    rows = [
+        # (capability, restore, car, verdict, the cell's reason)
+        (start, False, car(P.HOME, plugged=True), P.SEND, plugged),
+        (amps, False, car(P.HOME, plugged=True), P.SEND, plugged),
+        (start, False, car(P.HOME), P.NOT_HERE, "not plugged in"),
+        (amps, False, car(P.HOME), P.NOT_HERE, "not plugged in"),
+        (start, False, car("driving", plugged=True), P.SEND, plugged),
+        (start, False, car(P.PRESUMED, held=True), P.SEND, plugged),  # presumed
+        (
+            start,
+            False,
+            car("presumed after an unplug", gone=10, held=True),
+            P.HOLD,
+            "not plugged in",
+        ),
+        (amps, False, car(P.PRESUMED), P.HOLD, "not plugged in"),
+        (start, False, car(P.NOT_HOME, plugged=True), P.NOT_HERE, "away"),
+        (limit, False, car(P.HOME, plugged=True, gone=20), P.SEND, "home"),
+        (limit, False, car(P.HOME), P.SEND, "home"),  # no departure seen
+        (limit, False, car(P.HOME, gone=10, back=20), P.SEND, "home"),
+        (limit, False, car(P.HOME, gone=20, back=10), P.NOT_HERE, "leaving"),
+        (limit, False, car(P.HOME, gone=20, back=20), P.HOLD, "tie"),
+        (limit, False, car("driving", plugged=True), P.HOLD, "driving"),
+        (limit, False, car(presumedPlugged, plugged=True), P.SEND, plugged),
+        (limit, False, car(P.PRESUMED), P.HOLD, "not known here"),
+        (limit, False, car("inside, not parked"), P.HOLD, "not known here"),
+        (limit, False, car(P.NOT_HOME), P.NOT_HERE, "away"),
+        (limit, True, car(P.HOME, plugged=True, gone=20), P.HOME_NOW, "home"),
+        (limit, True, car(P.HOME, gone=20, back=10), P.SEND, "leaving"),
+        (limit, True, car(P.HOME, gone=10, back=20), P.HOME_NOW, "home"),
+        (limit, True, car(P.HOME), P.HOME_NOW, "home"),  # neither seen
+        (limit, True, car(P.PRESUMED), P.HOLD, "not known here"),
+        (limit, True, car(P.NOT_HOME), P.SEND, "away"),
+    ]
+    for i, (capability, restore, (m, v), verdict, why) in enumerate(rows):
+        assert P.applicable(m, v, capability, restore) == (verdict, why), i
+    m, v = car(presumedPlugged, plugged=True)
+    assert P.presence(m, v) == P.PRESUMED and P.pluggedNow(m, v)
+
+
+def scriptedBle(m, *outcomes):
+    p = ble(*(outcomes or [O.Outcome(O.DONE)]))
+    m.providerOrder.register(p)
+    bleAnswers(m)
+    return p
+
+
+def test_a_presumed_car_is_pinged_first_and_an_answer_sends_free(requests_mock):
+    from tests.unit.test_command_path_parity import (
+        FleetCar,
+        bleCommands,
+        install,
+        paid,
+        realBle,
+    )
+
+    m, r, v, c, api = install(fleet=True, located=False)
+    b = realBle(m)
+    FleetCar(requests_mock, limit=50)
+    v.observe("chargeLimit", 50, TM)
+    assert P.presence(m, v) == P.PRESUMED
+    m.setPolicyLimit(80, transition=True)
+    r.pass_()
+    assert b.pings == [VIN] and v.markAt("contact") == c.t
+    assert bleCommands(b) == ["wake", "charging-set-limit"]  # a raise, woken free
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_one_missed_ping_does_not_open_the_paid_path(requests_mock):
+    from tests.unit.test_command_path_parity import (
+        FleetCar,
+        install,
+        paid,
+        passes,
+        realBle,
+    )
+    from TWCManager.Vehicle.Reconcile.Reconciler import PAID_AFTER
+
+    m, r, v, c, api = install(fleet=True, located=False)
+    b = realBle(m, ping=False)
+    FleetCar(requests_mock, limit=50)
+    v.observe("chargeLimit", 50, TM)
+    m.setPolicyLimit(80, transition=True)
+    r.pass_()
+    assert b.pings == [VIN] and b.runs == [] and v.markAt("absent") == c.t
+    last = m.desired.record(VIN, CHARGE_LIMIT).lastOutcome
+    assert last == O.Outcome(O.UNREACHABLE, "no BLE answer")
+    passes(r, c, PAID_AFTER[CHARGE_LIMIT] - 10)
+    assert paid(requests_mock) == (0, 0, 0) and b.pings == [VIN]
+
+
+@pytest.fixture
+def nosleep(monkeypatch):
+    import TWCManager.Vehicle.Providers.TeslaAPIProviders as providers
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+
+    for module in (teslaapi, providers):
+        monkeypatch.setattr(module.time, "sleep", lambda s: None)
+
+
+def heldFleetCar(requests_mock):
+    # A Fleet-only car, no home set: its read places nothing, so a raise holds
+    from tests.unit.test_command_path_parity import FleetCar, install
+
+    m, r, v, c, api = install(fleet=True, located=False)
+    car = FleetCar(requests_mock, limit=50)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c.t - 3600)
+    m.setPolicyLimit(80, transition=True)
+    return m, r, v, c, car
+
+
+def test_a_hold_reads_once_and_waits_for_pushed_evidence(requests_mock, nosleep):
+    from tests.unit.test_command_path_parity import paid, passes
+
+    m, r, v, c, car = heldFleetCar(requests_mock)
+    r.pass_()
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert paid(requests_mock) == (1, 1, 0) and rec.heldAt == c.t
+    assert rec.lastOutcome.detail == "rules: held: not known here"
+    assert rec.paidSpent == 2 and rec.settledAt is None
+    seen = len(requests_mock.request_history)
+    passes(r, c, 3600)
+    assert len(requests_mock.request_history) == seen  # nothing new: no re-plan
+    later(c)
+    v.observe("state", "online", TM, seen=False)  # pushed, not a sighting
+    r.pass_()
+    assert rec.heldAt == c.t  # planned again, and held again
+    assert paid(requests_mock) == (1, 1, 0)  # awake and freshly read: free
+
+
+def test_held_re_plans_stop_paying_after_the_budget(requests_mock, nosleep):
+    from tests.unit.test_command_path_parity import counts, passes
+
+    m, r, v, c, car = heldFleetCar(requests_mock)
+
+    def push():
+        if c.t % 1800 == 0:
+            car.state = "asleep"  # each re-plan wakes and reads again
+            v.observe("state", "asleep", TM, seen=False)
+
+    passes(r, c, 6 * 3600, each=push)
+    spent = counts(requests_mock)
+    assert spent["command"] == 0
+    assert spent["vehicle_data"] + spent["wake_up"] <= 4
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert rec.paidSends + rec.paidSpent >= 4 and rec.heldAt is not None
+
+
+def test_a_held_desire_is_not_blocked_by_settled_at():
+    m, v, c = placed()
+    p = scriptedBle(m)
+    m.vehicleRegistry.getOrCreate(VIN, "t")
+    v.observe("chargeLimit", 50, TM)
+    later(c)
+    v.observe("state", "driving", TM)
+    later(c)
+    v.observe("bleReach", True, "TeslaBLE")  # in range, still moving
+    m.desired.set(VIN, CHARGE_LIMIT, 60, "policy")
+    m.reconciler.pass_()
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert p.calls == [] and rec.heldAt == c.t and rec.settledAt is None
+    later(c, 180)
+    v.observe("state", "online", TM)  # parked inside: an arrival
+    m.reconciler.pass_()
+    assert p.calls[-1] == ("setChargeLimit", VIN, 60) and rec.heldAt is None
+
+
+def test_start_and_amps_need_a_plug_here():
+    from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGING
+
+    m, v, c = placed()
+    p = scriptedBle(m)
+    v.observe("chargingState", "Stopped", "TeslaBLE")
+    later(c)
+    v.observe("pluggedIn", False, TM)  # the cable is out
+    m.desired.set(VIN, CHARGING, True, "distributor")
+    m.desired.set(VIN, AMPS, 16, "distributor")
+    for _ in range(2):
+        m.reconciler.pass_()
+    assert p.calls == [] and m.desired.get(VIN, CHARGING) is None
+    assert m.desired.get(VIN, AMPS) is None  # not here: both withdrawn
+    later(c)
+    v.observe("pluggedIn", True, TM)  # plugged in again
+    m.desired.set(VIN, CHARGING, True, "distributor")
+    m.desired.set(VIN, AMPS, 16, "distributor")
+    m.reconciler.pass_()
+    assert [x[0] for x in p.calls if x[0] != "wake"] == ["setAmps", "startCharging"]
+
+
+def unplugged(held=True):
+    # Plugged in at home under a held limit, then unplugged
+    m, v, c = placed()
+    v.observe("chargeLimit", 50, TM)
+    later(c)
+    v.observe("chargingState", "Charging", TM)
+    if held:
+        m.heldLimits.set(VIN, 90, 50)
+    later(c)
+    v.observe("chargingState", "Disconnected", TM)
+    return m, v, c
+
+
+def test_a_restores_own_ble_reply_re_applies_nothing():
+    m, v, c = unplugged()
+    p = scriptedBle(m)
+    m.setPolicyLimit(50, transition=False)  # the policy pass restores
+    assert m.desired.get(VIN, CHARGE_LIMIT).restore
+    m.reconciler.pass_()
+    assert p.calls == [("setChargeLimit", VIN, 90)] and m.heldLimits.get(VIN) is None
+    later(c)
+    v.observe("bleReach", True, "TeslaBLE")  # the restore's own reply
+    assert P.presence(m, v) == P.HOME and P.leaving(v) > P.arriving(v)
+    for _ in range(3):
+        later(c, 60)
+        m.setPolicyLimit(50, transition=False)
+        m.reconciler.pass_()
+    assert len(p.calls) == 1 and m.desired.settled(VIN, CHARGE_LIMIT)
+
+
+def test_a_plug_or_a_newer_arrival_cancels_a_pending_restore():
+    for back in ("plug", "arrival"):
+        m, v, c = unplugged()
+        p = scriptedBle(m)
+        later(c)
+        v.observe("bleReach", True, "TeslaBLE")
+        m.setPolicyLimit(50, transition=False)
+        assert m.desired.get(VIN, CHARGE_LIMIT).restore  # leaving, not yet sent
+        later(c)
+        if back == "plug":
+            v.observe("chargingState", "Charging", TM)
+        else:
+            v.observe("shiftState", "D", TM)
+            later(c, 20)
+            v.observe("shiftState", "P", TM)
+            later(c)
+            v.observe("bleReach", True, "TeslaBLE")
+        m.reconciler.pass_()
+        d = m.desired.get(VIN, CHARGE_LIMIT)
+        assert p.calls == [] and m.heldLimits.get(VIN) is not None, back
+        # A plug-in is an arrival decision: the policy limit, held already
+        assert d is None if back == "arrival" else d.value == 50 and not d.restore
+
+
+def test_arrival_is_one_decision_for_the_plugged_car_only():
+    m, v, c = placed()
+    scriptedBle(m)
+    other = m.vehicleRegistry.getOrCreate(VIN2, "t")
+    other.claim("TeslaBLE", True, "paired")
+    placeAt(m, other)
+    m.policyLimit = 70
+    later(c)
+    v.observe("chargingState", "Charging", TM)  # the plug-in event
+    assert m.desired.get(VIN, CHARGE_LIMIT).value == 70
+    assert m.desired.get(VIN2, CHARGE_LIMIT) is None  # only the plugged car
+    m.desired.adopt(VIN, CHARGE_LIMIT, 85)
+    later(c)
+    v.observe("chargingState", "Charging", TM)  # the same session: no new event
+    assert m.desired.get(VIN, CHARGE_LIMIT).value == 85
+    later(c)
+    other.observe("fastChargerPresent", True, TM)
+    other.observe("chargingState", "Charging", TM)  # a fast charger near home
+    assert m.desired.get(VIN2, CHARGE_LIMIT) is None
+
+
+def test_power_start_still_queues_check_charge():
+    from tests.unit.gen2_helpers import drive
+    from tests.unit.test_registry_callers import _handler
+
+    m, r, v, c = home()
+    s = m.getSlaveTWCs()[0]
+    queued = []
+    m.queue_background_task = lambda task, delay=0: queued.append(task["cmd"])
+    drive(m, s, 0.0)
+    drive(m, s, 10.0)  # power starts flowing
+    assert "checkCharge" in queued
+    for path in ("/api/checkArrival", "/api/checkDeparture"):
+        request = Mock()
+        request.url = urllib.parse.urlparse(path)
+        request.post_data = b"{}"
+        _handler(m).do_API_POST.__func__(request)
+        request.send_response.assert_called_with(404)
+
+
+def test_endpoints_list_cars_plugged_here_whatever_module_knows_them():
+    from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
+
+    m, v, c = placed()
+    m.providerOrder.register(
+        ScriptedProvider("TeslaBLE", 2, True, [], readyFor=lambda v, cap: True)
+    )
+    v.claim("TeslaBLE", True, "paired")  # known to BLE alone
+    idle = m.vehicleRegistry.getOrCreate(VIN2, "t")
+    idle.claim("TeslaBLE", True, "paired")
+    placeAt(m, idle)
+    assert vehicleEndpoints(m) == []  # home, nothing plugged
+    later(c)
+    v.observe("chargingState", "Stopped", "TeslaBLE")
+    assert [e.currentVIN for e in vehicleEndpoints(m)] == [VIN]
+
+
+def test_anonymous_00_edge_car_is_never_also_an_endpoint():
+    from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
+
+    m, v, c = placed()
+    m.providerOrder.register(
+        ScriptedProvider("TeslaBLE", 2, True, [], readyFor=lambda v, cap: True)
+    )
+    anon = m.vehicleRegistry.beginPlugSession("8244")  # the point at 00
+    v.observe("state", "online", TM)
+    v.observe("pluggedIn", True, TM)  # live telemetry: plugged in
+    assert P.pluggedHere(m, v) and P.telemetrySaysPlugged(m, v)
+    keys = [e.vehicleKey for e in vehicleEndpoints(m)]
+    assert anon.key not in keys and VIN not in keys  # it may be the 00 car
+
+
+def test_a_ble_fix_teaches_home_and_a_fleet_fix_alone_does_not():
+    m, r, v, c = setup(here=False)
+    m.queue_background_task = Mock()
+    v.observe("lat", AWAY[0], "FleetAPI")
+    v.observe("lon", AWAY[1], "FleetAPI")
+    assert m.getHomeLatLon()[0] == 10000  # a cloud fix may be anywhere
+    later(c)
+    v.observe("lat", HOME[0], "TeslaBLE")
+    v.observe("lon", HOME[1], "TeslaBLE")  # BLE answers only in range
+    assert m.getHomeLatLon() == list(HOME)
+
+
+def test_an_unanswered_ping_is_absence_only_when_the_range_scan_misses():
+    from tests.unit.test_teslable_pairing_status import VIN as BVIN
+
+    b, reg, master = scanner()
+    reg.onObserve = functools.partial(P.noteObservation, master)
+    v = reg.getOrCreate(BVIN, "t")
+    b._tool = Mock(return_value=(None, None, None))  # timed out
+    b.scanForVehicleInRange = Mock(return_value=None)  # no scan possible
+    assert b.ping(BVIN) is False and v.markAt("absent") == P.NEVER
+    b.scanForVehicleInRange.return_value = False  # the scan ran and missed it
+    assert b.ping(BVIN) is False and v.markAt("absent") > P.NEVER
+    b._tool.return_value = (b"{}", b"", 0)
+    assert b.ping(BVIN) is True and v.markAt("contact") > P.NEVER
+    b._tool.return_value = None  # no key: nothing ran, no scan
+    calls = b.scanForVehicleInRange.call_count
+    assert b.ping(BVIN) is False and b.scanForVehicleInRange.call_count == calls
+
+
+def test_home_is_learned_from_the_triggering_sources_own_fix():
+    m, r, v, c = setup(here=False)
+    m.queue_background_task = Mock()
+    v.observe("lon", HOME[1] + 1, "FleetAPI")  # another source, elsewhere
+    later(c)
+    v.observe("lat", HOME[0], "TeslaBLE")
+    assert m.getHomeLatLon()[0] == 10000  # half a BLE fix: never a mixed one
+    v.observe("lon", HOME[1], "TeslaBLE")
+    assert m.getHomeLatLon() == list(HOME)
+
+
+def cloudFix(v, at, source="FleetAPI", gpsAsOf=None):
+    if gpsAsOf is not None:
+        v.observe("gpsAsOf", gpsAsOf, source)
+    v.observe("lat", at[0], source)
+    v.observe("lon", at[1], source)
+
+
+def plugAndName(m, v, c, monkeypatch, seconds=13):
+    # A Gen2 plug-in, its session, and its VIN read seconds later
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    s.reportedState, s.currentVIN = 0x03, VIN
+    m.vehicleRegistry.beginPlugSession("8244")
+    later(c, seconds)
+    m.recordVehicleVIN(s)
+    return s
+
+
+def test_an_away_fix_from_before_the_plug_in_never_moves_home(monkeypatch):
+    # The read that found the car away, 9 minutes before it was plugged in
+    # at home: still under HOME_FIX_MAX_AGE, but not where the TWC is
+    m, r, v, c = home()
+    m.queue_background_task = Mock()
+    cloudFix(v, AWAY)
+    later(c, 540)
+    plugAndName(m, v, c, monkeypatch)
+    assert m.getHomeLatLon() == list(HOME) and P.presence(m, v) == P.HOME
+
+
+def test_a_ble_fix_from_before_the_plug_in_still_teaches_home(monkeypatch):
+    # BLE answers only in range: its fix keeps the age rule alone
+    m, r, v, c = home()
+    m.queue_background_task = Mock()
+    plugAndName(m, v, c, monkeypatch)
+    later(c)
+    assert bleFix(m, v, AWAY, c.t - 480)
+    assert m.getHomeLatLon() == list(AWAY)
+
+
+def test_a_read_after_the_plug_in_teaches_home_whatever_its_gps_time(monkeypatch):
+    # No home yet. Read 30 s after the plug-in, its GPS time 3 minutes
+    # before it: the read shows where the car is now
+    m, r, v, c = setup(here=False)
+    m.queue_background_task = Mock()
+    plugged = c.t
+    plugAndName(m, v, c, monkeypatch)
+    later(c, 30 - 13)
+    cloudFix(v, AWAY, gpsAsOf=plugged - 180)
+    assert m.getHomeLatLon() == list(AWAY) and P.presence(m, v) == P.HOME
+
+
+def test_a_ble_fix_read_before_the_vin_read_still_moves_home_at_it(monkeypatch):
+    # BLE answers only within range, so its fix needs no read after the
+    # plug-in: a wrong home moves to it when the TWC reads the VIN
+    m, r, v, c = home()
+    m.queue_background_task = Mock()
+    assert bleFix(m, v, HOME, c.t - 5)
+    m.settings.update(homeLat=AWAY[0], homeLon=AWAY[1])
+    later(c, 60)
+    plugAndName(m, v, c, monkeypatch)
+    assert m.getHomeLatLon() == list(HOME) and P.presence(m, v) == P.HOME

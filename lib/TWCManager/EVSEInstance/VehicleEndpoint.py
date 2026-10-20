@@ -12,7 +12,7 @@ one covers the rate). The endpoint holds no state of its own.
 from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
-from TWCManager.Vehicle.Presence import HOME, presence
+from TWCManager.Vehicle.Presence import pluggedHere, telemetrySaysPlugged
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
@@ -162,16 +162,9 @@ def _blindTWCs(master) -> Tuple[bool, bool]:
     return blind, unknown
 
 
-def _telemetryPluggedIn(vehicle):
-    # A live telemetry feed (TeslaMate) says the cable is plugged in.
-    # Live is the telemetryChargeLimit criterion: syncSource is the
-    # telemetry module, which reverts to "TeslaAPI" after SYNC_TIMEOUT.
-    return vehicle.syncSource != "TeslaAPI" and vehicle.value("pluggedIn") is True
-
-
 def vehicleEndpoints(master) -> List[VehicleEndpoint]:
-    """A VehicleEndpoint for each car an enabled TeslaAPI lists that is
-    home.
+    """A VehicleEndpoint for each car plugged in here with a provider that
+    can set its rate, whichever module knows it.
 
     While a charging point that can't name its car is plugged in or draws
     power, it might be serving any of them, so none is listed: an
@@ -179,22 +172,18 @@ def vehicleEndpoints(master) -> List[VehicleEndpoint]:
     Gen2 idle at 00 may still hide a plugged-in car, so while any point
     can't name its car, a car live telemetry says is plugged in is not
     listed either. A car on a named point is listed; the distributor
-    merges it with that point. Read-only endpoints are listed too (the
-    distributor skips them). Dropping an endpoint strands nothing: stops
+    merges it with that point. Dropping an endpoint strands nothing: stops
     go to master.stopCarsCharging by VIN.
     """
-    carapi = master.getModuleByName("TeslaAPI")
-    try:
-        if carapi is None or not carapi.enabled():
-            return []
-    except Exception:
-        return []
     blind, unknown = _blindTWCs(master)
     if blind:
         return []
+    order = master.providerOrder
     return [
-        VehicleEndpoint(vehicle, master.providerOrder, master)
-        for vehicle, car in master.vehicleRegistry.attached("TeslaAPI")
-        if presence(master, vehicle) == HOME
-        and not (unknown and _telemetryPluggedIn(vehicle))
+        VehicleEndpoint(v, order, master)
+        for v in master.vehicleRegistry.vehicles()
+        if not v.isAnonymous
+        and pluggedHere(master, v)
+        and order.candidates(v, SET_AMPS)
+        and not (unknown and telemetrySaysPlugged(master, v))
     ]

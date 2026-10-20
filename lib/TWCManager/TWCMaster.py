@@ -32,7 +32,7 @@ from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile.Belief import newerReading
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
-from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, targetsFor
+from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, targetsFor
 from TWCManager.Vehicle import Presence
 
 logger = LoggerFactory.get_logger("Master", "Master")
@@ -1590,7 +1590,10 @@ class TWCMaster:
         )
         vehicle = self.vehicleRegistry.get(vin)
         if vehicle is not None:
-            Presence.learnHome(self, vehicle)
+            Presence.learnHome(
+                self, vehicle, vehicle.latest("lat"), vehicle.latest("lon")
+            )
+            onArrival(self, vehicle)
 
     def releaseBackgroundTasksLock(self):
         self.backgroundTasksLock.release()

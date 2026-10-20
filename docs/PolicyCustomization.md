@@ -51,8 +51,10 @@ policy changes, and to cars which arrive while the policy is in effect.  The
 car's original charge limit is remembered and restored when the car leaves or
 when a new policy does not apply a limit.
 
-TWCManager decides where each car is from events as they arrive, so a paid
-Tesla API read is never needed to place a car.  The newest evidence wins, and a
+TWCManager decides where each car is from events as they arrive, so no Tesla
+API read is made just to place a car (a "probably home" car with a limit or
+charge command waiting may be woken and read over the paid Fleet API to deliver
+it).  The newest evidence wins, and a
 car is home, away, or "probably home" (nothing says either way):
 
 - **Home:** a TWC reports the car by VIN while it is plugged in; the car
@@ -74,9 +76,10 @@ Telemetry) does not say the car is still plugged in.  The log shows each
 decision (`TWC <id>: 00 onset ...`, `unplugged, <VIN> departs`).  This rule
 was tuned on two cars, so please report a car that is mishandled.
 
-The home location moves to a car's position only when a TWC names that car by
-VIN or the position arrived over BLE, and only for a fresh position outside the
-current home radius; it is never taken from the first position of a car that
+The home location moves to a car's position only when a TWC reads that car's
+VIN or the position arrived over BLE, and only for a position outside the
+current home radius that is under 10 minutes old (by the car's GPS time, where
+it reports one); it is never taken from the first position of a car that
 nothing places at home.  If you run cars with no TWC and no BLE, set the home
 location yourself, on the Settings page (use the vehicle location button) or
 with `homeLat` and `homeLon` through the

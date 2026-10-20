@@ -787,18 +787,6 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode("utf-8"))
 
-            elif self.url.path == "/api/checkArrival":
-                master.queue_background_task({"cmd": "checkArrival"})
-                self.send_response(202)
-                self.end_headers()
-                self.wfile.write("".encode("utf-8"))
-
-            elif self.url.path == "/api/checkDeparture":
-                master.queue_background_task({"cmd": "checkDeparture"})
-                self.send_response(202)
-                self.end_headers()
-                self.wfile.write("".encode("utf-8"))
-
             elif self.url.path == "/api/deleteConsumptionOffset":
                 success, data, error_msg = APIValidator.validate_json(self.post_data)
                 if not success:

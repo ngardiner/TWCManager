@@ -8,7 +8,7 @@ Allows you to select which theme you'd like to use for the TWCManager interface.
 
 ## Home Location
 
-Home is learned from a car that a TWC names by VIN, or from a fresh position read over BLE; it is never taken from the first position of a car that nothing places at home. A car-only install (no TWC, no BLE) must set it here, with the vehicle location button, or TWCManager logs a warning once and does not treat cars known only through vehicle APIs as home. `atHomeRadius` defaults to 1,000 feet.
+Home is learned from a fresh position of a car when a TWC reads its VIN, or from a fresh position read over BLE; it is never taken from the first position of a car that nothing places at home. A car-only install (no TWC, no BLE) must set it here, with the vehicle location button, or TWCManager logs a warning once and does not treat cars known only through vehicle APIs as home. `atHomeRadius` defaults to 1,000 feet.
 
 ## Stop Charging Method
 

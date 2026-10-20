@@ -588,49 +588,58 @@ class TeslaBLE:
         return None
 
     @_serialized
-    def _fetch_state_json(self, vin, state_type):
-        """Run `tesla-control state STATE_TYPE` and return parsed JSON dict, or None."""
+    def _tool(self, vin, *args):
+        """(stdout, stderr, rc) of one tesla-control run; None without a key."""
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
             return None
         vin = self._settingsKey(vin)
         if not self.master.settings.get("Vehicles", {}).get(vin):
             return None
-
         self.sendPrivateKey(vin)
-
-        command_string = [
-            self.binaryPath,
-            "-ble",
-            "-vin",
-            vin,
-            "-key-file",
-            self.pipeName,
-            "state",
-            state_type,
-        ]
+        command = [self.binaryPath, "-ble", "-vin", vin, "-key-file", self.pipeName]
         try:
-            stdout, stderr, return_code = self._run_command_with_timeout(
-                command_string, timeout=self.commandTimeout
+            return self._run_command_with_timeout(
+                command + list(args), timeout=self.commandTimeout
             )
-            if stdout is None or return_code != 0:
-                logger.debug(
-                    f"BLE state {state_type} failed for {vin} (rc={return_code})"
+        finally:
+            self._ensure_pipe_closed()
+
+    def _fetch_state_json(self, vin, state_type):
+        """Run `tesla-control state STATE_TYPE` and return parsed JSON dict, or None."""
+        ran, vin = self._tool(vin, "state", state_type), self._settingsKey(vin)
+        if ran is None:
+            return None
+        stdout, stderr, return_code = ran
+        if stdout is None or return_code != 0:
+            logger.debug(f"BLE state {state_type} failed for {vin} (rc={return_code})")
+            if stderr:
+                self._safeNote(
+                    self._noteBleRefusal, vin, stderr.decode("utf-8", errors="ignore")
                 )
-                if stderr:
-                    self._safeNote(
-                        self._noteBleRefusal,
-                        vin,
-                        stderr.decode("utf-8", errors="ignore"),
-                    )
-                return None
+            return None
+        try:
             state = json.loads(stdout.decode("utf-8"))
-            self._safeNote(self._noteBleProof, vin)
-            return state
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
             logger.debug(f"BLE state {state_type} JSON parse error for {vin}: {e}")
             return None
-        finally:
-            self._ensure_pipe_closed()
+        self._safeNote(self._noteBleProof, vin)
+        return state
+
+    def _runPing(self, vin):
+        """True: VCSEC answered (it does asleep). Without an answer the range
+        scan decides, so only a scan that ran and missed the car is False."""
+        ran = self._tool(vin, "body-controller-state")
+        if ran is None:
+            return None
+        return True if ran[2] == 0 else self.scanForVehicleInRange(vin)
+
+    def ping(self, vin) -> bool:
+        """The sleep-safe range check: only an unanswered run is absence."""
+        answer = self._runPing(vin)
+        v = self.registry.get(vin)
+        if v is not None and answer is not None:
+            self._safeNote(v.observe, "bleReach", answer, "TeslaBLE", None, answer)
+        return answer is True
 
     def get_charge_state(self, vin):
         """Fetch charge state via BLE. Returns normalized dict or None on failure."""

@@ -85,7 +85,7 @@ The module uses this data to:
 
 * report each vehicle's battery level, charge limit, charge current setting,
   charging state and location to TWCManager's vehicle registry
-* keep each vehicle's `battery_level`, `lat`, `lon` and `at_home`
+* keep each vehicle's `battery_level`
 * expose aggregate properties to TWCManager such as:
   * `numCarsAtHome`
   * `minBatteryLevelAtHome`

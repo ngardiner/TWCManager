@@ -2,6 +2,7 @@
 # command methods return scripted outcomes, and a provider order on a Mock
 # master.
 import time
+from types import SimpleNamespace
 from typing import List
 from unittest.mock import Mock
 
@@ -25,6 +26,16 @@ def placeAt(master, vehicle, at=HOME):
     master.settings.update(homeLat=HOME[0], homeLon=HOME[1])
     vehicle.observe("lat", at[0], "TeslaMateVehicle")
     vehicle.observe("lon", at[1], "TeslaMateVehicle")
+
+
+def bleAnswers(master, ok=True):
+    # A scripted TeslaBLE's ping: an answer is contact and no answer is
+    # absence, as TeslaBLE.ping observes them
+    def ping(vin):
+        master.vehicleRegistry.get(vin).observe("bleReach", ok, "TeslaBLE", seen=ok)
+        return ok
+
+    master.providerOrder.provider("TeslaBLE").module = SimpleNamespace(ping=ping)
 
 
 class Clock:

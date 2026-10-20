@@ -65,11 +65,12 @@ class TeslaBLEProvider(Provider):
         loc = self.ble.get_location_state(vin)
         if loc is None:
             return None
-        # Only registry field names: heading is not a field
+        # Only registry field names: heading is not a field. The fix time
+        # first: the position's observers date the fix by it
         return {
+            "gpsAsOf": loc.get("gpsAsOf") or None,
             "lat": loc.get("latitude"),
             "lon": loc.get("longitude"),
-            "gpsAsOf": loc.get("gpsAsOf") or None,
         }
 
     def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:

@@ -18,6 +18,7 @@ from ..Providers.Capability import (
 )
 from .Outcome import (
     EXCLUDING,
+    HELD,
     QUEUE_DETAILS,
     REFUSED,
     RETRYABLE,
@@ -88,6 +89,8 @@ class Attempt(NamedTuple):
     force: bool = False
     # Why a command goes without a wake (logged by runAttempt)
     wakeSkipped: Optional[str] = None
+    # The car's paid request count when planned (Vehicle.paidRequests)
+    paidBefore: int = 0
 
 
 class AttemptRecord:
@@ -117,6 +120,8 @@ class AttemptRecord:
         # send: the command never went (Reconciler's WAKE_CHECK)
         self.wakeCheckBy: Optional[str] = None
         self.settledAt: Optional[float] = None
+        # A hold: when, and the paid requests attempts that held made
+        self.heldAt, self.paidSpent = None, 0
         self.pendingSave: Any = None
         # Sends that found the current value unreadable (a limit's backstop)
         self.unread = 0
@@ -139,6 +144,7 @@ class AttemptRecord:
         self.rearmed = False
         self.wakeCheckBy = None
         self.settledAt = None
+        self.heldAt, self.paidSpent = None, 0
         self.unread = 0
         self.clearedValue = None
 
@@ -341,7 +347,10 @@ class DesiredStore:
                 and want.value == attempt.value
                 and attempt.since >= want.at
             )
+            held = outcome.detail.startswith(HELD)
             if current:
+                # A hold sent nothing: the desire waits for newer evidence
+                record.heldAt = now if held else None
                 record.lastOutcome = outcome
                 record.lastOutcomeAt = now
                 record.lastProvider = attempt.provider
@@ -368,9 +377,9 @@ class DesiredStore:
                     # A failed wake (an HTTP error too) never reached the car
                     record.paidReached |= outcome.kind != UNREACHABLE and not failedWake
                     record.paidAt = now
-            if current and outcome.kind in SETTLED:
+            if current and outcome.kind in SETTLED and not held:
                 record.settledAt = now
-            if paid:
+            if paid or held:
                 pass
             elif outcome.kind in SETTLED or outcome.detail == "pairing":
                 # Inside the pairing window the car answers, refusing the key

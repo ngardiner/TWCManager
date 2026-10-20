@@ -25,6 +25,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from ...VehicleCommandQueue import VehicleCommandQueue
+from .. import Presence
 from ..Registry.Fields import READ_MAX_AGE
 from ..Providers.Capability import (
     NO_INDIVIDUAL_STOP,
@@ -39,6 +40,7 @@ from .Desired import AMPS, CAPABILITY_FOR, CHARGE_LIMIT, CHARGING, FIELD_FOR, At
 from .Outcome import (
     ERROR,
     EXCLUDING,
+    HELD,
     QUEUE_DETAILS,
     SATISFIED,
     SETTLED,
@@ -84,6 +86,8 @@ LIMIT_THEN_START_GAP = 5.0
 # The least time between two sends of one aspect to one car, whichever
 # providers carry them: it spaces start/stop toggles and rate changes
 MIN_SEND_GAP = {CHARGE_LIMIT: 10.0, CHARGING: 10.0, AMPS: 15.0}
+# The most paid sends, and wakes and reads for held attempts, per desire
+PAID_BUDGET = 4
 # A limit held unsent for one of these (both NOT_SENT) cannot be delivered
 _REFUSALS = frozenset({"wake refused", "no command token"})
 
@@ -247,6 +251,9 @@ class VehicleReconciler(threading.Thread):
         rec = self.desired.record(key, aspect)
         if d is None or rec.inFlight is not None:
             return None
+        if rec.heldAt is not None and vehicle.lastObservedAt <= rec.heldAt:
+            # Held: only newer evidence (or a new desire) plans it again
+            return None
         k = known(vehicle, aspect)
         if d.lift and (rec.settledAt is not None or satisfied(AMPS, d.value, k)):
             # A lift is a one-shot desire: done once it settles
@@ -257,6 +264,7 @@ class VehicleReconciler(threading.Thread):
         last = rec.lastOutcome
         if (
             last is not None
+            and rec.heldAt is None
             and isNotSent(last)
             and last.detail not in QUEUE_DETAILS
             and last.kind not in EXCLUDING
@@ -369,7 +377,12 @@ class VehicleReconciler(threading.Thread):
             )
         )
         freeGap = RESTORE_RETRY if d.restore and rec.lastFreeAt else RETRY[aspect]
-        if paid and freeFailed and paidAgain:
+        # Spent only while the message would still not go
+        spent = rec.paidSends + rec.paidSpent >= PAID_BUDGET and (
+            Presence.applicable(self.master, vehicle, capability, d.restore)[0]
+            != Presence.SEND
+        )
+        if paid and freeFailed and paidAgain and not spent:
             p = paid[0]
             rec.paidSaw = k.value if k is not None else None
         elif free and now - rec.lastFreeAt >= freeGap:
@@ -414,6 +427,7 @@ class VehicleReconciler(threading.Thread):
             force=aspect == CHARGE_LIMIT
             and needsLiveRead(d.restore, k.value if k else None, held),
             wakeSkipped=None if wake else self._whyNoWake(aspect, p, k, blind),
+            paidBefore=vehicle.paidRequests,
         )
         rec.inFlight = attempt
         return attempt
@@ -482,9 +496,29 @@ class VehicleReconciler(threading.Thread):
 
     # Hooks: runAttempt calls these on the queue's thread, around the command
 
+    def inapplicable(self, vehicle, attempt) -> Optional[Outcome]:
+        # The one applicability rule, after the attempt's read: None sends
+        if attempt.aspect is None or Run.isStop(attempt):
+            return None
+        verdict, why = Presence.applicable(
+            self.master, vehicle, attempt.capability, attempt.restore
+        )
+        if verdict == Presence.SEND:
+            return None
+        rec = self.desired.record(attempt.key, attempt.aspect)
+        if verdict != Presence.HOLD or rec.heldAt is None:
+            logger.info("%s %s: %s (%s)", vehicle.key, attempt.aspect, verdict, why)
+        if verdict == Presence.HOLD:
+            # Only this worker touches it while the attempt is in flight
+            rec.paidSpent += vehicle.paidRequests - attempt.paidBefore
+            return Outcome(SATISFIED, HELD + why)
+        self.desired.clearIf(attempt.key, attempt.aspect, attempt.value)
+        return Outcome(SATISFIED, verdict)
+
     def beforeWrite(self, vehicle, attempt, provider, believed):
-        if attempt.aspect != CHARGE_LIMIT:
-            return attempt.value, None
+        early = self.inapplicable(vehicle, attempt)
+        if early is not None or attempt.aspect != CHARGE_LIMIT:
+            return attempt.value, early
         decision = decideChargeLimit(
             attempt.value,
             attempt.restore,

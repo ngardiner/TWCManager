@@ -118,3 +118,32 @@ def test_telemetry_plug_state_and_geofence_changes_log_at_info(caplog):
         "TestCar: geofence None -> Home",
         "TestCar: geofence Home -> Work",
     ]
+
+
+def test_a_paid_request_is_counted_under_the_vehicle_lock(requests_mock):
+    # The cloud worker and the background thread both count
+    from TWCManager.Vehicle.Registry.Vehicle import Vehicle
+
+    class Spy:
+        held = False
+
+        def __enter__(self):
+            Spy.held = True
+
+        def __exit__(self, *exc):
+            Spy.held = False
+
+    class Counted(Vehicle):
+        counts = []
+        paidRequests = property(
+            lambda self: len(self.counts),
+            lambda self, n: self.counts.append(Spy.held),
+        )
+
+    api = new_api()
+    api.storeToken(fleet_token())
+    v = VehicleRegistry({}).getOrCreate(VIN, "t")
+    v.__class__, v._lock = Counted, Spy()
+    requests_mock.post(FLEET + f"vehicles/{VIN}/wake_up", json={"response": {}})
+    api._request(api.fleetSlot, "post", f"vehicles/{VIN}/wake_up", "wake", vehicle=v)
+    assert Counted.counts == [True]

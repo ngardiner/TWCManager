@@ -6,7 +6,7 @@ from typing import Dict, NamedTuple, Optional
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED
-from TWCManager.Vehicle.Presence import _PLUGGED, candidates, inside
+from TWCManager.Vehicle.Presence import _plug, candidates, inside
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
 
@@ -118,19 +118,12 @@ class TWCSlave:
         # and not placed away; with every unnamed car the fan-out reaches
         named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
         cars = [v for v in candidates(self.master, SET_AMPS) if v.key not in named]
-        plugged = []
-        for v in cars:
-            if inside(self.master, v) is False:
-                continue
+
+        def on(v):
             obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
-            if obs is None:
-                continue
-            if obs.source == "HomeAssistant":
-                # HA reports "Stopped" for an unplugged car too
-                if obs.value == "Charging":
-                    plugged.append(v)
-            elif obs.value in _PLUGGED:
-                plugged.append(v)
+            return obs is not None and _plug("chargingState", obs) is True
+
+        plugged = [v for v in cars if inside(self.master, v) is not False and on(v)]
         return plugged, cars
 
     def minAmpsToOffer(self):
@@ -662,13 +655,13 @@ class TWCSlave:
         self.historyNumSamples += 1
         self.master.queue_background_task({"cmd": "snapHistoryData"})
 
-        # If power starts flowing, check whether a car has arrived
+        # If power starts flowing, refresh the cars at home
         if (
             self.reportedAmpsActualSignificantChangeMonitor < 3
             and self.reportedAmpsActual > 3
         ):
             self.master.getModuleByName("Policy").fireWebhook("start")
-            self.master.queue_background_task({"cmd": "checkArrival"})
+            self.master.queue_background_task({"cmd": "checkCharge"})
 
         # If power drops off, check whether a car leaves in the next little while
         if (

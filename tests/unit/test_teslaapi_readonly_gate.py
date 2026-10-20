@@ -790,7 +790,9 @@ class TestThroughTheWalk:
             add_home_vehicle(
                 api, command_signing=signing, vin=vins[i], name="Car%d" % i, id=i + 1
             )
-            m.vehicleRegistry.get(vins[i]).observe("chargeLimit", 90, "OwnerAPI")
+            car = m.vehicleRegistry.get(vins[i])
+            car.observe("chargeLimit", 90, "OwnerAPI")
+            car.observe("pluggedIn", True, "Gen3TWC")  # plugged in at home
         return m, r, api, last
 
     def limit(self, m, r, *vins, passes=3):

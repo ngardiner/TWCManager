@@ -4,9 +4,14 @@ import functools
 import logging
 from typing import Any, List, Optional, Tuple
 
+from .Providers.Capability import SET_CHARGE_LIMIT
+from .Registry.Fields import TELEMETRY_SOURCES
+
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Presence")
 
 HOME, PRESUMED, NOT_HOME = "home", "presumed", "notHome"
+# applicable's verdicts on one message
+SEND, NOT_HERE, HOLD, HOME_NOW = "send", "not here", "hold", "home"
 HOME_RADIUS_FT = 1000
 HOME_FIX_MAX_AGE = 600.0
 REACH_WINDOW = 300.0
@@ -103,8 +108,9 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
         lat, lon = (obs, other) if field == "lat" else (other, obs)
         if other is not None and _within(master, lat.value, lon.value) is False:
             vehicle.mark("outside", at)
-        if twcVinAt(master, vehicle) > NEVER:
-            learnHome(master, vehicle)
+        # A BLE location read answers only within range
+        if obs.source == "TeslaBLE" or twcVinAt(master, vehicle) > NEVER:
+            learnHome(master, vehicle, lat, lon)
     elif field in ("shiftState", "state"):
         here = inside(master, vehicle)
         moving, wasMoving = _driving(field, obs.value), _driving(field, before)
@@ -122,9 +128,17 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
             vehicle.mark("unplug", at)
         elif plugged is True and was is not True:
             vehicle.mark("plugIn", at)
+            # A pushed or Gen3 plug-in; a Gen2 names its car (recordVehicleVIN)
+            if obs.source in TELEMETRY_SOURCES | {"Gen3TWC"}:
+                from .Reconcile.Targets import onArrival
+
+                onArrival(master, vehicle)
 
 
 def pluggedNow(master, v) -> bool:
+    if twcVinAt(master, v) > NEVER:
+        # A charging point names the car and reports a plug
+        return True
     here, best = inside(master, v), None
     for field in ("pluggedIn", "chargingState"):
         for obs in v.reported(field).values():
@@ -133,6 +147,11 @@ def pluggedNow(master, v) -> bool:
             if value is not None and (best is None or key > best[0]):
                 best = (key, value)
     return best is not None and best[1]
+
+
+def telemetrySaysPlugged(master, v) -> bool:
+    # A live telemetry feed says the cable is in
+    return v.syncSource in TELEMETRY_SOURCES and v.value("pluggedIn") is True
 
 
 def drivingNow(v) -> bool:
@@ -206,6 +225,44 @@ def arriving(v) -> float:
     return max(v.markAt("outside"), v.markAt("driveEnd"))
 
 
+def departed(master, v) -> Optional[float]:
+    # When the car was seen gone, or leaving while unplugged here (its last
+    # departure newer than its last arrival); None while it stays
+    state, _, at = decide(master, v)
+    if state == HOME and not pluggedNow(master, v):
+        return leaving(v) if leaving(v) > arriving(v) else None
+    return at if state == NOT_HOME else None
+
+
+def applicable(master, v, capability, restore) -> Tuple[str, str]:
+    # Whether a message, a stop aside, still fits where the car is, and the
+    # cell that says so. Missing event times are NEVER; a tie holds
+    state, plugged = presence(master, v), pluggedNow(master, v)
+    gone = departed(master, v)
+    if restore:
+        if state == HOME:
+            return (SEND, "leaving") if gone is not None else (HOME_NOW, "home")
+        return (HOLD, "not known here") if state == PRESUMED else (SEND, "away")
+    if state == NOT_HOME:
+        return NOT_HERE, "away"
+    if capability != SET_CHARGE_LIMIT:
+        # A start or a rate needs the plug; a car we hold a limit on and
+        # saw no unplug from is presumed still on it
+        presumed = state == PRESUMED and v.markAt("unplug") == NEVER
+        if plugged or presumed and v.vin in master.heldLimits.holding():
+            return SEND, "plugged in"
+        return (NOT_HERE if state == HOME else HOLD), "not plugged in"
+    if state == HOME:
+        if gone is not None:
+            return NOT_HERE, "leaving"
+        tie = not plugged and leaving(v) == arriving(v) > NEVER
+        return (HOLD, "tie") if tie else (SEND, "home")
+    if drivingNow(v):
+        return HOLD, "driving"
+    # Not known to be here: a plug says so
+    return (SEND, "plugged in") if plugged else (HOLD, "not known here")
+
+
 def candidates(master, capability=None) -> List:
     # Cars an unnamed charging point may serve. A broadcast (capability)
     # reaches cars on the Tesla API's list or with a BLE key that may be
@@ -236,13 +293,23 @@ def homeCars(master, attachment) -> List[Tuple[Any, Any]]:
     return [(v, a) for v, a in pairs if homeForLimits(master, v)]
 
 
-def learnHome(master, vehicle) -> bool:
-    # A car a TWC names is here: a fresh fix outside the radius (or no home
-    # yet) moves home to it. A stale fix may be wherever the car last had
-    # reception; its own time counts, not a live feed's vouching for it
-    lat, lon = vehicle.latest("lat"), vehicle.latest("lon")
-    now = master.vehicleRegistry.now()
-    if lat is None or lon is None or now - lat.at > HOME_FIX_MAX_AGE:
+def learnHome(master, vehicle, lat, lon) -> bool:
+    # A car a TWC names, or BLE reads, is here: a fresh fix outside the
+    # radius, or with no home yet, moves home to it. A stale fix may be
+    # wherever the car last had reception: the GPS time its source gave
+    # (observed before the position) dates it, else its reading's time. A
+    # fix not read over BLE must be read after the car reached its TWC (the
+    # later of its plug-in and the VIN read; a Gen2's plug-in mark stays on
+    # the anonymous session the VIN read replaces), else it may predate the
+    # drive home
+    if lat is None or lon is None:
+        return False
+    named = getattr(vehicle.latest("twcVin"), "at", NEVER)
+    if lat.source != "TeslaBLE" and lat.at < max(vehicle.markAt("plugIn"), named):
+        return False
+    gps = vehicle.reported("gpsAsOf").get(lat.source)
+    fixAt = lat.at if gps is None else min(lat.at, gps.value)
+    if master.vehicleRegistry.now() - fixAt > HOME_FIX_MAX_AGE:
         return False
     if _within(master, lat.value, lon.value):
         return False

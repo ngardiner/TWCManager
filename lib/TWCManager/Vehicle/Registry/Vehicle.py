@@ -64,6 +64,10 @@ class Vehicle:
         self.firstSeen = now
         self.lastSeen = now
         self.lastSeenSource = "created"
+        # The last observation of any kind, a pushed unseen one included
+        self.lastObservedAt = now
+        # Billed requests made for this car (TeslaAPI's Fleet slot)
+        self.paidRequests = 0
         self._fields = FieldStore(clock)
         # Leaf lock: guards claims, attachments, marks and lastSeen only.
         self._lock = threading.Lock()
@@ -85,6 +89,7 @@ class Vehicle:
         hook = getattr(self._registry, "onObserve", None)
         prior = self._fields.reported(field).get(source) if hook else None
         obs = self._fields.observe(field, value, source, at)
+        self.lastObservedAt = self._clock()
         if seen:
             with self._lock:
                 # A future stamp must not push lastSeen ahead of now.

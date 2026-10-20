@@ -350,6 +350,10 @@ class TeslaAPI:
             )
             paid = _PAID_PATH.search(path.split("?")[0])
             if paid and slot is self.fleetSlot:
+                if vehicle is not None:
+                    # The cloud worker and the background thread both count
+                    with vehicle._lock:
+                        vehicle.paidRequests += 1
                 # Never the URL, which holds the VIN
                 kind = paid.group(1).replace("/", ":")
                 logger.info(
@@ -1870,18 +1874,18 @@ class TeslaAPI:
                 missing = "charge_state missing from API response"
                 charge = response["charge_state"]
                 missing = "latitude/longitude missing from drive_state"
+                # The fix time first: the position's observers date it by it
+                if drive.get("gps_as_of"):
+                    vehicle.observe("gpsAsOf", drive["gps_as_of"], source)
                 vehicle.observe("lat", drive["latitude"], source)
                 vehicle.observe("lon", drive["longitude"], source)
-            except (KeyError, TypeError):
+            except (KeyError, TypeError, AttributeError):
                 logger.error("update_vehicle_data: %s for %s" % (missing, vehicle.vin))
                 return False
             lat, lon = vehicle.value("lat", 10000), vehicle.value("lon", 10000)
 
             # Only keys present in the response are observed: a default or a
             # carried-over value is not a fresh TeslaAPI reading.
-            gpsAsOf = drive.get("gps_as_of") or 0
-            if gpsAsOf:
-                vehicle.observe("gpsAsOf", gpsAsOf, source)
             if "shift_state" in drive:
                 vehicle.observe("shiftState", drive["shift_state"], source)
 

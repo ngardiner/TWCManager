@@ -56,6 +56,8 @@ NOT_SENT = QUEUE_DETAILS | {
     "no provider",
 }
 RULES = "rules: "
+# A message the car's whereabouts hold back: kept, not settled
+HELD = RULES + "held: "
 
 
 class Outcome(NamedTuple):

@@ -42,7 +42,7 @@ import threading
 from TWCManager.ControlTick import ControlTick
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
-from TWCManager.Vehicle.Reconcile.Targets import onArrival, onDeparture
+from TWCManager.Vehicle.Reconcile.Targets import onDeparture
 from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
 import requests
 from enum import Enum
@@ -320,12 +320,7 @@ def background_tasks_thread(master):
             task = master.getBackgroundTask()
 
             if "cmd" in task:
-                if task["cmd"] == "checkArrival":
-                    onArrival(master)
-                    # A free vehicle list load; refreshes cars at home, as
-                    # an arrival does
-                    master.updateChargeAtHome()
-                elif task["cmd"] == "checkCharge":
+                if task["cmd"] == "checkCharge":
                     master.updateChargeAtHome()
                 elif task["cmd"] == "refreshTokens":
                     refreshTokens(master)

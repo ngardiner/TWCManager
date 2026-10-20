@@ -7,13 +7,20 @@ from TWCManager.Vehicle.Reconcile.Reconciler import MIN_SEND_GAP, PAID_AFTER, PR
 from tests.unit.reconcile_helpers import Clock, ScriptedProvider, inline
 from tests.unit.test_gen2twc_provider import VIN, make as make_master
 
-def setup(*providers, clock=True):
+def setup(*providers, clock=True, here=True):
+    # here: the car is plugged in at home, so every message applies to it
     m, s = make_master(); c = Clock(1000.0) if clock else time.time
     m.config = dict(m.config, config=dict(m.config["config"]))          # never the shared CONFIG
     if clock: m.vehicleRegistry._clock = c
     for p in providers: m.providerOrder.register(p)
     m.desired = DesiredStore(clock=c); m.vehicleRegistry.removed = m.desired.forget; m.heldLimits.load()
-    m.reconciler = r = inline(VehicleReconciler(m, clock=c)); v = m.vehicleRegistry.getOrCreate(VIN, "t"); return m, r, v, c
+    m.reconciler = r = inline(VehicleReconciler(m, clock=c)); v = m.vehicleRegistry.getOrCreate(VIN, "t")
+    if here:
+        v.observe("pluggedIn", True, "Gen3TWC")
+    return m, r, v, c
+
+def leave(v):                                                                # unplugged after the plug-in: a restore applies
+    v.observe("pluggedIn", False, "Gen3TWC", at=v.markAt("plugIn") + 1)
 
 def ble(*outs): return ScriptedProvider("TeslaBLE", 2, True, list(outs))
 def fleet(*outs): return ScriptedProvider("FleetAPI", 5, False, list(outs), tier=C.FLEET_COMMAND)
@@ -68,7 +75,9 @@ def test_no_wake_to_lower_wake_to_raise_never_for_a_restore():
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); assert names(p) == ["setChargeLimit"]
     c.t += 400; v.observe("chargeLimit", 50, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 70, "policy", decision=True); r.pass_()
     assert names(p)[1:] == ["wake", "setChargeLimit"]
-    c.t += 400; v.observe("chargeLimit", 70, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", decision=True, restore=True); r.pass_()
+    c.t += 400; v.observe("chargeLimit", 70, "TeslaBLE")
+    leave(v)
+    m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", decision=True, restore=True); r.pass_()
     assert names(p)[3:] == ["setChargeLimit"] and m.heldLimits.get(VIN) is None   # a restore raises without a wake
     assert VIN not in m.settings["chargeLimits"]                             # restored: nothing held, no entry
 
@@ -89,6 +98,7 @@ def test_ble_only_install_keeps_retrying_ble_at_the_retry_cadence():
 
 def test_restore_to_an_absent_car_retries_hourly_and_never_wakes():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE))); b = prov(m, "TeslaBLE"); m.heldLimits.set(VIN, 90, 50)
+    leave(v)
     v.observe("chargeLimit", 50, "TeslaMateVehicle")                            # the last known limit, from another channel
     m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True); r.pass_()
     assert [x[0] for x in b.calls] == ["setChargeLimit"]; c.t += 3599; r.pass_(); assert len(b.calls) == 1
@@ -96,7 +106,9 @@ def test_restore_to_an_absent_car_retries_hourly_and_never_wakes():
 
 def test_a_restore_falls_to_fleet_without_a_wake_and_at_most_twice():    # pre-flight L4, paid counted
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.UNREACHABLE, "timeout"))); f = prov(m, "FleetAPI")
-    m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "FleetAPI"); m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
+    m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "FleetAPI")
+    leave(v)
+    m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
     r.pass_(); assert f.calls == []
     c.t += PAID_AFTER[CHARGE_LIMIT]; r.pass_(); assert names(f) == ["setChargeLimit"]
     for _ in range(40): c.t += 300; r.pass_()
@@ -261,6 +273,7 @@ def test_restore_with_nothing_held_clears_the_desire_and_unknown_limit_on_cloud_
 
 def test_a_rules_settled_restore_clears_the_desire_and_does_not_loop():
     m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 80, "TeslaBLE")   # hand-set before a restart: no write stamp
+    leave(v)
     m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
     assert r.pass_() == 1 and prov(m, "TeslaBLE").calls == [] and m.desired.get(VIN, CHARGE_LIMIT) is None
     assert m.heldLimits.get(VIN) is None                                      # hand-set limit stands: nothing held
@@ -623,6 +636,7 @@ def test_ha_is_reached_only_once_fleet_has_refused_or_is_unavailable(aspect, val
 
 def test_a_restore_stamps_the_outside_value():                             # deleted-test audit row 16
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaBLE")
+    leave(v)
     m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True); r.pass_()
     w = v.lastWrite("chargeLimit"); assert (w.value, w.source) == (90, "TeslaBLE") and prov(m, "TeslaBLE").calls[-1] == ("setChargeLimit", VIN, 90)
 
