@@ -76,7 +76,7 @@ def test_status_deferral_counts_as_success_without_fetch():  # P13
     ble.wakeVehicle.assert_not_called()
 
 
-def test_update_location_zero_forces_a_fresh_read():  # P12
+def test_a_zero_age_location_read_forces_a_fresh_ble_read():
     api, ble, reg = setup(None)
     reg.get(VIN).observe("lat", 1.0, "OwnerAPI")
     reg.get(VIN).observe("lon", 2.0, "OwnerAPI")

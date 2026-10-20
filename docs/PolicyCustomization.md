@@ -88,24 +88,14 @@ nothing can check is never treated as unplugged by the TWC alone.  The log
 shows each checked change and the answer (`TWC <id>: 03 → 00, max ... A:
 checking <VIN>`, `TWC <id>: plugged in: ...`, `unplugged, <VIN> departs`).
 
-The home location moves to a car's position only when a TWC reads that car's
-VIN or the position arrived over BLE, and only for a position outside the
-current home radius that is under 10 minutes old (by the car's GPS time, where
-it reports one); it is never taken from the first position of a car that
-nothing places at home.  If you run cars with no TWC and no BLE, set the home
-location yourself, on the Settings page (use the vehicle location button) or
-with `homeLat` and `homeLon` through the
-[setSetting API](modules/control_HTTP_API/setSetting.md).  Until it is set,
-TWCManager logs a warning once, and a car known only through vehicle APIs is
-never treated as home and gets no limit.  `atHomeRadius` defaults to 1,000 feet.
+Home is set or moved only from a fresh position read of a car: a position under 10 minutes old, by the fix's own GPS time, that the car actually reported (a feed's retained copy, redelivered at a restart or reconnect, never counts). That happens when a TWC reads the car's VIN, or when the car's position arrives over BLE. When no home is set yet, a fresh position that arrives while a TWC is naming the car sets it too. A position not read over BLE must also have been read after the car reached its TWC (its plug-in or the VIN read), so a read from before the drive home never moves home, and once home is set, only a BLE position (or the Settings page) moves it. Home is never set from a car's first position otherwise. A car-only install with no TWC and no BLE must set home on the Settings page (use the vehicle location button), or with `homeLat` and `homeLon` through the [setSetting API](modules/control_HTTP_API/setSetting.md). Until then TWCManager logs a warning once, and a car known only through vehicle APIs is never treated as home and gets no limit. `atHomeRadius` defaults to 1,000 feet.
 
 A car's start and charge rate commands also need the car to be plugged in
 here.  A TWC's own commands (start, stop, amps) are never held back by where a
 car is.  Raising a car's limit may wake it, but lowering one never does, and
 nothing wakes a car for a raise while its TWC or charger is offered 0 A.
 When a car leaves, its original limit is sent wherever it is, without waking
-it.  If that restore fails, the log may repeat a "not here" line for the away
-car on each policy pass until it succeeds.
+it.
 
 Known limits: a guest car that later plugs in to the same TWC can keep a car
 that left idle counted as home until that car reports a position outside the

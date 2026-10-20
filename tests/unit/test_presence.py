@@ -1462,6 +1462,25 @@ def asleepPing(m, vin):
     return True
 
 
+@pytest.mark.parametrize("limit", [50, 80])
+def test_a_failing_restore_to_an_away_car_logs_no_not_here(
+    requests_mock, caplog, monkeypatch, limit
+):
+    import TWCManager.Vehicle.TeslaBLE as teslable
+    from tests.unit.test_command_path_parity import install, passes, realBle
+
+    monkeypatch.setattr(teslable.time, "sleep", lambda s: None)
+    caplog.set_level(logging.INFO)
+    m, r, v, c, api = install(owner=True, fleet=True, policy="ble_only", held=(90, 50))
+    b = realBle(m, answers=None)  # every restore fails
+    v.observe("chargeLimit", 50, TM)
+    later(c, 1)
+    placeAt(m, v, AWAY)
+    passes(r, c, 3 * 3600, step=60, each=lambda: m.setPolicyLimit(limit, False))
+    assert len(b.runs) >= 6  # the hourly restore and its quick retry
+    assert not [r for r in caplog.records if P.NOT_HERE in r.getMessage()]
+
+
 def scanOnly(life):
     # The sleep-safe check answered by the range scan alone: sleep unknown
     from tests.unit.test_command_path_parity import realBle

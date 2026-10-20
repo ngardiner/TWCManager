@@ -90,7 +90,7 @@ The module uses this data to:
   * `numCarsAtHome`
   * `minBatteryLevelAtHome`
 
-Where a car is comes from TWCManager's presence rules (see Charge Limits in [Policy Customization](../PolicyCustomization.md)), using the car's Home Assistant location along with its other evidence. Home is learned from a car a TWC names or a BLE position, or set on the Settings page. A zone state of `home` with no coordinates no longer places a car at home. `atHomeRadius` (in feet) defaults to 1,000.
+Where a car is comes from TWCManager's presence rules (see Charge Limits in [Policy Customization](../PolicyCustomization.md)), using the car's Home Assistant location along with its other evidence. Home is set or moved only from a fresh position read of a car (under 10 minutes old, by the fix's own GPS time): when a TWC reads the car's VIN, or when the position arrives over BLE, or, with no home set yet, when a fresh position arrives while a TWC is naming the car. A position not read over BLE counts only if it was read after the car reached its TWC, so once home is set, only a BLE position (or the Settings page) moves it. It is never set from a car's first position otherwise. A car-only install with no TWC and no BLE must set home on the Settings page. A zone state of `home` with no coordinates no longer places a car at home. `atHomeRadius` (in feet) defaults to 1,000.
 
 ### Charging Control
 
