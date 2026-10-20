@@ -44,13 +44,8 @@ class Kostal:
         self.config = master.config
         self.lastUpdate = 0
 
-        # try to read the config file
-        try:
-            self.configConfig = master.config["config"]
-            self.configKostal = master.config.get("sources", {})["Kostal"]
-        except KeyError:
-            self.configConfig = {}
-            self.configKostal = {}
+        self.configConfig = master.config.get("config", {})
+        self.configKostal = master.config.get("sources", {}).get("Kostal", {})
 
         # read configuration values and initialize variables
         self.enabled = self.configKostal.get("enabled", False)

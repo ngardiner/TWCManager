@@ -58,10 +58,7 @@ class TelmetryBase:
         self.registry = VehicleRegistry.forMaster(master)
 
         self.config = master.config
-        try:
-            self.configConfig = self.config["config"]
-        except KeyError:
-            self.configConfig = {}
+        self.configConfig = self.config.get("config", {})
         try:
             self.configModule = self.config["vehicle"][self.configName]
             self.status = self.config["vehicle"][self.configName]["enabled"]

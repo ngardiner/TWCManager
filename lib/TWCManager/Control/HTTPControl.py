@@ -209,14 +209,8 @@ class HTTPControl:
 
     def __init__(self, master):
         self.master = master
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configHTTP = master.config["control"]["HTTP"]
-        except KeyError:
-            self.configHTTP = {}
+        self.configConfig = master.config.get("config", {})
+        self.configHTTP = master.config.get("control", {}).get("HTTP", {})
         self.httpPort = self.configHTTP.get("listenPort", 8080)
         self.status = self.configHTTP.get("enabled", False)
 
@@ -510,8 +504,9 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
 
                 with master.settingsLock:
-                    if not master.settings.get("consumptionOffset", None):
-                        master.settings["consumptionOffset"] = {}
+                    master.settings["consumptionOffset"] = (
+                        master.settings.get("consumptionOffset") or {}
+                    )
 
                 json_data = json.dumps(master.settings["consumptionOffset"])
                 self.wfile.write(json_data.encode("utf-8"))
@@ -711,8 +706,9 @@ def CreateHTTPHandlerClass(master):
                     and not self.checkForUnsafeCharactters(name)
                 ):
                     with master.settingsLock:
-                        if not master.settings.get("consumptionOffset", None):
-                            master.settings["consumptionOffset"] = {}
+                        master.settings["consumptionOffset"] = (
+                            master.settings.get("consumptionOffset") or {}
+                        )
                         master.settings["consumptionOffset"][name] = {}
                         master.settings["consumptionOffset"][name]["value"] = value
                         master.settings["consumptionOffset"][name]["unit"] = unit
@@ -1871,8 +1867,7 @@ def CreateHTTPHandlerClass(master):
             # If not, this would indicate that this is the first time
             # we have saved the new schedule settings
             with master.settingsLock:
-                if master.settings.get("Schedule", None) == None:
-                    master.settings["Schedule"] = {}
+                master.settings["Schedule"] = master.settings.get("Schedule") or {}
 
                 # Slight issue with checkboxes, you have to default them all to
                 # false, otherwise if one is unticked it is just not sent via form data
@@ -1886,8 +1881,9 @@ def CreateHTTPHandlerClass(master):
                     "Saturday",
                 ]
                 for day in days:
-                    if master.settings["Schedule"].get(day, None) == None:
-                        master.settings["Schedule"][day] = {}
+                    master.settings["Schedule"][day] = (
+                        master.settings["Schedule"].get(day) or {}
+                    )
                     master.settings["Schedule"][day]["enabled"] = ""
                     master.settings["Schedule"][day]["flex"] = ""
 
@@ -1904,21 +1900,20 @@ def CreateHTTPHandlerClass(master):
                         # Rewrite it into the settings array and delete it
                         # from the input
 
-                        if (
-                            master.settings["Schedule"].get(match.group(2), None)
-                            == None
-                        ):
-                            # Create dictionary key for this day
-                            master.settings["Schedule"][match.group(2)] = {}
+                        day = match.group(2)
+                        master.settings["Schedule"][day] = (
+                            master.settings["Schedule"].get(day) or {}
+                        )
 
                         # Set per-day settings
-                        master.settings["Schedule"][match.group(2)][match.group(1)] = (
+                        master.settings["Schedule"][day][match.group(1)] = (
                             self.getFieldValue(key)
                         )
 
                     else:
-                        if master.settings["Schedule"].get("Settings", None) == None:
-                            master.settings["Schedule"]["Settings"] = {}
+                        master.settings["Schedule"]["Settings"] = (
+                            master.settings["Schedule"].get("Settings") or {}
+                        )
                         master.settings["Schedule"]["Settings"][key] = (
                             self.getFieldValue(key)
                         )
@@ -2029,8 +2024,7 @@ def CreateHTTPHandlerClass(master):
             # If not, this would indicate that this is the first time
             # we have saved it
             with master.settingsLock:
-                if master.settings.get("Graphs", None) == None:
-                    master.settings["Graphs"] = {}
+                master.settings["Graphs"] = master.settings.get("Graphs") or {}
                 master.settings["Graphs"]["Initial"] = initial
                 master.settings["Graphs"]["End"] = end
 

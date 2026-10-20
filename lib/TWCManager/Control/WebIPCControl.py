@@ -20,17 +20,11 @@ class WebIPCControl:
 
     def __init__(self, master):
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
+        self.configConfig = master.config.get("config", {})
         self.debugLevel = self.configConfig.get("debugLevel", 0)
         self.master = master
 
-        try:
-            self.configIPC = master.config["control"]["IPC"]
-        except KeyError:
-            self.configIPC = {}
+        self.configIPC = master.config.get("control", {}).get("IPC", {})
         self.status = self.configIPC.get("enabled", False)
 
         # Unload if this module is disabled or misconfigured

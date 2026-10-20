@@ -30,14 +30,8 @@ class IotaWatt:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configIotaWatt = master.config.get("sources", {})["IotaWatt"]
-        except KeyError:
-            self.configIotaWatt = {}
+        self.configConfig = master.config.get("config", {})
+        self.configIotaWatt = master.config.get("sources", {}).get("IotaWatt", {})
         self.status = self.configIotaWatt.get("enabled", False)
         self.serverIP = self.configIotaWatt.get("serverIP", None)
         self.iotaWattOutputConsumption = self.configIotaWatt.get(

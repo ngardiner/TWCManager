@@ -46,10 +46,7 @@ class MQTTStatus:
         self.__config = master.config
         self.__master = master
 
-        try:
-            self.__configMQTT = self.__config["status"]["MQTT"]
-        except KeyError:
-            self.__configMQTT = {}
+        self.__configMQTT = self.__config.get("status", {}).get("MQTT", {})
 
         self.status = self.__configMQTT.get("enabled", False)
         self.brokerIP = self.__configMQTT.get("brokerIP", None)

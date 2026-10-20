@@ -1259,8 +1259,7 @@ class TWCMaster:
 
         # If particular details are missing from the Settings dict, create them
         with self.settingsLock:
-            if not self.settings.get("VehicleGroups", None):
-                self.settings["VehicleGroups"] = {}
+            self.settings["VehicleGroups"] = self.settings.get("VehicleGroups") or {}
             if not self.settings["VehicleGroups"].get("Allow Charging", None):
                 self.settings["VehicleGroups"]["Allow Charging"] = {
                     "Description": "Built-in Group - Vehicles in this Group can charge on managed TWCs",
@@ -1480,8 +1479,7 @@ class TWCMaster:
         # This function is called when a vehicle charge session ends.
         # If we have a last vehicle VIN set, close off the charging session
         # for this vehicle and save the settings.
-        if not self.settings.get("Vehicles", None):
-            self.settings["Vehicles"] = {}
+        self.settings["Vehicles"] = self.settings.get("Vehicles") or {}
         if self.settings["Vehicles"].get(slaveTWC.lastVIN, None):
             if self.settings["Vehicles"][slaveTWC.lastVIN].get("startkWh", 0) > 0:
                 # End current session
@@ -1562,16 +1560,13 @@ class TWCMaster:
         with self.settingsLock:
             # Record Slave TWC ID as being capable of reporting VINs, if it is
             # not already.
-            if not self.settings.get("SlaveTWCs", None):
-                self.settings["SlaveTWCs"] = {}
-            if not self.settings["SlaveTWCs"].get(twcid, None):
-                self.settings["SlaveTWCs"][twcid] = {}
-            if not self.settings["SlaveTWCs"][twcid].get("supportsVINQuery", 0):
-                self.settings["SlaveTWCs"][twcid]["supportsVINQuery"] = 1
+            slaves = self.settings["SlaveTWCs"] = self.settings.get("SlaveTWCs") or {}
+            slaves[twcid] = slaves.get(twcid) or {}
+            if not slaves[twcid].get("supportsVINQuery", 0):
+                slaves[twcid]["supportsVINQuery"] = 1
 
             # Increment sessions counter for this VIN in persistent settings file
-            if not self.settings.get("Vehicles", None):
-                self.settings["Vehicles"] = {}
+            self.settings["Vehicles"] = self.settings.get("Vehicles") or {}
             if not self.settings["Vehicles"].get(vin, None):
                 self.settings["Vehicles"][vin] = {
                     "chargeSessions": 1,
@@ -2033,8 +2028,7 @@ class TWCMaster:
             periodTimestamp = snaptime - timedelta(minutes=5)
 
             with self.settingsLock:
-                if not "history" in self.settings:
-                    self.settings["history"] = []
+                self.settings.setdefault("history", [])
 
                 self.settings["history"].append(
                     (

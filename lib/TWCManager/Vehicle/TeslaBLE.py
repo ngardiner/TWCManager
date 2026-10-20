@@ -112,10 +112,7 @@ class TeslaBLE:
         # failure sendCommand retries).
         self._failure = threading.local()
         self.master = master
-        try:
-            self.config = self.master.config
-        except KeyError:
-            self.config = {}
+        self.config = self.master.config
         self.configConfig = self.config.get("config", {})
         cfg = self.config.get("vehicle", {}).get("teslaBLE", {}) or {}
         self._enabled = cfg.get("enabled", True)

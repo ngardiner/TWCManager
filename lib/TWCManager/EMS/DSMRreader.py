@@ -25,14 +25,8 @@ class DSMRreader:
     def __init__(self, master):
         self.master = master
         self.__config = master.config
-        try:
-            self.__configConfig = master.config["config"]
-        except KeyError:
-            self.__configConfig = {}
-        try:
-            self.__configDSMRreader = master.config.get("sources", {})["DSMRreader"]
-        except KeyError:
-            self.__configDSMRreader = {}
+        self.__configConfig = master.config.get("config", {})
+        self.__configDSMRreader = master.config.get("sources", {}).get("DSMRreader", {})
 
         self.status = self.__configDSMRreader.get("enabled", False)
         self.brokerIP = self.__configDSMRreader.get("brokerIP", None)

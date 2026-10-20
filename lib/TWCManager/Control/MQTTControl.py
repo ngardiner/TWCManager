@@ -20,14 +20,8 @@ class MQTTControl:
 
     def __init__(self, master):
         self.config = master.config
-        try:
-            self.configConfig = self.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configMQTT = self.config["control"]["MQTT"]
-        except KeyError:
-            self.configMQTT = {}
+        self.configConfig = self.config.get("config", {})
+        self.configMQTT = self.config.get("control", {}).get("MQTT", {})
         self.status = self.configMQTT.get("enabled", False)
         self.master = master
         self.topicPrefix = self.configMQTT.get("topicPrefix", None)
