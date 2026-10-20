@@ -224,7 +224,10 @@ class VehicleReconciler(threading.Thread):
         rec = self.desired.record(key, aspect)
         if d is None or rec.inFlight is not None:
             return None
-        if rec.heldAt is not None and vehicle.lastObservedAt <= rec.heldAt:
+        # A drive's hold can change only once the car stops
+        driving = rec.lastOutcome == (O.SATISFIED, O.HELD + "driving")
+        driving = driving and Presence.decide(self.master, vehicle)[1] == "driving"
+        if rec.heldAt is not None and (vehicle.lastObservedAt <= rec.heldAt or driving):
             # Held: only newer evidence (or a new desire) plans it again
             return None
         k = B.known(vehicle, aspect)
@@ -302,9 +305,12 @@ class VehicleReconciler(threading.Thread):
         free = [p for p in cands if _tier(p, capability) < C.TIER_BILLED]
         paid = [p for p in cands if _tier(p, capability) >= C.TIER_BILLED]
         ch = self.desired.free(key)
+        # Free failures from before the car came back say nothing of it here
+        back = Presence.returned(vehicle)
         freeFailed = not free or (
             ch.failingSince is not None
-            and now - ch.failingSince >= PAID_AFTER[aspect]
+            and ch.lastAttemptAt >= back
+            and now - max(ch.failingSince, back) >= PAID_AFTER[aspect]
             and now - ch.lastAttemptAt < PROBE_AFTER
         )
         # At most two paid sends per arm, and two arms per desire: one send,
@@ -363,7 +369,7 @@ class VehicleReconciler(threading.Thread):
         if paid and freeFailed and paidAgain and not spent:
             p = paid[0]
             rec.paidSaw = k.value if k is not None else None
-        elif free and now - rec.lastFreeAt >= freeGap:
+        elif free and (now - rec.lastFreeAt >= freeGap or rec.lastFreeAt < back):
             p = free[0]
         else:
             return None

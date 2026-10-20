@@ -68,6 +68,15 @@ def test_pilot_mismatch_means_another_charger():
     assert pick(m) is None
 
 
+def test_a_car_resting_on_a_mobile_connector_is_not_the_twc_s():
+    # At its limit on a 32 A mobile connector, in BLE contact: the car the
+    # TWC's plug belongs to is the other one, inside
+    m, a, b, c = cars()
+    plugged(a, pilot=32, state="Complete")
+    placeAt(m, b)
+    assert pick(m) == VIN2
+
+
 def test_fast_charger_is_never_the_twc():
     # Plugged in just now, but on a fast charger: no guess, and nothing
     # places it here

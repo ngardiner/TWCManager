@@ -102,6 +102,8 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
     # The registry's onObserve hook, for every field: obs is the incoming
     # reading, previous the same source's reading before it
     at, before = obs.at, None if previous is None else previous.value
+    from .Reconcile import Targets
+
     if field == "bleReach":
         if isinstance(obs.value, bool):
             vehicle.mark("contact" if obs.value else "absent", at)
@@ -121,6 +123,8 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
             vehicle.mark("lifeAt", at)
         if moving and not wasMoving and here is not False:
             vehicle.mark("driveStart", at)
+            # The drive start plans the restore while BLE is still in range
+            Targets._restoreDeparted(master, read=False)
         elif (
             wasMoving and not moving and here and (field == "state" or obs.value == "P")
         ):
@@ -141,9 +145,9 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
                 vehicle.mark("lifeAt", at)
             # A pushed or attributed plug-in; a Gen2's VIN arrives on its own
             if obs.source in TELEMETRY_SOURCES | {"Gen2TWC", "Gen3TWC"}:
-                from .Reconcile.Targets import onArrival
-
-                onArrival(master, vehicle)
+                Targets.onArrival(master, vehicle)
+            if obs.source in TELEMETRY_SOURCES and not vehicle.value("twcVin"):
+                master.attributePlugs()
 
 
 def pluggedNow(master, v, unknown=False, since=NEVER) -> Optional[bool]:
@@ -167,10 +171,11 @@ def pluggedNow(master, v, unknown=False, since=NEVER) -> Optional[bool]:
     return unknown if best is None else best[1]
 
 
-def telemetryPlug(v) -> Optional[bool]:
-    # The live telemetry feed's own plug reading
+def telemetryPlug(v, since=NEVER) -> Optional[bool]:
+    # The live telemetry feed's own plug reading, if not older than since
     obs = v.reported("pluggedIn").get(v.syncSource)
-    return obs.value if obs is not None and v.syncSource in TELEMETRY_SOURCES else None
+    live = obs is not None and obs.at >= since and v.syncSource in TELEMETRY_SOURCES
+    return obs.value if live else None
 
 
 def drivingNow(v) -> bool:
@@ -265,13 +270,20 @@ def arriving(v) -> float:
     return max(v.markAt("outside"), v.markAt("driveEnd"))
 
 
+def returned(v) -> float:
+    # When the car last came back: parked inside the radius, or plugged in
+    return max(v.markAt("driveEnd"), v.markAt("plugIn"))
+
+
 def departed(master, v) -> Optional[float]:
-    # When the car was seen gone, or leaving while unplugged here (its last
-    # departure newer than its last arrival); None while it stays
+    # When the car was seen gone, or leaving (unplugged here, or driving off
+    # after it came back) since it last arrived; None while it stays
     state, _, at = decide(master, v)
-    if state == HOME and not pluggedNow(master, v):
-        return leaving(v) if leaving(v) > arriving(v) else None
-    return at if state == NOT_HOME else None
+    if state == NOT_HOME:
+        return at
+    away = state == HOME or drivingNow(v) and returned(v) > NEVER
+    away = away and leaving(v) > arriving(v) and not pluggedNow(master, v)
+    return leaving(v) if away else None
 
 
 def applicable(master, v, capability) -> Tuple[str, str]:
@@ -334,10 +346,13 @@ def _reached(master, v) -> bool:
     return reach < v.markAt("contact")
 
 
-def pick(master, offered=None, actual=0, read=False):
-    # A VIN-less plug's car: plugged in just now, else BLE-read at this pilot
-    # and draw (only given an offer), else BLE-reached, else inside
+def pick(master, offered=None, actual=0, read=False, since=NEVER):
+    # A VIN-less plug's car (plugged in at since): plugged in just now, else
+    # BLE-read at this pilot and draw (given an offer, or a function giving
+    # the offer now), else reached or inside
     now, pool = master.vehicleRegistry.now(), candidates(master)
+    offer = offered if callable(offered) else lambda: offered
+    offered = offer()
 
     def fresh(v, field, source="TeslaBLE", window=REACH_WINDOW):
         o = v.reported(field).get(source) if source else v.latest(field)
@@ -351,8 +366,11 @@ def pick(master, offered=None, actual=0, read=False):
 
     def fits(v):
         # BLE says: False not plugged in here, True at this pilot and draw;
-        # a live feed saying unplugged rules the car out
-        if telemetryPlug(v) is False:
+        # a live feed saying unplugged since the plug, or an unplug just
+        # before it, rules the car out
+        if telemetryPlug(v, since) is False:
+            return False
+        if v.markAt("unplug") > since - REACH_WINDOW > NEVER:
             return False
         ble = read and "TeslaBLE" in v.claims and not fresh(v, "chargingState")
         if ble and asleep(v, now - REACH_WINDOW) is None:
@@ -364,7 +382,9 @@ def pick(master, offered=None, actual=0, read=False):
         plugged = state and _plug("chargingState", state)
         if not (plugged and pilot and offered is not None):
             return None if plugged else plugged
-        if abs(pilot.value - offered) > PILOT_MATCH_TOLERANCE:
+        # The offer may have changed during the read
+        gap = min(abs(pilot.value - o) for o in (offered, offer()))
+        if gap > PILOT_MATCH_TOLERANCE:
             return False
         drawing = actual >= 1 and amps
         return not drawing or abs(amps.value - actual) <= PILOT_MATCH_TOLERANCE or None
@@ -379,9 +399,9 @@ def pick(master, offered=None, actual=0, read=False):
 def attribute(master, pointId, source, offered=None, actual=0) -> Optional[str]:
     # Names an anonymous session's car, plugged in there. Given an offer it
     # may read over BLE, so it runs on the BLE worker
-    if not getattr(master.vehicleRegistry.vehicleAt(pointId), "isAnonymous", 0):
+    if not getattr(anon := master.vehicleRegistry.vehicleAt(pointId), "isAnonymous", 0):
         return None
-    v = pick(master, offered, actual, read=offered is not None)
+    v = pick(master, offered, actual, offered is not None, anon.markAt("plugIn"))
     if v is None:
         logger.info("%s: no single car plugged in; left anonymous", pointId)
         return None

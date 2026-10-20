@@ -183,6 +183,7 @@ class VehicleRegistry:
             v = self._vehicles.get(key)
             if v is None:
                 v = Vehicle(key, None, self, clock=self._clock)
+                v.mark("plugIn", self.now())
                 self._vehicles[key] = v
             return v
 

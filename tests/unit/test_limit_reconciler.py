@@ -116,6 +116,7 @@ def test_a_restore_falls_to_fleet_without_a_wake_and_at_most_twice():    # pre-f
 
 def test_stale_free_failure_gets_the_real_command_over_ble_before_paid():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); b, f = prov(m, "TeslaBLE"), prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "FleetAPI")
+    c.t += PROBE_AFTER + 300                                                  # failing since the plug-in
     m.desired.free(VIN).failure(c() - PROBE_AFTER - 300)                     # failing long enough, but untried for > PROBE_AFTER (pre-flight M1)
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); assert cmds(b) == ["setChargeLimit"] and f.calls == []
     r.pass_(); assert f.calls == []                                           # never two sends inside the gap
@@ -123,7 +124,7 @@ def test_stale_free_failure_gets_the_real_command_over_ble_before_paid():
 
 def test_a_recent_free_failure_goes_paid_without_a_new_ble_try():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); b, f = prov(m, "TeslaBLE"), prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "FleetAPI")
-    m.desired.free(VIN).failure(c() - PAID_AFTER[CHARGE_LIMIT])
+    c.t += PAID_AFTER[CHARGE_LIMIT]; m.desired.free(VIN).failure(c() - PAID_AFTER[CHARGE_LIMIT])  # failing since the plug-in
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); assert r.pass_() == 1 and b.calls == [] and cmds(f) == ["setChargeLimit"]
 
 def test_pairing_error_does_not_open_the_paid_window():                     # ledger L52

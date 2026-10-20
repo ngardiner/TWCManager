@@ -1526,11 +1526,7 @@ class TWCMaster:
                 # attribution. A VIN read, once the car draws, replaces it
                 flicker = time.time() < slaveTWC.anonEndedAt + slaveTWC.UNPLUG_DEBOUNCE
                 if not flicker:
-                    s = slaveTWC
-                    attribute = lambda: Presence.attribute(
-                        self, twcid, "Gen2TWC", s.reportedAmpsMax, s.reportedAmpsActual
-                    )
-                    self.reconciler.submitJob(twcid, "attribute", attribute)
+                    self.attributePlugs([slaveTWC])
                 return
             cars = [self.vehicleRegistry.vehicleAt(twcid)]
             if cars == [None] or cars[0].isAnonymous:
@@ -1545,6 +1541,22 @@ class TWCMaster:
             self.vehicleRegistry.endPlugSession(twcid)
         except Exception as e:
             logger.warning("Vehicle registry plug session update failed: %s", e)
+
+    def attributePlugs(self, slaves=None):
+        # Each plug unnamed since just now, on the BLE worker
+        reg = self.vehicleRegistry
+        recent = reg.now() - Presence.PLUGGED_JUST_NOW
+        for s in slaves or self.getSlaveTWCs():
+            anon = reg.vehicleAt(s.twcid)
+            if getattr(anon, "isAnonymous", 0) and anon.markAt("plugIn") >= recent:
+                attribute = lambda s=s: Presence.attribute(
+                    self,
+                    s.twcid,
+                    "Gen2TWC",
+                    lambda: s.reportedAmpsMax,
+                    s.reportedAmpsActual,
+                )
+                self.reconciler.submitJob(s.twcid, "attribute", attribute)
 
     def recordVehicleVIN(self, slaveTWC):
         twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])

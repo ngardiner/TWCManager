@@ -710,6 +710,59 @@ def test_a_hold_reads_once_and_waits_for_pushed_evidence(requests_mock, nosleep)
     assert paid(requests_mock) == (1, 1, 0)  # awake and freshly read: free
 
 
+def test_a_driving_hold_waits_for_the_car_to_stop(requests_mock, nosleep, caplog):
+    # A reading each second while it drives plans nothing more; once it
+    # stops, the hold is planned again for its new reason
+    from tests.unit.test_command_path_parity import paid, passes
+
+    caplog.set_level(logging.INFO)
+    m, r, v, c, car = heldFleetCar(requests_mock)
+    car.state = "online"
+    v.observe("state", "driving", TM)
+    # The feed's own limit each second: fresh, so no attempt reads
+    pushed = lambda: v.observe("chargeLimit", 50, TM)
+    passes(r, c, 60, step=1, each=pushed)
+
+    def lines(text):
+        return [x for x in caplog.records if text in x.getMessage()]
+
+    assert len(lines("held: driving")) == 1 and len(lines("hold (driving)")) == 1
+    later(c)
+    v.observe("state", "online", TM)
+    r.pass_()
+    assert len(lines("held: not known here")) == 1
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_held_car_driving_in_ble_range_is_never_pinged(requests_mock):
+    # Inside the radius, BLE answering, a position each second for 120 s
+    from tests.unit.test_command_path_parity import install, passes, push, realBle
+
+    m, r, v, c, api = install()
+    b = realBle(m)
+    v.observe("chargeLimit", 90, TM)
+    push(v, c, state="driving", shiftState="D")
+    m.setPolicyLimit(50, transition=True)
+    passes(r, c, 120, step=1, each=lambda: placeAt(m, v, HOME))
+    assert b.pings == [] and b.runs == []
+    assert m.desired.record(VIN, CHARGE_LIMIT).heldAt is not None
+
+
+def test_a_driving_hold_clears_once_the_car_is_seen_away(requests_mock):
+    from tests.unit.test_command_path_parity import install, passes, push, realBle
+
+    m, r, v, c, api = install()
+    b = realBle(m)
+    v.observe("chargeLimit", 90, TM)
+    push(v, c, state="driving", shiftState="D")
+    m.setPolicyLimit(50, transition=True)
+    passes(r, c, 30, step=1, each=lambda: placeAt(m, v, HOME))
+    assert m.desired.record(VIN, CHARGE_LIMIT).heldAt is not None
+    passes(r, c, 30, step=1, each=lambda: placeAt(m, v, AWAY))
+    assert m.desired.get(VIN, CHARGE_LIMIT) is None
+    assert b.pings == [] and b.runs == []
+
+
 def test_held_re_plans_stop_paying_after_the_budget(requests_mock, nosleep):
     from tests.unit.test_command_path_parity import counts, passes
 
@@ -1313,6 +1366,25 @@ def test_the_twcs_vin_read_overrides_an_attribution(requests_mock, monkeypatch):
         v.value("twcVin") is None and v.reported("pluggedIn")["Gen2TWC"].value is False
     )
     assert v.markAt("unplug") == c.t
+
+
+def test_a_car_seen_outside_while_still_driving_has_departed(requests_mock):
+    # It came back (parked inside), then left with no drive start seen inside
+    # the radius: the fix outside is the departure even while it drives on
+    from tests.unit.test_command_path_parity import install, push
+
+    m, r, v, c, api = install(held=(90, 50))
+    push(v, c, shiftState="D")
+    push(v, c, shiftState="P")
+    assert v.markAt("driveEnd") == c.t
+    c.t += 600
+    placed_at = c.t
+    placeAt(m, v, AWAY)
+    push(v, c, shiftState="D")
+    assert P.decide(m, v)[0] == P.NOT_HOME and P.drivingNow(v)
+    assert P.departed(m, v) == placed_at
+    m.setPolicyLimit(50, transition=False)
+    assert m.desired.get(VIN, CHARGE_LIMIT).restore
 
 
 def cloudFix(v, at, source="FleetAPI", gpsAsOf=None):
