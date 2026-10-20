@@ -4,7 +4,7 @@
 # held; a save with held None removes the record.
 from typing import NamedTuple, Optional
 
-from .Desired import CHARGE_LIMIT, CHARGING
+from .Desired import CHARGE_LIMIT, CHARGING, RELEASE
 from .HeldLimits import MAX_LIMIT, MIN_LIMIT, HeldLimit
 
 # Observations that never adopt and never stand for the car's own state
@@ -67,6 +67,8 @@ def decideChargeLimit(
       otherwise the car's limit stands and becomes the normal limit.
     - A car already at the target gets no command.
     """
+    # A release puts back the outside limit as a restore does
+    restore = restore or desired == RELEASE
     outside = _clamped(held.outside) if held is not None else None
     ours = held.held if held is not None else None
     target = None if restore else _clamped(desired)
@@ -108,6 +110,11 @@ def decideChargeLimit(
     else:
         reason = "set %s%%" % target
     return ChargeLimitDecision(target, None, HeldLimit(normal, target), False, reason)
+
+
+def releases(desired) -> bool:
+    # A departure's restore or a policy release: the outside limit goes back
+    return desired.restore or desired.value == RELEASE
 
 
 def needsLiveRead(restore: bool, telemetryCurrent, held: Optional[HeldLimit]) -> bool:

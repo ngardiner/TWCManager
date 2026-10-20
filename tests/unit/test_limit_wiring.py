@@ -8,7 +8,7 @@ from pathlib import Path
 
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
+from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, RELEASE
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit, HeldLimits
 from TWCManager.Vehicle.Presence import HOME as AT_HOME, NOT_HOME, PRESUMED, candidates, presence
 from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, onDeparture, presentVehicles, targetsFor
@@ -38,7 +38,9 @@ def test_present_rule():
 def test_policy_limit_sets_desired_for_present_cars_and_none_restores():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); a, b, d = cars(m); m.heldLimits.set(VIN, 90, 50)
     m.setPolicyLimit(50, transition=True); assert m.policyLimit == 50 and m.desired.get(VIN, CHARGE_LIMIT).value == 50 and m.desired.get(VIN2, CHARGE_LIMIT) is None
-    m.setPolicyLimit(None, transition=True); assert m.desired.get(VIN, CHARGE_LIMIT).restore and m.desired.get(VIN, CHARGE_LIMIT).value == 90 and m.desired.get(VIN3, CHARGE_LIMIT) is None
+    m.setPolicyLimit(None, transition=True)
+    d = m.desired.get(VIN, CHARGE_LIMIT)
+    assert (d.value, d.restore, d.by) == (RELEASE, False, "policy") and m.desired.get(VIN3, CHARGE_LIMIT) is None   # no limit: release ours, an apply
     assert applyPolicyLimit(m, None, decision=False) == 2                      # both present cars touched; VIN3 holds nothing, so it wants nothing
 
 def test_periodic_reenforce_does_not_undo_an_adopted_limit():
@@ -375,8 +377,7 @@ def test_an_empty_twc_at_00_begins_no_session(requests_mock):   # review I2
 
 def test_an_unplug_older_than_our_last_limit_write_is_no_departure(requests_mock):
     m, r, v, car = restarted(requests_mock); c = m.vehicleRegistry._clock                       # parked at home, plugged in
-    r.pass_()
-    assert m.desired.get(VIN, CHARGE_LIMIT) is None                                              # the plug-in's restore: home, nothing sent
+    m.desired.clear(VIN, CHARGE_LIMIT)                                                           # the restart's plug-in restore: not under test
     c.t += 1; v.observe("chargingState", "Disconnected", "TeslaMateVehicle")                     # unplugged...
     c.t += 1; v.noteWrite("chargeLimit", 50, "TeslaBLE")                                         # ...before we wrote the hold
     assert presence(m, v) == NOT_HOME

@@ -12,7 +12,7 @@ import itertools
 import logging
 import threading
 
-from .. import Presence
+from ..Presence import NOT_HOME, PRESUMED, presence
 from ..Providers.Capability import (
     SET_AMPS,
     SET_CHARGE_LIMIT,
@@ -156,18 +156,15 @@ def runAttempt(reconciler, attempt) -> Outcome:
     wakeFirst = attempt.wake and not provider.local and provider.declares(WAKE)
     try:
         ping = provider.name == "TeslaBLE" and aspect and not isStop(attempt)
-        state = Presence.presence(master, vehicle)
-        if ping and state == Presence.PRESUMED:
+        state = presence(master, vehicle)
+        if ping and state == PRESUMED:
             # A car that may be away: the sleep-safe ping comes first
             if not provider.module.ping(vin):
                 return Outcome(UNREACHABLE, "no BLE answer")
-        # Only a car that may be here is woken
-        early = wakeFirst and state == Presence.NOT_HOME
-        early = early and reconciler.inapplicable(vehicle, attempt)
-        if early:
-            return _tagged(early, "rules: ")
         if wakeFirst:
-            early = _wake(provider, vin, attempt.capability)
+            # Only a car that may be here is woken
+            early = state == NOT_HOME and reconciler.inapplicable(vehicle, attempt)
+            early = early or _wake(provider, vin, attempt.capability)
             if early is not None:
                 return early
         field = FIELD_FOR[aspect] if aspect is not None else None

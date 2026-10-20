@@ -42,6 +42,7 @@ from .Outcome import (
     EXCLUDING,
     HELD,
     QUEUE_DETAILS,
+    RULES,
     SATISFIED,
     SETTLED,
     UNREACHABLE,
@@ -60,6 +61,7 @@ from .Rules import (
     VEHICLE_SOURCES_EXCLUDED,
     decideChargeLimit,
     needsLiveRead,
+    releases,
     satisfied,
 )
 
@@ -339,7 +341,12 @@ class VehicleReconciler(threading.Thread):
         # A start goes with the limit first: its wake carries the limit
         ride = aspect == CHARGE_LIMIT and self._startWanted(vehicle, config)
         field = FIELD_FOR[aspect]
-        wakes = allowWake(aspect, d, k) or ride and not d.restore
+        # A release goes to the outside limit: as any apply, a raise may wake
+        aim = held.outside if releases(d) and held is not None else d.value
+        wakes = allowWake(aspect, d._replace(value=aim), k) or ride and not d.restore
+        # Nor for a raise its charging point can do nothing with
+        idle = aspect != CHARGING and getattr(self.master, "offered", {}).get(key) == 0
+        wakes = wakes and not idle
         reached = rec.paidSends and reachedCar(vehicle, field, rec.paidAt, rec.paidSaw)
         if (
             rec.paidSends
@@ -379,8 +386,7 @@ class VehicleReconciler(threading.Thread):
         freeGap = RESTORE_RETRY if d.restore and rec.lastFreeAt else RETRY[aspect]
         # Spent only while the message would still not go
         spent = rec.paidSends + rec.paidSpent >= PAID_BUDGET and (
-            Presence.applicable(self.master, vehicle, capability, d.restore)[0]
-            != Presence.SEND
+            Presence.applicable(self.master, vehicle, capability)[0] != Presence.SEND
         )
         if paid and freeFailed and paidAgain and not spent:
             p = paid[0]
@@ -425,17 +431,19 @@ class VehicleReconciler(threading.Thread):
             # A desire set after this pass began is still this attempt's
             since=max(now, d.at),
             force=aspect == CHARGE_LIMIT
-            and needsLiveRead(d.restore, k.value if k else None, held),
-            wakeSkipped=None if wake else self._whyNoWake(aspect, p, k, blind),
+            and needsLiveRead(releases(d), k.value if k else None, held),
+            wakeSkipped=None if wake else self._whyNoWake(aspect, p, k, blind, idle),
             paidBefore=vehicle.paidRequests,
         )
         rec.inFlight = attempt
         return attempt
 
     @staticmethod
-    def _whyNoWake(aspect, p, k, blind) -> str:
+    def _whyNoWake(aspect, p, k, blind, idle) -> str:
         if blind:
             return "blind paid retry"
+        if idle:
+            return "nothing offered"
         if aspect == AMPS and not p.local:
             return "billed provider never wakes for amps"
         if aspect == CHARGE_LIMIT and k is None:
@@ -498,22 +506,18 @@ class VehicleReconciler(threading.Thread):
 
     def inapplicable(self, vehicle, attempt) -> Optional[Outcome]:
         # The one applicability rule, after the attempt's read: None sends
-        if attempt.aspect is None or Run.isStop(attempt):
+        if attempt.aspect is None or Run.isStop(attempt) or attempt.restore:
             return None
-        verdict, why = Presence.applicable(
-            self.master, vehicle, attempt.capability, attempt.restore
-        )
+        verdict, why = Presence.applicable(self.master, vehicle, attempt.capability)
         if verdict == Presence.SEND:
             return None
         rec = self.desired.record(attempt.key, attempt.aspect)
         if verdict != Presence.HOLD or rec.heldAt is None:
             logger.info("%s %s: %s (%s)", vehicle.key, attempt.aspect, verdict, why)
         if verdict == Presence.HOLD:
-            # Only this worker touches it while the attempt is in flight
-            rec.paidSpent += vehicle.paidRequests - attempt.paidBefore
             return Outcome(SATISFIED, HELD + why)
         self.desired.clearIf(attempt.key, attempt.aspect, attempt.value)
-        return Outcome(SATISFIED, verdict)
+        return Outcome(SATISFIED, RULES + verdict)
 
     def beforeWrite(self, vehicle, attempt, provider, believed):
         early = self.inapplicable(vehicle, attempt)
@@ -572,6 +576,7 @@ class VehicleReconciler(threading.Thread):
             # A debug one-shot changes no record
             return
         provider = self.master.providerOrder.provider(attempt.provider)
+        vehicle = self.master.vehicleRegistry.get(attempt.key)
         self.desired.noteOutcome(
             attempt.key,
             attempt.aspect,
@@ -579,5 +584,6 @@ class VehicleReconciler(threading.Thread):
             outcome,
             self._clock(),
             paid=_tier(provider, attempt.capability) >= TIER_BILLED,
+            spent=vehicle.paidRequests - attempt.paidBefore if vehicle else 0,
         )
         self.wake()

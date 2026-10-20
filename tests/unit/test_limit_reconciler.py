@@ -75,9 +75,7 @@ def test_no_wake_to_lower_wake_to_raise_never_for_a_restore():
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); assert names(p) == ["setChargeLimit"]
     c.t += 400; v.observe("chargeLimit", 50, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 70, "policy", decision=True); r.pass_()
     assert names(p)[1:] == ["wake", "setChargeLimit"]
-    c.t += 400; v.observe("chargeLimit", 70, "TeslaBLE")
-    leave(v)
-    m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", decision=True, restore=True); r.pass_()
+    c.t += 400; v.observe("chargeLimit", 70, "TeslaBLE"); m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", decision=True, restore=True); r.pass_()
     assert names(p)[3:] == ["setChargeLimit"] and m.heldLimits.get(VIN) is None   # a restore raises without a wake
     assert VIN not in m.settings["chargeLimits"]                             # restored: nothing held, no entry
 
@@ -660,3 +658,26 @@ def test_a_stop_logs_neither_a_wake_nor_a_skip(caplog):
     caplog.set_level("INFO"); m, r, v, c = setup(ble(O.Outcome(O.DONE))); v.observe("chargingState", "Charging", "TeslaBLE")
     m.desired.set(VIN, CHARGING, False, "distributor"); r.pass_(); assert cmds(prov(m, "TeslaBLE")) == ["stopCharging"]
     assert not any(" wake " in x for x in _info(caplog))
+
+
+def test_a_raise_never_wakes_a_car_its_point_offers_nothing(caplog):
+    caplog.set_level("INFO")
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)))
+    p = prov(m, "TeslaBLE")
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    m.distributeEVSEPower()  # the car's point wants no power: offered 0
+    assert m.offered[VIN] == 0
+    m.desired.set(VIN, CHARGE_LIMIT, 80, "policy")
+    r.pass_()
+    assert names(p) == ["setChargeLimit"]  # sent, but without a wake
+    assert "TeslaBLE no wake for %s before setChargeLimit: nothing offered" % VIN in [
+        x.getMessage() for x in caplog.records
+    ]
+    m.setMaxAmpsToDivideAmongSlaves(32)
+    v.observe("chargingState", "Stopped", "TeslaBLE")  # wants power now
+    m.distributeEVSEPower()
+    assert m.offered[VIN] > 0
+    c.t += 60
+    m.desired.set(VIN, CHARGE_LIMIT, 90, "policy")
+    r.pass_()
+    assert names(p)[1:3] == ["wake", "setChargeLimit"]  # offered: the raise wakes

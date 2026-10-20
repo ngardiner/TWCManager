@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Presence")
 
 HOME, PRESUMED, NOT_HOME = "home", "presumed", "notHome"
 # applicable's verdicts on one message
-SEND, NOT_HERE, HOLD, HOME_NOW = "send", "not here", "hold", "home"
+SEND, NOT_HERE, HOLD = "send", "not here", "hold"
 HOME_RADIUS_FT = 1000
 HOME_FIX_MAX_AGE = 600.0
 REACH_WINDOW = 300.0
@@ -234,15 +234,11 @@ def departed(master, v) -> Optional[float]:
     return at if state == NOT_HOME else None
 
 
-def applicable(master, v, capability, restore) -> Tuple[str, str]:
-    # Whether a message, a stop aside, still fits where the car is, and the
-    # cell that says so. Missing event times are NEVER; a tie holds
+def applicable(master, v, capability) -> Tuple[str, str]:
+    # Whether a message, a stop or a restore aside (those always go), still
+    # fits where the car is, and the cell that says so. Missing event times
+    # are NEVER; a tie holds
     state, plugged = presence(master, v), pluggedNow(master, v)
-    gone = departed(master, v)
-    if restore:
-        if state == HOME:
-            return (SEND, "leaving") if gone is not None else (HOME_NOW, "home")
-        return (HOLD, "not known here") if state == PRESUMED else (SEND, "away")
     if state == NOT_HOME:
         return NOT_HERE, "away"
     if capability != SET_CHARGE_LIMIT:
@@ -253,14 +249,16 @@ def applicable(master, v, capability, restore) -> Tuple[str, str]:
             return SEND, "plugged in"
         return (NOT_HERE if state == HOME else HOLD), "not plugged in"
     if state == HOME:
-        if gone is not None:
+        if departed(master, v) is not None:
             return NOT_HERE, "leaving"
         tie = not plugged and leaving(v) == arriving(v) > NEVER
         return (HOLD, "tie") if tie else (SEND, "home")
     if drivingNow(v):
         return HOLD, "driving"
     # Not known to be here: a plug says so
-    return (SEND, "plugged in") if plugged else (HOLD, "not known here")
+    moving = inside(master, v) and v.value("shiftState") not in (None, "P")
+    why = "not parked" if moving else "not known here"
+    return (SEND, "plugged in") if plugged else (HOLD, why)
 
 
 def candidates(master, capability=None) -> List:

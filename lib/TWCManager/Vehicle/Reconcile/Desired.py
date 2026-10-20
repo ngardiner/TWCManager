@@ -36,6 +36,8 @@ CHARGE_LIMIT = "chargeLimit"
 CHARGING = "charging"
 AMPS = "amps"
 ASPECTS = frozenset({CHARGE_LIMIT, CHARGING, AMPS})
+# The charge limit of a policy with none: the car's own (outside) limit
+RELEASE = -1
 
 # The registry field each aspect is observed in. AMPS is the car's own
 # current request, never availableCurrent (the charger's pilot)
@@ -323,6 +325,7 @@ class DesiredStore:
         outcome,
         now,
         paid: bool,
+        spent: int = 0,
     ) -> bool:
         # The only change to a record after submit. A report for anything
         # but the attempt in flight is stale and changes nothing; so is a
@@ -351,6 +354,8 @@ class DesiredStore:
             if current:
                 # A hold sent nothing: the desire waits for newer evidence
                 record.heldAt = now if held else None
+                # The paid requests an attempt that held made (wake, read)
+                record.paidSpent += spent if held else 0
                 record.lastOutcome = outcome
                 record.lastOutcomeAt = now
                 record.lastProvider = attempt.provider

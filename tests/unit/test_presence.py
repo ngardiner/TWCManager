@@ -14,7 +14,7 @@ import pytest
 from TWCManager.Vehicle import Presence as P
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT
+from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT, Attempt
 from TWCManager.Vehicle.Registry.Fields import Observation
 from tests.unit.reconcile_helpers import (
     AWAY,
@@ -517,43 +517,50 @@ def test_applicability_every_cell():
     start, limit, amps = C.START_CHARGING, C.SET_CHARGE_LIMIT, C.SET_AMPS
     plugged, presumedPlugged = "plugged in", "presumed, plugged"
     rows = [
-        # (capability, restore, car, verdict, the cell's reason)
-        (start, False, car(P.HOME, plugged=True), P.SEND, plugged),
-        (amps, False, car(P.HOME, plugged=True), P.SEND, plugged),
-        (start, False, car(P.HOME), P.NOT_HERE, "not plugged in"),
-        (amps, False, car(P.HOME), P.NOT_HERE, "not plugged in"),
-        (start, False, car("driving", plugged=True), P.SEND, plugged),
-        (start, False, car(P.PRESUMED, held=True), P.SEND, plugged),  # presumed
+        # (capability, car, verdict, the cell's reason)
+        (start, car(P.HOME, plugged=True), P.SEND, plugged),
+        (amps, car(P.HOME, plugged=True), P.SEND, plugged),
+        (start, car(P.HOME), P.NOT_HERE, "not plugged in"),
+        (amps, car(P.HOME), P.NOT_HERE, "not plugged in"),
+        (start, car("driving", plugged=True), P.SEND, plugged),
+        (start, car(P.PRESUMED, held=True), P.SEND, plugged),  # presumed
         (
             start,
-            False,
             car("presumed after an unplug", gone=10, held=True),
             P.HOLD,
             "not plugged in",
         ),
-        (amps, False, car(P.PRESUMED), P.HOLD, "not plugged in"),
-        (start, False, car(P.NOT_HOME, plugged=True), P.NOT_HERE, "away"),
-        (limit, False, car(P.HOME, plugged=True, gone=20), P.SEND, "home"),
-        (limit, False, car(P.HOME), P.SEND, "home"),  # no departure seen
-        (limit, False, car(P.HOME, gone=10, back=20), P.SEND, "home"),
-        (limit, False, car(P.HOME, gone=20, back=10), P.NOT_HERE, "leaving"),
-        (limit, False, car(P.HOME, gone=20, back=20), P.HOLD, "tie"),
-        (limit, False, car("driving", plugged=True), P.HOLD, "driving"),
-        (limit, False, car(presumedPlugged, plugged=True), P.SEND, plugged),
-        (limit, False, car(P.PRESUMED), P.HOLD, "not known here"),
-        (limit, False, car("inside, not parked"), P.HOLD, "not known here"),
-        (limit, False, car(P.NOT_HOME), P.NOT_HERE, "away"),
-        (limit, True, car(P.HOME, plugged=True, gone=20), P.HOME_NOW, "home"),
-        (limit, True, car(P.HOME, gone=20, back=10), P.SEND, "leaving"),
-        (limit, True, car(P.HOME, gone=10, back=20), P.HOME_NOW, "home"),
-        (limit, True, car(P.HOME), P.HOME_NOW, "home"),  # neither seen
-        (limit, True, car(P.PRESUMED), P.HOLD, "not known here"),
-        (limit, True, car(P.NOT_HOME), P.SEND, "away"),
+        (amps, car(P.PRESUMED), P.HOLD, "not plugged in"),
+        (start, car(P.NOT_HOME, plugged=True), P.NOT_HERE, "away"),
+        (limit, car(P.HOME, plugged=True, gone=20), P.SEND, "home"),
+        (limit, car(P.HOME), P.SEND, "home"),  # no departure seen
+        (limit, car(P.HOME, gone=10, back=20), P.SEND, "home"),
+        (limit, car(P.HOME, gone=20, back=10), P.NOT_HERE, "leaving"),
+        (limit, car(P.HOME, gone=20, back=20), P.HOLD, "tie"),
+        (limit, car("driving", plugged=True), P.HOLD, "driving"),
+        (limit, car(presumedPlugged, plugged=True), P.SEND, plugged),
+        (limit, car(P.PRESUMED), P.HOLD, "not known here"),
+        (limit, car("inside, not parked"), P.HOLD, "not parked"),
+        (limit, car(P.NOT_HOME), P.NOT_HERE, "away"),
     ]
-    for i, (capability, restore, (m, v), verdict, why) in enumerate(rows):
-        assert P.applicable(m, v, capability, restore) == (verdict, why), i
+    for i, (capability, (m, v), verdict, why) in enumerate(rows):
+        assert P.applicable(m, v, capability) == (verdict, why), i
     m, v = car(presumedPlugged, plugged=True)
     assert P.presence(m, v) == P.PRESUMED and P.pluggedNow(m, v)
+
+
+def test_a_restore_goes_wherever_the_car_is():
+    restore = Attempt(
+        VIN, CHARGE_LIMIT, C.SET_CHARGE_LIMIT, 90, "x", False, None, True, 0.0
+    )
+    for m, v in (
+        car(P.HOME, plugged=True),
+        car(P.HOME, gone=10, back=20),
+        car(P.PRESUMED),
+        car("driving"),
+        car(P.NOT_HOME),
+    ):
+        assert m.reconciler.inapplicable(v, restore) is None
 
 
 def scriptedBle(m, *outcomes):
@@ -745,18 +752,44 @@ def test_a_plug_or_a_newer_arrival_cancels_a_pending_restore():
         assert m.desired.get(VIN, CHARGE_LIMIT).restore  # leaving, not yet sent
         later(c)
         if back == "plug":
-            v.observe("chargingState", "Charging", TM)
+            v.observe("chargingState", "Charging", TM)  # the arrival decision
         else:
             v.observe("shiftState", "D", TM)
             later(c, 20)
             v.observe("shiftState", "P", TM)
-            later(c)
-            v.observe("bleReach", True, "TeslaBLE")
+            m.setPolicyLimit(50, transition=False)  # the next policy pass
         m.reconciler.pass_()
         d = m.desired.get(VIN, CHARGE_LIMIT)
         assert p.calls == [] and m.heldLimits.get(VIN) is not None, back
-        # A plug-in is an arrival decision: the policy limit, held already
-        assert d is None if back == "arrival" else d.value == 50 and not d.restore
+        assert d.value == 50 and not d.restore, back  # the policy limit, held
+
+
+def test_a_policy_with_no_limit_is_an_apply_of_the_cars_own_once():
+    from TWCManager.Vehicle.Reconcile.Desired import RELEASE
+
+    m, v, c = placed()
+    p = scriptedBle(m)
+    v.observe("chargeLimit", 50, TM)
+    later(c)
+    v.observe("chargingState", "Charging", TM)
+    m.heldLimits.set(VIN, 90, 50)
+    m.setPolicyLimit(None, transition=False)  # the policy has no limit
+    d = m.desired.get(VIN, CHARGE_LIMIT)
+    assert (d.value, d.restore) == (RELEASE, False)
+    for _ in range(5):
+        m.reconciler.pass_()
+        later(c, 60)
+        m.setPolicyLimit(None, transition=False)
+    # Back up to the outside 90: a raise, woken as any apply; then nothing
+    assert p.calls == [("wake", VIN, None), ("setChargeLimit", VIN, 90)]
+    assert m.heldLimits.get(VIN) is None and m.desired.get(VIN, CHARGE_LIMIT) is None
+    m, v, c = placed()
+    p = scriptedBle(m)
+    v.observe("chargeLimit", 80, TM)
+    m.heldLimits.set(VIN, 60, 80)
+    m.setPolicyLimit(None, transition=False)
+    m.reconciler.pass_()
+    assert p.calls == [("setChargeLimit", VIN, 60)]  # down to 60: never woken
 
 
 def test_arrival_is_one_decision_for_the_plugged_car_only():

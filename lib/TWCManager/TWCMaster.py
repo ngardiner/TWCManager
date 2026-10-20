@@ -575,7 +575,8 @@ class TWCMaster:
         # gets a 0 offer (its idle minimum) and a Gen3 unit a 0 target. A car
         # that carries its own rate keeps its last commanded rate; only the
         # AMPS desire is cleared. Slaves first, so a failing chargingPoints()
-        # cannot leave them on a stale offer
+        # cannot leave them on a stale offer. A car offered 0 is not woken
+        self.offered = dict.fromkeys(self.offered, 0)
         for slave in self.getSlaveTWCs():
             if slave.heardFrom:
                 slave.offer = Offer(0, 0)
@@ -644,7 +645,7 @@ class TWCMaster:
                     self._noteRefusedPoint(point, fair_share)
 
                 point.setTargetPower(offer)
-                offers.append((point.ID, offer))
+                offers.append((point, offer))
 
                 # Update accounting
                 remaining_watts -= offer
@@ -666,13 +667,15 @@ class TWCMaster:
             if point in wants_power or point.isReadOnly:
                 continue
             point.setTargetPower(0)
-            offers.append((point.ID, 0))
+            offers.append((point, 0))
+        # The targets just set, by the car each point serves
+        self.offered = {p.vehicleKey: watts for p, watts in offers}
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "distributeEVSEPower: %d W over %s",
                 available_watts,
-                ", ".join("%s=%d W" % (pid, watts) for pid, watts in offers)
+                ", ".join("%s=%d W" % (p.ID, watts) for p, watts in offers)
                 or "no points",
             )
         return points

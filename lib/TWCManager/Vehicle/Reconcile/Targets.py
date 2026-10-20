@@ -11,7 +11,7 @@ from ..Providers.Capability import (
     STOP_CHARGING,
 )
 from ..Registry.Fields import READ_MAX_AGE
-from .Desired import CHARGE_LIMIT
+from .Desired import CHARGE_LIMIT, RELEASE
 
 
 def presentVehicles(master, capability) -> List:
@@ -33,23 +33,19 @@ def targetsFor(master, vin: Optional[str], capability=STOP_CHARGING) -> List:
     return presentVehicles(master, capability)
 
 
-def _restore(master, vehicle, decision) -> bool:
-    # Put back the outside limit while we hold one; else want nothing
-    held = master.heldLimits.get(vehicle.vin)
-    if held is None or held.held is None:
+def _apply(master, vehicle, limit, decision, restore=False) -> None:
+    # The policy's limit, or RELEASE; a departure's restore of the outside
+    # limit. Either wants nothing once we hold no limit
+    if limit is None and vehicle.vin not in master.heldLimits.holding():
         master.desired.clear(vehicle.key, CHARGE_LIMIT)
-        return False
-    master.desired.set(
-        vehicle.key, CHARGE_LIMIT, held.outside, "restore", decision, restore=True
-    )
-    return True
-
-
-def _apply(master, vehicle, limit, decision) -> None:
-    if limit is None:
-        _restore(master, vehicle, decision)
+    elif restore:
+        held = master.heldLimits.get(vehicle.vin)
+        master.desired.set(
+            vehicle.key, CHARGE_LIMIT, held.outside, "restore", decision, restore=True
+        )
     else:
-        master.desired.set(vehicle.key, CHARGE_LIMIT, limit, "policy", decision)
+        value = RELEASE if limit is None else limit
+        master.desired.set(vehicle.key, CHARGE_LIMIT, value, "policy", decision)
 
 
 def applyPolicyLimit(master, limit: Optional[int], decision: bool) -> int:
@@ -95,4 +91,4 @@ def _restoreDeparted(master, read) -> None:
         # is stamped with that write's time, and is not a new fix
         if at is None or write is not None and at <= write.at:
             continue
-        _restore(master, vehicle, decision=True)
+        _apply(master, vehicle, None, True, restore=True)
