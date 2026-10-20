@@ -11,7 +11,7 @@ from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, RELEASE
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit, HeldLimits
 from TWCManager.Vehicle.Presence import HOME as AT_HOME, NOT_HOME, PRESUMED, candidates, presence
-from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED, applyPolicyLimit, onArrival, onDeparture, presentVehicles, targetsFor
+from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED, _restoreDeparted, applyPolicyLimit, onArrival, presentVehicles, targetsFor
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.gen2_helpers import drive as heartbeat
 from tests.unit.reconcile_helpers import AWAY, HOME, bleAnswers, inline, placeAt
@@ -30,7 +30,7 @@ def test_present_rule():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); a, b, d = cars(m); anon = m.vehicleRegistry.beginPlugSession("8245")
     assert [x.vin for x in presentVehicles(m, C.SET_CHARGE_LIMIT)] == [VIN, VIN3]            # on a TWC; BLE-only with no location evidence; not the away API car, not the anonymous one
     assert [x.key for x in targetsFor(m, None, C.STOP_CHARGING)] == [VIN, VIN3] and targetsFor(m, anon.key) == [anon]   # mode 1: the anonymous car has no stop candidate
-    m.settings["chargeStopMode"] = "2"; m.newSlave(b"\x82\x45", 80)
+    m.settings["chargeStopMode"] = "2"; m.newSlave(b"\x82\x45", 80).reportedState = 0x03
     assert [x.key for x in targetsFor(m, None, C.STOP_CHARGING)] == [VIN, VIN3, anon.key]                            # mode 2: the Gen2 stop can reach it
     m.providerOrder.provider("TeslaBLE").ready = lambda vehicle, cap: False
     assert m.setPolicyLimit(50, transition=True) is None and m.desired.get(VIN, CHARGE_LIMIT) is None   # no candidate: no desired state
@@ -51,8 +51,8 @@ def test_periodic_reenforce_does_not_undo_an_adopted_limit():
 def test_departure_restores_a_held_limit_for_an_absent_car_once():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE))); a, b, d = cars(m); m.heldLimits.set(VIN2, 90, 50)
     m.providerOrder.provider("TeslaBLE").ready = lambda vehicle, cap: vehicle.vin != VIN2            # no BLE claim for the away car
-    onDeparture(m); d = m.desired.get(VIN2, CHARGE_LIMIT); assert d.value == 90 and d.restore and m.desired.get(VIN, CHARGE_LIMIT) is None
-    onDeparture(m); assert m.desired.get(VIN2, CHARGE_LIMIT) == d                # once: the same desire, not a new one
+    _restoreDeparted(m); d = m.desired.get(VIN2, CHARGE_LIMIT); assert d.value == 90 and d.restore and m.desired.get(VIN, CHARGE_LIMIT) is None
+    _restoreDeparted(m); assert m.desired.get(VIN2, CHARGE_LIMIT) == d           # once: the same desire, not a new one
     r.pass_(); assert m.providerOrder.provider("TeslaBLE").calls == []           # BLE not ready for a car it holds no claim on; nothing sent, nothing paid
 
 def test_policy_thread_calls_set_policy_limit():
@@ -199,28 +199,15 @@ def fleetCarOffItsPoint(requests_mock, home):
 def paid(requests_mock):
     return [q.url.split("?")[0].split("/")[-1] for q in requests_mock.request_history if q.url.split("?")[0] != FLEET_CAR]
 
-def test_a_fleet_car_that_unplugs_and_leaves_gets_its_normal_limit_back(requests_mock):   # C1, paid counted
-    m, r, car = fleetCarOffItsPoint(requests_mock, home=False)
-    onDeparture(m); d = m.desired.get(VIN, CHARGE_LIMIT)
-    assert presence(m, m.vehicleRegistry.get(VIN)) == NOT_HOME and d is not None and d.restore and d.value == 90
-    r.pass_()
-    assert paid(requests_mock) == ["vehicle_data", "set_charge_limit"]                  # one read, one command, never a wake
-    assert requests_mock.request_history[-1].json() == {"percent": 90}
-
-def test_an_unplug_at_home_is_not_a_departure(requests_mock):
-    m, r, car = fleetCarOffItsPoint(requests_mock, home=True)
-    onDeparture(m); r.pass_()
-    assert m.desired.get(VIN, CHARGE_LIMIT) is None and paid(requests_mock) == ["vehicle_data"]
-
 def test_live_telemetry_places_a_departing_car_for_free(requests_mock):   # main's telemetry placement, paid counted
     m, r, car = fleetCarOffItsPoint(requests_mock, home=True)                                     # awake: a paid read would go out, and say home
     v = m.vehicleRegistry.get(VIN); v.observe("state", "online", "TeslaMateVehicle"); placeAt(m, v, AWAY)
-    onDeparture(m); d = m.desired.get(VIN, CHARGE_LIMIT)
+    _restoreDeparted(m); d = m.desired.get(VIN, CHARGE_LIMIT)
     assert v.syncSource == "TeslaMateVehicle" and d.restore and d.value == 90 and requests_mock.call_count == 0
 
 def test_a_policy_change_while_the_car_is_away_sends_nothing(requests_mock):  # C1, paid counted
     m, r, car = fleetCarOffItsPoint(requests_mock, home=False)
-    onDeparture(m); r.pass_(); before = len(requests_mock.request_history)
+    placeAt(m, m.vehicleRegistry.get(VIN), AWAY); _restoreDeparted(m); r.pass_(); before = len(requests_mock.request_history)
     m.setPolicyLimit(60, transition=True); r.pass_()
     assert m.desired.get(VIN, CHARGE_LIMIT).value == 90 and len(requests_mock.request_history) == before
 
@@ -319,8 +306,10 @@ def test_a_vinless_gen2_after_a_restart_is_an_anonymous_plug_session(requests_mo
     assert b.calls == [("wake", VIN, None), ("setChargeLimit", VIN, 70),                        # the limit first
                        ("wake", VIN, None), ("setAmps", VIN, s.wiringMaxAmps)]                   # the BLE lift may wake the car, as main's; the start waits out the limit gap
     assert requests_mock.call_count == 0
+    heartbeat(m, s, 0.0, state=0x00)                                                              # the 00 asks for a check of the car
+    assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is not None             # no car at 00, the session kept until the check
     v.observe("chargingState", "Disconnected", "TeslaMateVehicle")
-    heartbeat(m, s, 0.0, state=0x00)                                                             # 00 and no car known plugged in: the session ends
+    s.edgeAt -= s.CHECK_WAIT; heartbeat(m, s, 0.0, state=0x00)                                   # the check finds it unplugged: the session ends
     assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None
     heartbeat(m, s, 0.0, state=0x00); assert m.vehicleRegistry.get("anon:8244") is None          # 00 never begins one
 
@@ -361,14 +350,17 @@ def test_an_away_fix_stamped_at_our_write_instant_is_no_departure(requests_mock)
     c.t += 0.001; placeAt(m, v, AWAY); m.setPolicyLimit(70, transition=False)                    # any later fix shows it
     assert m.desired.get(VIN, CHARGE_LIMIT).restore
 
-def test_only_a_plugged_state_begins_the_session_and_00_ends_it(requests_mock):   # review I2, paid counted
+def test_only_a_plugged_state_begins_the_session_and_a_checked_unplug_ends_it(requests_mock):   # review I2, paid counted
     m, r, v, car = restarted(requests_mock); s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; m.setMaxAmpsToDivideAmongSlaves(32)
     for _ in range(2): heartbeat(m, s, 0.0, state=0x00, amps_max=32)                            # TeslaMate says "Complete" at home, but a TWC at 00 has no car
     assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None and requests_mock.call_count == 0
     for _ in range(2): heartbeat(m, s, 0.0, state=0x03, amps_max=32)                            # asleep, plugged in; the TWC echoes its offer, targeted from the second beat
     assert s.vehicleKey == "anon:8244" and m.desired.get(VIN, AMPS).lift and requests_mock.call_count == 0
-    heartbeat(m, s, 0.0, state=0x00)
-    assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None                   # 00: the session ends
+    heartbeat(m, s, 0.0, state=0x00)                                                              # the 00 asks for a check of the car
+    assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is not None             # no car at 00, the session kept until the check
+    v.observe("chargingState", "Disconnected", "TeslaMateVehicle")
+    s.edgeAt -= s.CHECK_WAIT; heartbeat(m, s, 0.0, state=0x00)
+    assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None                   # the check finds it unplugged: the session ends
 
 def test_an_empty_twc_at_00_begins_no_session(requests_mock):   # review I2
     for position, state in ((HOME, "Disconnected"), (AWAY, "Complete")):                         # at home unplugged; plugged in elsewhere

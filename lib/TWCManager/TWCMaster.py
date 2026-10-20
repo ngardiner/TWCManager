@@ -664,8 +664,17 @@ class TWCMaster:
                 continue
             point.setTargetPower(0)
             offers.append((point, 0))
-        # The targets just set, by each car a point serves or fans out to
-        self.offered = {k: w for p, w in offers for k in (p.vehicleKey, *p.carKeys)}
+        # The targets just set, by each car a point serves or fans out to, or
+        # a TWC still holds (offered power, or none was left for it)
+        held = {
+            e.heldKey: w
+            for p, w in offers
+            for e in p.localEndpoints
+            if w or remaining_watts < p.minPower
+        }
+        held.update({k: w for p, w in offers for k in (p.vehicleKey, *p.carKeys)})
+        held.pop(None, None)
+        self.offered = held
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -1289,10 +1298,7 @@ class TWCMaster:
 
     def newSlave(self, newSlaveID, maxAmps):
         try:
-            slaveTWC = self.slaveTWCs[newSlaveID]
-            # Already known: a re-link starts a new plugged run
-            slaveTWC.pluggedSince = time.time()
-            return slaveTWC
+            return self.slaveTWCs[newSlaveID]
         except KeyError:
             pass
 
@@ -1317,10 +1323,12 @@ class TWCMaster:
     def observeChargingSessions(self):
         # Serial thread only: starts and ends charging sessions from what
         # the slaves report
-        carsCharging, now = 0, time.time()
+        carsCharging, now = 0, self.vehicleRegistry.now()
         for slaveTWC in self.getSlaveTWCs():
-            if slaveTWC.unplugStep(now):
-                self._plugSession(slaveTWC, False)
+            since = slaveTWC.plugCheckDue(now)
+            if since is not None:
+                check = lambda s=slaveTWC, t=since: self._plugSession(s, False, t)
+                self.reconciler.submitJob(slaveTWC.twcid, "plugCheck", check)
             if slaveTWC.reportedAmpsActual >= 1.0:
                 # Amps are flowing — cancel any pending session-end debounce
                 slaveTWC.chargingDroppedBelowThresholdTime = 0
@@ -1380,11 +1388,6 @@ class TWCMaster:
                     # plugged in: unnamed, it opens a session to attribute
                     if slaveTWC.vehicleKey is None:
                         self._plugSession(slaveTWC, True)
-                elif slaveTWC.reportedState == 0 and isAnonKey(slaveTWC.vehicleKey):
-                    # 00 ends the anonymous session; the unplug, if it is
-                    # one, departs a car once it holds
-                    slaveTWC.anonEndedAt = now
-                    self._plugSession(slaveTWC, False, depart=False)
             carsCharging += slaveTWC.isCharging
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
@@ -1515,29 +1518,31 @@ class TWCMaster:
             },
         )
 
-    def _plugSession(self, slaveTWC, begin, depart=True):
-        # Serial thread: never let a registry call raise into the RS-485
-        # loop. An unplug departs the named car, else the only possible one
+    def _plugSession(self, slaveTWC, begin, since=None):
+        # Begun on the serial thread; ended on the BLE worker only when a check
+        # after a status edge at since finds no car plugged in. A registry
+        # call must not raise into either loop
         try:
             twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
             if begin:
                 self.vehicleRegistry.beginPlugSession(twcid)
-                # A car waking flickers 00: the session it ended had its
-                # attribution. A VIN read, once the car draws, replaces it
-                flicker = time.time() < slaveTWC.anonEndedAt + slaveTWC.UNPLUG_DEBOUNCE
-                if not flicker:
-                    self.attributePlugs([slaveTWC])
+                self.attributePlugs([slaveTWC])
                 return
-            cars = [self.vehicleRegistry.vehicleAt(twcid)]
-            if cars == [None] or cars[0].isAnonymous:
-                cars = Presence.candidates(self) if depart else []
-            v = cars[0] if len(cars) == 1 else None
-            if v is not None and Presence.telemetryPlug(v):
-                logger.info("TWC %s: not an unplug, %s is plugged in", twcid, v.key)
+            at = self.vehicleRegistry.vehicleAt(twcid)
+            if at is None or at.isAnonymous and slaveTWC.reportedState:
+                # An unnamed plug the TWC still shows is a car no check names
                 return
-            if v is not None:
+            if slaveTWC.reportedAmpsActual >= 1:
+                return  # a car drawing current is plugged in
+            cars = Presence.candidates(self) if at.isAnonymous else [at]
+            plugged = {v.key: Presence.checkPlug(self, v, since) for v in cars}
+            logger.info("TWC %s: plugged in: %s", twcid, plugged)
+            if any(p is not False for p in plugged.values()):
+                return
+            if len(cars) == 1:
+                v = cars[0]
                 logger.info("TWC %s: unplugged, %s departs", twcid, v.key)
-                v.observe("pluggedIn", False, "Gen2TWC")
+                v.observe("pluggedIn", False, "Gen2TWC", at=Presence.unpluggedAt(v))
             self.vehicleRegistry.endPlugSession(twcid)
         except Exception as e:
             logger.warning("Vehicle registry plug session update failed: %s", e)

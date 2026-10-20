@@ -139,9 +139,9 @@ def test_restart_with_a_car_charging_never_offers_zero():
     s.protocolVersion = 2
     s.send_master_heartbeat()
     m.controlPass()  # not heard from yet: no offer
-    assert not s.heardFrom and s.offer is None
+    assert s.heardFrom is False and s.offer is None
     iface = tickThenBeat(m, s, 0x01, 40, 32)  # the first reply: charging at 32 A
-    assert s.offer.amps == 32
+    assert s.offer.amps == 32 and s.heardFrom is True
     for _ in range(2):
         hb = iface.send.call_args.args[0][6:15]
         assert hb[0] == 0x09 and ((hb[1] << 8) + hb[2]) / 100 == 32  # never 0 A

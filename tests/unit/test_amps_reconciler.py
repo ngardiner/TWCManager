@@ -143,7 +143,7 @@ def anonTwc(*outcomes):
     for i, vin in enumerate((VIN, VIN2, VIN3, VIN4)):
         api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, m.vehicleRegistry.get(vin))   # at home by position
     s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN, other.reportedState = VIN3, 0x03; m.vehicleRegistry.observeTwcVin("8245", VIN3)
-    anon = m.vehicleRegistry.beginPlugSession("8244"); assert s.vehicleKey == anon.key
+    s.reportedState = 0x03; anon = m.vehicleRegistry.beginPlugSession("8244"); assert s.vehicleKey == anon.key
     (pt,) = groupEndpoints(m, [s]); return m, r, v, c, s, pt
 
 def test_an_anonymous_twc_rates_only_cars_plugged_in_here_and_never_vehicles_0():    # I2, paid counted

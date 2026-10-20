@@ -164,19 +164,19 @@ def test_a_mode_2_to_1_switch_mid_session_lifts_again(member):
 
 
 def test_a_twc_point_never_clears_a_vehicle_endpoints_rate():
-    # An anonymous TWC at 00 (not blind) rates its fan-out in mode 2. Once
-    # VIN is named by the other TWC it leaves that fan-out, and its own
-    # VehicleEndpoint (on the other TWC's point) holds a "distributor" rate,
-    # which the anonymous point must leave in place
+    # An unnamed session at 00 (not blind) reports no car, as a named one
+    # does, so VIN is rated by its own VehicleEndpoint. Once VIN is named by
+    # the other TWC that endpoint (on the other TWC's point) holds a
+    # "distributor" rate, which the unnamed point must leave in place
     m = master(mode=2, feed=40)
     m.config["controller.Gen2TWCs"] = {"ranges": {"8245": {"maxAmps": 16}}}
     car(m, VIN, "Charging")
     s = slave(m, state=0x00, maxA=32, actual=0.0)
     other = slave(m, b"\x82\x45", state=0x00, maxA=0, actual=0.0)
     m.vehicleRegistry.beginPlugSession("8244")
-    assert s.vehicleKey == "anon:8244" and other.vehicleKey is None
+    assert s.vehicleKey is None and other.vehicleKey is None
     beat(m, s)
-    assert rate(m)[0] == 20  # the fan-out reaches VIN
+    assert rate(m) == (20, "distributor", False)  # VIN's own endpoint
     other.currentVIN, other.reportedState, other.reportedAmpsMax = VIN, 0x01, 16
     other.reportedAmpsActual = 10.0
     for _ in range(2):

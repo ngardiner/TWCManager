@@ -7,9 +7,10 @@ phases, and defaults for an endpoint that cannot name or see its car.
 
 class EVSEInstance:
     # The VIN of the connected car ("" if unknown), the registry key of the
-    # car served, and whether a car is connected (None if unknown)
+    # car served (and of one it may still hold), and whether a car is
+    # connected (None if unknown)
     currentVIN = ""
-    vehicleKey = None
+    vehicleKey = heldKey = None
     occupied = None
     # The budgets (TWCMaster._budgets) this endpoint draws from
     controllers = []

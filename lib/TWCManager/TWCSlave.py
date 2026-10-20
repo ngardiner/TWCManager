@@ -46,8 +46,8 @@ class TWCSlave:
     reportedAmpsMax = 0
     reportedAmpsActual = 0
     reportedState = 0
-    # The first reply's time: a slave not yet heard from is offered nothing
-    heardFrom = 0
+    # Set by the first reply: a slave not yet heard from is offered nothing
+    heardFrom = False
 
     # history* vars are used to track power usage over time
     historyAvgAmps = 0
@@ -95,9 +95,11 @@ class TWCSlave:
     # end, the tick records the session it lifted
     plugSessions = 0
     liftedSession: Optional[int] = None
-    # unplugStep's run starts and last max amps (0: this 00 run is no unplug)
-    UNPLUG_DEBOUNCE, PLUGGED_RUN, LINK_GRACE = 60, 60, 300
-    pluggedSince, ampsMaxBefore, zeroSince, anonEndedAt = 0, 0, None, 0
+    # The last heartbeat's (state, max amps); the first edge not yet checked,
+    # waiting for a live feed's report; armed: until 03 or 00 at 0 A, one
+    # edge with the max above 0 is checked per event
+    CHECK_WAIT = 20
+    status, edgeAt, armed = None, None, True
     # The car keys the charging point last rated (tick)
     _lastKeys = ()
     # The last all-TWC wiring cap logged, so a held cap logs once
@@ -113,25 +115,30 @@ class TWCSlave:
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
-    def unplugStep(self, now) -> bool:
-        # Serial thread: True once per 00 run that is an unplug. A waking car
-        # says 00 too; a car leaving drops the max amps it takes to 0 with it
-        if self.reportedState:
-            if self.zeroSince is not None:
-                self.pluggedSince, self.zeroSince = now, None
-            self.ampsMaxBefore = self.reportedAmpsMax
-        elif self.zeroSince is None:
-            self.zeroSince, before = now, self.ampsMaxBefore
-            early = now < self.pluggedSince + self.PLUGGED_RUN
-            if early or self.reportedAmpsMax or now < self.heardFrom + self.LINK_GRACE:
-                self.ampsMaxBefore = 0
-            text = "TWC %s: 00 onset, max %.2f A before, %.2f A now: %s"
-            why = "an unplug if it holds" if self.ampsMaxBefore else "not an unplug"
-            logger.info(text, self.twcid, before, self.reportedAmpsMax, why)
-        elif self.ampsMaxBefore and now - self.zeroSince >= self.UNPLUG_DEBOUNCE:
-            self.ampsMaxBefore = 0
-            return True
-        return False
+    def plugCheckDue(self, now) -> Optional[float]:
+        # Serial thread: an edge's time once its check is due. The codes are
+        # the car's talk with the TWC, not the plug: a 00, a max dropping to 0
+        # in one, or a plug state change only says to ask the car. A car awake
+        # at its limit flickers 00/09 at its max; an unplug leaves 00 at 0 A
+        was, self.status = self.status, (self.reportedState, self.reportedAmpsMax)
+        (state, amps), plugged = self.status, self.PLUGGED_STATES
+        empty = not state and not amps
+        edge = was is not None and (
+            not state
+            and (was[0] or was[1] and not amps)
+            or (state in plugged) != (was[0] in plugged)
+        )
+        # A car drawing current is plugged in
+        ask = edge and (self.armed or empty) and self.reportedAmpsActual < 1
+        v = ask and self.master.vehicleRegistry.vehicleAt(self.twcid)
+        if v:
+            text = "TWC %s: %02X → %02X, max %.2f → %.2f A: checking %s"
+            logger.info(text, self.twcid, was[0], state, was[1], amps, v.key)
+            self.edgeAt = self.edgeAt or now
+        self.armed = state == 0x03 or empty or self.armed and not v
+        if self.edgeAt and now >= self.edgeAt + self.CHECK_WAIT:
+            since, self.edgeAt = self.edgeAt, None
+            return since
 
     def minAmpsToOffer(self):
         # The lowest offer this TWC makes: the configured minAmpsPerTWC, or
@@ -621,7 +628,7 @@ class TWCSlave:
         self.reportedAmpsMax = ((heartbeatData[1] << 8) + heartbeatData[2]) / 100
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
-        self.heardFrom = self.heardFrom or now
+        self.heardFrom = True
         self.refreshingChargerLoadStatus()
         key = self.vehicleKey
         vehicle = self.master.vehicleRegistry.get(key) if key else None
@@ -670,15 +677,12 @@ class TWCSlave:
             self.master.getModuleByName("Policy").fireWebhook("start")
             self.master.queue_background_task({"cmd": "checkCharge"})
 
-        # If power drops off, check whether a car leaves in the next little while
+        # If power drops off, tell the policy's webhook
         if (
             self.reportedAmpsActualSignificantChangeMonitor > 2
             and self.reportedAmpsActual < 2
         ):
             self.master.getModuleByName("Policy").fireWebhook("stop")
-            self.master.queue_background_task({"cmd": "checkDeparture"}, 5 * 60)
-            self.master.queue_background_task({"cmd": "checkDeparture"}, 20 * 60)
-            self.master.queue_background_task({"cmd": "checkDeparture"}, 45 * 60)
 
         # Keep track of the amps the slave is actually using and the last time it
         # changed by more than 0.8A.

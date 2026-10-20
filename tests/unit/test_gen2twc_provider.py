@@ -76,6 +76,8 @@ def test_vehicle_key_keeps_the_confirmed_car_while_plugged_state():  # ledger I5
     assert s.vehicleKey is None and s.occupied is None
     reg.endPlugSession("8244")  # the unplug
     reg.beginPlugSession("8244")
+    assert s.vehicleKey is None  # an unnamed car at 00 too
+    s.reportedState = 0x03
     assert s.vehicleKey == "anon:8244"
     assert s.twcid == "8244"
 
@@ -141,6 +143,7 @@ def test_amps_range_never_none_while_set_amps_ready(mode):
     m.settings["chargeRateControl"] = mode
     known = m.vehicleRegistry.getOrCreate(VIN, "t")
     assert p.ready(known, C.SET_AMPS) is False and p.ampsRange(known) is None
+    s.reportedState = 0x03
     anon = m.vehicleRegistry.beginPlugSession("8244")
     assert p.ready(anon, C.SET_AMPS) and p.ampsRange(anon) is not None
     m.vehicleRegistry.endPlugSession("8244")

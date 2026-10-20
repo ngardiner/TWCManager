@@ -55,6 +55,7 @@ class CarApiState:
     delayNextWakeAttempt = 0
     online = None  # the free online check: True, False, None (no answer)
     onlineCheckedAt = 0  # ... reused for 120 s from here
+    staleBefore = 0  # an online answer from before this is not reused
     # As listed: Owner API commands only for "off". The latch is set
     # by a 403 to one (noteOwnerCommandRefused)
     commandSigning = None
@@ -1717,12 +1718,12 @@ class TeslaAPI:
         if (
             age is not None
             and age <= vehicle.SYNC_TIMEOUT / 4
-            and obs.at >= car.onlineCheckedAt
+            and obs.at >= max(car.onlineCheckedAt, car.staleBefore)
         ):
             return obs.value in ("online", "charging", "updating", "driving")
 
         # Don't check more often than every 2 minutes
-        if now - car.onlineCheckedAt < 120:
+        if now - car.onlineCheckedAt < 120 and car.onlineCheckedAt >= car.staleBefore:
             return car.online
         result, response = self.get_car_api(
             vehicle, vehicle.vin, checkReady=False, slot=slot

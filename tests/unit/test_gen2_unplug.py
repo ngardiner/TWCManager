@@ -1,8 +1,9 @@
-# tests/unit/test_gen2_unplug.py: the Gen2 unplug rule through a real
-# Gen2TWC's heartbeats. A Gen2 reports 00 both for an empty TWC and while a
-# plugged car wakes, so only a 00 whose first heartbeat drops the slave's
-# max amps from above 0 to 0, held a minute after a plugged run, and well
-# after the link, is an unplug.
+# tests/unit/test_gen2_unplug.py: a Gen2 status edge asks for a check of the
+# car, through a real Gen2TWC's heartbeats. The status codes are the car's
+# talk with the TWC, not the plug: a 00, a max that drops to 0 inside one, or
+# a plug state change only asks the car what changed. Here the car has no
+# provider, so nothing can check it; test_command_path_parity.py has the
+# checks that answer.
 import logging
 import time
 
@@ -29,104 +30,137 @@ def beats(m, s, c, seconds, state, maxA, actual=0.0, step=10):
 
 
 def named(m, v, c, s):
-    # Linked at 03 with the car's 32 A, named by VIN, past the link grace
+    # Linked at 03 with the car's 32 A, named by VIN
     beats(m, s, c, 10, 0x03, 32.0)
     m.vehicleRegistry.observeTwcVin("8244", v.vin)
     beats(m, s, c, 400, 0x03, 32.0)
 
 
-def test_00_with_the_max_amps_drop_after_a_plugged_run_is_one_unplug(rig):
+@pytest.fixture
+def checks(rig, monkeypatch):
+    # When each plug check is queued; no job runs
+    m, v, c, s = rig
+    out = []
+
+    def submit(key, kind, run):
+        if kind == "plugCheck":
+            out.append(c.t)
+
+    monkeypatch.setattr(m.reconciler, "submitJob", submit)
+    return out
+
+
+def test_a_status_edge_asks_for_one_check_after_the_wait(rig, checks):
     m, v, c, s = rig
     named(m, v, c, s)
-    beats(m, s, c, 50, 0x00, 0.0)
-    assert v.markAt("unplug") == P.NEVER  # not yet held a minute
-    beats(m, s, c, 20, 0x00, 0.0)
-    assert v.markAt("unplug") > P.NEVER and P.presence(m, v) == P.NOT_HOME
-    assert v.value("twcVin") is None
-
-
-def test_00_without_the_drop_on_the_first_00_heartbeat_is_never_an_unplug(rig):
-    m, v, c, s = rig
-    named(m, v, c, s)
-    beats(m, s, c, 600, 0x00, 47.0)  # a waking car keeps its max
-    assert v.markAt("unplug") == P.NEVER
-    beats(m, s, c, 120, 0x03, 32.0)
-    beats(m, s, c, 10, 0x00, 47.0)
-    beats(m, s, c, 600, 0x00, 0.0)  # the drop comes a heartbeat late
-    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
-
-
-def test_an_idle_car_already_at_0_a_never_gives_a_twc_unplug(rig):
-    m, v, c, s = rig
-    beats(m, s, c, 10, 0x03, 0.0)
-    m.vehicleRegistry.observeTwcVin("8244", v.vin)
-    beats(m, s, c, 400, 0x03, 0.0)
+    edge = c.t + 10
+    beats(m, s, c, 10, 0x00, 0.0)
+    assert checks == []  # a live feed reports first
     beats(m, s, c, 600, 0x00, 0.0)
-    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
+    assert checks == [edge + s.CHECK_WAIT]
 
 
-def test_00_inside_link_grace_or_without_a_plugged_run_is_never_an_unplug(rig):
+@pytest.mark.parametrize(
+    "runs, edges",
+    [
+        ([(0x03, 32.0), (0x00, 32.0)], 1),  # a 00
+        ([(0x03, 47.0), (0x00, 47.0), (0x00, 0.0)], 2),  # and its max dropping
+        ([(0x03, 32.0), (0x00, 0.0), (0x03, 32.0)], 2),  # a plug again
+        ([(0x03, 32.0), (0x09, 32.0), (0x01, 32.0), (0x03, 6.0)], 0),
+        ([(0x00, 0.0), (0x00, 47.0)], 0),  # a restart at 00, the max rising
+    ],
+)
+def test_which_heartbeats_are_edges(rig, checks, runs, edges):
     m, v, c, s = rig
-    beats(m, s, c, 10, 0x03, 32.0)
     m.vehicleRegistry.observeTwcVin("8244", v.vin)
-    beats(m, s, c, 200, 0x03, 32.0)
-    beats(m, s, c, 600, 0x00, 0.0)  # 210 s after the link
-    assert v.markAt("unplug") == P.NEVER
-    beats(m, s, c, 50, 0x03, 32.0)  # a short plugged run
-    beats(m, s, c, 600, 0x00, 0.0)
-    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
+    for state, maxA in runs:
+        beats(m, s, c, 120, state, maxA)
+    assert len(checks) == edges
 
 
-def test_onset_logs_the_slave_max_amps(rig, caplog):
+def test_a_car_awake_at_its_limit_flickering_00_09_is_checked_once(rig, checks):
+    # Box, 2026-10-20 13:57-14:11: 09 at 47 A and 00 at 46 A every 18 s,
+    # drawing nothing, for 14 minutes
     m, v, c, s = rig
     named(m, v, c, s)
-    with caplog.at_level(logging.INFO):
-        beats(m, s, c, 10, 0x00, 0.0)
-        beats(m, s, c, 60, 0x03, 32.0)
-        beats(m, s, c, 10, 0x00, 47.0)
-    onsets = [r.getMessage() for r in caplog.records if "00 onset" in r.getMessage()]
-    assert onsets == [
-        "TWC 8244: 00 onset, max 32.00 A before, 0.00 A now: an unplug if it holds",
-        "TWC 8244: 00 onset, max 32.00 A before, 47.00 A now: not an unplug",
-    ]
+    for _ in range(int(14 * 60 / 36)):
+        beats(m, s, c, 18, 0x09, 47.0, step=2)
+        beats(m, s, c, 18, 0x00, 46.0, step=2)
+    assert len(checks) == 1
+    beats(m, s, c, 60, 0x03, 6.0)  # asleep again: the next event is checked
+    beats(m, s, c, 60, 0x00, 47.0)
+    assert len(checks) == 2
 
 
-def test_reported_once_per_00_run(rig, monkeypatch):
-    m, v, c, s = rig
-    unplugs = []
-    monkeypatch.setattr(m, "_plugSession", lambda s, begin: begin or unplugs.append(s))
-    named(m, v, c, s)
-    beats(m, s, c, 900, 0x00, 0.0)
-    assert unplugs == [s]
-    beats(m, s, c, 120, 0x03, 32.0)
-    beats(m, s, c, 900, 0x00, 0.0)
-    assert unplugs == [s, s]
-
-
-def test_a_re_link_starts_a_new_plugged_run(rig):
+def test_edges_while_the_car_draws_current_run_no_check(rig, checks):
     m, v, c, s = rig
     named(m, v, c, s)
-    assert m.newSlave(b"\x82\x44", 80) is s  # the TWC links again
-    beats(m, s, c, 30, 0x03, 32.0)
-    beats(m, s, c, 600, 0x00, 0.0)  # 30 s into the new run
-    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
+    for _ in range(10):
+        beats(m, s, c, 20, 0x01, 32.0, actual=16.0)
+        beats(m, s, c, 20, 0x00, 32.0, actual=16.0)
+        beats(m, s, c, 20, 0x00, 0.0, actual=16.0)
+    assert checks == []
 
 
-def test_an_unnamed_session_outlasts_a_waking_00_and_departs_no_one(
-    rig, monkeypatch, caplog
-):
+def test_a_check_due_while_the_car_draws_current_is_skipped(rig, caplog):
     m, v, c, s = rig
-    jobs = []
-    monkeypatch.setattr(m.reconciler, "submitJob", lambda *job: jobs.append(job[:2]))
+    named(m, v, c, s)
     caplog.set_level(logging.INFO)
+    beats(m, s, c, 10, 0x00, 0.0)  # the edge, at 0 A
+    beats(m, s, c, 60, 0x00, 0.0, actual=16.0)  # drawing when the check runs
+    assert "checking %s" % VIN in caplog.text
+    assert "plugged in:" not in caplog.text
+
+
+def test_every_00_at_0_a_is_checked(rig, checks):
+    m, v, c, s = rig
+    named(m, v, c, s)
+    beats(m, s, c, 60, 0x00, 47.0)  # woken: checked once
+    beats(m, s, c, 60, 0x09, 47.0)
+    beats(m, s, c, 60, 0x00, 47.0)  # the same event: not again
+    beats(m, s, c, 60, 0x00, 0.0)  # the max drops: always
+    assert len(checks) == 2
+
+
+def test_an_edge_on_an_empty_twc_checks_nothing(rig, checks):
+    # The plug-in side begins the session and names it
+    m, v, c, s = rig
+    beats(m, s, c, 60, 0x00, 0.0)
+    beats(m, s, c, 120, 0x03, 32.0)
+    assert checks == [] and s.vehicleKey == "anon:8244"
+
+
+def test_nothing_can_check_the_car_so_it_stays(rig, caplog):
+    m, v, c, s = rig
+    named(m, v, c, s)
+    caplog.set_level(logging.INFO)
+    beats(m, s, c, 600, 0x00, 0.0)
+    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
+    assert "TWC 8244: 03 → 00, max 32.00 → 0.00 A: checking %s" % VIN in caplog.text
+    assert "TWC 8244: plugged in: {'%s': None}" % VIN in caplog.text
+
+
+def unnamed(m, c, s):
+    # Plugged in and left unnamed: the attribution job is left pending
     beats(m, s, c, 400, 0x03, 32.0)
-    beats(m, s, c, 20, 0x00, 32.0)  # a car waking
-    beats(m, s, c, 60, 0x03, 32.0)
-    assert jobs.count(("8244", "attribute")) == 1
+    assert s.vehicleKey == "anon:8244"
+
+
+def test_an_unnamed_session_nothing_can_check_stays(rig):
+    m, v, c, s = rig
+    unnamed(m, c, s)
+    beats(m, s, c, 600, 0x00, 0.0)
     assert m.vehicleRegistry.vehicleAt("8244").isAnonymous
-    beats(m, s, c, 120, 0x00, 0.0)  # it left
+    assert v.markAt("unplug") == P.NEVER
+
+
+def test_an_unnamed_session_with_no_candidate_ends_at_the_check(rig):
+    # A car no account knows: nothing else may be on the TWC
+    m, v, c, s = rig
+    unnamed(m, c, s)
+    m.vehicleRegistry.forget(VIN)
+    beats(m, s, c, 60, 0x00, 0.0)
     assert m.vehicleRegistry.vehicleAt("8244") is None
-    assert "anon:8244 departs" not in caplog.text
 
 
 def test_an_anonymous_point_finds_its_cars_once_per_pass(rig, monkeypatch):

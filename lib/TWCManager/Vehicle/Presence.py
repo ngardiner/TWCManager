@@ -124,14 +124,22 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
         if moving and not wasMoving and here is not False:
             vehicle.mark("driveStart", at)
             # The drive start plans the restore while BLE is still in range
-            Targets._restoreDeparted(master, read=False)
+            Targets._restoreDeparted(master)
         elif (
             wasMoving and not moving and here and (field == "state" or obs.value == "P")
         ):
             vehicle.mark("driveEnd", at)
     elif field in ("pluggedIn", "chargingState"):
         plugged = _plugEvidence(vehicle, field, obs, inside(master, vehicle))
+        # A feed's retained copy, redelivered on a reconnect, is no plug event
+        plugged = None if obs.source in TELEMETRY_SOURCES and not obs.seen else plugged
         was = None if previous is None else _plug(field, previous)
+        # No previous reading counts as seen. A retained copy since the feed's
+        # last report: the plug events say what that report was, if any is
+        # known (none after a restart: then the copy is the best word)
+        if obs.source in TELEMETRY_SOURCES and not getattr(previous, "seen", True):
+            plugIn, unplug = vehicle.markAt("plugIn"), vehicle.markAt("unplug")
+            was = was if plugIn == unplug else plugIn > unplug
         if plugged is False and (was is True or obs.source == "Gen2TWC"):
             # A car parked unplugged reports Disconnected again and again
             vehicle.mark("unplug", at)
@@ -171,11 +179,38 @@ def pluggedNow(master, v, unknown=False, since=NEVER) -> Optional[bool]:
     return unknown if best is None else best[1]
 
 
-def telemetryPlug(v, since=NEVER) -> Optional[bool]:
-    # The live telemetry feed's own plug reading, if not older than since
+def telemetryPlug(v, since=NEVER, seen=False) -> Optional[bool]:
+    # The live feed's own plug reading, not older than since (seen: nor retained)
     obs = v.reported("pluggedIn").get(v.syncSource)
     live = obs is not None and obs.at >= since and v.syncSource in TELEMETRY_SOURCES
-    return obs.value if live else None
+    return obs.value if live and (obs.seen or not seen) else None
+
+
+def unpluggedAt(v) -> float:
+    # When the newest reading saying unplugged was made
+    fields = ("pluggedIn", "chargingState")
+    obs = [o for f in fields for o in v.reported(f).values() if _plug(f, o) is False]
+    return max((o.at for o in obs), default=NEVER)
+
+
+def checkPlug(master, v, since) -> Optional[bool]:
+    # Plugged in, after a charging point's status edge at since? Never wakes:
+    # a live feed reports a change in seconds (a retained copy is no report);
+    # an unplug wakes a sleeping car; else the read cascade, where a cloud API
+    # reads only a car its free online check finds awake, past the stored
+    # reading and online answer that an unplug just made stale
+    if (feed := telemetryPlug(v, since, seen=True)) is not None:
+        return feed
+    ble, now = master.providerOrder.provider("TeslaBLE"), master.vehicleRegistry.now()
+    # Asleep, or not seen awake lately (the range scan alone answered)
+    if "TeslaBLE" in v.claims and ble.module.ping(v.vin):
+        if asleep(v, now - REACH_WINDOW) is not False:
+            return True
+    car = v.attachment("TeslaAPI")
+    if car is not None:
+        car.statusDeferral, car.staleBefore = 0, since
+    v.read("chargingState", 0, force=True)
+    return pluggedNow(master, v, None, since)
 
 
 def drivingNow(v) -> bool:
@@ -376,7 +411,7 @@ def pick(master, offered=None, actual=0, read=False, since=NEVER):
         if ble and asleep(v, now - REACH_WINDOW) is None:
             # A charge read may wake the car: the sleep-safe check first
             master.providerOrder.provider("TeslaBLE").module.ping(v.vin)
-        if ble and not asleep(v):
+        if ble and asleep(v, now - REACH_WINDOW) is False:
             v.read("chargingState", 0, providers=("TeslaBLE",), force=True)
         state, pilot, amps = (fresh(v, f) for f in _BLE_CHARGE)
         plugged = state and _plug("chargingState", state)

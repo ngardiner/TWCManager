@@ -6,7 +6,6 @@ from typing import List, Optional
 
 from .. import Presence
 from ..Providers import Capability as C
-from ..Registry.Fields import READ_MAX_AGE
 from .Desired import CHARGE_LIMIT, RELEASE
 
 # The policy's limit before its first pass, which decides for every car
@@ -55,7 +54,7 @@ def applyPolicyLimit(master, limit: Optional[int], decision: bool) -> int:
         if vehicle.vin and Presence.departed(master, vehicle) is None:
             _apply(master, vehicle, limit, decision)
             touched += 1
-    _restoreDeparted(master, read=False)
+    _restoreDeparted(master)
     return touched
 
 
@@ -69,23 +68,13 @@ def onArrival(master, vehicle) -> None:
             _apply(master, vehicle, master.policyLimit, decision=True)
 
 
-def onDeparture(master) -> None:
-    # Background thread only: an unplug alone is not a departure
-    _restoreDeparted(master, read=True)
-
-
-def _restoreDeparted(master, read) -> None:
-    # A held car gone or leaving gets its normal limit back. read: a listed
-    # car off its point with no live telemetry is read first (never woken).
-    # Evidence older than our last limit write cannot show a departure
+def _restoreDeparted(master) -> None:
+    # A held car gone or leaving gets its normal limit back. Evidence older
+    # than our last limit write cannot show a departure
     for vin in master.heldLimits.holding():
         vehicle = master.vehicleRegistry.get(vin)
         if vehicle is None:
             continue
-        api = vehicle.attachment("TeslaAPI")
-        if read and api is not None and vehicle.syncSource == "TeslaAPI":
-            if Presence.twcVinAt(master, vehicle) == Presence.NEVER:
-                vehicle.read("chargingState", READ_MAX_AGE)
         at = Presence.departed(master, vehicle)
         write = vehicle.lastWrite("chargeLimit")
         # <= on purpose: a retained MQTT position redelivered after our write

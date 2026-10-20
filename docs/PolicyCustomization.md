@@ -71,12 +71,22 @@ car is home, away, or "probably home" (nothing says either way):
   `minBatteryLevelAtHome` below, but a charge limit waits for them until they
   plug in or are confirmed home.
 
-A Gen2 TWC reports status 00 both when a car leaves and when it wakes up, so
-TWCManager treats a 00 as an unplug only if the TWC's maximum amps went from
-above 0 to 0, the 00 lasts 60 seconds, and live telemetry (TeslaMate or Fleet
-Telemetry) does not say the car is still plugged in.  The log shows each
-decision (`TWC <id>: 00 onset ...`, `unplugged, <VIN> departs`).  This rule
-was tuned on two cars, so please report a car that is mishandled.
+A Gen2 TWC reports status 00 both when a car leaves and when it wakes up, so a
+status change (a 00, the TWC's maximum amps dropping to 0 during one, or a
+change between plugged and not) only makes TWCManager check the car, about 20
+seconds after the first such change and never waking it.  A car awake at its
+limit can flicker between statuses for minutes; that is checked once, while
+every change to 00 at 0 A (how an unplug looks) is checked.  A live feed
+(TeslaMate or Fleet Telemetry) that reported the plug since the change answers
+by itself.  Otherwise BLE's sleep-safe check runs: a sleeping car is still
+plugged in, since unplugging wakes it, and so is one the check cannot tell is
+awake (a charge read might wake it); an awake one gets a BLE charge read.
+Otherwise the Tesla API reads the car only if its free online check finds it
+awake.  So a Fleet-API-only install, or one whose BLE is down, pays for a read
+when a check finds the car awake, about one per real plug event.  A car
+nothing can check is never treated as unplugged by the TWC alone.  The log
+shows each checked change and the answer (`TWC <id>: 03 → 00, max ... A:
+checking <VIN>`, `TWC <id>: plugged in: ...`, `unplugged, <VIN> departs`).
 
 The home location moves to a car's position only when a TWC reads that car's
 VIN or the position arrived over BLE, and only for a position outside the
@@ -100,7 +110,10 @@ car on each policy pass until it succeeds.
 Known limits: a guest car that later plugs in to the same TWC can keep a car
 that left idle counted as home until that car reports a position outside the
 radius or starts driving, and a VIN a TWC rejected during a charge session
-stays rejected until the car is unplugged.
+stays rejected until the car is unplugged.  A car charging away from a TWC
+(on a mobile connector, say) with no telemetry feed is not watched for its
+departure, so its original limit waits until something else shows it left; a
+separate feature for that is planned.
 
 Acceptable values are 50-100; -1 means not to apply a limit: the car is released
 to its original limit, which is applied like any other limit.

@@ -121,10 +121,10 @@ def test_mode_2_start_after_our_stop_needs_no_slave():                      # le
     assert m.settings["respondToSlaves"] == 1 and f.calls == []
 
 def test_non_tesla_car_on_a_twc_gets_the_disruptive_stop_at_once():
-    m, r, v, c = setup(ble(O.Outcome(O.DONE)), fleet(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "2"
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)), fleet(O.Outcome(O.DONE))); s = slave(m); s.reportedState = 0x01; anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "2"
     anon.observe("actualCurrent", 12.0, "Gen2TWC"); m.stopCarsCharging(anon.key); assert r.pass_() == 1 and m.settings["respondToSlaves"] == 0
     assert m.providerOrder.provider("TeslaBLE").calls == [] and m.providerOrder.provider("FleetAPI").calls == []
-    m, r, v, c = setup(ble(O.Outcome(O.DONE))); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); m.getSlaveTWCs()[0].reportedState = 0x01; anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"
     anon.observe("actualCurrent", 12.0, "Gen2TWC"); m.stopCarsCharging(anon.key); assert r.pass_() == 1 and [x[:2] for x in m._outbox] == [b"\xfc\xb2"]
 
 def test_gen3_multi_unit_stop_uses_the_car_not_the_bus():
@@ -371,7 +371,7 @@ def test_offer_flaps_do_not_multiply_paid_starts():                         # I4
     c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert len(cmds(f)) == n + 1                                    # still wanted: settled, no repeat
 
 def test_a_rejected_twc_vin_falls_back_to_the_anonymous_session():          # review M3
-    m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244")
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); s.reportedState = 0x01; anon = m.vehicleRegistry.beginPlugSession("8244")
     s.currentVIN = "5YJ3E1EA1KF000009"; m.vehicleRegistry._pending["8244"] = {"candidate": None, "attempts": 3, "rejected": True}
     assert s.vehicleKey == anon.key
     m.vehicleRegistry._pending.pop("8244"); m.vehicleRegistry.getOrCreate("5YJ3E1EA1KF000009", "TWC"); assert s.vehicleKey == "5YJ3E1EA1KF000009"

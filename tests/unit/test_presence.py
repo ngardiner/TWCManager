@@ -1018,12 +1018,12 @@ def test_home_is_learned_from_the_triggering_sources_own_fix():
     assert m.getHomeLatLon() == list(HOME)
 
 
-# The Gen2 unplug: a filtered 00 departs the car the TWC names, else the
-# only car it may serve, unless live telemetry says it is plugged in
+# A Gen2 status edge checks the car: here through a live feed, the cheapest
+# answer. It departs the car the TWC names, else the only car it may serve
 
 
 def onGen2(monkeypatch, m, v, c, named=True):
-    # Linked at 03 with a car's 32 A, past the link grace
+    # Linked at 03 with a car's 32 A
     from tests.unit.test_gen2_unplug import beats
 
     monkeypatch.setattr(time, "time", c)
@@ -1035,25 +1035,164 @@ def onGen2(monkeypatch, m, v, c, named=True):
     return s, lambda *a, **k: beats(m, s, c, *a, **k)
 
 
-def test_live_telemetry_plugged_vetoes_a_twc_unplug(monkeypatch, caplog):
-    m, v, c = placed()
+def fed(v, plugged=True):
+    # TeslaMate live, reporting the plug
     v.observe("state", "online", TM)
+    v.observe("pluggedIn", plugged, TM)
+
+
+def test_a_feed_report_after_the_edge_keeps_the_car_through_a_twc_00(
+    monkeypatch, caplog
+):
+    m, v, c = placed()
+    fed(v)
+    s, beat = onGen2(monkeypatch, m, v, c)
+    with caplog.at_level(logging.INFO):
+        beat(10, 0x00, 0.0)
+        v.observe("pluggedIn", True, TM)
+        beat(110, 0x00, 0.0)
+    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
+    assert "TWC 8244: plugged in: {'%s': True}" % VIN in caplog.text
+
+
+def test_a_feed_report_after_the_edge_keeps_the_car_through_a_max_drop_in_00(
+    monkeypatch,
+):
+    m, v, c = placed()
+    fed(v)
+    s, beat = onGen2(monkeypatch, m, v, c)
+    beat(49, 0x00, 47.0, step=7)  # woken by the app
+    beat(10, 0x00, 0.0)
     v.observe("pluggedIn", True, TM)
+    beat(110, 0x00, 0.0)
+    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
+
+
+def test_a_car_its_twc_still_holds_at_00_is_offered_the_twcs_nothing(monkeypatch):
+    from TWCManager.Vehicle.Reconcile import Belief
+
+    m, v, c = placed()
+    s, beat = onGen2(monkeypatch, m, v, c)
+    beat(120, 0x00, 0.0)  # checked: no answer, so the car stays
+    m.distributeEVSEPower()
+    assert s.vehicleKey is None and m.offered[VIN] == 0
+    assert Belief.whyQuiet(m, v) == "nothing offered"
+
+
+@pytest.mark.parametrize("move", ["driveStart", "outside"])
+def test_a_twc_at_00_stops_holding_a_car_that_moved_since_it_was_named(
+    monkeypatch, move
+):
+    m, v, c = placed()
+    s, beat = onGen2(monkeypatch, m, v, c)
+    beat(120, 0x00, 0.0)
+    assert s.heldKey == VIN
+    later(c)
+    v.mark(move, c.t)
+    assert m.vehicleRegistry.vehicleAt(s.twcid) is v and s.heldKey is None
+
+
+def test_a_feed_reading_older_than_the_edge_is_no_answer(monkeypatch, caplog):
+    # A live feed silent since the edge says nothing about it: nothing else
+    # can check the car, so it stays
+    m, v, c = placed()
+    fed(v, False)
     s, beat = onGen2(monkeypatch, m, v, c)
     with caplog.at_level(logging.INFO):
         beat(120, 0x00, 0.0)
-    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
-    assert "TWC 8244: not an unplug, %s is plugged in" % VIN in caplog.text
+    assert v.value("twcVin") == "8244" and v.markAt("unplug") == P.NEVER
+    assert "TWC 8244: plugged in: {'%s': None}" % VIN in caplog.text
+
+
+def test_a_retained_redelivery_inside_the_wait_is_no_answer(monkeypatch, caplog):
+    # A reconnect redelivers the feed's last report, stamped now: it is no
+    # report of this edge, and nothing else can check the car
+    m, v, c = placed()
+    fed(v)
+    s, beat = onGen2(monkeypatch, m, v, c)
+    with caplog.at_level(logging.INFO):
+        beat(10, 0x00, 0.0)
+        v.observe("pluggedIn", False, TM, seen=False)
+        beat(110, 0x00, 0.0)
+    assert v.value("twcVin") == "8244"
+    assert "TWC 8244: plugged in: {'%s': None}" % VIN in caplog.text
+
+
+def test_a_retained_unplugged_redelivery_marks_no_unplug_and_restores_nothing():
+    m, v, c = placed()
+    m.heldLimits.set(VIN, 90, 50)
+    fed(v)
+    later(c)
+    v.observe("pluggedIn", False, TM, seen=False)  # a reconnect's retained copy
+    m.setPolicyLimit(50, transition=False)
+    assert v.markAt("unplug") == P.NEVER and P.departed(m, v) is None
+    assert m.desired.get(VIN, CHARGE_LIMIT) is None
+
+
+def test_a_live_unplug_after_a_retained_copy_is_marked_once_at_the_report():
+    m, v, c = placed()
+    fed(v)
+    later(c)
+    v.observe("pluggedIn", False, TM, seen=False)  # a reconnect's retained copy
+    later(c)
+    v.observe("pluggedIn", False, TM)  # the feed's live report
+    assert v.markAt("unplug") == c.t
+    later(c)
+    v.observe("pluggedIn", False, TM)  # reported again: no new unplug
+    assert v.markAt("unplug") == c.t - 10
+
+
+def test_after_a_restart_a_live_unplug_after_a_retained_plugged_copy_is_marked():
+    m, v, c = placed()
+    v.observe("state", "online", TM)
+    v.observe("pluggedIn", True, TM, seen=False)  # the reconnect's retained copy
+    later(c)
+    v.observe("pluggedIn", False, TM)
+    assert v.markAt("unplug") == c.t
+
+
+def test_after_a_restart_a_live_plugged_report_after_a_retained_copy_is_no_event(
+    monkeypatch,
+):
+    import TWCManager.Vehicle.Reconcile.Targets as targets
+
+    m, v, c = placed()
+    arrivals = []
+    monkeypatch.setattr(targets, "onArrival", lambda m, v: arrivals.append(v))
+    m.attributePlugs = Mock()
+    v.observe("state", "online", TM)
+    v.observe("pluggedIn", True, TM, seen=False)
+    later(c)
+    life = v.markAt("lifeAt")
+    v.observe("pluggedIn", True, TM)
+    assert v.markAt("plugIn") == P.NEVER and v.markAt("lifeAt") == life
+    assert arrivals == [] and not m.attributePlugs.called
+
+
+def test_a_feed_report_after_the_edge_keeps_an_unnamed_session(monkeypatch, caplog):
+    m, v, c = placed()
+    v.observe("state", "online", TM)
+    s, beat = onGen2(monkeypatch, m, v, c, named=False)
+    with caplog.at_level(logging.INFO):
+        beat(10, 0x00, 0.0)
+        v.observe("pluggedIn", True, TM)
+        beat(110, 0x00, 0.0)
+    assert m.vehicleRegistry.vehicleAt("8244").isAnonymous
+    assert v.markAt("unplug") == P.NEVER
+    assert "TWC 8244: plugged in: {'%s': True}" % VIN in caplog.text
 
 
 def test_charge_stop_keeps_twc_vin_until_the_unplug(monkeypatch):
     m, v, c = placed()
+    fed(v)
     s, beat = onGen2(monkeypatch, m, v, c)
     beat(300, 0x01, 32.0, actual=10.0)
     beat(30, 0x03, 32.0)  # the charge stops
     assert s.isCharging == 0 and v.value("twcVin") == "8244"
     assert P.presence(m, v) == P.HOME
-    beat(70, 0x00, 0.0)
+    beat(10, 0x00, 0.0)
+    v.observe("pluggedIn", False, TM)
+    beat(20, 0x00, 0.0)
     assert v.value("twcVin") is None and P.presence(m, v) == P.NOT_HOME
 
 
@@ -1061,24 +1200,30 @@ def test_vehicle_key_names_the_car_after_a_charge_stop_and_nobody_after_an_unplu
     monkeypatch,
 ):
     m, v, c = placed()
+    fed(v)
     s, beat = onGen2(monkeypatch, m, v, c)
     beat(300, 0x01, 32.0, actual=10.0)  # this charge's VIN read never lands
     beat(30, 0x03, 32.0)
     assert m.vehicleRegistry.get("anon:8244") is not None and s.vehicleKey == VIN
-    beat(70, 0x00, 47.0)  # the car wakes: no unplug, whatever the session
+    beat(70, 0x00, 47.0)  # the car wakes: still plugged in, whatever the session
     assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
     beat(70, 0x03, 32.0)
-    beat(70, 0x00, 0.0)
-    assert s.vehicleKey is None
+    beat(10, 0x00, 0.0)
+    v.observe("pluggedIn", False, TM)
+    beat(60, 0x00, 0.0)
+    assert s.vehicleKey is None and v.value("twcVin") is None
     beat(10, 0x03, 32.0)  # another car: unnamed until its VIN is read
     assert s.vehicleKey == "anon:8244"
 
 
 def test_a_vinless_unplug_departs_the_only_candidate(monkeypatch):
     m, v, c = placed()
+    fed(v)
     s, beat = onGen2(monkeypatch, m, v, c, named=False)
     assert s.vehicleKey == "anon:8244" and P.candidates(m) == [v]
-    beat(70, 0x00, 0.0)
+    beat(10, 0x00, 0.0)
+    v.observe("pluggedIn", False, TM)
+    beat(20, 0x00, 0.0)
     assert v.markAt("unplug") > P.NEVER and P.presence(m, v) == P.NOT_HOME
     assert m.vehicleRegistry.get("anon:8244") is None
 
@@ -1138,7 +1283,7 @@ def test_a_car_a_gen2_names_at_00_is_plugged_for_a_start_until_it_leaves():
     m.reconciler.pass_()
     assert [x[0] for x in p.calls if x[0] != "wake"] == ["startCharging"]
     later(c)
-    v.observe("pluggedIn", False, "Gen2TWC")  # the filtered unplug
+    v.observe("pluggedIn", False, "Gen2TWC")  # the checked unplug
     assert P.applicable(m, v, C.START_CHARGING) == (P.NOT_HERE, "away")
 
 
@@ -1315,6 +1460,34 @@ def vinReadingGen2(requests_mock, monkeypatch, located=True):
 def asleepPing(m, vin):
     m.vehicleRegistry.get(vin).observe("state", "asleep", "TeslaBLE")
     return True
+
+
+def scanOnly(life):
+    # The sleep-safe check answered by the range scan alone: sleep unknown
+    from tests.unit.test_command_path_parity import realBle
+
+    m, v, c = placed()
+    if life:
+        v.observe("state", "online", TM)  # awake an hour ago
+        later(c, 3600)
+    b = realBle(m, ping=lambda vin: True)
+    b.fetched = []
+    b._fetch_state_json = lambda vin, kind: b.fetched.append(vin)
+    return m, v, c, b
+
+
+@pytest.mark.parametrize("life", [False, True])
+def test_an_attribution_never_reads_a_car_the_scan_alone_answered_for(life):
+    m, v, c, b = scanOnly(life)
+    P.pick(m, offered=32, read=True, since=c.t)
+    assert b.pings == [VIN] and b.fetched == []
+
+
+@pytest.mark.parametrize("life", [False, True])
+def test_a_plug_check_keeps_a_car_the_scan_alone_answered_for(life):
+    m, v, c, b = scanOnly(life)
+    assert P.checkPlug(m, v, c.t) is True
+    assert b.pings == [VIN] and b.fetched == []
 
 
 def test_a_vin_reading_twc_attributes_a_sleeping_car_without_reading_it(

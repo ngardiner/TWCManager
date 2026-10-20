@@ -43,11 +43,19 @@ class Gen2TWC(EVSEInstance, TWCSlave):
             or reg.get(anonKey) is None
         ):
             return self.currentVIN.upper()
-        # The car last confirmed here until the unplug, while it shows a plug;
+        # While it shows a plug: the car last confirmed here until the unplug,
         # else the anonymous session, also for a VIN the registry rejected
         v = reg.vehicleAt(self.twcid)
-        plugged = self.reportedState in self.PLUGGED_STATES
-        return v.key if v and (v.isAnonymous or plugged) else None
+        return v.key if v and self.reportedState in self.PLUGGED_STATES else None
+
+    @property
+    def heldKey(self):
+        # The car a status change has not shown leaving: until a check says
+        # it left, or it moves, this TWC's offer is all it can draw
+        v = self.master.vehicleRegistry.vehicleAt(self.twcid)
+        named = v and v.latest("twcVin")
+        moved = named and max(v.markAt("driveStart"), v.markAt("outside"))
+        return v.key if named and named.at > moved else None
 
     @property
     def occupied(self):

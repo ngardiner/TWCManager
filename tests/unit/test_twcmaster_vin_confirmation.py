@@ -3,6 +3,7 @@ from datetime import timedelta
 from unittest.mock import Mock
 import pytest
 from TWCManager.TWCMaster import TWCMaster
+from tests.unit.reconcile_helpers import runPending
 
 VIN = "5YJ3E1EA1KF000001"
 CONFIG = {
@@ -69,7 +70,7 @@ def test_anonymous_plug_session_begins_at_a_charge_and_ends_at_the_unplug(master
     s.isCharging = 0
     s.chargingDroppedBelowThresholdTime = 0
     s.plugSessions = 0  # a Mock slave: the session counter is a real int
-    s.unplugStep = Mock(return_value=False)
+    s.plugCheckDue = Mock(return_value=None)
     master.getSlaveTWCs = Mock(return_value=[s])
     master.observeChargingSessions()
     assert master.vehicleRegistry.get("anon:8244") is not None
@@ -78,8 +79,9 @@ def test_anonymous_plug_session_begins_at_a_charge_and_ends_at_the_unplug(master
     master.observeChargingSessions()
     assert master.vehicleRegistry.get("anon:8244") is not None and s.plugSessions == 1
     s.PLUGGED_STATES, s.reportedState = (0x03,), 0x00
-    s.unplugStep.return_value = True
+    s.plugCheckDue.return_value = 1.0  # the check after the 00, no car to read
     master.observeChargingSessions()
+    runPending(master.reconciler.ble)
     assert master.vehicleRegistry.get("anon:8244") is None
 
 

@@ -42,7 +42,6 @@ import threading
 from TWCManager.ControlTick import ControlTick
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
-from TWCManager.Vehicle.Reconcile.Targets import onDeparture
 from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
 import requests
 from enum import Enum
@@ -324,8 +323,6 @@ def background_tasks_thread(master):
                     master.updateChargeAtHome()
                 elif task["cmd"] == "refreshTokens":
                     refreshTokens(master)
-                elif task["cmd"] == "checkDeparture":
-                    onDeparture(master)
                 elif task["cmd"] == "checkGreenEnergy":
                     check_green_energy()
                 elif task["cmd"] == "checkVINEntitlement":
