@@ -811,7 +811,10 @@ class TestThroughTheWalk:
         sent = [q.url for q in posts(requests_mock)]
         assert sent == [OWNER_URL + "/" + VIN + "/command/set_charge_limit"]
         # The "required" car got no request from TeslaAPI and fell through
-        assert last.calls == [("setChargeLimit", VIN2, 50)]
+        assert last.calls == [
+            ("wake", VIN2, None),
+            ("setChargeLimit", VIN2, 50),
+        ]  # unknown battery: expected to charge, so it wakes
         assert no_error_recorded(api)
 
     def test_403_falls_through(self, no_threads, requests_mock):

@@ -312,12 +312,9 @@ class VehicleReconciler(threading.Thread):
         # A start goes with the limit first: its wake carries the limit
         ride = aspect == CHARGE_LIMIT and self._startWanted(vehicle, config)
         field = FIELD_FOR[aspect]
-        # A release goes to the outside limit: as any apply, a raise may wake
-        aim = held.outside if R.releases(d) and held is not None else d.value
-        wakes = B.allowWake(aspect, d._replace(value=aim), k) or ride and not d.restore
-        # Nor for a raise its charging point can do nothing with
-        idle = aspect != CHARGING and getattr(self.master, "offered", {}).get(key) == 0
-        wakes = wakes and not idle
+        # Only a car expected to charge is woken; a restore or stop never is
+        quiet = B.whyQuiet(self.master, vehicle)
+        wakes = quiet is None and not d.restore and d.value is not False
         if not wakes and last == O.ASLEEP and Presence.asleep(vehicle):
             # Asleep: only a sign of life, or a message that may wake
             return None
@@ -409,23 +406,19 @@ class VehicleReconciler(threading.Thread):
             since=max(now, d.at),
             force=aspect == CHARGE_LIMIT
             and R.needsLiveRead(R.releases(d), k.value if k else None, held),
-            wakeSkipped=None if wake else self._whyNoWake(aspect, p, k, blind, idle),
+            wakeSkipped=None if wake else self._whyNoWake(d, p, quiet, blind),
             paidBefore=vehicle.paidRequests,
         )
         rec.inFlight = attempt
         return attempt
 
     @staticmethod
-    def _whyNoWake(aspect, p, k, blind, idle) -> str:
+    def _whyNoWake(d, p, quiet, blind) -> str:
         if blind:
             return "blind paid retry"
-        if idle:
-            return "nothing offered"
-        if aspect == AMPS and not p.local:
-            return "billed provider never wakes for amps"
-        if aspect == CHARGE_LIMIT and k is None:
-            return "current limit unknown"
-        return "lower never wakes"
+        if d.restore or d.value is False:
+            return "restore or stop never wakes"
+        return quiet or "billed provider never wakes for amps"
 
     def _startWanted(self, vehicle, config) -> bool:
         start = self.desired.get(vehicle.key, CHARGING)

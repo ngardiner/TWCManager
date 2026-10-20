@@ -1,13 +1,13 @@
 import time
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
+from TWCManager.Vehicle.Reconcile.Desired import RELEASE, AMPS, CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
 from TWCManager.Vehicle.Reconcile.Reconciler import MIN_SEND_GAP, PAID_AFTER, PROBE_AFTER, RETRY, VehicleReconciler
-from tests.unit.reconcile_helpers import Clock, ScriptedProvider, inline, settled
+from tests.unit.reconcile_helpers import Clock, placeAt, ScriptedProvider, inline, settled
 from tests.unit.test_gen2twc_provider import VIN, make as make_master
 
-def setup(*providers, clock=True, here=True):
+def setup(*providers, clock=True, here=True, battery=60):
     # here: the car is plugged in at home, so every message applies to it
     m, s = make_master(); c = Clock(1000.0) if clock else time.time
     m.config = dict(m.config, config=dict(m.config["config"]))          # never the shared CONFIG
@@ -17,6 +17,8 @@ def setup(*providers, clock=True, here=True):
     m.reconciler = r = inline(VehicleReconciler(m, clock=c)); v = m.vehicleRegistry.getOrCreate(VIN, "t")
     if here:
         v.observe("pluggedIn", True, "Gen3TWC")
+        if battery:
+            v.observe("batteryLevel", battery, "TeslaMateVehicle")
     return m, r, v, c
 
 def leave(v):                                                                # unplugged after the plug-in: a restore applies
@@ -397,15 +399,17 @@ def test_paid_sends_that_never_reached_the_car_rearm_on_a_reading_after_it_wakes
 
 def test_a_start_wakes_the_car_for_the_limit_first():                      # N1 ruling 2, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI")
+    v.observe("batteryLevel", 40, "TeslaMateVehicle")   # below the limit: it charges
     v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_()
     c.t += 7200; f.outcomes = [O.Outcome(O.DONE)]; m.desired.set(VIN, CHARGING, True, "heartbeat")
     for _ in range(30): r.pass_(); c.t += 1
-    assert names(f) == ["setChargeLimit", "setChargeLimit", "wake", "setChargeLimit", "wake", "startCharging"]
+    assert names(f) == ["wake", "wake", "wake", "setChargeLimit", "wake", "startCharging"]   # a charging car's lower wakes: the wakes fail asleep, the limit waits
     assert v.lastWrite("chargeLimit").at < v.lastWrite("chargingState").at   # never charges on the old limit
 
 def test_a_start_waits_for_an_unsettled_limit():                           # N1 ruling 2
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI")
+    v.observe("batteryLevel", 40, "TeslaMateVehicle")   # below the limit: it charges
     v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()
     for _ in range(int(PAID_AFTER[CHARGE_LIMIT]) - 1): c.t += 1; r.pass_()
@@ -415,6 +419,7 @@ def test_a_start_waits_for_an_unsettled_limit():                           # N1 
 
 def test_a_limit_no_provider_can_deliver_never_holds_a_start():
     m, r, v, c = setup(ScriptedProvider("FleetAPI", 5, False, [O.Outcome(O.DONE)], caps={C.START_CHARGING: C.FLEET_COMMAND, C.WAKE: C.FLEET_WAKE}))
+    v.observe("batteryLevel", 40, "TeslaMateVehicle")   # below the limit: it charges
     f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")
     assert r.pass_() == 1 and names(f) == ["wake", "startCharging"]
@@ -505,6 +510,7 @@ def test_a_charging_reading_rearms_a_never_reached_limit_once_per_desire():   # 
 
 def test_a_refused_limit_does_not_block_the_start_forever():                # c4, paid counted
     m, r, v, c = setup(ha(O.Outcome(O.REFUSED, "403"), O.Outcome(O.DONE))); h = prov(m, "HomeAssistant")
+    v.observe("batteryLevel", 40, "TeslaMateVehicle")   # below the limit: it charges
     v.observe("chargeLimit", 60, "HomeAssistant"); v.observe("chargingState", "Stopped", "HomeAssistant")
     m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")
     for _ in range(5): c.t += 61; r.pass_()
@@ -522,6 +528,7 @@ def test_a_refused_limit_with_a_paired_ble_whose_radio_is_down_still_blocks_the_
 def test_an_unpaired_ble_does_not_hold_the_start_of_a_car_ha_refused():    # review I2, paid counted
     unpaired = ScriptedProvider("TeslaBLE", 2, True, [O.Outcome(O.DONE)], readyFor=lambda vehicle, cap: False)
     m, r, v, c = setup(unpaired, ha(O.Outcome(O.REFUSED, "403"), O.Outcome(O.DONE))); h = prov(m, "HomeAssistant")
+    v.observe("batteryLevel", 40, "TeslaMateVehicle")   # below the limit: it charges
     v.observe("chargeLimit", 60, "HomeAssistant"); v.observe("chargingState", "Stopped", "HomeAssistant")
     m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); m.desired.set(VIN, CHARGING, True, "heartbeat")
     for _ in range(5): c.t += 61; r.pass_()
@@ -542,10 +549,11 @@ def test_an_unreached_limit_whose_one_rearm_is_spent_no_longer_blocks_the_start(
 
 def test_a_limit_whose_ride_wake_failed_does_not_block_the_start_forever():   # c4 with the I2 cap, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI")
+    v.observe("batteryLevel", 40, "TeslaMateVehicle")   # below the limit: it charges
     v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_()   # asleep: the lower and its retry
     c.t += 7200; m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()   # the limit rides the start's wake, which fails
-    assert names(f) == ["setChargeLimit", "setChargeLimit", "wake"] and m.desired.record(VIN, CHARGE_LIMIT).rearmed
+    assert names(f) == ["wake", "wake", "wake"] and m.desired.record(VIN, CHARGE_LIMIT).rearmed
     for _ in range(60):                                                       # an hour of TeslaMate republishing, unchanged
         c.t += 60; v.observe("chargeLimit", 90, "TeslaMateVehicle"); v.observe("chargingState", "Stopped", "TeslaMateVehicle"); r.pass_()
     # The start went with its own wake: bounded, not stalled. Each desire's I2 cap: the limit's 4 and the
@@ -566,11 +574,12 @@ def sleepy(f, v):
 
 def test_a_lowered_limit_that_failed_once_rides_the_start_s_wake():       # review I1, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI")
+    v.observe("batteryLevel", 40, "TeslaMateVehicle")   # below the limit: it charges
     v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI"); sleepy(f, v)
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()
     c.t += 30; m.desired.set(VIN, CHARGING, True, "heartbeat"); r.pass_()
     for _ in range(80): c.t += 30; r.pass_()
-    assert names(f) == ["setChargeLimit", "wake", "setChargeLimit", "wake", "startCharging"]
+    assert names(f) == ["wake", "setChargeLimit", "wake", "startCharging"]
     assert v.believed("chargeLimit").value == 50 and v.lastWrite("chargeLimit").at < v.lastWrite("chargingState").at
 
 def test_a_rearm_resets_the_blind_retry_and_keeps_the_cap():               # review I1, paid counted
@@ -648,10 +657,10 @@ def test_a_limit_raise_logs_the_wake_and_its_outcome(caplog):
     assert "TeslaBLE wake for %s before setChargeLimit: done" % VIN in _info(caplog)
     assert not any("no wake" in x for x in _info(caplog))
 
-def test_a_limit_raise_with_unknown_current_limit_logs_why_no_wake(caplog):
-    # Unknown when planned; the read before the write finds it, so it is sent
+def test_a_limit_raise_with_unknown_current_limit_wakes_and_reads_first(caplog):
+    # An unknown limit is expected to charge: it wakes, and the read before the write finds the limit
     caplog.set_level("INFO"); m, r, v, c = setup(ble(O.Outcome(O.DONE)).reads(60)); m.desired.set(VIN, CHARGE_LIMIT, 70, "policy"); r.pass_()
-    assert "TeslaBLE no wake for %s before setChargeLimit: current limit unknown" % VIN in _info(caplog)
+    assert "TeslaBLE wake for %s before setChargeLimit: done" % VIN in _info(caplog)
     assert cmds(prov(m, "TeslaBLE")) == ["setChargeLimit"]
 
 def test_a_stop_logs_neither_a_wake_nor_a_skip(caplog):
@@ -681,3 +690,141 @@ def test_a_raise_never_wakes_a_car_its_point_offers_nothing(caplog):
     m.desired.set(VIN, CHARGE_LIMIT, 90, "policy")
     r.pass_()
     assert names(p)[1:3] == ["wake", "setChargeLimit"]  # offered: the raise wakes
+
+
+def quietCar(battery, limit, *wants):
+    # A BLE car plugged in with a battery level and limit, and what is wanted
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)), battery=battery)
+    v.observe("chargeLimit", limit, "TeslaBLE")
+    for aspect, value, kw in wants:
+        m.desired.set(VIN, aspect, value, "policy", **kw)
+    r.pass_()
+    return names(prov(m, "TeslaBLE")), m
+
+
+def test_a_car_that_will_not_charge_is_never_woken_to_raise_its_limit(caplog):
+    caplog.set_level("INFO")
+    calls, m = quietCar(80, 50, (CHARGE_LIMIT, 70, {}))  # still at or below its battery
+    assert calls == ["setChargeLimit"]
+    assert "car won't charge: limit at or below battery" in "\n".join(
+        x.getMessage() for x in caplog.records
+    )
+
+
+def test_a_car_that_will_not_charge_is_never_woken_to_lower_its_limit():
+    assert quietCar(80, 90, (CHARGE_LIMIT, 70, {}))[0] == ["setChargeLimit"]
+
+
+def test_a_car_that_will_still_charge_may_be_woken_to_lower_its_limit():
+    assert quietCar(40, 90, (CHARGE_LIMIT, 70, {}))[0] == ["wake", "setChargeLimit"]
+
+
+def test_a_car_wakes_for_a_lower_once_its_point_offers_power():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE), O.Outcome(O.DONE)), battery=40)
+    v.observe("chargeLimit", 90, "TeslaBLE")
+    m.distributeEVSEPower()  # nothing wanted: offered 0
+    assert m.offered[VIN] == 0
+    m.desired.set(VIN, CHARGE_LIMIT, 70, "policy")
+    r.pass_()
+    assert names(prov(m, "TeslaBLE")) == ["setChargeLimit"]
+    m.setMaxAmpsToDivideAmongSlaves(32)
+    v.observe("chargingState", "Stopped", "TeslaBLE")
+    m.distributeEVSEPower()
+    assert m.offered[VIN] > 0
+    c.t += 60
+    m.desired.set(VIN, CHARGE_LIMIT, 60, "policy")
+    r.pass_()
+    assert names(prov(m, "TeslaBLE"))[1:3] == ["wake", "setChargeLimit"]
+
+
+def test_a_lift_never_wakes_a_car_full_at_its_limit():
+    assert quietCar(60, 50, (AMPS, 32, {"lift": True}))[0] == ["setAmps"]
+
+
+def test_a_pending_higher_limit_makes_the_car_expected_to_charge():
+    calls, m = quietCar(60, 50, (CHARGE_LIMIT, 70, {}), (AMPS, 32, {"lift": True}))
+    assert calls[:2] == ["wake", "setChargeLimit"] and "setAmps" in calls
+
+
+def test_an_unknown_battery_level_is_expected_to_charge():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)), battery=None)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    m.desired.set(VIN, AMPS, 32, "lift", lift=True)
+    r.pass_()
+    assert names(prov(m, "TeslaBLE")) == ["wake", "setAmps"]
+
+
+def test_an_unplugged_car_at_home_is_not_woken_to_lower_its_limit():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)), here=False, battery=40)
+    placeAt(m, v)  # parked at home, never seen plugged in
+    v.observe("pluggedIn", False, "Gen3TWC")
+    v.observe("chargeLimit", 90, "TeslaBLE")
+    c.t += 3600
+    m.desired.set(VIN, CHARGE_LIMIT, 70, "policy")
+    r.pass_()
+    assert names(prov(m, "TeslaBLE")) == ["setChargeLimit"]
+
+
+def test_a_release_with_nothing_held_leaves_the_known_limit_in_charge():
+    calls, m = quietCar(60, 80, (CHARGE_LIMIT, RELEASE, {}), (AMPS, 32, {"lift": True}))
+    assert "wake" in calls
+
+
+def restarted(feed=True, asleep=True):
+    # Just started, the car plugged in with its battery and limit unknown,
+    # and a lift wanted; TeslaMate configured but not yet heard from
+    from TWCManager.Vehicle.TeslaMateVehicle import TeslaMateVehicle
+
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)), battery=None)
+    v.observe("state", "asleep" if asleep else "online", "TeslaBLE")
+    if feed:
+        m.config["vehicle"] = {"TeslaMate": {"enabled": True}}
+        tm = TeslaMateVehicle(m)
+        tm.vehicles["7"] = v
+        m.getModuleByName = {"TeslaMateVehicle": tm}.get
+    else:
+        tm = None
+    m.desired.set(VIN, AMPS, 32, "lift", lift=True)
+    r.pass_()
+    return m, r, v, c, tm
+
+
+def test_no_wake_before_the_feed_reports_after_a_start():
+    m, r, v, c, tm = restarted()
+    assert "wake" not in names(prov(m, "TeslaBLE"))
+    c.t += 5  # the report is an observation after the hold
+    tm.applyDataToVehicle("7", "charge_limit_soc", "50")
+    tm.applyDataToVehicle("7", "battery_level", "60")  # full: nothing to wake for
+    r.pass_()
+    assert "wake" not in names(prov(m, "TeslaBLE"))
+
+
+def test_a_wake_follows_the_feeds_first_report_of_a_car_that_will_charge():
+    m, r, v, c, tm = restarted()
+    c.t += 5
+    tm.applyDataToVehicle("7", "charge_limit_soc", "50")
+    tm.applyDataToVehicle("7", "battery_level", "40")
+    r.pass_()
+    assert "wake" in names(prov(m, "TeslaBLE"))
+
+
+def test_a_silent_feed_is_waited_for_a_minute():
+    m, r, v, c, tm = restarted()
+    c.t += 55
+    v.observe("pluggedIn", True, "Gen3TWC")  # the TWC's heartbeat
+    r.pass_()
+    assert "wake" not in names(prov(m, "TeslaBLE"))
+    c.t += 10
+    v.observe("pluggedIn", True, "Gen3TWC")
+    r.pass_()
+    assert "wake" in names(prov(m, "TeslaBLE"))
+
+
+def test_no_feed_means_no_wait():
+    m, r, v, c, tm = restarted(feed=False)
+    assert names(prov(m, "TeslaBLE"))[:2] == ["wake", "setAmps"]
+
+
+def test_an_awake_car_is_commanded_during_the_wait():
+    m, r, v, c, tm = restarted(asleep=False)
+    assert names(prov(m, "TeslaBLE")) == ["setAmps"]  # sent without a wake

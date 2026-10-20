@@ -42,6 +42,8 @@ class TelmetryBase:
     connected = False
     everConnected = False
     lostConnection = False
+    # Until its first report, or 60 s after start: no wake before it
+    settleUntil = 0.0
 
     # Empty default events
     events = {
@@ -74,6 +76,8 @@ class TelmetryBase:
         if not self.status or self.__class__.__name__ == "TelmetryBase":
             self.master.releaseModule("lib.TWCManager.Vehicle", self.__class__.__name__)
             return None
+
+        self.settleUntil = self.registry.now() + 60
 
         # A report-on-change source: while the feed is live, its silence
         # means its last values still hold.
@@ -233,6 +237,7 @@ class TelmetryBase:
             if vehicle:
                 field, converter = events[event][0], events[event][1]
                 self._observe(vehicle, field, converter(payload), retained)
+                self.settleUntil = 0.0
             else:
                 # If we don't know this vehicle yet, save the data: the
                 # latest per topic, so a car the broker retains but that

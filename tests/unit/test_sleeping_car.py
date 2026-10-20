@@ -59,6 +59,7 @@ def test_a_lowering_to_a_sleeping_car_holds_after_one_preflight(requests_mock, c
     caplog.set_level(logging.INFO)
     m, r, v, c, api = install()
     b = sleepy(m)
+    v.observe("batteryLevel", 80, TM)  # above the new limit: the car quiesces
     v.observe("chargeLimit", 90, TM)
     m.setPolicyLimit(70, transition=True)
     passes(r, c, 10)
@@ -114,7 +115,9 @@ def test_a_ble_wake_is_a_sign_of_life(requests_mock):
     assert v.reported("state")["TeslaBLE"].value == "online"
     m.setPolicyLimit(60, transition=True)
     passes(r, c, 60)
-    assert bleCommands(b) == ["wake", "charging-set-limit", "charging-set-limit"]
+    assert (
+        bleCommands(b) == ["wake", "charging-set-limit"] * 2
+    )  # an unknown battery level: expected to charge, so each wakes
     assert b._tool.call_count == 0
     assert m.desired.record(VIN, CHARGE_LIMIT).heldAt is None
 
@@ -125,7 +128,10 @@ def test_a_charging_cars_lowering_needs_no_check(requests_mock):
     v.observe("chargeLimit", 90, TM)
     m.setPolicyLimit(70, transition=True)
     passes(r, c, 10, each=lambda: v.observe("actualCurrent", 16, "Gen2TWC"))
-    assert b._tool.call_count == 0 and bleCommands(b) == ["charging-set-limit"]
+    assert b._tool.call_count == 0 and bleCommands(b) == [
+        "wake",
+        "charging-set-limit",
+    ]  # still charging after the lower: it may wake
 
 
 def test_ble_contact_never_masks_a_feeds_drive(requests_mock):
@@ -144,6 +150,7 @@ def test_a_fleet_online_check_that_finds_it_asleep_suppresses_ble(requests_mock)
     b = sleepy(m)
     assert api.is_awake(v) is False
     assert v.latest("state").value == "asleep" and Presence.asleep(v)
+    v.observe("batteryLevel", 80, TM)  # above the new limit: the car quiesces
     v.observe("chargeLimit", 90, TM)
     m.setPolicyLimit(70, transition=True)
     passes(r, c, 3600, each=noise(v, c))

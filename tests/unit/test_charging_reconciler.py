@@ -139,6 +139,7 @@ def test_gen3_multi_unit_stop_uses_the_car_not_the_bus():
 
 def test_shared_free_failure_lets_a_later_aspect_go_paid_at_once():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
+    v.observe("batteryLevel", 40, "FleetAPI")   # below the limit: it charges
     v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
     r.pass_(); c.t += PAID_AFTER[CHARGE_LIMIT]; r.pass_(); assert cmds(f) == ["setChargeLimit"]
     c.t += LIMIT_THEN_START_GAP + 1; m.startCarsCharging(VIN); r.pass_(); assert cmds(f) == ["setChargeLimit", "startCharging"]   # no fresh 60 s wait
@@ -254,6 +255,7 @@ def test_fleet_start_sends_the_limit_first(requests_mock, monkeypatch):     # Ta
     import TWCManager.Vehicle.Reconcile.Reconciler as rec
     monkeypatch.setattr(rec, "LIMIT_THEN_START_GAP", 0.0)
     m, r, v, c, api = fleetOnTwc(requests_mock); m.settings["chargeStopMode"] = "1"
+    v.observe("batteryLevel", 40, "FleetAPI")   # below the limit: it charges
     m.setPolicyLimit(50, transition=True); m.startCarsCharging(VIN)
     for _ in range(3): r.pass_(); time.sleep(0.01)
     sent = [q.url.split("/")[-1] for q in requests_mock.request_history if q.method == "POST"]
@@ -304,6 +306,7 @@ def test_an_asleep_fleet_car_with_an_unknown_limit_is_woken_then_limited_then_st
     import TWCManager.Vehicle.TeslaAPI as teslaapi
     monkeypatch.setattr(rec, "LIMIT_THEN_START_GAP", 0.0); monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     m, r, v, c, api = fleetOnTwc(requests_mock); car = v.attachment("TeslaAPI")
+    v.observe("batteryLevel", 40, "FleetAPI")   # below the limit: it charges
     requests_mock.get(FLEET_CAR, [{"json": {"response": {"state": "asleep"}}}, {"json": {"response": {"state": "online"}}}])
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()                            # the wake hold is over
     assert v.value("chargeLimit") is None                                                                           # nothing read since the restart

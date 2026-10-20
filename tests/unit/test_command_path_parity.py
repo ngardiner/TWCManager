@@ -523,9 +523,12 @@ def test_ble_only_limits_never_wake_to_lower(requests_mock):
     passes(r, c, 600)
     m.setPolicyLimit(60, transition=True)
     passes(r, c, 600)
-    assert bleCommands(b) == ["charging-set-limit", "charging-set-limit"]
+    # The car is expected to charge (battery unknown): each lower wakes first
+    assert bleCommands(b) == ["wake", "charging-set-limit"] * 2
     assert [args for vin, cmd, args in b.runs] == [
+        None,
         70,
+        None,
         60,
     ] and requests_mock.call_count == 0
     assert m.heldLimits.get(VIN) == HeldLimit(90, 60)
@@ -609,11 +612,15 @@ def off_car_run(requests_mock, scenario, base, **tokens):
 def test_owner_only_off_car_matches_fleet_only(requests_mock, scenario):
     fleet = off_car_run(requests_mock, scenario, FLEET, fleet=True)
     owner = off_car_run(requests_mock, scenario, OWNER, owner=True)
-    # A lower limit is sent without a wake; the 500 and the 408 are retried once
-    limit = ["set_charge_limit"] * (1 if scenario == "raise" else 2)
+    # The lower wakes a car that will charge: a car that stays asleep gets no
+    # command; the 500 is retried once
+    limit = ["set_charge_limit"] * {"raise": 1, "asleep": 0}.get(scenario, 2)
     assert fleet[0] == (["charge_stop"] if scenario == "stop" else limit)
     # Same requests, and the same paid records after every pass
-    assert any(rec and rec[0] for rec in fleet[2][-1])
+    if scenario == "asleep":  # the wake is held: no paid send
+        assert fleet[2][-1][0][4].detail == "wake held"
+    else:
+        assert any(rec and rec[0] for rec in fleet[2][-1])
     assert owner == fleet
 
 
@@ -677,13 +684,13 @@ def test_ble_plus_fleet_waits_five_minutes(requests_mock):
     passes(r, c, PAID_AFTER[CHARGE_LIMIT] - 10)
     assert (
         paid(requests_mock) == (0, 0, 0)
-        and bleCommands(b) == ["charging-set-limit"] * 2
-    )  # one try plus its quick retry
+        and bleCommands(b) == ["wake"] * 2 + ["charging-set-limit"] * 2
+    )  # the wake and its quick retry, then the send and its retry
     passes(r, c, 3600)
     assert paid(requests_mock) == (0, 0, 1) and commands(requests_mock) == [
         "set_charge_limit"
     ]
-    assert len(b.runs) == 2 and dollars(requests_mock) == 0.001
+    assert len(b.runs) == 4 and dollars(requests_mock) == 0.001
 
 
 def test_ble_plus_fleet_stop_waits_a_minute(requests_mock):
@@ -710,12 +717,12 @@ def test_telemetry_limit_change_is_adopted(requests_mock):
     v.observe("chargeLimit", 90, "TeslaMateVehicle")
     m.setPolicyLimit(50, transition=True)
     passes(r, c, 60)
-    assert [args for vin, cmd, args in b.runs] == [50]
+    assert [args for vin, cmd, args in b.runs] == [None, 50]
     v.observe("chargeLimit", 80, "TeslaMateVehicle")  # the app
     passes(
         r, c, 3600, step=30, each=lambda: m.setPolicyLimit(50, transition=False)
     )  # the policy re-enforces every pass
-    assert len(b.runs) == 1 and m.desired.get(VIN, CHARGE_LIMIT).value == 80
+    assert len(b.runs) == 2 and m.desired.get(VIN, CHARGE_LIMIT).value == 80
     # adopted: nothing held, so no entry
     assert m.heldLimits.get(VIN) is None and requests_mock.call_count == 0
 
@@ -1122,7 +1129,7 @@ def test_mode_2_twc_holds_the_target_until_the_car_rate_lands(requests_mock):
 # Row 23 (slim Task 10 M2): a spent re-arm lets the start go without the limit
 
 
-def test_a_spent_rearm_lets_the_start_go_without_the_limit(requests_mock):
+def test_a_lower_that_wakes_a_refusing_car_rides_the_start_once_it_wakes(requests_mock):
     m, r, v, c, api = install(fleet=True)
     car = FleetCar(requests_mock, state="asleep", limit=90, wakes=False)
     for field, value in (
@@ -1131,24 +1138,23 @@ def test_a_spent_rearm_lets_the_start_go_without_the_limit(requests_mock):
         ("batteryLevel", 40),
     ):
         v.observe(field, value, "TeslaMateVehicle")
-    m.setPolicyLimit(50, transition=True)  # a lower: never a wake; asleep, so 408
+    m.setPolicyLimit(50, transition=True)  # a lower on a car that will charge: it wakes
     passes(r, c, 600)
     c.t += 1
     v.observe(
         "chargeLimit", 90, "FleetTelemetryMQTT"
     )  # a reading that reached the car: the one re-arm
     passes(r, c, 1200)
-    assert (
-        commands(requests_mock) == ["set_charge_limit"] * 4
-    )  # one send, its blind retry, then the re-arm's two: all 408
+    # The lower wakes the car (it charges once limited): the wake fails, and
+    # Fleet's wake hold keeps every later send from the car
+    assert commands(requests_mock) == [] and paid(requests_mock) == (0, 1, 0)
     assert m.desired.record(VIN, CHARGE_LIMIT).rearmed
     car.wakes = True
     m.startCarsCharging(VIN)
     passes(r, c, 600, each=lambda: m.startCarsCharging(VIN))
-    assert commands(requests_mock) == ["set_charge_limit"] * 4 + [
-        "charge_start"
-    ]  # no fifth limit send rides the start's wake
-    assert paid(requests_mock) == (1, 1, 5) and car.charge["charge_limit_soc"] == 90
+    assert commands(requests_mock) == ["set_charge_limit", "charge_start"]
+    # The woken car takes the limit, then the start
+    assert paid(requests_mock) == (1, 2, 2) and car.charge["charge_limit_soc"] == 50
 
 
 # Row 24 (slim Task 12a I1): an anonymous Gen2 point in mode 1 stops
@@ -1449,15 +1455,15 @@ def test_arrive_limit_set_then_shift_to_d_in_the_driveway_restores_over_ble(
     push(v, c, 20, shiftState="P")
     policy = cycles(m, 50)
     passes(r, c, 60, each=policy)
-    assert bleCommands(b) == ["charging-set-limit"]
+    assert bleCommands(b) == ["wake", "charging-set-limit"]
     assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
     push(v, c, shiftState="D")
     passes(r, c, 60, each=policy)
-    assert bleCommands(b) == ["charging-set-limit"]  # moving: nothing yet
+    assert bleCommands(b) == ["wake", "charging-set-limit"]  # moving: nothing yet
     c.t += 1
     placeAt(m, v, AWAY)
     passes(r, c, 60, each=policy)
-    assert [args for vin, cmd, args in b.runs if cmd != "wake"] == [50, 90]
+    assert [args for vin, cmd, args in b.runs] == [None, 50, 90]  # no wake to restore
     assert m.heldLimits.get(VIN) is None and requests_mock.call_count == 0
 
 
@@ -1738,7 +1744,7 @@ def test_2026_10_12_return_plugged_in_keeps_the_policy_limit(requests_mock):
     placeAt(m, v, HOME)
     push(v, c, chargingState="Charging")
     passes(r, c, 600, each=policy)
-    assert [args for vin, cmd, args in b.runs] == [90, 50]
+    assert [args for vin, cmd, args in b.runs] == [90, None, 50]
     assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
 
 
@@ -1760,7 +1766,7 @@ def test_2026_10_12_arrival_during_a_running_restore_ends_at_the_policy_limit(
 
     b = realBle(m, answers=answer)
     passes(r, c, 600, each=cycles(m, 50))
-    assert [args for vin, cmd, args in b.runs] == [90, 50]
+    assert [args for vin, cmd, args in b.runs] == [90, None, 50]
     assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
 
 
@@ -2115,7 +2121,7 @@ def test_vinless_ambiguous_plug_rates_nobody_and_logs_once(
     assert caplog.text.count("8244: no single car plugged in; left anonymous") == 1
     assert v.value("twcVin") is None and two.value("twcVin") is None
     assert s.vehicleKey == "anon:8244"
-    assert {cmd for vin, cmd, args in b.runs} <= {"charging-set-limit"}
+    assert {cmd for vin, cmd, args in b.runs} <= {"charging-set-limit", "wake"}
     assert paid(requests_mock) == (0, 0, 0)
 
 

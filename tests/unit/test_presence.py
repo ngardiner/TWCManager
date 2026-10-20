@@ -532,7 +532,10 @@ def test_policy_wide_apply_skips_a_departed_car_on_every_channel(requests_mock):
     assert m.desired.get(VIN, CHARGE_LIMIT).value == 70
     assert m.desired.get(VIN2, CHARGE_LIMIT) is None
     r.pass_()
-    assert prov(m, "TeslaBLE").calls == [("setChargeLimit", VIN, 70)]
+    assert prov(m, "TeslaBLE").calls == [
+        ("wake", VIN, None),
+        ("setChargeLimit", VIN, 70),
+    ]
     assert requests_mock.call_count == 0
 
 
@@ -843,7 +846,10 @@ def test_a_policy_with_no_limit_is_an_apply_of_the_cars_own_once():
     m.heldLimits.set(VIN, 60, 80)
     m.setPolicyLimit(None, transition=False)
     m.reconciler.pass_()
-    assert p.calls == [("setChargeLimit", VIN, 60)]  # down to 60: never woken
+    assert p.calls == [
+        ("wake", VIN, None),
+        ("setChargeLimit", VIN, 60),
+    ]  # an unknown battery level is expected to charge: it wakes
 
 
 def test_arrival_is_one_decision_for_the_plugged_car_only():
