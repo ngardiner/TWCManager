@@ -270,6 +270,47 @@ def test_a_fast_charger_inside_the_radius_marks_no_plug_in():
     assert v.markAt("plugIn") == c.t
 
 
+def fleetFeed(m, v, c, **topics):
+    # Fleet Telemetry values as the MQTT module receives them
+    from TWCManager.Vehicle.FleetTelemetryMQTT import FleetTelemetryMQTT
+
+    m.config = {"config": {}, "vehicle": {"teslaFleetTelemetryMQTT": {"enabled": True}}}
+    m.getModuleByName = Mock(return_value=None)
+    t = FleetTelemetryMQTT(m)
+    later(c)
+    for topic, payload in topics.items():
+        t.applyDataToVehicle(v.vin, topic, payload)
+
+
+def test_a_telemetry_only_car_at_a_fast_charger_is_not_plug_evidence():
+    chargers = (
+        {"FastChargerPresent": True},
+        {"FastChargerType": "FastChargerSupercharger"},
+        {
+            "ChargingCableType": "CableTypeUnknown",
+            "FastChargerType": "FastChargerCombo",
+        },
+        {"ACChargingPower": 50.0, "ChargeCurrentRequestMax": 48},
+    )
+    for charger in chargers:
+        m, v, c = placed()
+        fleetFeed(m, v, c, **charger, DetailedChargeState="DetailedChargeStateCharging")
+        assert v.markAt("plugIn") == P.NEVER and not P.pluggedNow(m, v)
+    m, v, c = placed()
+    fleetFeed(
+        m,
+        v,
+        c,
+        FastChargerPresent=False,
+        FastChargerType="FastChargerACSingleWireCAN",
+        ChargingCableType="CableTypeIEC",
+        ACChargingPower=7.2,
+        ChargeCurrentRequestMax=32,
+        DetailedChargeState="DetailedChargeStateCharging",
+    )
+    assert v.markAt("plugIn") == c.t and P.pluggedNow(m, v)
+
+
 def test_a_plugged_report_with_no_cable_is_not_home():
     m, v, c = placed()
     chargingAt(v, c, connChargeCable="<invalid>")

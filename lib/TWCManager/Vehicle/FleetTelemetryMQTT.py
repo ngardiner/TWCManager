@@ -13,6 +13,13 @@ from TWCManager.Logging.LoggerFactory import LoggerFactory
 logger = LoggerFactory.get_logger("FleetTLM", "Vehicle")
 
 
+def _fastCharger(a):
+    # "FastChargerSupercharger" -> "Supercharger"; an unknown type is not a
+    # charger the car is at
+    name = a[11:]
+    return "" if name in ("Unknown", "SNA") else name
+
+
 class FleetTelemetryMQTT(TelmetryBase):
     configName = "teslaFleetTelemetryMQTT"
     vehicleNameTopic = "VehicleName"
@@ -30,6 +37,11 @@ class FleetTelemetryMQTT(TelmetryBase):
         "ChargerPhases": ["phases", lambda a: int(a) if a else 0],
         "ChargerVoltage": ["voltage", lambda a: float(a)],
         "DetailedChargeState": ["chargingState", lambda a: a[19:]],
+        "FastChargerPresent": ["fastChargerPresent", lambda a: a in (True, "true")],
+        "FastChargerType": ["fastChargerType", _fastCharger],
+        "ChargingCableType": ["connChargeCable", lambda a: a[9:]],
+        "ACChargingPower": ["chargerPower", lambda a: float(a)],
+        "ChargeCurrentRequestMax": ["chargeCurrentRequestMax", lambda a: int(a)],
     }
 
     def vinFor(self, vehicle_id) -> Optional[str]:

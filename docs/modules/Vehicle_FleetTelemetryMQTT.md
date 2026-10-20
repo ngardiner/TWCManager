@@ -4,7 +4,7 @@
 
 Tesla <a href="https://developer.tesla.com/docs/fleet-api/fleet-telemetry">Fleet Telemetry</a> is the Tesla preferred way of receiving data from vehicles. It replaces polling the `vehicle_data` API endpoint for all Tesla's except pre-2021 Model S and X cars. It is faster and a lot <a href="https://developer.tesla.com">cheaper</a> than using the API.
 
-The purpose of this integration is to allow users of TWCManager to receive real-time status data from their cars without constantly polling the Tesla Fleet API. If the telemetry data stops for more than 1 hour (for example during a long sleep) TWCManager will fall back to polling the `vehicle_data` API endpoint. When the telemetry stream is restored it will take over again. This means the API might still used once per long sleep/wake cycle.
+The purpose of this integration is to allow users of TWCManager to receive real-time status data from their cars without constantly polling the Tesla Fleet API. While TWCManager is connected to the MQTT broker and the broker's telemetry feed is healthy, the car's data comes from telemetry, and a sleeping car does not cause TWCManager to poll `vehicle_data`. TWCManager falls back to polling the API only when the broker or the telemetry server is down, and telemetry takes over again once it is restored.
 
 ## Requirements
 
@@ -48,6 +48,7 @@ Some notes:
 * If your Telsa connects to your local Wifi network at home, it can stream the telemetry data directly to a server in your local network
 * If you want to use the fleet telemetry during drivers, make sure the telemetry server TCP port is reachable from the public internet
 * The MQTT setting `retained` is used so TWCManager can see which vehicles are sending telemetry data even if they are currently asleep 
+* The `connectivity` record is required: it is the only signal that a car is online or offline (`CONNECTED` and `DISCONNECTED`). `Gear` and `DetailedChargeState` only refine it, so without `connectivity` in `records` TWCManager cannot tell when the car goes offline.
 * The Tesla Fleet Telemetry server reference implementation is secured with client TLS certificates. This means only Tesla cars can connect to it. Random internet bots probing your server IP and port will not get past this protection.
 
 
@@ -132,31 +133,65 @@ Save the config below to `fleet-telemetry-config.json`
         "port": 4433,
         "ca": "-----BEGIN CERTIFICATE-----\nMIICETCCAZegAwIBAgIUV6uzlujiD32rb9vQO9jMvk6JWiIwCgYIKoZIzj0EAwIw\nHTEbMBkGA1UEAwwSTW91bnQgS25vd2xlZGdlIENBMB4XDTI1MDMwMTE2MzUyMFoX\nDTQ1MDIyNDE2MzUyMFowHTEbMBkGA1UEAwwSTW91bnQgS25vd2xlZGdlIENBMHYw\nEAYHKoZIzj0CAQYFK4EEACIDYgAEEfUrjGY1irTQfhw4pOINzOiBSaKoGZwFGo+M\nLK7qQNj1jp3dbx65tS53CtIqjDVL+Gmt9EqLAoSnzxtUGjiZi7uFgLfeUOzeP3vX\n4DxeIezfDLgU0NH4KJcDhnZM9ln6o4GXMIGUMAwGA1UdEwQFMAMBAf8wHQYDVR0O\nBBYEFBzwtrkUd6cnUaa+QMs1DHyvW1qbMFgGA1UdIwRRME+AFBzwtrkUd6cnUaa+\nQMs1DHyvW1qboSGkHzAdMRswGQYDVQQDDBJNb3VudCBLbm93bGVkZ2UgQ0GCFFer\ns5bo4g99q2/b0DvYzL5OiVoiMAsGA1UdDwQEAwIBBjAKBggqhkjOPQQDAgNoADBl\nAjEAyblL768SxxDqkNpGKHdn6aO+idhV/3j+eYdktJRJ2avqOT3rbwY8zjj5lXuv\nfFN1AjBnvcQBzIiUG5rLd4itSKl4FQkHMbCkOUNbqBlu8aT9YusMeMsfTq63KSc5\ns142lUE=\n-----END CERTIFICATE-----",
         "fields": {
+            "Location": {
+                "interval_seconds": 60
+            },
+            "Gear": {
+                "interval_seconds": 60
+            },
+            "DetailedChargeState": {
+                "interval_seconds": 60
+            },
+            "ChargeAmps": {
+                "interval_seconds": 60
+            },
+            "ChargerVoltage": {
+                "interval_seconds": 60
+            },
+            "ChargerPhases": {
+                "interval_seconds": 60
+            },
+            "ChargeCurrentRequest": {
+                "interval_seconds": 60
+            },
+            "FastChargerPresent": {
+                "interval_seconds": 60
+            },
+            "FastChargerType": {
+                "interval_seconds": 60
+            },
+            "ChargingCableType": {
+                "interval_seconds": 60
+            },
+            "ACChargingPower": {
+                "interval_seconds": 60
+            },
+            "ChargeCurrentRequestMax": {
+                "interval_seconds": 60
+            },
             "BatteryLevel": {
                 "interval_seconds": 60
             },
             "ChargeLimitSoc": {
                 "interval_seconds": 60
             },
-            "DetailedChargeState": {
-                "interval_seconds": 60
-            },
-            "Gear": {
+            "TimeToFullCharge": {
                 "interval_seconds": 60
             },
             "VehicleName": {
-                "interval_seconds": 60
-            },
-            "Location": {
-                "interval_seconds": 60
-            },
-            "TimeToFullCharge": {
                 "interval_seconds": 60
             }
         }
     }
 }
 ```
+
+The fields fall into four groups:
+
+* Presence (`Location`, `Gear`, `DetailedChargeState`; with the `connectivity` record) tells TWCManager whether the car is home, parked and plugged in.
+* Charging (`ChargeAmps`, `ChargerVoltage`, `ChargerPhases`, `ChargeCurrentRequest`) gives the current, voltage and phases. Without them a car on a mobile connector has no amps, voltage or phases, and TWCManager cannot see that it is drawing current.
+* Home-charger narrowing (`FastChargerPresent`, `FastChargerType`, `ChargingCableType`, `ACChargingPower`, `ChargeCurrentRequestMax`) lets TWCManager tell a plug-in at a fast charger near home from one at a home charger.
+* Display (`BatteryLevel`, `ChargeLimitSoc`, `TimeToFullCharge`, `VehicleName`) is what the web interface shows. `VehicleName` also maps the car to its VIN.
 
 Send this configration to the VINs inside it using the <a href="https://developer.tesla.com/docs/fleet-api/endpoints/vehicle-endpoints#fleet-telemetry-config-create">fleet_telemetry_config</a> API endpoint.
 
