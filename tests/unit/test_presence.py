@@ -412,6 +412,33 @@ def test_a_fresh_fix_outside_moves_home_when_a_twc_reads_the_cars_vin(monkeypatc
     assert m.getHomeLatLon() == list(AWAY) and P.presence(m, v) == P.HOME
 
 
+def test_a_retained_position_never_moves_home_at_a_vin_read(monkeypatch):
+    m, r, v, c = home()
+    m.queue_background_task = Mock()
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    s.reportedState, s.currentVIN = 0x03, VIN
+    v.observe("lat", AWAY[0], "TeslaMateVehicle", seen=False)
+    v.observe("lon", AWAY[1], "TeslaMateVehicle", seen=False)
+    m.recordVehicleVIN(s)
+    assert m.getHomeLatLon() == list(HOME)
+
+
+def test_a_home_assistant_position_never_moves_home_at_a_vin_read(monkeypatch):
+    from TWCManager.Vehicle.HomeAssistant import HaVehicle
+
+    m, r, v, c = home()
+    m.queue_background_task = Mock()
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    s.reportedState, s.currentVIN = 0x03, VIN
+    car = HaVehicle("Car", VIN, "d", {})
+    car.parse_from_home_assistant = lambda api: {"lat": AWAY[0], "lon": AWAY[1]}
+    car.refresh_from_home_assistant(SimpleNamespace(registry=m.vehicleRegistry))
+    m.recordVehicleVIN(s)
+    assert v.value("lat") == AWAY[0] and m.getHomeLatLon() == list(HOME)
+
+
 def fleetCars(requests_mock, m):
     api = new_api(master=m)
     api.storeToken(fleet_token())

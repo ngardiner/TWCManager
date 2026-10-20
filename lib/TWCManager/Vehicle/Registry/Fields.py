@@ -9,6 +9,7 @@ class Observation(NamedTuple):
     value: Any
     source: str
     at: float
+    seen: bool = True  # False: a retained redelivery, not a sighting
 
 
 FIELDS = (

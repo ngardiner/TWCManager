@@ -979,6 +979,56 @@ def test_pairing_that_could_not_start_creates_no_vehicle_record():  # M7
     assert ble.bleStatus(VIN)["status"] == "pairing_failed"
 
 
+def test_a_scan_hit_is_a_sighting_and_a_miss_is_not():
+    ble, reg, master = scanner()
+    v = reg.getOrCreate(VIN, "TeslaBLE")
+    seen = v.lastSeen
+
+    def scan(out):
+        ble._run_command_with_timeout = lambda *a, **k: (out, b"", 0)
+        with patch(
+            "TWCManager.Vehicle.TeslaBLE.shutil.which",
+            return_value="/usr/bin/bluetoothctl",
+        ):
+            return ble.scanForVehicleInRange(VIN)
+
+    assert scan(b"[NEW] Device 11:22:33:44:55:66 Other\n") is False
+    assert v.lastSeen == seen
+    assert scan(b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n") is True
+    assert v.lastSeen > seen and v.lastSeenSource == "TeslaBLE"
+
+
+def test_the_last_scan_survives_a_restart():
+    ble, reg, master = scanner()
+    ble._run_command_with_timeout = lambda *a, **k: (b"", b"", 0)
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.shutil.which",
+        return_value="/usr/bin/bluetoothctl",
+    ):
+        assert ble.scanForVehicleInRange(VIN) is False
+    master.queue_background_task.assert_any_call({"cmd": "saveSettings"})
+    saved = master.settings["Vehicles"][VIN]["ble"]["scan"]
+    assert saved["inRange"] is False
+
+    # A new module over the same settings
+    with patch.object(TeslaBLE, "_start_dbus_session"), patch.object(
+        TeslaBLE, "_cleanup_stale_pipe"
+    ):
+        again = TeslaBLE(master)
+    assert again.rangeStatus(VIN) == {**saved, "pending": False}
+    # Pairing writes the status beside it without dropping it
+    again._setBleStatus(VIN, "paired")
+    assert master.settings["Vehicles"][VIN]["ble"]["scan"] == saved
+
+
+def test_a_scan_of_a_car_with_no_record_is_kept_in_memory_only():
+    ble, reg, master = scanner()
+    master.settings["Vehicles"] = {}
+    ble._noteScan(VIN, True)
+    assert ble.rangeStatus(VIN)["inRange"] is True
+    assert master.settings["Vehicles"] == {}
+
+
 def test_failed_device_lookup_is_range_unknown():  # M3
     ble, reg, master = scanner()
 

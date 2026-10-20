@@ -936,7 +936,8 @@ class TeslaBLE:
 
     # BLE pairing status and registry claims
     #
-    # settings["Vehicles"][vin]["ble"] = {"status": ..., "since": epoch}
+    # settings["Vehicles"][vin]["ble"] = {"status": ..., "since": epoch,
+    # "scan": {"inRange": ..., "at": epoch}}
     # with status one of pairing, paired, pairing_failed, refused. A key is
     # proven when the car accepts a command or answers a state read signed
     # with it; tesla-control's ErrKeyNotPaired text means the car dropped it.
@@ -1069,15 +1070,15 @@ class TeslaBLE:
                 else:
                     inRange = bool(heard & known)
         if failure is not None:
-            self._rangeScan[vin] = {"inRange": None, "at": time.time()}
+            self._noteScan(vin, None)
             logger.warning(f"BLE scan for {vin}: range unknown ({failure})")
             return None
-        self._rangeScan[vin] = {"inRange": inRange, "at": time.time()}
+        self._noteScan(vin, inRange)
         logger.info(f"BLE scan for {vin}: {'in range' if inRange else 'not in range'}")
         v = self.registry.get(vin)
         if v is not None:
-            # Not a sighting: a scan that misses the car says nothing new.
-            self._safeNote(v.observe, "bleReach", inRange, "TeslaBLE", None, False)
+            # A hit heard the car advertising here; a miss says nothing new.
+            self._safeNote(v.observe, "bleReach", inRange, "TeslaBLE", None, inRange)
         return inRange
 
     @staticmethod
@@ -1116,11 +1117,29 @@ class TeslaBLE:
                 macs.add(parts[1].upper())
         return macs
 
+    def _noteScan(self, vin, inRange):
+        # Also kept in the car's ble record, so a restart has it
+        scan = self._rangeScan[vin] = {"inRange": inRange, "at": time.time()}
+        with self.master.settingsLock:
+            vehicles = self.master.settings.get("Vehicles") or {}
+            rec = vehicles.get(vehicleRecordKey(vehicles, vin))
+            if isinstance(rec, dict):
+                if not isinstance(rec.get("ble"), dict):
+                    rec["ble"] = {}
+                rec["ble"]["scan"] = dict(scan)
+        if isinstance(rec, dict):
+            self.master.queue_background_task({"cmd": "saveSettings"})
+
     def rangeStatus(self, vin):
         vin = vin.upper() if isinstance(vin, str) else vin
-        # Unlocked read: _rangeScan entries are replaced whole, never mutated,
-        # and a single dict get is atomic under the GIL.
-        scan = self._rangeScan.get(vin) or {}
+        scan = self._rangeScan.get(vin)
+        if scan is None:
+            with self.master.settingsLock:
+                vehicles = self.master.settings.get("Vehicles") or {}
+                rec = vehicles.get(vehicleRecordKey(vehicles, vin))
+                ble = rec.get("ble") if isinstance(rec, dict) else None
+            scan = ble.get("scan") if isinstance(ble, dict) else None
+        scan = scan or {}
         with self._scanLock:
             requested = self._scanRequests.get(vin)
             scanning = vin in self._scanInProgress
@@ -1139,8 +1158,7 @@ class TeslaBLE:
         if not isinstance(vin, str) or not isWellFormedVIN(vin):
             return
         vin = vin.upper()
-        # Unlocked read, as in rangeStatus.
-        last = (self._rangeScan.get(vin) or {}).get("at")
+        last = self.rangeStatus(vin)["at"]
         with self._scanLock:
             if vin in self._scanInProgress:
                 return
@@ -1201,7 +1219,7 @@ class TeslaBLE:
                     "totalkWh": 0,
                 }
             old = rec.get("ble") if isinstance(rec.get("ble"), dict) else {}
-            ble = {"status": status, "since": now}
+            ble = {**old, "status": status, "since": now}
             if old.get("status") == status and old.get("since"):
                 ble["since"] = old["since"]
             sent = pairingSent if pairingSent is not None else old.get("pairingSent")

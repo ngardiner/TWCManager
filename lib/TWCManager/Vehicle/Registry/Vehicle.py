@@ -93,6 +93,7 @@ class Vehicle:
         source: str,
         at: Optional[float],
         bySource: bool = False,
+        seen: bool = True,
     ) -> Observation:
         if field not in FIELDS:
             raise KeyError(field)
@@ -101,7 +102,7 @@ class Vehicle:
         # the entry that stays is returned. bySource keeps the same rule per
         # source.
         with self._fieldLock:
-            obs = Observation(value, source, self._clock() if at is None else at)
+            obs = Observation(value, source, self._clock() if at is None else at, seen)
             if bySource:
                 mine = self._bySource.setdefault(field, {})
                 prev = mine.get(source)
@@ -123,7 +124,7 @@ class Vehicle:
     ) -> Observation:
         hook = getattr(self._registry, "onObserve", None)
         prior = self.reported(field).get(source) if hook else None
-        obs = self._store(self._latest, field, value, source, at, True)
+        obs = self._store(self._latest, field, value, source, at, True, seen)
         self.lastObservedAt = self._clock()
         if seen:
             with self._lock:

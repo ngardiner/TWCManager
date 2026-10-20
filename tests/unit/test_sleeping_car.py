@@ -176,7 +176,6 @@ def test_another_sources_sleep_reading_keeps_the_feed_in_sync():
         ("state", "online", "TeslaBLE"),
         ("shiftState", "D", "TeslaMateVehicle"),
         ("actualCurrent", 16, "Gen2TWC"),
-        ("pluggedIn", True, "Gen3TWC"),
     ],
 )
 def test_a_sign_of_life_ends_known_asleep(life):
@@ -193,6 +192,74 @@ def test_a_sign_of_life_ends_known_asleep(life):
     assert Presence.asleep(v)
     c.t += 1
     v.observe(*life)
+    assert not Presence.asleep(v)
+
+
+def test_a_gen2_plug_attributed_after_a_restart_is_not_a_sign_of_life(requests_mock):
+    # A restarted Gen2's first heartbeat begins a plug session for a car that
+    # was plugged in all along; attributing it must not end the hold
+    m, r, v, c, api = install()
+    b = sleepy(m)
+    assert b.ping(VIN) and Presence.asleep(v)
+    c.t += 4
+    m.vehicleRegistry.beginPlugSession("8244")
+    c.t += 3
+    assert Presence.attribute(m, "8244", "Gen2TWC") == VIN
+    assert v.markAt("plugIn") > v.latest("state").at and Presence.asleep(v)
+    v.observe("batteryLevel", 80, TM)  # above the new limit: the car quiesces
+    v.observe("chargeLimit", 90, TM)
+    m.setPolicyLimit(70, transition=True)
+    passes(r, c, 60, each=noise(v, c))
+    assert b._tool.call_count == 1 and bleCommands(b) == []
+
+    # A plug the car itself reports afterwards is life
+    c.t += 1
+    v.observe("pluggedIn", True, TM)
+    v.observe("pluggedIn", False, TM)
+    v.observe("pluggedIn", True, TM)
+    assert not Presence.asleep(v)
+
+
+@pytest.mark.parametrize(
+    "field, value", [("state", "online"), ("state", "suspended"), ("pluggedIn", True)]
+)
+def test_a_retained_telemetry_reading_is_not_a_sign_of_life(
+    field, value, requests_mock
+):
+    m, r, v, c, api = install()
+    b = sleepy(m)
+    assert b.ping(VIN) and Presence.asleep(v)
+    c.t += 5
+    v.observe(field, value, TM, seen=False)
+    assert Presence.asleep(v)
+    v.observe("batteryLevel", 80, TM)  # above the new limit: the car quiesces
+    v.observe("chargeLimit", 90, TM)
+    m.setPolicyLimit(70, transition=True)
+    passes(r, c, 60, each=noise(v, c))
+    assert b._tool.call_count == 1 and bleCommands(b) == []
+    c.t += 5
+    if field == "pluggedIn":
+        v.observe(field, False, TM)
+        c.t += 1
+    v.observe(field, value, TM)  # the same report, live this time
+    assert not Presence.asleep(v)
+
+
+def test_a_charger_plug_it_did_not_see_happen_is_not_life():
+    m, r, v, c = setup(here=False)
+    v.observe("state", "asleep", "TeslaBLE")
+    c.t += 1
+    v.observe("pluggedIn", True, "Gen3TWC")  # its first reading, after a restart
+    assert Presence.asleep(v)
+
+
+@pytest.mark.parametrize("source", ["Gen2TWC", "Gen3TWC"])
+def test_a_charger_replug_after_an_observed_unplug_is_life(source):
+    m, r, v, c = setup(here=False)
+    v.observe("pluggedIn", False, source)
+    v.observe("state", "asleep", "TeslaBLE")
+    c.t += 1
+    v.observe("pluggedIn", True, source)
     assert not Presence.asleep(v)
 
 

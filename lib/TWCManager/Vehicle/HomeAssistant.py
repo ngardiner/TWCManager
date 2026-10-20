@@ -88,7 +88,9 @@ class HaVehicle:
         v = api.registry.get(self.vin)
         if v is not None:
             for field, value in seen.items():
-                v.observe(field, value, "HomeAssistant")
+                # A polled position is Home Assistant's copy, never a fix
+                fix = field in ("lat", "lon")
+                v.observe(field, value, "HomeAssistant", seen=not fix)
         return True
 
     def parse_from_home_assistant(self, api: "HomeAssistant") -> Optional[dict]:

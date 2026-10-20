@@ -22,6 +22,7 @@ HOME_CHARGER_TYPES = frozenset({"ACSingleWireCAN", "MCSingleWireCAN", "<invalid>
 _PLUGGED = frozenset({"Charging", "Starting", "Stopped", "Complete", "NoPower"})
 # A plug report from these needs no position: the charger or the radio is here
 _STRONG = frozenset({"TWC", "Gen2TWC", "Gen3TWC", "TeslaBLE"})
+_CHARGERS = frozenset({"Gen2TWC", "Gen3TWC"})
 _MOVING = frozenset({"D", "R", "N"})
 # Feet per degree of latitude; the box test uses it for longitude too
 _FT_PER_DEGREE = 364488.888
@@ -116,6 +117,8 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
     elif field in ("shiftState", "state"):
         here = inside(master, vehicle)
         moving, wasMoving = _driving(field, obs.value), _driving(field, before)
+        if obs.seen and moving != wasMoving:
+            vehicle.mark("lifeAt", at)
         if moving and not wasMoving and here is not False:
             vehicle.mark("driveStart", at)
         elif (
@@ -128,8 +131,14 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
         if plugged is False and (was is True or obs.source == "Gen2TWC"):
             # A car parked unplugged reports Disconnected again and again
             vehicle.mark("unplug", at)
+            if obs.seen:
+                vehicle.mark("lifeAt", at)
         elif plugged is True and was is not True:
             vehicle.mark("plugIn", at)
+            # Not a retained copy, nor a charger's first reading of a plug
+            # it did not see happen (a restart)
+            if obs.seen and (obs.source not in _CHARGERS or was is False):
+                vehicle.mark("lifeAt", at)
             # A pushed or attributed plug-in; a Gen2's VIN arrives on its own
             if obs.source in TELEMETRY_SOURCES | {"Gen2TWC", "Gen3TWC"}:
                 from .Reconcile.Targets import onArrival
@@ -183,12 +192,12 @@ def drivingNow(v) -> bool:
 
 
 def asleep(v, lately=NEVER) -> Optional[bool]:
-    # True: the newest asleep reading outranks every sign of life (a state
-    # other than asleep or offline, a drive, a plug change, current drawn).
+    # True: the newest asleep reading outranks every sign of life (a seen state
+    # other than asleep or offline, a seen drive or plug change, current drawn).
     # False: a sign of life newer than it and than lately. Else unknown
     states, amps = v.reported("state").values(), v.latest("actualCurrent")
-    life = [o.at for o in states if o.value not in ("asleep", "offline")]
-    life += [v.markAt(m) for m in ("plugIn", "unplug", "driveStart", "driveEnd")]
+    life = [o.at for o in states if o.seen and o.value not in ("asleep", "offline")]
+    life += [v.markAt("lifeAt")]
     life = max(life + ([amps.at] if amps and (amps.value or 0) >= 1 else []))
     slept = max([o.at for o in states if o.value == "asleep"], default=NEVER)
     if slept >= life and slept > NEVER:
@@ -391,11 +400,12 @@ def learnHome(master, vehicle, lat, lon) -> bool:
     # radius, or with no home yet, moves home to it. A stale fix may be
     # wherever the car last had reception: the GPS time its source gave
     # (observed before the position) dates it, else its reading's time. A
-    # fix not read over BLE must be read after the car reached its TWC (the
-    # later of its plug-in and the VIN read; a Gen2's plug-in mark stays on
-    # the anonymous session the VIN read replaces), else it may predate the
-    # drive home
-    if lat is None or lon is None:
+    # retained or redelivered copy is never a fix, whatever its stamp. A fix
+    # not read over BLE must be read after the car reached its TWC (the later
+    # of its plug-in and the VIN read; a Gen2's plug-in mark stays on the
+    # anonymous session the VIN read replaces), else it may predate the drive
+    # home
+    if lat is None or lon is None or not (lat.seen and lon.seen):
         return False
     named = getattr(vehicle.latest("twcVin"), "at", NEVER)
     if lat.source != "TeslaBLE" and lat.at < max(vehicle.markAt("plugIn"), named):
