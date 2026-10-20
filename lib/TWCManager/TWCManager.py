@@ -41,6 +41,7 @@ import yaml
 import threading
 from TWCManager.ControlTick import ControlTick
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.Vehicle import Presence
 from TWCManager.Vehicle.Providers.Order import registerProviders
 from TWCManager.Vehicle.Reconcile.Targets import onDeparture
 from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
@@ -359,6 +360,12 @@ def background_tasks_thread(master):
                     master.getSlaveLifetimekWh()
                 elif task["cmd"] == "getVehicleVIN":
                     master.getVehicleVIN(task["slaveTWC"], task["vinPart"])
+                elif task["cmd"] == "attributePlug":
+                    # BLE reads take seconds: here, never on the serial loop
+                    s = master.slaveTWCs.get(task["slaveTWC"])
+                    if s:
+                        amps = (s.reportedAmpsMax, s.reportedAmpsActual)
+                        Presence.attribute(master, s.twcid, "Gen2TWC", *amps)
                 elif task["cmd"] == "snapHistoryData":
                     master.snapHistoryData()
                 elif task["cmd"] == "updateStatus":

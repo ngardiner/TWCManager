@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from TWCManager.EVSEInstance.ChargingPoint import anonymousCars, groupEndpoints
+from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
 from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
@@ -139,31 +139,31 @@ def anonTwc(*outcomes):
     # first; VIN3 is on a TWC that names it
     from tests.unit.reconcile_helpers import placeAt
     from tests.unit.teslatokens import new_api
-    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),)))); m.settings["chargeRateControl"] = "2"; api = new_api(master=m)
+    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),))), here=False); m.settings["chargeRateControl"] = "2"; api = new_api(master=m)
     for i, vin in enumerate((VIN, VIN2, VIN3, VIN4)):
         api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, m.vehicleRegistry.get(vin))   # at home by position
-    s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN = VIN3
+    s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN, other.reportedState = VIN3, 0x03; m.vehicleRegistry.observeTwcVin("8245", VIN3)
     anon = m.vehicleRegistry.beginPlugSession("8244"); assert s.vehicleKey == anon.key
     (pt,) = groupEndpoints(m, [s]); return m, r, v, c, s, pt
 
-def test_an_anonymous_twc_rates_only_plugged_in_cars_else_vehicles_0():    # I2, paid counted
+def test_an_anonymous_twc_rates_only_cars_plugged_in_here_and_never_vehicles_0():    # I2, paid counted
     m, r, v, c, s, pt = anonTwc(); f = prov(m, "FleetAPI")
     m.vehicleRegistry.get(VIN2).observe("chargingState", "Charging", "OwnerAPI"); m.vehicleRegistry.get(VIN3).observe("chargingState", "Charging", "OwnerAPI")
     m.vehicleRegistry.get(VIN4).observe("chargingState", "Disconnected", "OwnerAPI")
     for i in range(3600): pt.setTargetPower((10 + i % 2) * 240); r.pass_(); c.t += 1
     assert {x[1] for x in f.calls} == {VIN2} and len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)   # never an unplugged car, nor a named one; no wake
-    m, r, v, c, s, pt = anonTwc(); f = prov(m, "FleetAPI")                     # none known plugged in: main's vehicles[0]
-    pt.setTargetPower(10 * 240); r.pass_(); assert f.calls == [("setAmps", VIN, 10)]
+    m, r, v, c, s, pt = anonTwc(); f = prov(m, "FleetAPI")                     # none known plugged in: nobody is rated
+    pt.setTargetPower(10 * 240); r.pass_(); assert f.calls == []
     m, r, v, c, s, pt = anonTwc(); f = prov(m, "FleetAPI")                     # HA says "Stopped" for an unplugged car (rereview N1)
     for vin in (VIN, VIN2, VIN4):
         m.vehicleRegistry.get(vin).observe("chargingState", "Disconnected", "OwnerAPI")
         m.vehicleRegistry.get(vin).observe("chargingState", "Stopped", "HomeAssistant", at=c() + 1)
     for i in range(3600): pt.setTargetPower((10 + i % 2) * 240); r.pass_(); c.t += 1
-    assert {x[1] for x in f.calls} == {VIN} and len(f.calls) <= 240                 # the vehicles[0] fallback only, no fan-out
+    assert f.calls == []                                                             # no fan-out, and no vehicles[0]
     m, r, v, c, s, pt = anonTwc()
     m.vehicleRegistry.get(VIN2).observe("chargingState", "Unknown", "TeslaBLE"); m.vehicleRegistry.get(VIN4).observe("chargingState", "None", "TeslaMateVehicle")
     m.vehicleRegistry.get(VIN).observe("chargingState", "Charging", "HomeAssistant")
-    assert [x.key for x in anonymousCars(m, s)] == [VIN]                            # BLE "Unknown" and TeslaMate "None" are not plugged in; HA "Charging" is
+    assert pt._carKeys() == [VIN]                                                   # BLE "Unknown" and TeslaMate "None" are not plugged in; HA "Charging" is
 
 def test_an_anonymous_mode_1_lift_goes_to_the_plugged_in_car_only():    # I2, paid counted
     m, r, v, c, s, pt = anonTwc(); f = prov(m, "FleetAPI"); m.settings["chargeRateControl"] = "1"

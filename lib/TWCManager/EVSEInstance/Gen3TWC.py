@@ -42,7 +42,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
-from TWCManager.Vehicle.Presence import HOME, presence
+from TWCManager.Vehicle.Presence import attribute
 
 if TYPE_CHECKING:
     from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
@@ -65,8 +65,6 @@ class Gen3TWC(EVSEInstance):
     vitals API.
     """
 
-    # Seconds within which a car's plug-in observation correlates it
-    CORRELATE_WINDOW = 120.0
     # Vitals carry no VIN (currentVIN stays "")
     isReadOnly = False
     isLocal = True
@@ -238,14 +236,8 @@ class Gen3TWC(EVSEInstance):
                 vehicle.observe("voltage", self.currentVoltage[0], "Gen3TWC")
 
     def _correlate(self) -> Optional[str]:
-        """Name the car that just connected, or leave the session anonymous.
-
-        The cloud VIN wins, and replaces a plug-in guess once the registry
-        confirms it; otherwise exactly one known car whose plug-in was
-        observed within CORRELATE_WINDOW, that is on no other point and is
-        not known to be away, is this one (provisionally: the cloud may
-        still correct it).
-        """
+        """Name the car that just connected: the cloud VIN, which replaces
+        an attribution guess once the registry confirms it, else the guess."""
         registry = self._registry()
         if registry is None:
             return None
@@ -262,7 +254,6 @@ class Gen3TWC(EVSEInstance):
                 # plugged in as far as this unit knows
                 guess = registry.get(guessKey)
                 if guess is not None:
-                    guess.observe("twcVin", None, "TWC", seen=False)
                     guess.observe("pluggedIn", False, "Gen3TWC")
                 logger.info(
                     "Gen3TWC %s: the energy site names %s here, not %s",
@@ -271,31 +262,7 @@ class Gen3TWC(EVSEInstance):
                     guessKey,
                 )
             return self.cloudVin
-        now = registry.now()
-        candidates = []
-        for vehicle in registry.vehicles():
-            if vehicle.isAnonymous:
-                continue
-            obs = vehicle.latest("pluggedIn")
-            if obs is None or obs.value is not True:
-                continue
-            if now - obs.at > self.CORRELATE_WINDOW:
-                continue
-            if vehicle.value("twcVin") is not None:
-                continue
-            api = vehicle.attachment("TeslaAPI")
-            if api is not None and presence(self.master, vehicle) != HOME:
-                continue
-            candidates.append(vehicle.vin)
-        if len(candidates) == 1:
-            registry.observeTwcVin(self.pointId, candidates[0])
-            return candidates[0]
-        logger.info(
-            "Gen3TWC %s: car connected, %d candidates; left anonymous",
-            self._ip,
-            len(candidates),
-        )
-        return None
+        return attribute(self.master, self.pointId, "Gen3TWC")
 
     @property
     def isReachable(self) -> bool:

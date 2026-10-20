@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from tests.unit.teslatokens import FakeMaster, new_api, owner_token, wire_reads
-from TWCManager.Vehicle.Presence import telemetrySaysPlugged
+from TWCManager.Vehicle.Presence import telemetryPlug
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Telemetry import TelmetryBase
 from TWCManager.Vehicle.TeslaMateVehicle import TeslaMateVehicle
@@ -275,11 +275,11 @@ def test_sleeping_car_on_healthy_feed_stays_telemetry_sourced(teslamate):  # rul
     v.observe("state", "asleep", "TeslaMateVehicle", at=0.0)
     v.observe("pluggedIn", True, "TeslaMateVehicle", at=0.0)
     assert v.syncSource == "TeslaMateVehicle"
-    assert telemetrySaysPlugged(None, v) is True
+    assert telemetryPlug(v) is True
     assert api.is_awake(v) is False and not api.get_car_api.called
     tm.noteHealthy("7", "false")  # TeslaMate stopped polling
     assert v.syncSource == "TeslaAPI"
-    assert telemetrySaysPlugged(None, v) is False
+    assert telemetryPlug(v) is None
     tm.noteHealthy("7", "true")
     tm.mqttDisconnect(None, None, None, 7)  # broker gone
     assert v.syncSource == "TeslaAPI"

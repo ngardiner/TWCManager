@@ -777,7 +777,7 @@ def gen3(m, *cars):
     from tests.unit.test_gen3twc_provider import IP1, IP2, make as make_gen3, vitals
 
     g, ctl, gp = make_gen3((IP1, IP2))
-    g.vehicleRegistry = m.vehicleRegistry
+    g.vehicleRegistry, g.getSlaveTWCs = m.vehicleRegistry, m.getSlaveTWCs
     m.providerOrder.register(gp)
     units = ctl.devices()
     for unit, vin in zip(units, cars):
@@ -2020,4 +2020,182 @@ def test_plug_in_on_a_vin_twc_comes_home_with_one_apply(requests_mock, monkeypat
     assert Presence.presence(m, v) == Presence.HOME
     beats(m, r, c, s, 600, 0x03, 32.0, policy)
     assert limits(b) == [50] and m.heldLimits.get(VIN) == HeldLimit(80, 50)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+# A VIN-less plug: one attribution names the car, else nobody is rated
+
+
+def attributeQueued(m):
+    # What the background thread does with the serial thread's attribution
+    # tasks; every other queued task is dropped, as this harness never runs
+    # them
+    while not m.backgroundTasksQueue.empty():
+        task = m.backgroundTasksQueue.get()
+        m.doneBackgroundTask(task)
+        s = m.slaveTWCs.get(task.get("slaveTWC"))
+        if task.get("cmd") == "attributePlug" and s:
+            amps = (s.reportedAmpsMax, s.reportedAmpsActual)
+            Presence.attribute(m, s.twcid, "Gen2TWC", *amps)
+
+
+def chargeRead(**cars):
+    # BLE's charge state per VIN: (chargingState, pilot amps); None for a
+    # car the radio does not answer
+    def fetch(vin, kind):
+        if kind != "charge" or cars.get(vin) is None:
+            return None
+        state, pilot = cars[vin]
+        cs = {"chargingState": {state: {}}, "chargerPilotCurrent": pilot}
+        return {"chargeState": dict(cs, chargerActualCurrent=0)}
+
+    return fetch
+
+
+def twoCarsHome(requests_mock, **kw):
+    # Two listed cars parked at home since before the plug, limits known,
+    # both paired over BLE
+    m, r, v, c, api = install(fleet=True, **kw)
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Two"})
+    two = m.vehicleRegistry.get(VIN2)
+    placeAt(m, two, HOME)
+    b = realBle(m, vins=(VIN, VIN2))
+    for vin in (VIN, VIN2):
+        FleetCar(requests_mock, vin=vin, state="asleep", limit=80)
+        m.vehicleRegistry.get(vin).observe("chargeLimit", 80, "TeslaBLE")
+    return m, r, v, two, c, b
+
+
+def test_vin_less_single_candidate_plug_one_apply(requests_mock, monkeypatch):
+    # Scenario 3: away, home, then plugged in on a TWC that reads no VIN: the
+    # only candidate is named and the policy limit goes once over BLE;
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, at=AWAY)
+    b = realBle(m)
+    FleetCar(requests_mock, state="asleep", limit=80)
+    v.observe("chargeLimit", 80, "TeslaBLE")
+    policy = cycles(m, 50)
+    passes(r, c, 300, each=policy)
+    c.t += 10
+    placeAt(m, v, HOME)
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and m.vehicleRegistry.get("anon:8244") is None
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert limits(b) == [50] and m.heldLimits.get(VIN) == HeldLimit(80, 50)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_vin_less_two_candidates_ble_pilot_one_apply(requests_mock, monkeypatch):
+    # Scenario 4: two cars at home, each given the policy limit once; BLE
+    # reads one charging at the TWC's 32 A pilot and the other unplugged:
+    # that one is named and it alone is rated; paid == (0, 0, 0)
+    m, r, v, two, c, b = twoCarsHome(requests_mock)
+    b._fetch_state_json = chargeRead(
+        **{VIN: ("Charging", 32), VIN2: ("Disconnected", 0)}
+    )
+    m.settings["chargeRateControl"] = "2"
+    m.setMaxAmpsToDivideAmongSlaves(10)
+    policy = cycles(m, 50)
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and two.value("twcVin") is None
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert limits(b) == [50] and limits(b, VIN2) == [50]
+    rated = {vin for vin, cmd, args in b.runs if cmd == "charging-set-amps"}
+    assert rated == {VIN} and paid(requests_mock) == (0, 0, 0)
+
+
+def test_vinless_ambiguous_plug_rates_nobody_and_logs_once(
+    requests_mock, monkeypatch, caplog
+):
+    # Scenario 5: two cars at home, BLE answers neither: nobody is named or
+    # rated, and the ambiguity logs once for the plug; paid == (0, 0, 0)
+    m, r, v, two, c, b = twoCarsHome(requests_mock)
+    m.settings["chargeRateControl"] = "2"
+    m.setMaxAmpsToDivideAmongSlaves(10)
+    policy = cycles(m, 50)
+    with caplog.at_level("INFO"):
+        s = gen2(monkeypatch, m, c, vin=None)
+        for _ in range(60):
+            beats(m, r, c, s, 10, 0x03, 32.0, policy)
+            attributeQueued(m)
+    assert caplog.text.count("8244: no single car plugged in; left anonymous") == 1
+    assert v.value("twcVin") is None and two.value("twcVin") is None
+    assert s.vehicleKey == "anon:8244"
+    assert {cmd for vin, cmd, args in b.runs} <= {"charging-set-limit"}
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_vinless_rate_never_falls_back_to_vehicles_0(requests_mock):
+    # (h): row 25 with neither car plugged in: the anonymous point rates
+    # nobody, where main rated vehicles[0]; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Two"})
+    for vin in (VIN, VIN2):
+        FleetCar(requests_mock, vin=vin, state="online", charging="Disconnected")
+        car = m.vehicleRegistry.get(vin)
+        placeAt(m, car, HOME)
+        car.observe("chargingState", "Disconnected", "TeslaMateVehicle")
+    s = m.getSlaveTWCs()[0]
+    s.protocolVersion = 2
+    m.settings["chargeRateControl"] = "2"
+    m.setMaxAmpsToDivideAmongSlaves(10)
+    m.vehicleRegistry.beginPlugSession("8244")
+    rated = []
+
+    def beat():
+        heartbeat(m, s, 10.0, state=0x01)
+        rated.extend(k for k in (VIN, VIN2) if m.desired.get(k, AMPS))
+
+    passes(r, c, 600, each=beat)
+    assert (
+        rated == [] and amps(requests_mock) == [] and paid(requests_mock) == (0, 0, 0)
+    )
+
+
+def test_supercharger_telemetry_plugged_is_not_home(requests_mock, monkeypatch):
+    # Scenario 6: the car charges at a Supercharger, its live feed saying
+    # plugged in, as something plugs in at home on a TWC that reads no VIN:
+    # the car is not home, not named and not applied; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, at=AWAY)
+    b = realBle(m)
+    FleetCar(requests_mock, state="online", limit=80, charging="Charging")
+    v.observe("chargeLimit", 80, "TeslaBLE")
+    policy = cycles(m, 50)
+    passes(r, c, 300, each=policy)
+    push(v, c, fastChargerPresent=True, pluggedIn=True, chargingState="Charging")
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert Presence.presence(m, v) == Presence.NOT_HOME
+    assert v.value("twcVin") is None and limits(b) == []
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_returning_car_on_an_unnamed_gen2_asleep_starts_over_ble(
+    requests_mock, monkeypatch
+):
+    # BLE and a VIN-less TWC only: after the unplug the car returns, BLE
+    # reaches it, and the TWC says 03 asleep at 6 A with no VIN read. The
+    # plug is attributed to it, so a start for the car goes over BLE;
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(located=False)
+    b = realBle(m)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    v.observe("bleReach", True, "TeslaBLE")
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244"
+    beats(m, r, c, s, 600, 0x03, 32.0)
+    beats(m, r, c, s, 120, 0x00, 0.0)
+    assert Presence.presence(m, v) == Presence.NOT_HOME
+    c.t += 600
+    v.observe("bleReach", True, "TeslaBLE")
+    beats(m, r, c, s, 10, 0x03, 6.0)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and Presence.pluggedHere(m, v)
+    m.startCarsCharging(VIN)
+    beats(m, r, c, s, 60, 0x03, 6.0)
+    assert "charging-start" in bleCommands(b)
     assert paid(requests_mock) == (0, 0, 0)

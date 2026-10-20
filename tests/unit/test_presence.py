@@ -861,7 +861,7 @@ def test_anonymous_00_edge_car_is_never_also_an_endpoint():
     anon = m.vehicleRegistry.beginPlugSession("8244")  # the point at 00
     v.observe("state", "online", TM)
     v.observe("pluggedIn", True, TM)  # live telemetry: plugged in
-    assert P.pluggedHere(m, v) and P.telemetrySaysPlugged(m, v)
+    assert P.pluggedHere(m, v) and P.telemetryPlug(v)
     keys = [e.vehicleKey for e in vehicleEndpoints(m)]
     assert anon.key not in keys and VIN not in keys  # it may be the 00 car
 
@@ -1040,6 +1040,151 @@ def test_an_unplugged_reading_after_the_naming_outweighs_it_and_an_older_one_doe
     later(c)
     v.observe("chargingState", "Disconnected", "FleetAPI")  # read after it
     assert P.applicable(m, v, C.START_CHARGING) == (P.NOT_HERE, "not plugged in")
+
+
+# One attribution names a VIN-less plug's car, for Gen2 and Gen3
+
+
+def test_attribution_reads_only_local_providers(requests_mock):
+    from tests.unit.test_command_path_parity import (
+        VIN2 as TWO,
+        chargeRead,
+        install,
+        realBle,
+    )
+
+    m, r, v, c, api = install(fleet=True, owner=True)
+    api.addVehicle({"id": 2, "vin": TWO, "display_name": "Two"})
+    placeAt(m, m.vehicleRegistry.get(TWO))  # both home: a fix can't tell them
+    b = realBle(m)
+    asked = []
+    read = chargeRead(**{VIN: ("Charging", 32)})
+    b._fetch_state_json = lambda vin, kind: asked.append((vin, kind)) or read(vin, kind)
+    m.vehicleRegistry.beginPlugSession("8244")
+    assert P.attribute(m, "8244", "Gen2TWC", 32.0, 0.0) == VIN
+    assert asked == [(VIN, "charge")] and requests_mock.call_count == 0
+
+
+def test_a_single_candidate_inside_is_attributed_merges_the_session_and_arrives_once(
+    monkeypatch,
+):
+    from TWCManager.Vehicle.Reconcile import Targets
+    from tests.unit.test_command_path_parity import attributeQueued
+    from tests.unit.test_gen2_unplug import beats
+    from tests.unit.test_gen3twc_provider import make as gen3, vitals
+
+    arrivals = []
+    monkeypatch.setattr(Targets, "onArrival", lambda m, v: arrivals.append(v.key))
+    m, v, c = placed()
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    beats(m, s, c, 20, 0x03, 32.0)  # a Gen2 that reads no VIN
+    assert m.vehicleRegistry.get("anon:8244").latest("actualCurrent") is not None
+    attributeQueued(m)
+    assert m.vehicleRegistry.get("anon:8244") is None and s.vehicleKey == VIN
+    assert v.latest("actualCurrent").source == "Gen2TWC"  # the session's readings
+    beats(m, s, c, 300, 0x03, 32.0)
+    attributeQueued(m)
+    assert arrivals == [VIN] and P.pluggedHere(m, v)
+    g, ctl, gp = gen3()  # and a Gen3: its own plug reading is the arrival
+    m.vehicleRegistry.endPlugSession("8244")
+    (u,) = ctl.devices()
+    u.master = m
+    vitals(u, True)
+    vitals(u, True)
+    assert u.vehicleKey == VIN and arrivals == [VIN, VIN]
+
+
+def test_two_candidates_attributed_by_ble_pilot():
+    m, r, v, c = home()
+    two = m.vehicleRegistry.getOrCreate(VIN2, "t")
+    for car, pilot in ((v, 16), (two, 32)):
+        placeAt(m, car)
+        car.claim("TeslaBLE", True, "paired")
+        later(c)
+        car.observe("chargingState", "Charging", "TeslaBLE")
+        car.observe("availableCurrent", pilot, "TeslaBLE")
+    m.vehicleRegistry.beginPlugSession("8244")
+    assert P.attribute(m, "8244", "Gen2TWC", 32.0, 0.0) == VIN2
+    assert two.value("twcVin") == "8244" and v.value("twcVin") is None
+
+
+def test_live_telemetry_unplugged_is_never_attributed_and_outranks_a_naming():
+    m, v, c = placed()
+    m.getSlaveTWCs()[0].reportedState = 0x03
+    later(c)
+    v.observe("state", "online", TM)
+    v.observe("pluggedIn", False, TM)
+    m.vehicleRegistry.beginPlugSession("8244")
+    assert P.attribute(m, "8244", "Gen2TWC") is None and v.value("twcVin") is None
+    m.vehicleRegistry.endPlugSession("8244")
+    m2, v2, c2 = placed()
+    m2.getSlaveTWCs()[0].reportedState = 0x03
+    m2.vehicleRegistry.beginPlugSession("8244")
+    assert P.attribute(m2, "8244", "Gen2TWC") == VIN and P.pluggedNow(m2, v2)
+    later(c2)
+    v2.observe("state", "online", TM)
+    v2.observe("pluggedIn", False, TM)  # newer than the naming
+    assert P.pluggedNow(m2, v2) is False and not P.pluggedHere(m2, v2)
+
+
+def test_a_vinless_unplug_never_departs_a_car_another_twc_names(monkeypatch):
+    m, v, c = placed()
+    s, beat = onGen2(monkeypatch, m, v, c, named=False)
+    other = m.newSlave(b"\x82\x45", 80)
+    m.vehicleRegistry.observeTwcVin("8245", v.vin)  # asleep at 00 on that TWC
+    assert P.twcVinAt(m, v) == P.NEVER and P.candidates(m) == []
+    beat(70, 0x00, 0.0)
+    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8245"
+    assert other.reportedState == 0x00
+
+
+def test_a_gen3_plug_in_never_reads_ble(requests_mock):
+    # The vitals refresh must not wait on the radio: with no offer to
+    # compare a pilot to, a Gen3 plug-in is attributed from what is known
+    from tests.unit.test_command_path_parity import VIN2 as TWO, install, realBle
+    from tests.unit.test_gen3twc_provider import make as gen3, vitals
+
+    m, r, v, c, api = install(fleet=True)  # at home; no plug reading at all
+    b = realBle(m, vins=(VIN, TWO))
+    fetched = []
+    b._fetch_state_json = lambda vin, kind: fetched.append(vin)
+    g, ctl, gp = gen3()
+    (u,) = ctl.devices()
+    u.master = m
+    vitals(u, True)
+    assert fetched == [] and u.vehicleKey == VIN
+
+
+def test_an_attributed_gen2_plug_ends_with_the_point_s_00_even_idle(monkeypatch):
+    from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
+    from tests.unit.test_command_path_parity import attributeQueued
+
+    m, v, c = placed()
+    scriptedBle(m)
+    s, beat = onGen2(monkeypatch, m, v, c, named=False)
+    attributeQueued(m)
+    beat(60, 0x03, 0.0)  # named, idle at 0 A: no 00 here is an unplug
+    assert v.value("twcVin") == "8244" and P.pluggedHere(m, v)
+    assert [e.vehicle for e in vehicleEndpoints(m)] == [v]
+    beat(120, 0x00, 0.0)
+    assert v.markAt("unplug") == P.NEVER and not P.pluggedHere(m, v)
+    assert vehicleEndpoints(m) == []
+
+
+def test_an_anonymous_point_s_offer_covers_the_cars_it_fans_out_to(monkeypatch):
+    from tests.unit.test_gen2_unplug import beats
+
+    m, v, c = placed()
+    scriptedBle(m)
+    v.claim("TeslaBLE", True, "paired")
+    v.observe("chargingState", "Charging", TM)  # plugged in here, unnamed
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    m.setMaxAmpsToDivideAmongSlaves(0)
+    beats(m, s, c, 20, 0x03, 32.0)
+    m.distributeEVSEPower()
+    assert s.vehicleKey == "anon:8244" and m.offered[VIN] == 0
 
 
 def cloudFix(v, at, source="FleetAPI", gpsAsOf=None):

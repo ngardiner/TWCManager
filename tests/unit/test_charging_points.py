@@ -90,7 +90,8 @@ def test_fair_share_below_the_point_minimum_is_a_stop_not_a_partial_amount():
 def test_idle_gen3_units_get_zero_and_two_units_are_two_points():
     g1 = ep("Gen3TWC-10.0.0.1", "anon:Gen3TWC-10.0.0.1", local=True, wants=True, maxW=11520)
     g2 = ep("Gen3TWC-10.0.0.2", None, local=True, wants=False, minW=1440)
-    pts = groupEndpoints(Mock(), [g1, g2]); assert [p.ID for p in pts] == ["Point-anon:Gen3TWC-10.0.0.1", "Point-Gen3TWC-10.0.0.2"]
+    m = Mock(); m.vehicleRegistry.vehicles.return_value = []                             # no car the anonymous unit's session fans out to
+    pts = groupEndpoints(m, [g1, g2]); assert [p.ID for p in pts] == ["Point-anon:Gen3TWC-10.0.0.1", "Point-Gen3TWC-10.0.0.2"]
     distributor(pts, 40).distributeEVSEPower()
     assert g1.setTargetPower.call_args.args[0] == 9600 and g2.setTargetPower.call_args.args[0] == 0
 

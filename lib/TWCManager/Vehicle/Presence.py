@@ -15,6 +15,8 @@ SEND, NOT_HERE, HOLD = "send", "not here", "hold"
 HOME_RADIUS_FT = 1000
 HOME_FIX_MAX_AGE = 600.0
 REACH_WINDOW = 300.0
+PILOT_MATCH_TOLERANCE, PLUGGED_JUST_NOW = 1, 120.0
+_BLE_CHARGE = ("chargingState", "availableCurrent", "actualCurrent")
 # A fast charger type other than these is not a home charger
 HOME_CHARGER_TYPES = frozenset({"ACSingleWireCAN", "MCSingleWireCAN", "<invalid>", ""})
 _PLUGGED = frozenset({"Charging", "Starting", "Stopped", "Complete", "NoPower"})
@@ -128,8 +130,8 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
             vehicle.mark("unplug", at)
         elif plugged is True and was is not True:
             vehicle.mark("plugIn", at)
-            # A pushed or Gen3 plug-in; a Gen2 names its car (recordVehicleVIN)
-            if obs.source in TELEMETRY_SOURCES | {"Gen3TWC"}:
+            # A pushed or attributed plug-in; a Gen2's VIN arrives on its own
+            if obs.source in TELEMETRY_SOURCES | {"Gen2TWC", "Gen3TWC"}:
                 from .Reconcile.Targets import onArrival
 
                 onArrival(master, vehicle)
@@ -137,22 +139,29 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
 
 def pluggedNow(master, v, unknown=False, since=NEVER) -> Optional[bool]:
     # The newest plug reading after since; unknown when nothing says
-    if twcVinAt(master, v) > NEVER:
-        # A charging point names the car and reports a plug
-        return True
     here, best = inside(master, v), None
     for field in ("pluggedIn", "chargingState"):
         for obs in v.reported(field).values():
             value = _plugEvidence(v, field, obs, here)
+            # A Gen2's plug counts only while it names the car, below
+            value = None if value and obs.source == "Gen2TWC" else value
             key = (obs.at, obs.source in _STRONG)
             if value is not None and obs.at > since and (best is None or key > best[0]):
-                best = (key, value)
+                best = (key, value, obs.source)
+    # A charging point naming the car says plugged unless another source
+    # read it unplugged since; a Gen2 re-plugged keeps its old naming
+    named = twcVinAt(master, v)
+    if named > NEVER and (
+        not best or best[1] or best[2] == "Gen2TWC" or best[0][0] <= named
+    ):
+        return True
     return unknown if best is None else best[1]
 
 
-def telemetrySaysPlugged(master, v) -> bool:
-    # A live telemetry feed says the cable is in
-    return v.syncSource in TELEMETRY_SOURCES and v.value("pluggedIn") is True
+def telemetryPlug(v) -> Optional[bool]:
+    # The live telemetry feed's own plug reading
+    obs = v.reported("pluggedIn").get(v.syncSource)
+    return obs.value if obs is not None and v.syncSource in TELEMETRY_SOURCES else None
 
 
 def drivingNow(v) -> bool:
@@ -267,8 +276,8 @@ def applicable(master, v, capability) -> Tuple[str, str]:
 
 
 def candidates(master, capability=None) -> List:
-    # Cars an unnamed charging point may serve. A broadcast (capability)
-    # reaches cars on the Tesla API's list or with a BLE key that may be
+    # Cars an unnamed charging point may serve, none named elsewhere. A
+    # broadcast (capability) reaches listed or BLE-keyed cars that may be
     # home, and Home Assistant cars at home that a TWC reports by VIN
     registry, order = master.vehicleRegistry, master.providerOrder
     out = []
@@ -277,9 +286,8 @@ def candidates(master, capability=None) -> List:
             continue
         state = presence(master, v)
         if capability is None:
-            reach = max(v.markAt("absent"), registry.now() - REACH_WINDOW)
-            near = reach < v.markAt("contact")
-            ok = state != NOT_HOME or inside(master, v) or near
+            near = inside(master, v) or _reached(master, v)
+            ok = (state != NOT_HOME or near) and not v.value("twcVin")
         else:
             api = v.attachment("TeslaAPI") is not None or "TeslaBLE" in v.claims
             ha = v.attachment("HomeAssistant") is not None and state == HOME
@@ -289,6 +297,62 @@ def candidates(master, capability=None) -> List:
         if ok:
             out.append(v)
     return out
+
+
+def _reached(master, v) -> bool:
+    reach = max(v.markAt("absent"), master.vehicleRegistry.now() - REACH_WINDOW)
+    return reach < v.markAt("contact")
+
+
+def pick(master, offered=None, actual=0, read=False):
+    # A VIN-less plug's car: plugged in just now, else BLE-read at this pilot
+    # and draw (only given an offer), else BLE-reached, else inside
+    now, pool = master.vehicleRegistry.now(), candidates(master)
+
+    def fresh(v, field, source="TeslaBLE", window=REACH_WINDOW):
+        o = v.reported(field).get(source) if source else v.latest(field)
+        return o if o is not None and now - o.at <= window else None
+
+    just = [(v, fresh(v, "pluggedIn", None, PLUGGED_JUST_NOW)) for v in pool]
+    just = [v for v, o in just if o and _plugEvidence(v, "pluggedIn", o, True)]
+    just = [v for v in just if presence(master, v) != NOT_HOME]
+    if len(just) == 1:
+        return just[0]
+
+    def fits(v):
+        # BLE says: False not plugged in here, True at this pilot and draw;
+        # a live feed saying unplugged rules the car out
+        if telemetryPlug(v) is False:
+            return False
+        if read and "TeslaBLE" in v.claims and not fresh(v, "chargingState"):
+            v.read("chargingState", 0, providers=("TeslaBLE",), force=True)
+        state, pilot, amps = (fresh(v, f) for f in _BLE_CHARGE)
+        plugged = state and _plug("chargingState", state)
+        if not (plugged and pilot and offered is not None):
+            return None if plugged else plugged
+        if abs(pilot.value - offered) > PILOT_MATCH_TOLERANCE:
+            return False
+        drawing = actual >= 1 and amps
+        return not drawing or abs(amps.value - actual) <= PILOT_MATCH_TOLERANCE or None
+
+    fit = [(v, fits(v)) for v in pool]
+    left = [v for v, f in fit if f is not False]
+    won = [v for v, f in fit if f] or [v for v in left if _reached(master, v)]
+    won = won or [v for v in left if inside(master, v)]
+    return won[0] if len(won) == 1 else None
+
+
+def attribute(master, pointId, source, offered=None, actual=0) -> Optional[str]:
+    # Background thread: names an anonymous session's car, plugged in there
+    if not getattr(master.vehicleRegistry.vehicleAt(pointId), "isAnonymous", 0):
+        return None
+    v = pick(master, offered, actual, read=offered is not None)
+    if v is None:
+        logger.info("%s: no single car plugged in; left anonymous", pointId)
+        return None
+    master.vehicleRegistry.observeTwcVin(pointId, v.vin)
+    v.observe("pluggedIn", True, source)
+    return v.vin
 
 
 def homeCars(master, attachment) -> List[Tuple[Any, Any]]:

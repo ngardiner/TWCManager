@@ -12,6 +12,8 @@ shared headroom) carries the whole target.
 from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.Vehicle.Presence import candidates, pluggedHere
+from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Reconcile.Belief import known
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Reconcile.Rules import satisfied
@@ -95,14 +97,15 @@ class ChargingPoint(EVSEInstance):
 
     def _carKeys(self) -> List[str]:
         # The cars this point rates: its car members; else the Gen2 TWC's
-        # named car, or the unnamed cars its anonymous session fans out to
+        # named car, or for an anonymous session the cars plugged in here
         cars = [e.vehicleKey for e in self.vehicleEndpoints if not e.isReadOnly]
         local = self.localEndpoints[0] if self.localEndpoints else None
         key = getattr(local, "vehicleKey", None)
         if cars or key is None:
             return cars
         if isAnonKey(key):
-            return [v.key for v in anonymousCars(self.master, local)]
+            cars = candidates(self.master, SET_AMPS)
+            return [v.key for v in cars if pluggedHere(self.master, v)]
         return [key]
 
     def confirmed(self) -> bool:
@@ -188,17 +191,6 @@ class ChargingPoint(EVSEInstance):
         # The car's own request is known to sit below the offer
         k = member.requestedAmps()
         return k is not None and k < int(amps)
-
-
-def anonymousCars(master, slave) -> list:
-    # The cars an anonymous session rates, paid once: the plugged-in
-    # cars, else vehicles[0]
-    plugged, cars = slave.pluggedCars()
-    if plugged:
-        return plugged
-    # The first car the Tesla API listed (registry (sorted VIN) order)
-    listed = [v for v, _ in master.vehicleRegistry.attached("TeslaAPI")]
-    return listed[:1] if listed and listed[0] in cars else []
 
 
 def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]:

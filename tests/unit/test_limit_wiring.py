@@ -361,12 +361,14 @@ def test_an_away_fix_stamped_at_our_write_instant_is_no_departure(requests_mock)
     c.t += 0.001; placeAt(m, v, AWAY); m.setPolicyLimit(70, transition=False)                    # any later fix shows it
     assert m.desired.get(VIN, CHARGE_LIMIT).restore
 
-def test_at_00_a_plugged_car_a_free_source_shows_at_home_begins_the_session(requests_mock):   # review I2, paid counted
+def test_only_a_plugged_state_begins_the_session_and_00_ends_it(requests_mock):   # review I2, paid counted
     m, r, v, car = restarted(requests_mock); s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; m.setMaxAmpsToDivideAmongSlaves(32)
-    for _ in range(2): heartbeat(m, s, 0.0, state=0x00, amps_max=32)                            # asleep, plugged in: TeslaMate says "Complete" at home; the TWC echoes its offer, targeted from the second beat
+    for _ in range(2): heartbeat(m, s, 0.0, state=0x00, amps_max=32)                            # TeslaMate says "Complete" at home, but a TWC at 00 has no car
+    assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None and requests_mock.call_count == 0
+    for _ in range(2): heartbeat(m, s, 0.0, state=0x03, amps_max=32)                            # asleep, plugged in; the TWC echoes its offer, targeted from the second beat
     assert s.vehicleKey == "anon:8244" and m.desired.get(VIN, AMPS).lift and requests_mock.call_count == 0
-    v.observe("chargingState", "Disconnected", "TeslaMateVehicle"); heartbeat(m, s, 0.0, state=0x00)
-    assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None                   # unplugged: the session ends
+    heartbeat(m, s, 0.0, state=0x00)
+    assert s.vehicleKey is None and m.vehicleRegistry.get("anon:8244") is None                   # 00: the session ends
 
 def test_an_empty_twc_at_00_begins_no_session(requests_mock):   # review I2
     for position, state in ((HOME, "Disconnected"), (AWAY, "Complete")):                         # at home unplugged; plugged in elsewhere

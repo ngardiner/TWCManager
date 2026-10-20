@@ -4,9 +4,6 @@ import re
 import time
 from typing import Dict, NamedTuple, Optional
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Vehicle.Providers.Capability import SET_AMPS
-from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED
-from TWCManager.Vehicle.Presence import _plug, candidates, inside
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
 
@@ -100,7 +97,7 @@ class TWCSlave:
     liftedSession: Optional[int] = None
     # unplugStep's run starts and last max amps (0: this 00 run is no unplug)
     UNPLUG_DEBOUNCE, PLUGGED_RUN, LINK_GRACE = 60, 60, 300
-    pluggedSince, ampsMaxBefore, zeroSince = 0, 0, None
+    pluggedSince, ampsMaxBefore, zeroSince, anonEndedAt = 0, 0, None, 0
     # The car keys the charging point last rated (tick)
     _lastKeys = ()
     # The last all-TWC wiring cap logged, so a held cap logs once
@@ -115,19 +112,6 @@ class TWCSlave:
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
-
-    def pluggedCars(self):
-        # The unnamed cars a vehicle source shows plugged in or charging,
-        # and not placed away; with every unnamed car the fan-out reaches
-        named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
-        cars = [v for v in candidates(self.master, SET_AMPS) if v.key not in named]
-
-        def on(v):
-            obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
-            return obs is not None and _plug("chargingState", obs) is True
-
-        plugged = [v for v in cars if inside(self.master, v) is not False and on(v)]
-        return plugged, cars
 
     def unplugStep(self, now) -> bool:
         # Serial thread: True once per 00 run that is an unplug. A waking car

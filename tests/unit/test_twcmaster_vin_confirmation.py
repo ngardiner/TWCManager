@@ -78,7 +78,6 @@ def test_anonymous_plug_session_begins_at_a_charge_and_ends_at_the_unplug(master
     master.observeChargingSessions()
     assert master.vehicleRegistry.get("anon:8244") is not None and s.plugSessions == 1
     s.PLUGGED_STATES, s.reportedState = (0x03,), 0x00
-    s.pluggedCars = Mock(return_value=([], []))
     s.unplugStep.return_value = True
     master.observeChargingSessions()
     assert master.vehicleRegistry.get("anon:8244") is None

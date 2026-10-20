@@ -354,10 +354,9 @@ class TWCMaster:
 
     @staticmethod
     def _taskKey(task):
-        # Tasks dedupe per cmd, except VIN queries, which dedupe per TWC so
-        # one TWC's query never replaces another's.
-        if task["cmd"] == "getVehicleVIN":
-            return ("getVehicleVIN", bytes(task.get("slaveTWC") or b""))
+        # Per cmd; a TWC's VIN query and attribution dedupe per TWC
+        if task["cmd"] in ("getVehicleVIN", "attributePlug"):
+            return (task["cmd"], bytes(task.get("slaveTWC") or b""))
         return task["cmd"]
 
     def doneBackgroundTask(self, task):
@@ -667,8 +666,8 @@ class TWCMaster:
                 continue
             point.setTargetPower(0)
             offers.append((point, 0))
-        # The targets just set, by the car each point serves
-        self.offered = {p.vehicleKey: watts for p, watts in offers}
+        # The targets just set, by each car a point serves or fans out to
+        self.offered = {k: w for p, w in offers for k in (p.vehicleKey, *p._carKeys())}
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -1378,18 +1377,16 @@ class TWCMaster:
                         slaveTWC.plugSessions += 1
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
-                elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES or (
-                    slaveTWC.reportedState == 0 and slaveTWC.pluggedCars()[0]
-                ):
+                elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES:
                     # A car drawing nothing (asleep after a restart) is still
-                    # plugged in: unidentified, it is an anonymous session.
-                    # At 00 (an empty TWC says it too) only if a free source
-                    # shows an at-home car plugged in
+                    # plugged in: unnamed, it opens a session to attribute
                     if slaveTWC.vehicleKey is None:
                         self._plugSession(slaveTWC, True)
                 elif slaveTWC.reportedState == 0 and isAnonKey(slaveTWC.vehicleKey):
-                    # 00 and no car known plugged in
-                    self._plugSession(slaveTWC, False)
+                    # 00 ends the anonymous session; the unplug, if it is
+                    # one, departs a car once it holds
+                    slaveTWC.anonEndedAt = now
+                    self._plugSession(slaveTWC, False, depart=False)
             carsCharging += slaveTWC.isCharging
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
@@ -1520,18 +1517,26 @@ class TWCMaster:
             },
         )
 
-    def _plugSession(self, slaveTWC, begin):
+    def _plugSession(self, slaveTWC, begin, depart=True):
         # Serial thread: never let a registry call raise into the RS-485
-        # loop. An end departs the named car, else the only possible one
+        # loop. An unplug departs the named car, else the only possible one
         try:
             twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
             if begin:
                 self.vehicleRegistry.beginPlugSession(twcid)
+                # A TWC that reads VINs names its car itself. A car waking
+                # flickers 00: the session it ended had its attribution
+                vins = (self.settings.get("SlaveTWCs") or {}).get(twcid) or {}
+                flicker = time.time() < slaveTWC.anonEndedAt + slaveTWC.UNPLUG_DEBOUNCE
+                if not vins.get("supportsVINQuery") and not flicker:
+                    task = {"cmd": "attributePlug", "slaveTWC": slaveTWC.TWCID}
+                    self.queue_background_task(task)
                 return
             cars = [self.vehicleRegistry.vehicleAt(twcid)]
-            cars = Presence.candidates(self) if cars == [None] else cars
+            if cars == [None] or cars[0].isAnonymous:
+                cars = Presence.candidates(self) if depart else []
             v = cars[0] if len(cars) == 1 else None
-            if v is not None and Presence.telemetrySaysPlugged(self, v):
+            if v is not None and Presence.telemetryPlug(v):
                 logger.info("TWC %s: not an unplug, %s is plugged in", twcid, v.key)
                 return
             if v is not None:

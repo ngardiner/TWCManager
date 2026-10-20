@@ -12,7 +12,7 @@ one covers the rate). The endpoint holds no state of its own.
 from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
-from TWCManager.Vehicle.Presence import pluggedHere, telemetrySaysPlugged
+from TWCManager.Vehicle.Presence import pluggedHere, telemetryPlug
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
@@ -181,5 +181,5 @@ def vehicleEndpoints(master) -> List[VehicleEndpoint]:
         if not v.isAnonymous
         and pluggedHere(master, v)
         and order.candidates(v, SET_AMPS)
-        and not (unknown and telemetrySaysPlugged(master, v))
+        and not (unknown and telemetryPlug(v))
     ]

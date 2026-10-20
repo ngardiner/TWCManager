@@ -382,7 +382,7 @@ def test_paid_sends_that_never_reached_the_car_rearm_on_a_reading_after_it_wakes
     m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "408"))); f = prov(m, "FleetAPI"); v.observe("chargeLimit", 90, "FleetAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_(); c.t += RETRY[CHARGE_LIMIT]; r.pass_(); assert len(cmds(f)) == 2
     for _ in range(60):                                                       # asleep an hour: only the TWC heartbeat reads
-        v.observe("actualCurrent", 0, "Gen2TWC"); v.observe("pluggedIn", True, "Gen2TWC")
+        v.observe("actualCurrent", 0, "Gen2TWC")
         for _ in range(6): c.t += 10; r.pass_()
     assert len(cmds(f)) == 2
     f.outcomes = [O.Outcome(O.UNREACHABLE, "408")]; v.observe("chargeLimit", 90, "FleetAPI"); c.t += 1; r.pass_()
