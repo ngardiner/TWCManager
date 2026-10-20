@@ -11,6 +11,7 @@ from TWCManager.Vehicle.Telemetry import TelmetryBase
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("FleetTLM", "Vehicle")
+_DOC = "docs/modules/Vehicle_FleetTelemetryMQTT.md"
 
 
 def _fastCharger(a):
@@ -43,6 +44,43 @@ class FleetTelemetryMQTT(TelmetryBase):
         "ACChargingPower": ["chargerPower", lambda a: float(a)],
         "ChargeCurrentRequestMax": ["chargeCurrentRequestMax", lambda a: int(a)],
     }
+    # Config fields that only narrow a plug-in to a home charger or fill the
+    # display; checkConfigs warns of a car whose config lacks any other field
+    # read here (Location gives latitude/longitude; syncState is connectivity)
+    OPTIONAL = {"FastChargerPresent", "FastChargerType", "ChargingCableType"}
+    OPTIONAL |= {"ACChargingPower", "ChargeCurrentRequestMax"}
+    OPTIONAL |= {"TimeToFullCharge", "VehicleName"}
+    REQUIRED = (set(events) | {"Location", "Gear"}) - OPTIONAL
+    REQUIRED -= {"latitude", "longitude", "syncState"}
+    configCheckDue = 0.0
+
+    def configProblem(self, answer) -> str:
+        # "" for a config with every required field, applied by the car
+        config = answer.get("config") if isinstance(answer, dict) else None
+        if not isinstance(config, dict):
+            return "no Fleet Telemetry config"
+        missing = sorted(self.REQUIRED - set(config.get("fields") or {}))
+        if missing:
+            return "Fleet Telemetry config lacks " + ", ".join(missing)
+        return "" if answer.get("synced") else "Fleet Telemetry config not applied yet"
+
+    def checkConfigs(self, carapi):
+        # A free read that never wakes the car. The claim holds the shown
+        # problem, so each one is warned of once
+        now, cars = time.time(), [v for v, _ in self.registry.attached("TeslaAPI")]
+        if now < self.configCheckDue or not cars or not carapi.fleetSlot.usable("read"):
+            return
+        self.configCheckDue = now + 24 * 60 * 60
+        for vehicle in cars:
+            answer = carapi.telemetryConfig(vehicle.vin)
+            if answer is None:
+                continue
+            status = self.configProblem(answer) or "reports"
+            claim = vehicle.claims.get(type(self).__name__)
+            if status != getattr(claim, "status", "reports"):
+                if status != "reports":
+                    logger.warning("%s: %s; see %s", vehicle.vin, status, _DOC)
+                vehicle.claim(type(self).__name__, False, status, keepsAlive=False)
 
     def vinFor(self, vehicle_id) -> Optional[str]:
         # The topic id is the VIN. Anything else under the prefix (another

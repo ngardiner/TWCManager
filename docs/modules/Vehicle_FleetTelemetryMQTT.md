@@ -201,6 +201,8 @@ The fields fall into four groups:
 * Home-charger narrowing (`FastChargerPresent`, `FastChargerType`, `ChargingCableType`, `ACChargingPower`, `ChargeCurrentRequestMax`) lets TWCManager tell a plug-in at a fast charger near home from one at a home charger.
 * Display (`BatteryLevel`, `ChargeLimitSoc`, `TimeToFullCharge`, `VehicleName`) is what the web interface shows. `VehicleName` also maps the car to its VIN.
 
+With a Fleet API token, TWCManager reads each car's telemetry config (`GET fleet_telemetry_config`, a free call that does not wake the car) a few minutes after startup and once a day. It logs a warning, and shows it on the car's Vehicle Details page, if the car has no config, has not applied it yet, or lacks a required field. The check covers every car on the Fleet API account, so a car you do not stream (one too old for Fleet Telemetry, or one you never configured) gets this warning too, once each time TWCManager starts; that is expected. The required fields are `Location`, `Gear`, `DetailedChargeState`, `ChargeAmps`, `ChargerVoltage`, `ChargerPhases`, `ChargeCurrentRequest`, `BatteryLevel` and `ChargeLimitSoc`; the home-charger narrowing fields, `TimeToFullCharge` and `VehicleName` are optional.
+
 Send this configration to the VINs inside it using the <a href="https://developer.tesla.com/docs/fleet-api/endpoints/vehicle-endpoints#fleet-telemetry-config-create">fleet_telemetry_config</a> API endpoint.
 
 Example command:

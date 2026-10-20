@@ -309,6 +309,9 @@ def refreshTokens(master):
                 # A list load that failed (at boot, say) or held limits
                 # still waiting on it retry here: free calls only
                 carapi.loadList()
+            fleetTLM = master.getModuleByName("FleetTelemetryMQTT")
+            if fleetTLM:
+                fleetTLM.checkConfigs(carapi)
     finally:
         master.queue_background_task({"cmd": "refreshTokens"}, delay=300)
 

@@ -366,26 +366,26 @@ class TeslaAPI:
     def _classify(
         self, slot, status, purpose, body, vehicle=None, refresh=True, sent=None
     ):
-        # What an answer means, acted on: None for an HTTP 200 (unless it is
-        # an Owner command's refusal), else an Outcome. purpose is "read",
-        # "list" (the vehicle list), "command", "wake" or "energy" (the Wall
-        # Connector VIN read). Energy refusals latch that read alone: Storm
-        # Watch and vehicle reads keep the token. Elsewhere a 401 refreshes
-        # an expired token once (_REFRESHED: send again) and otherwise
-        # retires the slot; 403 refuses commands or wakes and pauses reads
-        # for an hour (an Owner command's 403 latches that car alone); 412
-        # retires commands, or latches reads until the token changes; 410
-        # pauses reads; an Owner command's 410 or 412 retires Owner commands
-        # (ownerRefusal); 429 backs off; 408 is an asleep or unreachable car.
-        # None of these touches the API backoff but 429, so the next poll can
-        # use the other slot at once.
+        # What an answer means, acted on: None for an HTTP 200 (unless it is an
+        # Owner command's refusal), else an Outcome. purpose is "read", "list"
+        # (the vehicle list), "command", "wake", "energy" (the Wall Connector
+        # VIN read) or "config" (telemetryConfig). Energy refusals latch that
+        # read alone, config ones nothing: Storm Watch and vehicle reads keep
+        # the token. Elsewhere a 401 refreshes an expired token once
+        # (_REFRESHED: send again) and otherwise retires the slot; 403 refuses
+        # commands or wakes and pauses reads for an hour (an Owner command's
+        # 403 latches that car alone); 412 retires commands, or latches reads
+        # until the token changes; 410 pauses reads; an Owner command's 410 or
+        # 412 retires Owner commands (ownerRefusal); 429 backs off; 408 is an
+        # asleep or unreachable car. None of these touches the API backoff but
+        # 429, so the next poll can use the other slot at once.
         paid = purpose in ("command", "wake")
         owner = paid and slot is self.ownerSlot and vehicle is not None
         if status == 200:
             # Tesla can refuse an Owner command in a 200's error text
             return self.ownerRefusal(vehicle, status, body) if owner else None
-        if purpose == "energy":
-            if status not in (401, 403, 410, 412):
+        if purpose in ("energy", "config"):
+            if purpose == "config" or status not in (401, 403, 410, 412):
                 return O.Outcome(O.ERROR, str(status))
             self._refuseWallConnectors(slot, status)
             return O.Outcome(O.REFUSED, str(status))
@@ -654,6 +654,16 @@ class TeslaAPI:
             held.resolveLegacyIds(
                 {car.get("id"): car.get("vin") for cars in lists for car in cars}
             )
+
+    def telemetryConfig(self, vin):
+        # The car's fleet_telemetry_config answer with the Fleet token (free,
+        # never wakes the car); None on any failure
+        path = "vehicles/%s/fleet_telemetry_config" % vin
+        req, outcome = self._request(self.fleetSlot, "get", path, "config")
+        try:
+            return None if outcome else json.loads(req.text)["response"]
+        except (ValueError, KeyError, TypeError):
+            return None
 
     def _vehicleList(self, slot):
         # One free GET of the slot's vehicle list: the listed cars; None when
