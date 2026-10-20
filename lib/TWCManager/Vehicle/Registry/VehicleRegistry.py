@@ -352,6 +352,3 @@ class VehicleRegistry:
         name = entry.get("name")
         if isinstance(name, str) and name:
             v.observe("name", name, "persisted", at=last, seen=False)
-
-    def summaries(self) -> List[dict]:
-        return [v.summary() for v in self.vehicles()]

@@ -1,7 +1,16 @@
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from TWCManager.Control.HTTPControl import vehicleLocalMgmt
+from TWCManager.Control.HTTPControl import pendingCommands, vehicleLocalMgmt
+from TWCManager.Vehicle.Reconcile.Desired import (
+    AMPS,
+    CHARGE_LIMIT,
+    CHARGING,
+    RELEASE,
+    Attempt,
+)
+from TWCManager.Vehicle.Reconcile.Outcome import HELD, UNREACHABLE, Outcome
 from tests.unit.test_vehicles_page import env, master, VIN
 
 
@@ -202,3 +211,116 @@ def test_scan_pending_page_refreshes_itself_only_while_pending():
     assert '<meta http-equiv="refresh" content="3">' in pending
     assert 'http-equiv="refresh"' not in render(m, status())
     assert 'http-equiv="refresh"' not in render(m, None)
+
+
+def pending(m):
+    v = m.vehicleRegistry.get(VIN)
+    return {r["aspect"]: r["why"] for r in pendingCommands(m, v)}
+
+
+def text(html):
+    return " ".join(html.split()).replace("&rarr;", "\u2192").replace("&#39;", "'")
+
+
+def attempt(aspect, value, provider="TeslaBLE"):
+    return Attempt(
+        VIN, aspect, "x", value, provider, False, None, False, time.time() - 12
+    )
+
+
+def test_pending_section_says_nothing_pending_when_the_store_is_empty():
+    m = master()
+    assert pending(m) == {}
+    html = render(m, None)
+    assert "Pending commands" in html and "Nothing pending" in html
+
+
+def test_pending_in_flight_names_the_source_and_age():
+    m = master()
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    m.desired.record(VIN, CHARGE_LIMIT).inFlight = attempt(CHARGE_LIMIT, 50)
+    assert pending(m) == {CHARGE_LIMIT: "sending via BLE, started 12 s ago"}
+    html = text(render(m, None))
+    assert "Charge limit \u2192 50%" in html
+    assert "sending via BLE, started 12 s ago" in html
+    assert "Nothing pending" not in html and "TeslaBLE" not in html
+
+
+def test_pending_rows_word_each_aspect_and_value():
+    m = master()
+    m.desired.set(VIN, CHARGE_LIMIT, RELEASE, "policy")
+    m.desired.set(VIN, CHARGING, True, "distributor")
+    m.desired.set(VIN, AMPS, 16, "distributor")
+    html = text(render(m, None))
+    for want in (
+        "Charge limit \u2192 car's own",
+        "Charging \u2192 start",
+        "Charge rate \u2192 16 A",
+    ):
+        assert want in html
+    assert pending(m) == {a: "not tried yet" for a in (CHARGE_LIMIT, CHARGING, AMPS)}
+
+
+def test_pending_held_by_a_real_hold_outcome_says_why():
+    m = master()
+    m.desired.set(VIN, CHARGING, True, "distributor")
+    a = attempt(CHARGING, True, "Gen2TWC")
+    a = a._replace(since=time.time())
+    m.desired.record(VIN, CHARGING).inFlight = a
+    m.desired.noteOutcome(
+        VIN,
+        CHARGING,
+        a,
+        Outcome("satisfied", HELD + "driving"),
+        time.time(),
+        paid=False,
+    )
+    rec = m.desired.record(VIN, CHARGING)
+    assert rec.heldAt is not None
+    assert pending(m)[CHARGING].startswith("held: driving via TWC, ")
+
+
+def test_pending_held_with_no_outcome_yet_does_not_crash():
+    m = master()
+    m.desired.set(VIN, CHARGING, True, "distributor")
+    m.desired.record(VIN, CHARGING).heldAt = time.time()
+    assert pending(m) == {CHARGING: "not tried yet"}
+    assert "not tried yet" in render(m, None)
+
+
+def test_pending_says_what_the_reconciler_said_over_the_last_outcome():
+    m = master()
+    m.desired.set(VIN, CHARGING, False, "distributor")
+    rec = m.desired.record(VIN, CHARGING)
+    rec.lastOutcome, rec.lastOutcomeAt = Outcome(UNREACHABLE), time.time() - 5
+    m.reconciler._said[(VIN, CHARGING)] = "hands off: battery below minChargeLevel"
+    assert pending(m) == {CHARGING: "hands off: battery below minChargeLevel"}
+    m.reconciler._said[(VIN, CHARGING)] = "no provider can deliver"
+    assert pending(m) == {CHARGING: "no provider can deliver"}
+
+
+def test_pending_last_outcome_with_source_and_age():
+    m = master()
+    m.desired.set(VIN, CHARGE_LIMIT, 70, "policy")
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    rec.lastOutcome, rec.lastOutcomeAt = Outcome(UNREACHABLE), time.time() - 120
+    rec.lastProvider = "TeslaBLE"
+    assert pending(m) == {CHARGE_LIMIT: "unreachable via BLE, 2 min ago"}
+    rec.lastOutcome = Outcome("unreachable", "backoff")
+    assert pending(m) == {CHARGE_LIMIT: "backoff via BLE, 2 min ago"}
+
+
+def test_pending_hides_a_desire_the_car_already_has_or_that_settled():
+    m = master()
+    v = m.vehicleRegistry.get(VIN)
+    v.observe("chargeLimit", 70, "TeslaBLE")
+    m.desired.set(VIN, CHARGE_LIMIT, 70, "policy")
+    m.desired.set(VIN, AMPS, 16, "distributor")
+    m.desired.record(VIN, AMPS).settledAt = time.time()
+    assert pending(m) == {}
+
+
+def test_a_render_creates_no_desired_state():
+    m = master()
+    render(m, None)
+    assert m.desired.keys() == []

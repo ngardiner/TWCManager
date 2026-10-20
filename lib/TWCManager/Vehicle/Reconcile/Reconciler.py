@@ -189,6 +189,9 @@ class VehicleReconciler(threading.Thread):
             self._said[(key, aspect)] = message
             logger.log(level, "%s %s: %s", key, aspect, message)
 
+    def said(self, key, aspect) -> Optional[str]:
+        return self._said.get((key, aspect))
+
     def pass_(self, now=None) -> int:
         now = self._clock() if now is None else now
         keys = self.desired.keys()

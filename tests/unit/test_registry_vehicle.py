@@ -62,15 +62,15 @@ def test_attachments_and_summary():
     v.observe("batteryLevel", 42, "TeslaBLE")
     c.t = 1010.0
     s = v.summary()
-    assert "tier" not in s and commands(v) and s["claims"] == [
-        {"provider": "TeslaBLE", "status": "paired", "commands": True}
-    ]
-    assert s["fields"]["batteryLevel"] == {
-        "value": 42,
-        "source": "TeslaBLE",
-        "age": 10.0,
-        "changedAge": 10.0,
+    assert commands(v) and set(s) == {
+        "vin",
+        "name",
+        "anonymous",
+        "point",
+        "lastSeenAge",
+        "lastSeenSource",
     }
+    assert s["vin"] == VIN and not s["anonymous"] and s["lastSeenSource"] == "TeslaBLE"
     assert s["lastSeenAge"] == 10.0 and s["point"] is None
     assert Vehicle("anon:8244", None, registry=None).summary()["point"] == "8244"
     assert v.value("batteryLevel") == 42 and v.value("lon", 0) == 0
@@ -126,34 +126,14 @@ def test_raising_claim_counts_as_false():
     v = Vehicle(VIN, VIN, registry=None)
     v.claim("TeslaAPI", boom)
     assert not commands(v)
-    assert v.summary()["claims"][0]["commands"] is False
 
 
-def test_summary_evaluates_a_claim_once():
+def test_summary_evaluates_no_claim():
     calls = []
-
-    def once():
-        calls.append(1)
-        return len(calls) == 1
-
     v = Vehicle(VIN, VIN, registry=None)
-    v.claim("TeslaAPI", once)
-    s = v.summary()
-    assert len(calls) == 1
-    assert "tier" not in s and s["claims"][0]["commands"] is True
-
-
-def test_summary_field_age_is_liveness_aware():
-    class Reg:
-        def sourceLiveAt(self, source, vehicle):
-            return 1500.0
-
-    c = Clock()
-    v = Vehicle(VIN, VIN, registry=Reg(), clock=c)
-    v.observe("chargeLimit", 80, "TeslaMateVehicle", at=1000.0)
-    c.t = 1600.0
-    f = v.summary()["fields"]["chargeLimit"]
-    assert f["age"] == 100.0 and f["changedAge"] == 600.0
+    v.claim("TeslaAPI", lambda: calls.append(1))
+    v.summary()
+    assert calls == []
 
 
 class FeedReg:
@@ -180,7 +160,6 @@ def test_live_feed_vouches_for_an_equal_value_another_source_observed():  # P8/3
     c.t = 5000.0
     assert v.latest("chargeLimit").source == "OwnerAPI"
     assert v.age("chargeLimit") == 0.0
-    assert v.summary()["fields"]["chargeLimit"]["age"] == 0.0
     reg.live = False  # feed down: the API reading ages normally
     assert v.age("chargeLimit") == 4100.0
 

@@ -24,7 +24,10 @@ from TWCManager.Vehicle.Registry.VIN import (
     storedBleStatus,
     vehicleRecordKey,
 )
-from TWCManager.Vehicle.Presence import HOME, presence
+from TWCManager.Vehicle.Presence import HOME, NOT_HOME, PRESUMED, presence
+from TWCManager.Vehicle.Reconcile.Belief import known
+from TWCManager.Vehicle.Reconcile.Outcome import RULES
+from TWCManager.Vehicle.Reconcile.Rules import satisfied
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
 
@@ -91,6 +94,35 @@ def heldLimitText(master, vehicle):
         limit.held,
         limit.outside,
     )
+
+
+PRESENCE_TEXT = {HOME: "Home", PRESUMED: "Probably home", NOT_HOME: "Away"}
+
+
+def pendingCommands(master, vehicle):
+    """Each desire the car has not reached: in flight, or why it is not."""
+    state, now, rows = master.desired.peek(vehicle.key), time.time(), []
+    for aspect, d in list(state.desired.items()) if state else []:
+        rec = state.records.get(aspect)
+        if rec is None:
+            continue
+        sent, last = rec.inFlight, rec.lastOutcome
+        why = master.reconciler.said(vehicle.key, aspect)
+        if sent:
+            why = "sending via %s, started %s" % (
+                sourceName(sent.provider),
+                ageText(now - sent.since),
+            )
+        elif rec.settledAt or satisfied(aspect, d.value, known(vehicle, aspect)):
+            continue
+        elif last and not why:
+            why = "%s via %s, %s" % (
+                last.detail.replace(RULES, "") or last.kind,
+                sourceName(rec.lastProvider),
+                ageText(now - rec.lastOutcomeAt),
+            )
+        rows.append({"aspect": aspect, "value": d.value, "why": why or "not tried yet"})
+    return rows
 
 
 def vehicleLocalMgmt(master, op, vin):
@@ -376,6 +408,10 @@ def CreateHTTPHandlerClass(master):
                 heldLimitText=lambda v: heldLimitText(master, v)
             )
             self.templateEnv.globals.update(sourceName=sourceName)
+            self.templateEnv.globals.update(
+                presence=lambda v: PRESENCE_TEXT[presence(master, v)],
+                pendingCommands=lambda v: pendingCommands(master, v),
+            )
             self.templateEnv.globals.update(
                 providerLines=lambda v: providerLines(master, v)
             )

@@ -327,8 +327,8 @@ class WebIPCControl:
                         + "\n"
                     )
 
-                    for s in self.master.vehicleRegistry.summaries():
-                        webResponseMsg += str(s) + "\n"
+                    for v in self.master.vehicleRegistry.vehicles():
+                        webResponseMsg += str(v.summary()) + "\n"
 
                     webResponseMsg += "slaveTWCRoundRobin:\n"
                     for slaveTWC in self.master.getSlaveTWCs():

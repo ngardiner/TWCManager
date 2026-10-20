@@ -345,35 +345,14 @@ class Vehicle:
         return obs.value if obs is not None and obs.value else ""
 
     def summary(self) -> dict:
-        now = self._clock()
-        claims: List[dict] = [
-            {"provider": c.provider, "status": c.status, "commands": c.commands}
-            for c in self.claims.values()
-        ]
-        if self.isAnonymous:
-            point = self.key[5:]
-        else:
-            point = self.value("twcVin")
+        # What the Vehicles pages and the debug dump read
         with self._lock:
             lastSeen, lastSeenSource = self.lastSeen, self.lastSeenSource
-        fields = {}
-        for f, o in self.snapshot().items():
-            fields[f] = {
-                "value": o.value,
-                "source": o.source,
-                "age": self._ageOf(o, now, self._liveAt(f, o)),
-                "changedAge": now - o.at,
-            }
         return {
-            "key": self.key,
             "vin": self.vin,
             "name": self.name,
             "anonymous": self.isAnonymous,
-            "userAsserted": self.userAsserted,
-            "claims": claims,
-            "point": point,
-            "lastSeen": lastSeen,
-            "lastSeenAge": now - lastSeen,
+            "point": self.key[5:] if self.isAnonymous else self.value("twcVin"),
+            "lastSeenAge": self._clock() - lastSeen,
             "lastSeenSource": lastSeenSource,
-            "fields": fields,
         }

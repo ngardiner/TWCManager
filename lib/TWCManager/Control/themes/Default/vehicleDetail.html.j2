@@ -34,6 +34,23 @@
     </form>
     {% endif %}
     <p>&nbsp;</p>
+    <h3>Pending commands</h3>
+    {% set pending = pendingCommands(regVehicle) %}
+    {% if pending %}
+    <table>
+      {% for p in pending %}
+      <tr>
+        <td>{{ {"chargeLimit": "Charge limit", "charging": "Charging", "amps": "Charge rate"}[p.aspect] }}
+          &rarr; {% if p.aspect == "chargeLimit" %}{% if p.value == -1 %}car's own{% else %}{{ p.value }}%{% endif %}
+          {% elif p.aspect == "amps" %}{{ p.value }} A{% else %}{{ "start" if p.value else "stop" }}{% endif %}</td>
+        <td>&nbsp;</td><td>{{ p.why }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p>Nothing pending</p>
+    {% endif %}
+    <p>&nbsp;</p>
     {% endif %}
     {% if vin != "00000000000000000" %}
     <table>

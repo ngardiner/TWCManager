@@ -5,13 +5,18 @@ from unittest.mock import Mock
 
 import jinja2
 
+from TWCManager.Vehicle.Presence import presence
+from TWCManager.Vehicle.Reconcile.Desired import DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
+from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Control.HTTPControl import (
     ageText,
     addVehicleByVIN,
     canForgetVehicle,
     heldLimitText,
+    PRESENCE_TEXT,
+    pendingCommands,
     providerLines,
     sourceName,
 )
@@ -29,6 +34,8 @@ def env(master):
         heldLimitText=lambda v: heldLimitText(master, v),
         sourceName=sourceName,
         providerLines=lambda v: providerLines(master, v),
+        presence=lambda v: PRESENCE_TEXT[presence(master, v)],
+        pendingCommands=lambda v: pendingCommands(master, v),
         registry=master.vehicleRegistry,
         vehicles=master.vehicleRegistry.vehicles,
         canForget=lambda vin: canForgetVehicle(master, vin),
@@ -56,6 +63,8 @@ def master():
     )
     m.heldLimits = HeldLimits(m)
     m.heldLimits.set(VIN, 90, 80)
+    m.desired = DesiredStore()
+    m.reconciler = VehicleReconciler(m)
     return m
 
 
@@ -165,9 +174,14 @@ def test_providers_one_per_line_with_source_names_and_no_tier():
     v.claim("Gen3TWC", True, "")
     v.observe("chargeLimit", 1, "FleetTelemetryMQTT")
     html = render(m)
-    assert "BLE: paired<br>TeslaMate: reports, read-only<br>Gen3 Wall Connector: commands" in html
+    assert (
+        "BLE: paired<br>TeslaMate: reports, read-only<br>Gen3 Wall Connector: commands"
+        in html
+    )
     assert "via Fleet Telemetry" in html
-    assert "Tier" not in html and "Gen3TWC" not in html and "TeslaMateVehicle" not in html
+    assert (
+        "Tier" not in html and "Gen3TWC" not in html and "TeslaMateVehicle" not in html
+    )
     assert sourceName("SomethingNew") == "SomethingNew"
     assert sourceName("Gen2TWC") == "TWC" and sourceName("TeslaBLE") == "BLE"
 
@@ -198,3 +212,23 @@ def test_provider_capability_text_for_tesla_cloud_and_ble():
         "Fleet API: commands",
         "Home Assistant: entities, commands",
     ] and "Owner API: commands" in providerLines(m, v)
+
+
+def presenceCell(html):
+    # The Presence column is the fifth cell after the VIN link
+    row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
+    return row.split("<td>")[4].split("</td>")[0].strip()
+
+
+def test_presence_column_shows_each_state():
+    m = master()
+    v = m.vehicleRegistry.get(VIN)
+    assert "<th>Presence</th>" in render(m)
+    assert presenceCell(render(m)) == "Probably home"  # no evidence either way
+    v.mark("plugIn", 100.0)
+    assert presenceCell(render(m)) == "Home"
+    v.mark("unplug", 200.0)
+    assert presenceCell(render(m)) == "Away"
+    # an unknown car on a TWC is here by definition
+    anon = m.vehicleRegistry.get("anon:8244")
+    assert PRESENCE_TEXT[presence(m, anon)] == "Home"
