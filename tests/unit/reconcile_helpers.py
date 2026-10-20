@@ -16,8 +16,8 @@ from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 COMMAND_CAPS = {capability: C.Declaration(C.LOCAL) for capability in C.COMMANDS}
 
 
-# Presence from position, as live: home is set and TeslaMate's free
-# position lands in the registry; nothing sets atHome by hand
+# Presence from events, as live: home is set and TeslaMate's free
+# position lands in the registry
 HOME, AWAY = (40.0, -75.0), (40.922592, -76.606221)
 
 

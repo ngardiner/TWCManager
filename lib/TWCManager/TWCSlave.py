@@ -6,14 +6,9 @@ from typing import Dict, NamedTuple, Optional
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED
-from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles, located
+from TWCManager.Vehicle.Presence import _PLUGGED, candidates, inside
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
-
-
-# Charging states only a plugged-in car reports ("Unknown", TeslaMate's "None"
-# and "Disconnected" are not)
-_PLUGGED = frozenset({"Charging", "Starting", "Stopped", "Complete", "NoPower"})
 
 # The tick's offer to one TWC: what goes on the wire, and the target it
 # came from (published as amps_desired). Immutable: the tick replaces it
@@ -122,12 +117,10 @@ class TWCSlave:
         # The unnamed cars a vehicle source shows plugged in or charging,
         # and not placed away; with every unnamed car the fan-out reaches
         named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
-        cars = [
-            v for v in broadcastVehicles(self.master, SET_AMPS) if v.key not in named
-        ]
+        cars = [v for v in candidates(self.master, SET_AMPS) if v.key not in named]
         plugged = []
         for v in cars:
-            if located(self.master, v) is False:
+            if inside(self.master, v) is False:
                 continue
             obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
             if obs is None:

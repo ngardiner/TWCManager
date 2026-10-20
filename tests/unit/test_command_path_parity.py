@@ -16,6 +16,7 @@ import pytest
 import requests
 from requests_mock import ANY
 
+from TWCManager.Vehicle import Presence
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
@@ -1303,7 +1304,8 @@ def vehicleOnly(requests_mock, **kw):
     m, r, v, c, api = install(**kw)
     m.deleteSlaveTWC(m.getSlaveTWCs()[0].TWCID)
     v.observe("chargingState", "Charging", "TeslaMateVehicle")
-    assert api.locate(v) is True  # free: TeslaMate's position is home
+    # Free: TeslaMate's position is home
+    assert Presence.presence(m, v) == Presence.HOME
     m.setMaxAmpsToDivideAmongSlaves(16)
     return m, r, v, c
 

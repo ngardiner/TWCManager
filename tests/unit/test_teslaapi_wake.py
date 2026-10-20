@@ -76,7 +76,6 @@ def _api(clock, *tokens):
     for token in tokens:
         a.storeToken(token)
     a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
-    _car(a).atHome = True
     return a
 
 

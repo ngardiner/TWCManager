@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 from TWCManager.TWCMaster import TWCMaster
 from tests.unit.test_gen2twc_provider import CONFIG
+from tests.unit.reconcile_helpers import placeAt
 from tests.unit.test_provider_order import fleet
 
 VIN = "5YJ3E1EA1KF000001"
@@ -35,7 +36,6 @@ def real(minAmps, ranges=None, feed=40):
     m.queue_background_task = Mock()
     carapi = Mock()
     carapi.enabled.return_value = True
-    carapi.locate.return_value = None  # no position known
     policy = Mock()
     policy.policyIsGreen.return_value = False
     iface = Mock()
@@ -144,10 +144,8 @@ def chargingAndIdle(feed):
     busy.currentVIN = VIN
     busy.reportedState, busy.reportedAmpsMax, busy.reportedAmpsActual = 0x01, 32, 20
     v = m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
-    v.attach(
-        "TeslaAPI",
-        SimpleNamespace(VIN=VIN, atHome=True),
-    )
+    v.attach("TeslaAPI", SimpleNamespace(VIN=VIN))
+    placeAt(m, v)
     v.observe("chargingState", "Charging", "OwnerAPI")
     idle = idleSlave(m)
     m.distributeEVSEPower()
@@ -186,10 +184,8 @@ def chargingSlave(m, twcid, vin):
     s.currentVIN = vin
     s.reportedState, s.reportedAmpsMax, s.reportedAmpsActual = 0x01, 32, 20
     v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI")
-    v.attach(
-        "TeslaAPI",
-        SimpleNamespace(VIN=vin, atHome=True),
-    )
+    v.attach("TeslaAPI", SimpleNamespace(VIN=vin))
+    placeAt(m, v)
     v.observe("chargingState", "Charging", "OwnerAPI")
     return s
 
@@ -230,12 +226,8 @@ def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
     idle.currentVIN = "5YJ3E1EA1KF000002"
     idle.reportedState, idle.reportedAmpsMax, idle.reportedAmpsActual = 0x01, 32, 20
     v = m.vehicleRegistry.getOrCreate(idle.currentVIN, "OwnerAPI")
-    v.attach(
-        "TeslaAPI",
-        SimpleNamespace(
-            VIN=idle.currentVIN, atHome=True,
-        ),
-    )
+    v.attach("TeslaAPI", SimpleNamespace(VIN=idle.currentVIN))
+    placeAt(m, v)
     v.observe("chargingState", "Charging", "OwnerAPI")
     m.distributeEVSEPower()
     assert busy.pointAmps == idle.pointAmps == 16

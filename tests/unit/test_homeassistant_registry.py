@@ -93,7 +93,6 @@ def test_refresh_observes_charging_and_location():
             "d.l": {"state": "away", "attributes": {"latitude": 1.5, "longitude": 2.5}},
         }.get(ent)
     )
-    ha.is_location_home = Mock(return_value=False)
     hv.refresh_from_home_assistant(ha)
     v = reg.get(VIN)
     assert v.latest("chargingState").value == "Charging"

@@ -17,16 +17,18 @@ def test_ble_outcomes_follow_tesla_control_output():
 
 def test_ble_key_refusal_is_refused_and_the_claim_follows_the_pairing_window():
     ble, reg, master = make(); (p,) = ble.providers(); v = reg.getOrCreate(VIN, "t"); ble._claimUnproven(v)
-    master.getModuleByName = Mock(return_value=None)                                                      # no TeslaAPI: no schedule data (a Mock module's schedule would block the start)
     def refuse(vin, command, args=None): ble._failure.refused = True; ble._noteBleRefusal(vin, ble.KEY_REFUSED_TEXT); return None
     ble.sendCommand = refuse
     assert p.startCharging(VIN).kind == O.REFUSED and "TeslaBLE" not in reg.get(VIN).claims and p.ready(reg.get(VIN), C.START_CHARGING) is False
     ble._claimUnproven(v); ble._setBleStatus(VIN, "pairing", pairingSent=__import__("time").time())
     assert p.startCharging(VIN) == O.Outcome(O.ERROR, "pairing") and "TeslaBLE" in reg.get(VIN).claims    # inside the window: not a refusal of the key; retryable
 
-def test_ble_schedule_block_is_satisfied_without_a_command():
-    ble, reg, master = make(); (p,) = ble.providers(); ble._scheduleBlocksStart = lambda vin: True; ble.sendCommand = Mock()
-    assert p.startCharging(VIN) == O.Outcome(O.SATISFIED, "scheduled") and ble.sendCommand.call_count == 0
+def test_a_pending_schedule_gets_no_ble_start_attempt():
+    from TWCManager.Vehicle.Reconcile.Desired import CHARGING
+    from tests.unit.test_limit_reconciler import ble as scripted, prov, setup
+    m, r, v, c = setup(scripted(O.Outcome(O.DONE))); v.observe("chargingState", "Stopped", "TeslaBLE")
+    v.observe("scheduledChargingPending", True, "TeslaBLE"); m.desired.set(v.key, CHARGING, True, "distributor")
+    r.pass_(); assert prov(m, "TeslaBLE").calls == []                                                     # the car's own schedule holds the start
 
 def test_gen2_stop_and_start_outcomes_and_the_billed_stop_suppression():
     m, s = make_gen2(); m.desired = DesiredStore(); p = m.providerOrder.provider("Gen2TWC"); v = m.vehicleRegistry.getOrCreate(VIN, "t"); s.currentVIN = VIN.lower()

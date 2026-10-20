@@ -32,7 +32,12 @@ FIELDS = (
     "scheduledChargingPending",
     "twcVin",
     "bleReach",
-    # The car's own AC current maximum (amps)
+    "shiftState",
+    "fastChargerPresent",
+    "fastChargerType",
+    "connChargeCable",
+    # Charging power (kW) and the car's own AC current maximum (amps)
+    "chargerPower",
     "chargeCurrentRequestMax",
 )
 

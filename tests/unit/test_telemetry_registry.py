@@ -208,10 +208,17 @@ def feed(tm, **topics):
         tm.applyDataToVehicle("7", topic, payload)
 
 
+def test_an_empty_charger_payload_is_no_reading(teslamate):
+    tm, api, reg = teslamate
+    feed(tm, charger_power="", charge_current_request_max="16.0")
+    assert reg.get(VIN).value("chargerPower", 0) is None
+    assert reg.get(VIN).value("chargeCurrentRequestMax") == 16.0
+
+
 def test_healthy_teslamate_car_reads_without_api_calls(teslamate):  # ruling 1
     tm, api, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0", battery_level="61")
-    assert api.update_location(reg.get(VIN), 0) is True  # maxAge 0: the feed vouches for now
+    assert reg.get(VIN).read("lat", 0) is not None  # maxAge 0: the feed vouches for now
     assert api.update_charge(reg.get(VIN)) is True
     assert not api.get_car_api.called
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
@@ -231,11 +238,11 @@ def test_feed_vouches_for_a_value_the_api_reobserved(teslamate):  # ruling 3
     reg.get(VIN).observe("lat", 37.0, "OwnerAPI")  # the cloud saw the same position after the feed
     reg.get(VIN).observe("lon", -122.0, "OwnerAPI")
     assert reg.get(VIN).latest("lat").source == "OwnerAPI"
-    assert api.update_location(reg.get(VIN), 0) is True and not api.get_car_api.called
+    assert reg.get(VIN).read("lat", 0) is not None and not api.get_car_api.called
     reg.get(VIN).observe("lat", 38.0, "OwnerAPI")  # a different value: the live feed still vouches (C1)
-    assert api.update_location(reg.get(VIN), 0) is True and not api.get_car_api.called
+    assert reg.get(VIN).read("lat", 0) is not None and not api.get_car_api.called
     tm.mqttDisconnect(None, None, None, 7)  # feed down: the value ages
-    api.update_location(reg.get(VIN), 0)
+    reg.get(VIN).read("lat", 0)
     assert api.get_car_api.called
 
 
@@ -253,10 +260,10 @@ def test_feed_outage_then_recovery_pays_one_cloud_read(teslamate):  # C1
     api.update_vehicle_data = vehicleData
     api.is_awake = lambda vehicle, slot=None: True
     tm.mqttDisconnect(None, None, None, 7)  # broker blip
-    assert api.update_location(reg.get(VIN), 0) is True and len(calls) == 1
+    assert reg.get(VIN).read("lat", 0) is not None and len(calls) == 1
     tm.mqttConnect(Mock(), None, None, 0)  # back; parked car publishes nothing
     for _ in range(5):
-        assert api.update_location(reg.get(VIN), 0) is True
+        assert reg.get(VIN).read("lat", 0) is not None
     assert len(calls) == 1
 
 

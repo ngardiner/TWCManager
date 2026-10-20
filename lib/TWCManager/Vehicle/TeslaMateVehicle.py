@@ -79,6 +79,8 @@ class TeslaMateVehicle(TelmetryBase):
         "charger_voltage": ["voltage", lambda a: int(a)],
         "charging_state": ["chargingState", lambda a: str(a)],
         "plugged_in": ["pluggedIn", parse_bool],
+        "shift_state": ["shiftState", lambda a: a or None],
+        "charger_power": ["chargerPower", _optNum],
         "charge_current_request_max": ["chargeCurrentRequestMax", _optNum],
     }
 

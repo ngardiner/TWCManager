@@ -65,10 +65,12 @@ class Vehicle:
         self.lastSeen = now
         self.lastSeenSource = "created"
         self._fields = FieldStore(clock)
-        # Leaf lock: guards claims, attachments and lastSeen only.
+        # Leaf lock: guards claims, attachments, marks and lastSeen only.
         self._lock = threading.Lock()
         self._claims: Dict[str, Claim] = {}
         self._attachments: Dict[str, Any] = {}
+        # Presence events by name: the newest time each was seen, in memory
+        self._marks: Dict[str, float] = {}
 
     # Fields
 
@@ -80,6 +82,8 @@ class Vehicle:
         at: Optional[float] = None,
         seen: bool = True,
     ) -> Observation:
+        hook = getattr(self._registry, "onObserve", None)
+        prior = self._fields.reported(field).get(source) if hook else None
         obs = self._fields.observe(field, value, source, at)
         if seen:
             with self._lock:
@@ -88,7 +92,23 @@ class Vehicle:
                 if at >= self.lastSeen:
                     self.lastSeen = at
                     self.lastSeenSource = obs.source
+        # The incoming reading, not the kept one: an older stamp is stored
+        # per source but loses the field's latest
+        mine = self._fields.reported(field).get(source) if hook else prior
+        if mine is not prior:
+            try:
+                hook(self, field, mine, prior)
+            except Exception:
+                logger.exception("Observe hook failed")
         return obs
+
+    def mark(self, name: str, at: float) -> None:
+        with self._lock:
+            self._marks[name] = max(at, self._marks.get(name, float("-inf")))
+
+    def markAt(self, name: str) -> float:
+        with self._lock:
+            return self._marks.get(name, float("-inf"))
 
     def latest(self, field: str) -> Optional[Observation]:
         return self._fields.latest(field)

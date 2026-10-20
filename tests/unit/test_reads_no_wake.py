@@ -82,8 +82,7 @@ def test_update_location_zero_forces_a_fresh_read():  # P12
         "heading": 0,
         "gpsAsOf": 5,
     }
-    api.is_location_home = Mock(return_value=True)
-    assert api.update_location(reg.get(VIN), 0) is True and reg.get(VIN).value("lat", 10000) == 3.0
+    assert reg.get(VIN).read("lat", 0).value == 3.0
     ble.get_location_state.assert_called_once()
 
 
@@ -125,7 +124,7 @@ def test_allow_wake_wakes_once_then_retries():
     ble.wakeVehicle.assert_called_once_with(VIN)
 
 
-def test_location_read_recomputes_at_home():
+def test_location_read_observes_the_position():
     api, ble, reg = setup(None)
     ble.get_location_state.return_value = {
         "latitude": 1.0,
@@ -133,12 +132,8 @@ def test_location_read_recomputes_at_home():
         "heading": 0,
         "gpsAsOf": 5,
     }
-    api.is_location_home = Mock(return_value=True)
-    assert (
-        api.update_location(reg.get(VIN)) is True
-        and state(reg).atHome is True
-        and (reg.get(VIN).value("lat", 10000), reg.get(VIN).value("lon", 10000)) == (1.0, 2.0)
-    )
+    assert reg.get(VIN).read("lat", 0) is not None
+    assert (reg.get(VIN).value("lat", 10000), reg.get(VIN).value("lon", 10000)) == (1.0, 2.0)
 
 
 def test_status_deferral_skips_the_online_check():
@@ -166,7 +161,7 @@ def test_ble_read_observes_actual_current():
     assert reg.get(VIN).latest("actualCurrent").source == "TeslaBLE"
 
 
-def test_location_ignores_a_fix_time_older_than_the_position():
+def test_a_location_read_with_no_fix_time_keeps_the_older_one():
     api, ble, reg = setup(None)
     reg.get(VIN).observe("gpsAsOf", 5, "OwnerAPI", at=1.0)
     ble.get_location_state.return_value = {
@@ -175,9 +170,7 @@ def test_location_ignores_a_fix_time_older_than_the_position():
         "heading": 0,
         "gpsAsOf": None,
     }
-    api.is_location_home = Mock(return_value=True)
-    assert api.update_location(reg.get(VIN)) is True
-    api.is_location_home.assert_called_once_with(1.0, 2.0, None)
+    assert reg.get(VIN).read("lat", 0).value == 1.0
     assert reg.get(VIN).latest("gpsAsOf").value == 5
 
 
@@ -202,7 +195,6 @@ def test_null_gps_as_of_is_not_observed():
         )
     )
     del api.update_vehicle_data  # use the real method
-    api.is_location_home = Mock(return_value=True)
     assert api.update_vehicle_data(reg.get(VIN)) is True
     assert reg.get(VIN).latest("gpsAsOf") is None and reg.get(VIN).value("batteryLevel", 10000) == 70
 
@@ -234,7 +226,7 @@ def test_ble_reply_with_no_values_falls_through_to_api():
         "heading": 90,
         "gpsAsOf": None,
     }
-    api.update_location(reg.get(VIN))
+    reg.get(VIN).read("lat", 0)
     api.update_vehicle_data.assert_called_once()
 
 

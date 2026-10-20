@@ -32,11 +32,8 @@ from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile.Belief import newerReading
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
-from TWCManager.Vehicle.Reconcile.Targets import (
-    applyPolicyLimit,
-    broadcastVehicles,
-    targetsFor,
-)
+from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, targetsFor
+from TWCManager.Vehicle import Presence
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -136,6 +133,7 @@ class TWCMaster:
         self.providerOrder = ProviderOrder(self)
         self.providerOrder.register(Gen2TWCProvider(self))
         self.vehicleRegistry.providerOrder = self.providerOrder
+        self.vehicleRegistry.onObserve = lambda *a: Presence.noteObservation(self, *a)
         # Desired vehicle state, and the reconciler that converges cars on
         # it; all on the registry's time.time clock
         self.desired = DesiredStore()
@@ -190,7 +188,7 @@ class TWCMaster:
 
     def _chargeTargets(self, vin, capability):
         # A named car; for an anonymous point, a mode-1 start or
-        # stop and a mode-3 start went unaddressed (broadcastVehicles)
+        # stop and a mode-3 start went unaddressed (Presence.candidates)
         targets = targetsFor(self, vin or None, capability)
         mode = int(self.settings.get("chargeStopMode", 1))
         if (
@@ -199,7 +197,7 @@ class TWCMaster:
             and (mode == 1 or mode == 3 and capability == START_CHARGING)
         ):
             # The anonymous car itself has no candidate in these modes
-            targets = broadcastVehicles(self, capability)
+            targets = Presence.candidates(self, capability)
         return targets
 
     def _wantCharging(self, vin, value):
@@ -358,12 +356,9 @@ class TWCMaster:
     @staticmethod
     def _taskKey(task):
         # Tasks dedupe per cmd, except VIN queries, which dedupe per TWC so
-        # one TWC's query never replaces another's, and home checks, per VIN.
+        # one TWC's query never replaces another's.
         if task["cmd"] == "getVehicleVIN":
             return ("getVehicleVIN", bytes(task.get("slaveTWC") or b""))
-        if task["cmd"] == "vehicleIsDefinitelyHome":
-            # Per VIN, so two TWCs' cars are both checked.
-            return ("vehicleIsDefinitelyHome", task.get("vin"))
         return task["cmd"]
 
     def doneBackgroundTask(self, task):
@@ -1593,17 +1588,9 @@ class TWCMaster:
                 "vehicleVIN": slaveTWC.currentVIN,
             },
         )
-
-        # If vehicle is charging, it's at home no matter what we previously
-        # thought. The check reads the vehicle (BLE, HTTP), so it runs on the
-        # background thread, not this (serial) one.
-        self.queue_background_task({"cmd": "vehicleIsDefinitelyHome", "vin": vin})
-
-    def vehicleIsDefinitelyHome(self, vin):
-        # Background thread: may do vehicle I/O.
-        tesla_api = self.getModuleByName("TeslaAPI")
-        if tesla_api:
-            tesla_api.vehicleIsDefinitelyHome(vin)
+        vehicle = self.vehicleRegistry.get(vin)
+        if vehicle is not None:
+            Presence.learnHome(self, vehicle)
 
     def releaseBackgroundTasksLock(self):
         self.backgroundTasksLock.release()

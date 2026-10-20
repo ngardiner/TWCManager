@@ -383,8 +383,6 @@ def background_tasks_thread(master):
                         ble.runPendingScans()
                 elif task["cmd"] == "expireVehicles":
                     master.expireVehicles()
-                elif task["cmd"] == "vehicleIsDefinitelyHome":
-                    master.vehicleIsDefinitelyHome(task["vin"])
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
                 elif task["cmd"] == "gen3Vitals":

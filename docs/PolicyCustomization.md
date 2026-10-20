@@ -46,42 +46,59 @@ vehicle when the policy comes into effect.  For instance, you might charge to
 50% during scheduled charging to ensure the car always has plenty of range, but
 charge up to 90% if excess solar production permits.
 
-These limits are GPS-based.  They will be applied to cars at home when the
+These limits apply to cars at home.  They are applied to cars at home when the
 policy changes, and to cars which arrive while the policy is in effect.  The
 car's original charge limit is remembered and restored when the car leaves or
 when a new policy does not apply a limit.
 
-A car counts as at home when:
+TWCManager decides where each car is from events as they arrive, so a paid
+Tesla API read is never needed to place a car.  The newest evidence wins, and a
+car is home, away, or "probably home" (nothing says either way):
 
-1. a TWC reports it by VIN; else
-2. for a car on your Tesla API account, its latest known position (from any
-   source, including TeslaMate and Fleet Telemetry, which cost nothing)
-   decides: at home within `atHomeRadius` of the home location, away
-   otherwise; else
-3. for a car on your Tesla API account, with no usable position: it was last
-   seen plugged in at home, or TWCManager holds a limit on it (it applied one
-   earlier, including before a restart); else
-4. a car Home Assistant tracks counts as at home exactly when Home Assistant
-   says so; else
-5. it has a BLE key paired with TWCManager.
+- **Home:** a TWC reports the car by VIN while it is plugged in; the car
+  plugs in at a TWC, or over BLE, or plugs in with its position inside
+  `atHomeRadius` of the home location (a fast charger or a cable-less plug
+  doesn't count); the car is in BLE range; or it is parked inside the radius.
+- **Away:** a position outside the radius, newer than the last evidence that
+  it is home; or it is unplugged after that evidence.
+- **Probably home:** a car that is driving, or has started driving or left BLE
+  range since it was last seen at home, until a position or an unplug settles
+  it.  Probably-home cars are counted in `numCarsAtHome` and
+  `minBatteryLevelAtHome` below, but a charge limit waits for them until they
+  plug in or are confirmed home.
 
-This is re-checked on every policy pass, so after a restart a car that is
-asleep and plugged in is found again from its last position, without waking
-it. A car leaves when its position places it away from home; a position
-stamped no later than TWCManager's last limit write to that car (such as a
-retained MQTT position delivered again) does not count as leaving.
+A Gen2 TWC reports status 00 both when a car leaves and when it wakes up, so
+TWCManager treats a 00 as an unplug only if the TWC's maximum amps went from
+above 0 to 0, the 00 lasts 60 seconds, and live telemetry (TeslaMate or Fleet
+Telemetry) does not say the car is still plugged in.  The log shows each
+decision (`TWC <id>: 00 onset ...`, `unplugged, <VIN> departs`).  This rule
+was tuned on two cars, so please report a car that is mishandled.
 
-The home location is set from the first fresh position a Tesla API vehicle
-read returns (a billed `vehicle_data` call on the Fleet API) or that Home
-Assistant reports. Until it is set, no position can place a car at home or
-away, so presence relies on steps 1 and 3-5: a car TWCManager holds a limit
-on, or a car with a BLE key, still gets the policy's limit. You can also set
-the home location yourself: the web interface can learn it from a vehicle's
-current position, or set `homeLat` and `homeLon` with the
-[setSetting API](modules/control_HTTP_API/setSetting.md).
+The home location moves to a car's position only when a TWC names that car by
+VIN or the position arrived over BLE, and only for a fresh position outside the
+current home radius; it is never taken from the first position of a car that
+nothing places at home.  If you run cars with no TWC and no BLE, set the home
+location yourself, on the Settings page (use the vehicle location button) or
+with `homeLat` and `homeLon` through the
+[setSetting API](modules/control_HTTP_API/setSetting.md).  Until it is set,
+TWCManager logs a warning once, and a car known only through vehicle APIs is
+never treated as home and gets no limit.  `atHomeRadius` defaults to 1,000 feet.
 
-Acceptable values are 50-100; -1 means not to apply a limit / restore the car's
-original limit.
+A car's start and charge rate commands also need the car to be plugged in
+here.  A TWC's own commands (start, stop, amps) are never held back by where a
+car is.  Raising a car's limit may wake it, but lowering one never does, and
+nothing wakes a car for a raise while its TWC or charger is offered 0 A.
+When a car leaves, its original limit is sent wherever it is, without waking
+it.  If that restore fails, the log may repeat a "not here" line for the away
+car on each policy pass until it succeeds.
+
+Known limits: a guest car that later plugs in to the same TWC can keep a car
+that left idle counted as home until that car reports a position outside the
+radius or starts driving, and a VIN a TWC rejected during a charge session
+stays rejected until the car is unplugged.
+
+Acceptable values are 50-100; -1 means not to apply a limit: the car is released
+to its original limit, which is applied like any other limit.
 
 These limits are not exposed through the web interface, but can be configured in
 the `config.json` file:
@@ -224,9 +241,10 @@ The values in a policy definition are:
     - `stormWatch`:  Whether Storm Watch is currently in effect
   - From `TeslaAPI`:
     - `numCarsAtHome`:  The number of (Tesla) vehicles currently believed to be
-      at home
+      at home, including those that are only probably home
     - `minBatteryLevelAtHome`:  The lowest battery level (0-100) of any Tesla
-      currently believed to be at home; `10000` if unknown / no cars are home.
+      currently believed to be at home (probably-home cars included); `10000` if
+      unknown / no cars are home.
 - Sub-lists
 
 (Note that TWCManager does not know which vehicle is connected to which TWC, so

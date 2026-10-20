@@ -171,22 +171,6 @@ class TeslaBLE:
     def providers(self):
         return [TeslaBLEProvider(self, self.master)]
 
-    def _scheduleBlocksStart(self, vin):
-        # Don't override the car's own Scheduled Charging / Departure timer
-        # with a BLE start command (the reconciler's handsOff is the same
-        # rule for every provider). Schedule state comes from the TeslaAPI
-        # module; without it (BLE-only installs) we have no schedule data and
-        # allow the command.
-        if not self.master.config["config"].get("respectVehicleSchedule", True):
-            return False
-        teslaapi = self.master.getModuleByName("TeslaAPI")
-        if not teslaapi:
-            return False
-        try:
-            return teslaapi.vehicleScheduledChargingPending(vin)
-        except Exception:
-            return False
-
     def _is_already_satisfied(self, output):
         """Return True if output indicates the car is already in the desired charge state."""
         return self._satisfiedReason(output) is not None
@@ -1264,6 +1248,10 @@ class TeslaBLE:
         v.claim("TeslaBLE", False, "unproven", keepsAlive=False)
 
     def _noteBleProof(self, vin):
+        # An answered exchange: the car is in range
+        v = self.registry.get(vin)
+        if v is not None:
+            v.observe("bleReach", True, "TeslaBLE")
         if self._storedStatus(vin)["status"] != "paired":
             logger.info(f"BLE key for {vin} accepted")
             self._setBleStatus(vin, "paired")

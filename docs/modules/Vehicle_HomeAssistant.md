@@ -90,7 +90,7 @@ The module uses this data to:
   * `numCarsAtHome`
   * `minBatteryLevelAtHome`
 
-Home location and "at home radius" are taken from the main TWCManager configuration, using the same heuristic as the original Tesla API module (with the `atHomeRadius` setting in feet).
+Where a car is comes from TWCManager's presence rules (see Charge Limits in [Policy Customization](../PolicyCustomization.md)), using the car's Home Assistant location along with its other evidence. Home is learned from a car a TWC names or a BLE position, or set on the Settings page. A zone state of `home` with no coordinates no longer places a car at home. `atHomeRadius` (in feet) defaults to 1,000.
 
 ### Charging Control
 

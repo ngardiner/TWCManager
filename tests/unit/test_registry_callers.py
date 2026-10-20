@@ -243,6 +243,7 @@ def test_get_slave_twcs_reports_the_listed_cars_fields_and_legacy_defaults():
     s.getCurrentChargerLoad = lambda: 0
     master = _master(reg)
     master.getSlaveTWCs = Mock(return_value=[s])
+    master.getHomeLatLon = lambda: (1.0, 2.0)
     handler = _handler(master)
 
     def get():
@@ -263,7 +264,9 @@ def test_get_slave_twcs_reports_the_listed_cars_fields_and_legacy_defaults():
     v.observe("batteryLevel", 61, "OwnerAPI")
     v.observe("chargeLimit", 80, "OwnerAPI")
     v.observe("timeToFullCharge", 1.5, "OwnerAPI")
-    v.attachment("TeslaAPI").atHome = True
+    assert get()["lastAtHome"] is False  # no position: presumed, not home
+    v.observe("lat", 1.0, "OwnerAPI")
+    v.observe("lon", 2.0, "OwnerAPI")  # parked at home
     row = get()
     assert (
         row["lastAtHome"],

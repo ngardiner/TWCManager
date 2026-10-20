@@ -321,7 +321,7 @@ def test_a_limit_that_stays_unreadable_stops_holding_the_start():          # C1 
 def fanOutCars(m):
     reg = m.vehicleRegistry; anon = reg.beginPlugSession("8244"); api = new_api(master=m)
     for i, (vin, at) in enumerate(((VIN, HOME), ("5YJ3E1EA1KF000002", AWAY), ("5YJ3E1EA1KF000003", HOME))):
-        api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, reg.get(vin), at)       # located by position
+        api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, reg.get(vin), at)       # placed by position
     other = reg.get("5YJ3E1EA1KF000003"); other.observe("twcVin", "8245", "TWC")
     bleCar = reg.getOrCreate("5YJ3E1EA1KF000004", "t"); bleCar.claim("TeslaBLE", True, "paired")
     return anon, [VIN, "5YJ3E1EA1KF000003", "5YJ3E1EA1KF000004"]
@@ -437,9 +437,9 @@ def haInstall(m, enabled=True):
     ha = Mock(); ha.enabled.return_value = enabled; ha.registry = m.vehicleRegistry; ha.master = m
     ha._post_service = Mock(return_value=O.Outcome(O.DONE)); m.providerOrder.register(HomeAssistantProvider(ha))
     for i, vin in enumerate((VIN, "5YJ3E1EA1KF000002")):
-        hv = SimpleNamespace(vin=vin, at_home=True, has_charge_switch=True, has_charge_current_number=True, has_charge_limit_number=True,
+        hv = SimpleNamespace(vin=vin, has_charge_switch=True, has_charge_current_number=True, has_charge_limit_number=True,
                              entity_ids={"charge_switch": "switch.c%d" % i})
-        m.vehicleRegistry.getOrCreate(vin, "t").attach("HomeAssistant", hv)
+        car = m.vehicleRegistry.getOrCreate(vin, "t"); car.attach("HomeAssistant", hv); placeAt(m, car)   # parked at home
     s = slave(m); s.currentVIN = VIN; m.settings["chargeStopMode"] = "1"
     return ha, m.vehicleRegistry.beginPlugSession("8245")
 

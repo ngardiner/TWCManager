@@ -12,6 +12,7 @@ one covers the rate). The endpoint holds no state of its own.
 from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.Vehicle.Presence import HOME, presence
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
@@ -169,8 +170,8 @@ def _telemetryPluggedIn(vehicle):
 
 
 def vehicleEndpoints(master) -> List[VehicleEndpoint]:
-    """A VehicleEndpoint for each registry car an enabled TeslaAPI places
-    at home.
+    """A VehicleEndpoint for each car an enabled TeslaAPI lists that is
+    home.
 
     While a charging point that can't name its car is plugged in or draws
     power, it might be serving any of them, so none is listed: an
@@ -194,5 +195,6 @@ def vehicleEndpoints(master) -> List[VehicleEndpoint]:
     return [
         VehicleEndpoint(vehicle, master.providerOrder, master)
         for vehicle, car in master.vehicleRegistry.attached("TeslaAPI")
-        if car.atHome and not (unknown and _telemetryPluggedIn(vehicle))
+        if presence(master, vehicle) == HOME
+        and not (unknown and _telemetryPluggedIn(vehicle))
     ]

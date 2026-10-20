@@ -1,5 +1,4 @@
 import base64
-import functools
 import hashlib
 import json
 import logging
@@ -14,6 +13,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Presence import HOME, homeCars, inside, presence
 from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
     FleetAPIProvider,
     OwnerAPIProvider,
@@ -52,7 +52,6 @@ class CarApiState:
     the car's registry Vehicle as "TeslaAPI": the attachment is the listing.
     The car's data is registry fields, never kept here."""
 
-    atHome = False  # home by the latest position (locate, a read)
     statusDeferral = 0  # until then a read reports stored values
     errorCount = 0  # the per-car API error backoff
     lastErrorTime = 0
@@ -678,65 +677,10 @@ class TeslaAPI:
             # Not JSON, or no 'response' or 'count' in the answer
             return False
 
-    def is_location_within_radius(self, lat, lon, radius):
-        if (
-            abs(self.master.getHomeLatLon()[0] - lat) > radius
-            or abs(self.master.getHomeLatLon()[1] - lon) > radius
-        ):
-            return False
-
-        return True
-
-    def is_location_home(self, lat, lon, gpsAge=None):
-        if self.master.getHomeLatLon()[0] == 10000:
-            # Don't seed home from a stale GPS fix. A sleeping car reports its
-            # last known coordinates, which can be hours old and kilometres
-            # away; seeding retries on a later poll once the fix is fresh.
-            if gpsAge is not None and gpsAge > 600:
-                logger.info(
-                    "Home location for vehicles has never been set, but the "
-                    "vehicle's GPS fix is %d seconds old. Waiting for a fresh "
-                    "fix before setting home." % gpsAge
-                )
-                return False
-            logger.info(
-                "Home location for vehicles has never been set.  "
-                + "We'll assume home is where we found the first vehicle currently parked.  "
-                + "Home set to lat="
-                + str(lat)
-                + ", lon="
-                + str(lon)
-            )
-            self.master.setHomeLat(lat)
-            self.master.setHomeLon(lon)
-            self.master.queue_background_task({"cmd": "saveSettings"})
-            self.master.queue_background_task({"cmd": "sunrise"})
-            return True
-
-        # 1 lat or lon = ~364488.888 feet. The exact feet is different depending
-        # on the value of latitude, but this value should be close enough for
-        # our rough needs.
-        # 1/364488.888 * 10560 = 0.0289.
-        # So if vehicle is within 0289 lat and lon of homeLat/Lon,
-        # it's within ~10560 feet (2 miles) of home and we'll consider it to be
-        # at home.
-        # I originally tried using 0.00548 (~2000 feet) but one night the car
-        # consistently reported being 2839 feet away from home despite being
-        # parked in the exact spot I always park it.  This is very odd because
-        # GPS is supposed to be accurate to within 12 feet.  Tesla phone app
-        # also reports the car is not at its usual address.  I suspect this
-        # is another case of a bug that's been causing car GPS to freeze  the
-        # last couple months.
-        # Desired maximum destination from home is now configurable. As the
-        # parameter may not be set, we catch the key error and use the default
-        # value documented above.
-        atHomeRadius = (
-            1 / 364488.888 * float(self.config["config"].get("atHomeRadius", 10560))
-        )
-        return self.is_location_within_radius(lat, lon, atHomeRadius)
-
     def is_far_from_home(self, lat, lon):
-        return not self.is_location_within_radius(lat, lon, 1.4)
+        # Further than an hour's drive
+        home = self.master.getHomeLatLon()
+        return abs(home[0] - lat) > 1.4 or abs(home[1] - lon) > 1.4
 
     def getCarApiErrorRetryMins(self, car=None):
         errorCount = self.errorCount
@@ -1708,53 +1652,20 @@ class TeslaAPI:
         # checkCharge: the vehicle list (free), then each car at home
         self.loadList()
         for vehicle, car in self.registry.attached("TeslaAPI"):
-            if car.atHome:
+            if presence(self.master, vehicle) == HOME:
                 self.update_charge(vehicle)
         self.lastChargeCheck = time.time()
 
-    def vehicleScheduledChargingPending(self, vin):
-        # True if the listed vehicle reports it is waiting on its in-car
-        # charging schedule (Scheduled Charging / Departure).
-        v = self.registry.get(vin) if isinstance(vin, str) else None
-        car = v.attachment("TeslaAPI") if v is not None and v.vin == vin else None
-        return bool(car and v.value("scheduledChargingPending", False))
-
-    def vehicleIsDefinitelyHome(self, vin):
-        v = self.registry.get(vin) if isinstance(vin, str) else None
-        car = v.attachment("TeslaAPI") if v is not None and v.vin == vin else None
-        if car is None or car.atHome:
-            return
-        # Force a real fetch; the status deferral would otherwise
-        # return cached (possibly stale) coordinates unqueried.
-        car.statusDeferral = 0
-        if self.update_location(v, 0) and not car.atHome:
-            say = functools.partial(logger.log, logging.INFO2)
-            say("%s was connected to a TWC, so is definitely home.", v.name)
-            gpsAsOf = v.value("gpsAsOf", 0)
-            if gpsAsOf and time.time() - gpsAsOf > 600:
-                # The car is home (the TWC reports its VIN), but its GPS fix
-                # is stale - don't move home to wherever the car last had
-                # reception.
-                say("Not resetting home location: %s's GPS fix is stale.", v.name)
-            else:
-                lat, lon = v.value("lat", 10000), v.value("lon", 10000)
-                say("Resetting home location to (%s, %s)", lat, lon)
-                self.master.setHomeLat(lat)
-                self.master.setHomeLon(lon)
-                self.master.queue_background_task({"cmd": "sunrise"})
-                self.master.queue_background_task({"cmd": "saveSettings"})
-            car.atHome = True
-
     @property
     def numCarsAtHome(self):
-        return len([car for _, car in self.registry.attached("TeslaAPI") if car.atHome])
+        return len(homeCars(self.master, "TeslaAPI"))
 
     @property
     def minBatteryLevelAtHome(self):
         if time.time() - self.lastChargeCheck > self.chargeUpdateInterval:
             self.master.queue_background_task({"cmd": "checkCharge"})
-        attached = self.registry.attached("TeslaAPI")
-        levels = [v.value("batteryLevel", 10000) for v, car in attached if car.atHome]
+        cars = homeCars(self.master, "TeslaAPI")
+        levels = [v.value("batteryLevel", 10000) for v, _ in cars]
         return min(levels or [10000])
 
     # One listed car's reads: vehicle is its registry Vehicle, car its
@@ -1930,32 +1841,6 @@ class TeslaAPI:
             car.lastAPIAccessTime = time.time()
         return obs
 
-    def update_location(self, vehicle, minInterval=0):
-        # minInterval 0 forces a fresh read (vehicleIsDefinitelyHome relies
-        # on it).
-        obs = self._readFresh(vehicle, "lat", minInterval)
-        if obs is None:
-            return False
-        gps = vehicle.latest("gpsAsOf")
-        # A fix time from an older read than this position says nothing
-        # about it.
-        gpsAsOf = gps.value if gps is not None and gps.at >= obs.at else 0
-        gpsAge = (time.time() - gpsAsOf) if gpsAsOf else None
-        vehicle.attachment("TeslaAPI").atHome = self.is_location_home(
-            vehicle.value("lat", 10000), vehicle.value("lon", 10000), gpsAge
-        )
-        return True
-
-    def locate(self, vehicle):
-        # Free: atHome from the latest position any source observed. None
-        # when the position or home is unknown (never seeds home)
-        lat = vehicle.value("lat", 10000)
-        if lat == 10000 or self.master.getHomeLatLon()[0] == 10000:
-            return None
-        car = vehicle.attachment("TeslaAPI")
-        car.atHome = self.is_location_home(lat, vehicle.value("lon", 10000))
-        return car.atHome
-
     def update_vehicle_data(self, vehicle, slot=None):
         car = vehicle.attachment("TeslaAPI")
         path = (
@@ -1997,8 +1882,8 @@ class TeslaAPI:
             gpsAsOf = drive.get("gps_as_of") or 0
             if gpsAsOf:
                 vehicle.observe("gpsAsOf", gpsAsOf, source)
-            gpsAge = (now - gpsAsOf) if gpsAsOf else None
-            car.atHome = self.is_location_home(lat, lon, gpsAge)
+            if "shift_state" in drive:
+                vehicle.observe("shiftState", drive["shift_state"], source)
 
             try:
                 vehicleName = response["vehicle_state"]["vehicle_name"]
@@ -2007,13 +1892,20 @@ class TeslaAPI:
             if vehicleName:
                 vehicle.observe("name", vehicleName, source)
 
+            # One reading: the charger details carry the charging state's
+            # stamp, and come first so it is judged with them
+            stamp = self.registry.now()
             for key, field in (
+                ("fast_charger_present", "fastChargerPresent"),
+                ("fast_charger_type", "fastChargerType"),
+                ("conn_charge_cable", "connChargeCable"),
+                ("charger_power", "chargerPower"),
+                ("charge_current_request_max", "chargeCurrentRequestMax"),
                 ("charge_limit_soc", "chargeLimit"),
                 ("battery_level", "batteryLevel"),
                 ("time_to_full_charge", "timeToFullCharge"),
                 ("charger_pilot_current", "availableCurrent"),
                 ("charge_current_request", "chargeCurrentRequest"),
-                ("charge_current_request_max", "chargeCurrentRequestMax"),
                 ("charger_actual_current", "actualCurrent"),
                 ("charger_phases", "phases"),
                 ("charger_voltage", "voltage"),
@@ -2021,9 +1913,9 @@ class TeslaAPI:
                 ("scheduled_charging_pending", "scheduledChargingPending"),
             ):
                 if key in charge:
-                    vehicle.observe(field, charge[key], source)
+                    vehicle.observe(field, charge[key], source, at=stamp)
 
-            if not car.atHome:
+            if inside(self.master, vehicle) is False:
                 if self.is_far_from_home(lat, lon):
                     # Car is further from home than can be driven in an
                     # hour; no point re-checking sooner than that.

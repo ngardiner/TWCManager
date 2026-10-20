@@ -16,7 +16,7 @@ from .Capability import (
     WAKE,
     Declaration,
 )
-from ..Reconcile.Outcome import SATISFIED, Outcome
+from ..Reconcile.Outcome import Outcome
 from .Provider import Provider, vehicleMaxAmps
 
 CAPABILITIES = (
@@ -92,10 +92,6 @@ class TeslaBLEProvider(Provider):
         return self.ble.commandOutcome(vin, "charging-set-limit", int(limit))
 
     def startCharging(self, vin: str) -> Outcome:
-        if self.ble._scheduleBlocksStart(vin):
-            # The car's own schedule holds the start: treated as done
-            # rather than asked again
-            return Outcome(SATISFIED, "scheduled")
         return self.ble.commandOutcome(vin, "charging-start")
 
     def stopCharging(self, vin: str) -> Outcome:

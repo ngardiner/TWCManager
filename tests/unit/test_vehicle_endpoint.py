@@ -5,6 +5,7 @@ from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint, _blindTWCs,
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from tests.unit.reconcile_helpers import AWAY, HOME, placeAt
 from tests.unit.test_provider_order import ble, fleet, twc
 from tests.unit.test_teslaapi_registry import api_with_registry
 from tests.unit.teslatokens import fleet_token, owner_token
@@ -14,14 +15,15 @@ def master(settings=None, *providers, slaves=()):
     m = Mock(); m.settings = settings or {}; m.config = {"config": {"wiringMaxAmpsPerTWC": 32, "defaultVoltage": 240}}
     m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     for p in providers: m.providerOrder.register(p)
-    carapi = Mock(); carapi.enabled.return_value = True; carapi.locate.return_value = None
+    carapi = Mock(); carapi.enabled.return_value = True
+    m.getHomeLatLon = lambda: [m.settings.get("homeLat", 10000), m.settings.get("homeLon", 10000)]
     m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves)
     m.getModulesByType = lambda t: []                                            # no RS-485 interface loaded
     m.busUp = lambda: False
     return m
 
-def car(m, vin, atHome=True):
-    v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome)); return v
+def car(m, vin, home=True):
+    v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin)); placeAt(m, v, HOME if home else AWAY); return v
 
 def provider(e):
     # The provider that would set this endpoint's rate ("" for none)
@@ -64,10 +66,10 @@ def test_set_target_power_sets_desired_amps():
     e.setTargetPower(0); assert m.desired.get(VIN1, AMPS) is None                        # a zero offer withdraws the rate
 
 def test_lists_at_home_api_cars_and_keeps_blind_rules():
-    m = master({}, fleet()); car(m, VIN1); car(m, VIN2, atHome=False); m.vehicleRegistry.beginPlugSession("8244")
+    m = master({}, fleet()); car(m, VIN1); car(m, VIN2, home=False); m.vehicleRegistry.beginPlugSession("8244")
     assert [e.currentVIN for e in vehicleEndpoints(m)] == [VIN1]
     m.getSlaveTWCs = lambda: [slave(amps=5.0)]; assert vehicleEndpoints(m) == []                                 # blind VIN-less TWC
-    m.getSlaveTWCs = lambda: [slave()]; v2 = car(m, VIN2); v2.observe("state", "online", "TeslaMateVehicle"); v2.observe("pluggedIn", True, "TeslaMateVehicle"); m.vehicleRegistry.get(VIN2).attachment("TeslaAPI").atHome = True
+    m.getSlaveTWCs = lambda: [slave()]; v2 = car(m, VIN2); v2.observe("state", "online", "TeslaMateVehicle"); v2.observe("pluggedIn", True, "TeslaMateVehicle")
     assert [e.currentVIN for e in vehicleEndpoints(m)] == [VIN1]                                                  # unknown TWC + telemetry plug
     m.getSlaveTWCs = lambda: [slave(key=VIN1)]
     assert sorted(e.currentVIN for e in vehicleEndpoints(m)) == [VIN1, VIN2]                                      # named TWC: grouping merges, not exclusion

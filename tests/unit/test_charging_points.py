@@ -9,6 +9,7 @@ from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
 from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint, vehicleEndpoints
 from TWCManager.EVSEInstance.ChargingPoint import ChargingPoint, groupEndpoints
 from TWCManager.TWCMaster import TWCMaster
+from tests.unit.reconcile_helpers import placeAt
 from tests.unit.test_gen2twc_provider import CONFIG
 from tests.unit.test_gen3twc_provider import vitals
 from tests.unit.test_provider_order import fleet
@@ -115,7 +116,7 @@ def real(mode=1, gen3=False):
     if gen3: config["controller.Gen3TWCs"] = {"enabled": True, "devices": [{"ip": "10.0.0.1", "fuseAmps": 48, "phases": 1}]}
     m = TWCMaster("AB", config); m.settings["chargeRateControl"] = mode
     m.queue_background_task = Mock()
-    carapi = Mock(); carapi.enabled.return_value = True; carapi.locate.return_value = None; policy = Mock(); policy.policyIsGreen.return_value = False
+    carapi = Mock(); carapi.enabled.return_value = True; policy = Mock(); policy.policyIsGreen.return_value = False
     modules = {"TeslaAPI": carapi, "Policy": policy}; m.getModuleByName = lambda n: modules.get(n)
     m.providerOrder.register(fleet())
     newSlave = m.newSlave
@@ -131,7 +132,7 @@ def real(mode=1, gen3=False):
 def budget(m, amps): m.getMaxAmpsToDivideAmongSlaves = lambda: amps
 
 def car(m, vin, state):
-    v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=True))
+    v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin)); placeAt(m, v)
     if state: v.observe("chargingState", state, "OwnerAPI")
     return v
 

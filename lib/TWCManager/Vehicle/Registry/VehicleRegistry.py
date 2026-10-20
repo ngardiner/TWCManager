@@ -60,6 +60,8 @@ class VehicleRegistry:
         # Called with a key, outside the lock, whenever a vehicle leaves:
         # state kept elsewhere per key (desired state) follows the removals
         self.removed: Optional[Callable[[str], None]] = None
+        # (vehicle, field, obs, the source's prior obs), after each store
+        self.onObserve: Optional[Callable[..., None]] = None
 
     @classmethod
     def forMaster(cls, master) -> "VehicleRegistry":
@@ -237,6 +239,10 @@ class VehicleRegistry:
             # newer values survive the merge.
             for field, obs in anon._fields.snapshot().items():
                 v.observe(field, obs.value, obs.source, at=obs.at)
+        # One car per point: the one it names now
+        for other in self._attributedTo(pointId):
+            if other is not v:
+                other.observe("twcVin", None, "TWC", seen=False)
         v.observe("twcVin", pointId, "TWC")
         return "confirmed"
 

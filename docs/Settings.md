@@ -6,12 +6,16 @@ The following settings (outside of the configuration file) are available via the
 
 Allows you to select which theme you'd like to use for the TWCManager interface.
 
+## Home Location
+
+Home is learned from a car that a TWC names by VIN, or from a fresh position read over BLE; it is never taken from the first position of a car that nothing places at home. A car-only install (no TWC, no BLE) must set it here, with the vehicle location button, or TWCManager logs a warning once and does not treat cars known only through vehicle APIs as home. `atHomeRadius` defaults to 1,000 feet.
+
 ## Stop Charging Method
 
 This option, which defaults to a vehicle command, allows you to specify how you would like TWCManager to stop a car from charging. The following options exist, and each has some information to help you decide on which approach to use:
 
    * Vehicle command (BLE or API)
-      * This method sends a stop charging command to vehicles which are detected as being "at home", over BLE where available and the Tesla API otherwise (see Vehicle Command Policy below).
+      * This method sends a stop charging command to vehicles which are detected as being "at home" (see Charge Limits in Policy Customization for how that is decided), over BLE where available and the Tesla API otherwise (see Vehicle Command Policy below).
       * This method is only effective for Tesla vehicles. Any non-Tesla vehicles are not visible via the Tesla API and will not be stopped, even if the available power falls below the minimum power per TWC.
       * For those vehicles, they will continue to charge, but at the minimum power per TWC rate.
    * Stop Responding to Slaves

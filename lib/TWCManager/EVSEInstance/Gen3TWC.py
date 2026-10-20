@@ -42,6 +42,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.Vehicle.Presence import HOME, presence
 
 if TYPE_CHECKING:
     from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
@@ -283,7 +284,7 @@ class Gen3TWC(EVSEInstance):
             if vehicle.value("twcVin") is not None:
                 continue
             api = vehicle.attachment("TeslaAPI")
-            if api is not None and not getattr(api, "atHome", False):
+            if api is not None and presence(self.master, vehicle) != HOME:
                 continue
             candidates.append(vehicle.vin)
         if len(candidates) == 1:

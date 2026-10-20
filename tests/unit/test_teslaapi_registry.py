@@ -85,7 +85,6 @@ def test_update_vehicle_data_observes_only_present_keys():  # P15
             },
         )
     )
-    api.is_location_home = Mock(return_value=False)
     api.is_far_from_home = Mock(return_value=False)
     assert api.update_vehicle_data(reg.get(VIN)) is True
     phases = reg.get(VIN).latest("phases")
@@ -112,7 +111,6 @@ def test_update_vehicle_data_observes_the_cars_own_current_request():  # slim Ta
             },
         )
     )
-    api.is_location_home = Mock(return_value=False)
     api.is_far_from_home = Mock(return_value=False)
     assert api.update_vehicle_data(reg.get(VIN)) is True
     obs = reg.get(VIN).latest("chargeCurrentRequest")
@@ -138,7 +136,6 @@ def test_each_slot_records_its_own_source(kind, source):
             },
         )
     )
-    api.is_location_home = Mock(return_value=False)
     api.is_far_from_home = Mock(return_value=False)
     assert api.update_vehicle_data(v, slot=slot) is True
     assert api.get_car_api.call_args.kwargs["slot"] is slot
@@ -333,7 +330,7 @@ def test_listing_attaches_state_and_both_claims():
     v = reg.get(VIN)
     state = v.attachment("TeslaAPI")
     assert type(state) is CarApiState
-    assert (state.atHome, state.statusDeferral, state.errorCount) == (False, 0, 0)
+    assert (state.statusDeferral, state.errorCount) == (0, 0)
     assert (state.lastErrorTime, state.lastAPIAccessTime) == (0, 0)
     assert (state.firstWakeAttemptTime, state.firstChargeNeededTime) == (0, 0)
     assert (state.lastChargeNeededTime, state.delayNextWakeAttempt) == (0, 0)

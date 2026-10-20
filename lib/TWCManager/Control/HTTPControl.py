@@ -20,6 +20,7 @@ import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Control.APIValidator import APIValidator
 from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
+from TWCManager.Vehicle.Presence import HOME, presence
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
 
@@ -568,7 +569,7 @@ def CreateHTTPHandlerClass(master):
                     vehicle = slaveTWC.getLastVehicle()
                     if vehicle is not None:
                         row = data[TWCID]
-                        row["lastAtHome"] = vehicle.attachment("TeslaAPI").atHome
+                        row["lastAtHome"] = presence(master, vehicle) == HOME
                         row["lastBatterySOC"] = vehicle.value("batteryLevel", 10000)
                         row["lastChargeLimit"] = vehicle.value("chargeLimit", -1)
                         row["lastTimeToFullCharge"] = vehicle.value(

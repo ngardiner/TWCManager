@@ -165,7 +165,6 @@ def test_owner_reads_cost_nothing_with_a_fleet_token_held(requests_mock, case):
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
     car.lastAPIAccessTime = 0
-    api.is_location_home = Mock(return_value=True)
     api.is_far_from_home = Mock(return_value=False)
     fleet = requests_mock.register_uri(ANY, FLEET_ANY, json=VEHICLE_DATA)
     online = requests_mock.get(
@@ -190,7 +189,6 @@ def test_fleet_reads_when_owner_holds_no_token(requests_mock):
     api.storeToken(fleet_token())
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
-    api.is_location_home = Mock(return_value=True)
     api.is_far_from_home = Mock(return_value=False)
     base = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
     online = requests_mock.get(base, json={"response": {"state": "online"}})
@@ -214,7 +212,6 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
     car.lastAPIAccessTime = 0
-    api.is_location_home = Mock(return_value=True)
     api.is_far_from_home = Mock(return_value=False)
     api.master.queue_background_task = Mock()
     base = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
@@ -232,6 +229,6 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     assert not api.ownerSlot.usable("read")
     # Next poll that must read (maxAge 0): Fleet alone reads
     car.statusDeferral = 0
-    assert api.update_location(reg.get(VIN), 0) is True
+    assert reg.get(VIN).read("lat", 0) is not None
     assert (ownerOnline.call_count, ownerData.call_count) == (1, 1)
     assert fleetData.call_count == 2
