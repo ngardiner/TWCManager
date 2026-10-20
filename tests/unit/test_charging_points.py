@@ -136,8 +136,11 @@ def car(m, vin, state):
     if state: v.observe("chargingState", state, "OwnerAPI")
     return v
 
+def named(m, s, vin):                                                         # the car this TWC last confirmed, until its unplug
+    m.vehicleRegistry.getOrCreate(vin.upper(), "OwnerAPI").observe("twcVin", s.twcid, "TWC")
+
 def stoppedTwc(m, vin=VIN, twcid=b"\x82\x44"):
-    s = m.newSlave(twcid, 80); s.lastVIN = vin; s.reportedState = 0x03; return s     # currentVIN cleared, lastVIN attributed
+    s = m.newSlave(twcid, 80); named(m, s, vin); s.reportedState = 0x03; return s     # currentVIN cleared, the car still attributed
 
 def endpoint(monkeypatch, vin):
     # Records the watts every pass's endpoint for vin is given
@@ -166,7 +169,8 @@ def test_stopped_car_and_its_endpoint_form_one_point_with_the_twc_minimum():
 def test_lower_case_vin_on_the_twc_groups_with_the_endpoint():
     m = real(); s = stoppedTwc(m, VIN.lower()); car(m, VIN, "Stopped")
     assert [p.ID for p in m.chargingPoints()] == ["Point-" + VIN]
-    s.lastVIN = ""; s.currentVIN = VIN.lower()
+    m.vehicleRegistry.endPlugSession("8244")                                      # the unplug
+    s.currentVIN = VIN.lower()
     assert [p.ID for p in m.chargingPoints()] == ["Point-" + VIN]
 
 def test_mode_1_budget_below_the_twc_floor_offers_zero_and_no_fleet_send():
@@ -218,19 +222,18 @@ def test_gen2_at_00_with_a_sleeping_car_is_two_points():   # pinned until presen
     m.distributeEVSEPower()
     assert [a["vin"] for a in setAmps(m)] == [VIN] and s.pointAmps == 0
 
-# A stale Gen2 lastVIN must not put two TWCs in one point
+# A stale Gen2 VIN must not put two TWCs in one point
 
 def twcs(m): return [s for s in m.getSlaveTWCs()]
 
 def pointsHolding(m, vin): return [p for p in m.chargingPoints() if any(e.ID == "Vehicle-" + vin for e in p.endpoints)]
 
 def test_two_twcs_claiming_one_car_stay_separate_points_within_budget():
-    for staleState, servingVin in ((0x01, True), (0x03, False)):
+    for staleState in (0x01, 0x03):
         m = real(); car(m, VIN, "Charging"); budget(m, 40)
-        s1 = m.newSlave(b"\x82\x44", 80); s1.lastVIN = VIN; s1.reportedState = 0x01; s1.reportedAmpsMax = 32   # stale: car A left, something else plugged in
+        s1 = m.newSlave(b"\x82\x44", 80); named(m, s1, VIN); s1.reportedState = 0x01; s1.reportedAmpsMax = 32   # stale: car A left, something else plugged in
         s2 = m.newSlave(b"\x82\x45", 80); s2.reportedState = staleState; s2.reportedAmpsMax = 32
-        if servingVin: s2.currentVIN = VIN
-        else: s2.lastVIN = VIN                                                      # both TWCs report the same stale lastVIN
+        s2.currentVIN = VIN                                                         # serving it, or a stale read of it
         assert s1.vehicleKey == s2.vehicleKey == VIN
         assert sorted(p.ID for p in m.chargingPoints()) == ["Point-" + VIN, "Point-Gen2TWC-8245"]
         assert len(pointsHolding(m, VIN)) == 1
@@ -239,10 +242,10 @@ def test_two_twcs_claiming_one_car_stay_separate_points_within_budget():
 
 def test_twc_offers_never_exceed_the_budget_or_wiring_across_point_shapes():
     def serving(s, vin): s.currentVIN = vin; s.reportedState = 0x01; s.reportedAmpsMax = 32
-    def stopped(s, vin): s.lastVIN = vin; s.reportedState = 0x03
-    def stale(s, vin): s.lastVIN = vin; s.reportedState = 0x01; s.reportedAmpsMax = 32      # car left; something else plugged in
+    def stopped(s, vin): named(s.master, s, vin); s.reportedState = 0x03
+    def stale(s, vin): s.currentVIN = vin; s.reportedState = 0x01; s.reportedAmpsMax = 32   # car left; something else plugged in
     def idle(s, vin): pass
-    shapes = [((serving, VIN), (stopped, VIN2.lower()), (stale, VIN)),                       # two cars on two TWCs, one stale lastVIN
+    shapes = [((serving, VIN), (stopped, VIN2.lower()), (stale, VIN)),                       # two cars on two TWCs, one stale VIN
               ((stale, VIN), (serving, VIN), (idle, None)),
               ((stale, VIN2), (stale, VIN2), (stale, VIN2)),
               ((serving, VIN), (serving, VIN2), (idle, None))]

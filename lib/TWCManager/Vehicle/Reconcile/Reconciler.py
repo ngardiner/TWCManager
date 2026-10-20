@@ -519,7 +519,8 @@ class VehicleReconciler(threading.Thread):
         return Outcome(SATISFIED, RULES + verdict)
 
     def beforeWrite(self, vehicle, attempt, provider, believed):
-        early = self.inapplicable(vehicle, attempt)
+        # A charging point's own command acts on the point, which is here
+        early = None if provider.module is None else self.inapplicable(vehicle, attempt)
         if early is not None or attempt.aspect != CHARGE_LIMIT:
             return attempt.value, early
         decision = decideChargeLimit(

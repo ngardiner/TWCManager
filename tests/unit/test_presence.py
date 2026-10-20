@@ -15,6 +15,7 @@ from TWCManager.Vehicle import Presence as P
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT, Attempt
+from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
 from TWCManager.Vehicle.Registry.Fields import Observation
 from tests.unit.reconcile_helpers import (
     AWAY,
@@ -904,6 +905,141 @@ def test_home_is_learned_from_the_triggering_sources_own_fix():
     assert m.getHomeLatLon()[0] == 10000  # half a BLE fix: never a mixed one
     v.observe("lon", HOME[1], "TeslaBLE")
     assert m.getHomeLatLon() == list(HOME)
+
+
+# The Gen2 unplug: a filtered 00 departs the car the TWC names, else the
+# only car it may serve, unless live telemetry says it is plugged in
+
+
+def onGen2(monkeypatch, m, v, c, named=True):
+    # Linked at 03 with a car's 32 A, past the link grace
+    from tests.unit.test_gen2_unplug import beats
+
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    beats(m, s, c, 10, 0x03, 32.0)
+    if named:
+        m.vehicleRegistry.observeTwcVin("8244", v.vin)
+    beats(m, s, c, 400, 0x03, 32.0)
+    return s, lambda *a, **k: beats(m, s, c, *a, **k)
+
+
+def test_live_telemetry_plugged_vetoes_a_twc_unplug(monkeypatch, caplog):
+    m, v, c = placed()
+    v.observe("state", "online", TM)
+    v.observe("pluggedIn", True, TM)
+    s, beat = onGen2(monkeypatch, m, v, c)
+    with caplog.at_level(logging.INFO):
+        beat(120, 0x00, 0.0)
+    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
+    assert "TWC 8244: not an unplug, %s is plugged in" % VIN in caplog.text
+
+
+def test_charge_stop_keeps_twc_vin_until_the_unplug(monkeypatch):
+    m, v, c = placed()
+    s, beat = onGen2(monkeypatch, m, v, c)
+    beat(300, 0x01, 32.0, actual=10.0)
+    beat(30, 0x03, 32.0)  # the charge stops
+    assert s.isCharging == 0 and v.value("twcVin") == "8244"
+    assert P.presence(m, v) == P.HOME
+    beat(70, 0x00, 0.0)
+    assert v.value("twcVin") is None and P.presence(m, v) == P.NOT_HOME
+
+
+def test_vehicle_key_names_the_car_after_a_charge_stop_and_nobody_after_an_unplug(
+    monkeypatch,
+):
+    m, v, c = placed()
+    s, beat = onGen2(monkeypatch, m, v, c)
+    beat(300, 0x01, 32.0, actual=10.0)  # this charge's VIN read never lands
+    beat(30, 0x03, 32.0)
+    assert m.vehicleRegistry.get("anon:8244") is not None and s.vehicleKey == VIN
+    beat(70, 0x00, 47.0)  # the car wakes: no unplug, whatever the session
+    assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
+    beat(70, 0x03, 32.0)
+    beat(70, 0x00, 0.0)
+    assert s.vehicleKey is None
+    beat(10, 0x03, 32.0)  # another car: unnamed until its VIN is read
+    assert s.vehicleKey == "anon:8244"
+
+
+def test_a_vinless_unplug_departs_the_only_candidate(monkeypatch):
+    m, v, c = placed()
+    s, beat = onGen2(monkeypatch, m, v, c, named=False)
+    assert s.vehicleKey == "anon:8244" and P.candidates(m) == [v]
+    beat(70, 0x00, 0.0)
+    assert v.markAt("unplug") > P.NEVER and P.presence(m, v) == P.NOT_HOME
+    assert m.vehicleRegistry.get("anon:8244") is None
+
+
+def test_a_non_tesla_plug_departs_nobody(monkeypatch):
+    m, v, c = placed(AWAY)  # the account's car is elsewhere
+    s, beat = onGen2(monkeypatch, m, v, c, named=False)
+    assert P.candidates(m) == []
+    beat(70, 0x00, 0.0)
+    assert v.markAt("unplug") == P.NEVER
+    assert m.vehicleRegistry.get("anon:8244") is None
+
+
+def test_restart_steady_00_with_telemetry_plugged_is_home_and_restores_nothing(
+    monkeypatch,
+):
+    from tests.unit.test_gen2_unplug import beats
+
+    m, v, c = placed()
+    m.heldLimits.set(VIN, 90, 50)
+    v.observe("chargeLimit", 50, TM)
+    p = scriptedBle(m)
+    later(c)
+    v.observe("state", "online", TM)
+    v.observe("pluggedIn", True, TM)
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    for _ in range(30):  # 00 from the first reply after the restart
+        beats(m, s, c, 30, 0x00, 0.0)
+        m.setPolicyLimit(50, transition=False)
+        m.reconciler.pass_()
+    assert P.presence(m, v) == P.HOME and v.markAt("unplug") == P.NEVER
+    assert p.calls == [] and m.heldLimits.get(VIN) == HeldLimit(90, 50)
+
+
+def test_a_charging_point_s_own_start_always_applies():
+    from TWCManager.Vehicle.Reconcile.Desired import CHARGING
+
+    m, v, c = placed(AWAY)  # wherever the car is said to be, the point is here
+    point = ScriptedProvider("Gen3TWC", 1, True, [O.Outcome(O.DONE)], module=None)
+    m.providerOrder.register(point)
+    m.desired.set(VIN, CHARGING, True, "distributor")
+    m.reconciler.pass_()
+    assert [x[0] for x in point.calls if x[0] != "wake"] == ["startCharging"]
+
+
+def test_a_car_a_gen2_names_at_00_is_plugged_for_a_start_until_it_leaves():
+    from TWCManager.Vehicle.Reconcile.Desired import CHARGING
+
+    m, v, c = placed()
+    p = scriptedBle(m)
+    twcNames(m, v, c, state=0x00)  # a sleeping car: 00, still named
+    later(c)
+    v.observe("bleReach", True, "TeslaBLE")
+    assert P.presence(m, v) == P.HOME and not P.pluggedNow(m, v)
+    m.desired.set(VIN, CHARGING, True, "distributor")
+    m.reconciler.pass_()
+    assert [x[0] for x in p.calls if x[0] != "wake"] == ["startCharging"]
+    later(c)
+    v.observe("pluggedIn", False, "Gen2TWC")  # the filtered unplug
+    assert P.applicable(m, v, C.START_CHARGING) == (P.NOT_HERE, "away")
+
+
+def test_an_unplugged_reading_after_the_naming_outweighs_it_and_an_older_one_does_not():
+    m, v, c = placed()
+    later(c)
+    v.observe("chargingState", "Disconnected", "FleetAPI")  # before the plug-in
+    twcNames(m, v, c, state=0x00)
+    assert P.applicable(m, v, C.START_CHARGING) == (P.SEND, "plugged in")
+    later(c)
+    v.observe("chargingState", "Disconnected", "FleetAPI")  # read after it
+    assert P.applicable(m, v, C.START_CHARGING) == (P.NOT_HERE, "not plugged in")
 
 
 def cloudFix(v, at, source="FleetAPI", gpsAsOf=None):

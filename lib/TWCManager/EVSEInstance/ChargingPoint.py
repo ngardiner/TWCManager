@@ -209,7 +209,7 @@ def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]
     order of their first endpoint.
 
     A point holds at most one local endpoint: every local member gets the
-    whole target, so a second TWC claiming the same car (a stale lastVIN)
+    whole target, so a second TWC claiming the same car (a stale VIN read)
     is its own point keyed by its ID and budgeted separately.
     """
     groups = {}

@@ -123,7 +123,7 @@ def _blindTWCs(master) -> Tuple[bool, bool]:
     """How far an unnamed car on a local charging point may reach.
 
     Returns (blind, unknown). A slave names its car when its vehicleKey
-    is a VIN (currentVIN, or lastVIN while it reports a plugged state),
+    is a VIN (currentVIN, or its last confirmed car while it reports a plug),
     so a stopped car does not hide the others. unknown is True when some
     slave's key is None or anonymous; blind when such a slave reports a
     plugged state (non-00) or draws power, so it might be serving any

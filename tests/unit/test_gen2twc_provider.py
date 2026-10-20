@@ -51,25 +51,30 @@ def test_ranges_follow_the_device_and_wiring():
     m2, s2 = make(
         dict(
             CONFIG,
-            **{"controller.Gen2TWCs": {"ranges": {"8244": {"minAmps": 6, "maxAmps": 16}}}}
+            **{
+                "controller.Gen2TWCs": {
+                    "ranges": {"8244": {"minAmps": 6, "maxAmps": 16}}
+                }
+            }
         )
     )
     assert (s2.minAmps, s2.maxOfferAmps) == (6, 16) and s2.minPower == 6 * 240
     assert s2.maxPower == 16 * 240
 
 
-def test_vehicle_key_keeps_last_vin_while_plugged_state():  # ledger I5
+def test_vehicle_key_keeps_the_confirmed_car_while_plugged_state():  # ledger I5
     m, s = make()
     reg = m.vehicleRegistry
     assert s.vehicleKey is None and s.occupied is None
     s.currentVIN = VIN.lower()
     assert s.vehicleKey == VIN and s.occupied is True
     s.currentVIN = ""
-    s.lastVIN = VIN
+    reg.getOrCreate(VIN, "t").observe("twcVin", "8244", "TWC")
     s.reportedState = 0x03
     assert s.vehicleKey == VIN and s.occupied is True
     s.reportedState = 0x00
     assert s.vehicleKey is None and s.occupied is None
+    reg.endPlugSession("8244")  # the unplug
     reg.beginPlugSession("8244")
     assert s.vehicleKey == "anon:8244"
     assert s.twcid == "8244"
@@ -139,7 +144,7 @@ def test_amps_range_never_none_while_set_amps_ready(mode):
     anon = m.vehicleRegistry.beginPlugSession("8244")
     assert p.ready(anon, C.SET_AMPS) and p.ampsRange(anon) is not None
     m.vehicleRegistry.endPlugSession("8244")
-    s.lastVIN = VIN
+    known.observe("twcVin", "8244", "TWC")
     readyStates = []
     for state in (0x00, 0x01, 0x03):
         s.reportedState = state
@@ -158,7 +163,9 @@ def test_disruptive_stop_declared_very_high_cost_and_off_by_default():
     p = m.providerOrder.provider("Gen2TWC")
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
     s.currentVIN = VIN
-    assert p.cost(C.STOP_CHARGING) == C.DISRUPTIVE and p.ready(v, C.STOP_CHARGING) is False
+    assert (
+        p.cost(C.STOP_CHARGING) == C.DISRUPTIVE and p.ready(v, C.STOP_CHARGING) is False
+    )
     assert p.stopCharging(VIN) == O.Outcome(O.UNSUPPORTED, "mode 1")
     m.settings["chargeStopMode"] = "2"
     assert p.ready(v, C.STOP_CHARGING) and p.stopCharging(VIN) == O.Outcome(

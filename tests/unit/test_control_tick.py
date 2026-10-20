@@ -424,9 +424,10 @@ def test_the_lift_survives_a_session_end_racing_the_tick():
     # session it lifted, so a session end between passes is never lost
     m = real()
     m.getMaxAmpsToDivideAmongSlaves = lambda: 20
-    m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
+    v = m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
     s = charging(m, actual=10.0)
     s.currentVIN, s.plugSessions, s.liftedSession = VIN, 3, 3
+    v.observe("twcVin", s.twcid, "TWC")  # confirmed here
     assert s.vehicleRateRaised
     m.controlPass()
     assert m.desired.get(VIN, AMPS) is None  # lifted this session already

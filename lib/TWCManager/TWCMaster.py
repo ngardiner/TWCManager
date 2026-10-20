@@ -1293,8 +1293,8 @@ class TWCMaster:
     def newSlave(self, newSlaveID, maxAmps):
         try:
             slaveTWC = self.slaveTWCs[newSlaveID]
-            # We didn't get KeyError exception, so this slave is already in
-            # slaveTWCs and we can simply return it.
+            # Already known: a re-link starts a new plugged run
+            slaveTWC.pluggedSince = time.time()
             return slaveTWC
         except KeyError:
             pass
@@ -1320,8 +1320,10 @@ class TWCMaster:
     def observeChargingSessions(self):
         # Serial thread only: starts and ends charging sessions from what
         # the slaves report
-        carsCharging = 0
+        carsCharging, now = 0, time.time()
         for slaveTWC in self.getSlaveTWCs():
+            if slaveTWC.unplugStep(now):
+                self._plugSession(slaveTWC, False)
             if slaveTWC.reportedAmpsActual >= 1.0:
                 # Amps are flowing — cancel any pending session-end debounce
                 slaveTWC.chargingDroppedBelowThresholdTime = 0
@@ -1372,7 +1374,6 @@ class TWCMaster:
 
                         # Close off the current charging session
                         self.recordVehicleSessionEnd(slaveTWC)
-                        self._plugSession(slaveTWC, False)
                         # The next session lifts the car's own rate again
                         slaveTWC.plugSessions += 1
                         slaveTWC.isCharging = 0
@@ -1520,14 +1521,23 @@ class TWCMaster:
         )
 
     def _plugSession(self, slaveTWC, begin):
-        # Serial thread: registry calls are short dict work; never let one
-        # raise into the RS-485 loop.
+        # Serial thread: never let a registry call raise into the RS-485
+        # loop. An end departs the named car, else the only possible one
         try:
             twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
             if begin:
                 self.vehicleRegistry.beginPlugSession(twcid)
-            else:
-                self.vehicleRegistry.endPlugSession(twcid)
+                return
+            cars = [self.vehicleRegistry.vehicleAt(twcid)]
+            cars = Presence.candidates(self) if cars == [None] else cars
+            v = cars[0] if len(cars) == 1 else None
+            if v is not None and Presence.telemetrySaysPlugged(self, v):
+                logger.info("TWC %s: not an unplug, %s is plugged in", twcid, v.key)
+                return
+            if v is not None:
+                logger.info("TWC %s: unplugged, %s departs", twcid, v.key)
+                v.observe("pluggedIn", False, "Gen2TWC")
+            self.vehicleRegistry.endPlugSession(twcid)
         except Exception as e:
             logger.warning("Vehicle registry plug session update failed: %s", e)
 

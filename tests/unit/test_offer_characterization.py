@@ -133,6 +133,7 @@ def test_mode_1_lift_goes_once_per_session_for_a_twc_only_point():
     m = master(mode=1, feed=20)
     s = slave(m, vin=VIN)  # no VehicleEndpoint for VIN: a TWC-only point
     beat(m, s)
+    m.vehicleRegistry.observeTwcVin("8244", VIN)  # the VIN read confirms it
     assert rate(m) == (32, "lift", True)
     m.desired.clearIf(VIN, AMPS, 32)  # settled
     beat(m, s)

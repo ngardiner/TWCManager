@@ -49,8 +49,8 @@ class TWCSlave:
     reportedAmpsMax = 0
     reportedAmpsActual = 0
     reportedState = 0
-    # Set by the first reply: a slave not yet heard from is offered nothing
-    heardFrom = False
+    # The first reply's time: a slave not yet heard from is offered nothing
+    heardFrom = 0
 
     # history* vars are used to track power usage over time
     historyAvgAmps = 0
@@ -98,6 +98,9 @@ class TWCSlave:
     # end, the tick records the session it lifted
     plugSessions = 0
     liftedSession: Optional[int] = None
+    # unplugStep's run starts and last max amps (0: this 00 run is no unplug)
+    UNPLUG_DEBOUNCE, PLUGGED_RUN, LINK_GRACE = 60, 60, 300
+    pluggedSince, ampsMaxBefore, zeroSince = 0, 0, None
     # The car keys the charging point last rated (tick)
     _lastKeys = ()
     # The last all-TWC wiring cap logged, so a held cap logs once
@@ -125,6 +128,26 @@ class TWCSlave:
 
         plugged = [v for v in cars if inside(self.master, v) is not False and on(v)]
         return plugged, cars
+
+    def unplugStep(self, now) -> bool:
+        # Serial thread: True once per 00 run that is an unplug. A waking car
+        # says 00 too; a car leaving drops the max amps it takes to 0 with it
+        if self.reportedState:
+            if self.zeroSince is not None:
+                self.pluggedSince, self.zeroSince = now, None
+            self.ampsMaxBefore = self.reportedAmpsMax
+        elif self.zeroSince is None:
+            self.zeroSince, before = now, self.ampsMaxBefore
+            early = now < self.pluggedSince + self.PLUGGED_RUN
+            if early or self.reportedAmpsMax or now < self.heardFrom + self.LINK_GRACE:
+                self.ampsMaxBefore = 0
+            text = "TWC %s: 00 onset, max %.2f A before, %.2f A now: %s"
+            why = "an unplug if it holds" if self.ampsMaxBefore else "not an unplug"
+            logger.info(text, self.twcid, before, self.reportedAmpsMax, why)
+        elif self.ampsMaxBefore and now - self.zeroSince >= self.UNPLUG_DEBOUNCE:
+            self.ampsMaxBefore = 0
+            return True
+        return False
 
     def minAmpsToOffer(self):
         # The lowest offer this TWC makes: the configured minAmpsPerTWC, or
@@ -614,7 +637,7 @@ class TWCSlave:
         self.reportedAmpsMax = ((heartbeatData[1] << 8) + heartbeatData[2]) / 100
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
-        self.heardFrom = True
+        self.heardFrom = self.heardFrom or now
         self.refreshingChargerLoadStatus()
         key = self.vehicleKey
         vehicle = self.master.vehicleRegistry.get(key) if key else None

@@ -135,7 +135,8 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
                 onArrival(master, vehicle)
 
 
-def pluggedNow(master, v) -> bool:
+def pluggedNow(master, v, unknown=False, since=NEVER) -> Optional[bool]:
+    # The newest plug reading after since; unknown when nothing says
     if twcVinAt(master, v) > NEVER:
         # A charging point names the car and reports a plug
         return True
@@ -144,9 +145,9 @@ def pluggedNow(master, v) -> bool:
         for obs in v.reported(field).values():
             value = _plugEvidence(v, field, obs, here)
             key = (obs.at, obs.source in _STRONG)
-            if value is not None and (best is None or key > best[0]):
+            if value is not None and obs.at > since and (best is None or key > best[0]):
                 best = (key, value)
-    return best is not None and best[1]
+    return unknown if best is None else best[1]
 
 
 def telemetrySaysPlugged(master, v) -> bool:
@@ -238,14 +239,18 @@ def applicable(master, v, capability) -> Tuple[str, str]:
     # Whether a message, a stop or a restore aside (those always go), still
     # fits where the car is, and the cell that says so. Missing event times
     # are NEVER; a tie holds
-    state, plugged = presence(master, v), pluggedNow(master, v)
+    state, plugged = presence(master, v), pluggedNow(master, v, None)
     if state == NOT_HOME:
         return NOT_HERE, "away"
     if capability != SET_CHARGE_LIMIT:
-        # A start or a rate needs the plug; a car we hold a limit on and
-        # saw no unplug from is presumed still on it
-        presumed = state == PRESUMED and v.markAt("unplug") == NEVER
-        if plugged or presumed and v.vin in master.heldLimits.holding():
+        # A start or a rate needs the plug. A naming outlasts a Gen2 00 until
+        # the car leaves or reads unplugged; a held car never unplugged stays
+        named = v.latest("twcVin")
+        at = named.at if named is not None and named.value else NEVER
+        named = at > leaving(v) and pluggedNow(master, v, True, since=at)
+        presumed = state == PRESUMED or plugged is None
+        presumed = presumed and v.markAt("unplug") == NEVER
+        if plugged or named or presumed and v.vin in master.heldLimits.holding():
             return SEND, "plugged in"
         return (NOT_HERE if state == HOME else HOLD), "not plugged in"
     if state == HOME:
