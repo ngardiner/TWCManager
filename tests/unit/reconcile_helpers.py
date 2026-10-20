@@ -73,7 +73,8 @@ class ScriptedProvider(Provider):
         caps=COMMAND_CAPS,
         amps=(1, 32),
         tier=None,
-        module=object(),
+        # A radio whose sleep-safe ping answers, with no sleep status
+        module=SimpleNamespace(ping=lambda vin: True),
         readyFor=None,
         worker=None,
     ):

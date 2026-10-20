@@ -165,10 +165,35 @@ def telemetryPlug(v) -> Optional[bool]:
 
 
 def drivingNow(v) -> bool:
-    state, shift = v.latest("state"), v.latest("shiftState")
+    # The feed's own state: a provider's sleep check never masks a drive. A
+    # car plugged in, named by a TWC or drawing current since that reading
+    # has stopped, whether or not the drive's end was reported
+    state, shift = v.telemetryState()[0], v.latest("shiftState")
     if shift is not None and (state is None or shift.at >= state.at):
-        return shift.value in _MOVING
-    return state is not None and state.value == "driving"
+        driving = shift if shift.value in _MOVING else None
+    else:
+        driving = state if state is not None and state.value == "driving" else None
+    named, charging = v.latest("twcVin"), v.latest("chargingState")
+    amps = v.latest("actualCurrent")
+    stopped = [v.markAt("plugIn")]
+    stopped += [named.at] if named is not None and named.value else []
+    stopped += [charging.at] if charging and charging.value == "Charging" else []
+    stopped += [amps.at] if amps is not None and (amps.value or 0) >= 1 else []
+    return driving is not None and driving.at >= max(stopped)
+
+
+def asleep(v, lately=NEVER) -> Optional[bool]:
+    # True: the newest asleep reading outranks every sign of life (a state
+    # other than asleep or offline, a drive, a plug change, current drawn).
+    # False: a sign of life newer than it and than lately. Else unknown
+    states, amps = v.reported("state").values(), v.latest("actualCurrent")
+    life = [o.at for o in states if o.value not in ("asleep", "offline")]
+    life += [v.markAt(m) for m in ("plugIn", "unplug", "driveStart", "driveEnd")]
+    life = max(life + ([amps.at] if amps and (amps.value or 0) >= 1 else []))
+    slept = max([o.at for o in states if o.value == "asleep"], default=NEVER)
+    if slept >= life and slept > NEVER:
+        return True
+    return False if life > max(slept, lately) else None
 
 
 def _pointPlugged(master, pointId) -> bool:

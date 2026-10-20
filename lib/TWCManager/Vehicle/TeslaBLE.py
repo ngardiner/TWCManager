@@ -626,9 +626,16 @@ class TeslaBLE:
         """True: VCSEC answered (it does asleep). Without an answer the range
         scan decides, so only a scan that ran and missed the car is False."""
         ran = self._tool(vin, "body-controller-state")
-        if ran is None:
-            return None
-        return True if ran[2] == 0 else self.scanForVehicleInRange(vin)
+        if ran is not None and ran[2] == 0:
+            self._safeNote(self._noteSleep, vin, ran[0])
+        return ran and (ran[2] == 0 or self.scanForVehicleInRange(vin))
+
+    def _noteSleep(self, vin, out):
+        # VEHICLE_SLEEP_STATUS_ASLEEP or _AWAKE is the car's state
+        status = str(json.loads(out).get("vehicleSleepStatus")).rpartition("_")[2]
+        state = {"ASLEEP": "asleep", "AWAKE": "online"}.get(status)
+        if state is not None:
+            self.registry.get(vin).observe("state", state, "TeslaBLE")
 
     def ping(self, vin) -> bool:
         """The sleep-safe range check: only an unanswered run is absence."""

@@ -252,13 +252,13 @@ class Vehicle:
             return obs
         return None
 
-    # Sync state is the latest "state" observation's source and age.
+    # Sync state is a feed's own latest "state" observation and its age.
 
     def telemetryState(self) -> Tuple[Optional[Observation], Optional[float]]:
-        obs = self.latest("state")
-        if obs is None or obs.source not in TELEMETRY_SOURCES:
-            return obs, None
-        return obs, self.age("state")
+        obs = self.latestFrom("state", set(self.reported("state")) - TELEMETRY_SOURCES)
+        if obs is None:
+            return self.latest("state"), None
+        return obs, self._ageOf(obs, self._clock(), self._liveAt("state", obs))
 
     @property
     def syncSource(self) -> str:

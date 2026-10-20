@@ -65,7 +65,9 @@ car is home, away, or "probably home" (nothing says either way):
   it is home; or it is unplugged after that evidence.
 - **Probably home:** a car that is driving, or has started driving or left BLE
   range since it was last seen at home, until a position or an unplug settles
-  it.  Probably-home cars are counted in `numCarsAtHome` and
+  it.  A car that plugs in, is named by a TWC or draws current after its last
+  driving report is no longer driving, even when the drive's end was never
+  reported.  Probably-home cars are counted in `numCarsAtHome` and
   `minBatteryLevelAtHome` below, but a charge limit waits for them until they
   plug in or are confirmed home.
 

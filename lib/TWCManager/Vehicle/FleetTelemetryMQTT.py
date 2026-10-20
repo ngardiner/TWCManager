@@ -65,7 +65,7 @@ class FleetTelemetryMQTT(TelmetryBase):
             return
 
         obs = (
-            self.vehicles[topic[1]].latest("state")
+            self.vehicles[topic[1]].reported("state").get("FleetTelemetryMQTT")
             if self.vehicles.get(topic[1])
             else None
         )

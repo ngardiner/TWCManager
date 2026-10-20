@@ -1729,6 +1729,9 @@ class TeslaAPI:
         )
         car.online = response.get("state", "") == "online" if result else None
         car.onlineCheckedAt = now
+        if result:
+            source = self.sourceOf(slot or self.slotFor("read"))
+            vehicle.observe("state", response.get("state"), source)
         return car.online
 
     def is_awake(self, vehicle, slot=None, now=None) -> bool:

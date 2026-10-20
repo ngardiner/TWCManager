@@ -312,6 +312,9 @@ class VehicleReconciler(threading.Thread):
         # Nor for a raise its charging point can do nothing with
         idle = aspect != CHARGING and getattr(self.master, "offered", {}).get(key) == 0
         wakes = wakes and not idle
+        if not wakes and last == O.ASLEEP and Presence.asleep(vehicle):
+            # Asleep: only a sign of life, or a message that may wake
+            return None
         reached = rec.paidSends and B.reachedCar(
             vehicle, field, rec.paidAt, rec.paidSaw
         )

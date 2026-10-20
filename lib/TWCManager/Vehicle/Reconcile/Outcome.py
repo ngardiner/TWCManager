@@ -61,6 +61,10 @@ class Outcome(NamedTuple):
     detail: str = ""
 
 
+# A message that may not wake, to a car known asleep
+ASLEEP = Outcome(SATISFIED, HELD + "asleep")
+
+
 def isOutcome(x) -> bool:
     return isinstance(x, Outcome) and x.kind in KINDS
 

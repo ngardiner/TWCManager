@@ -324,3 +324,41 @@ def test_a_render_creates_no_desired_state():
     m = master()
     render(m, None)
     assert m.desired.keys() == []
+
+
+def test_pending_shows_a_settled_desire_the_car_drifted_from():
+    # Settled, then the car reads another rate: the reconciler sends again,
+    # so the page lists it until a reading shows the car has it
+    from tests.unit.test_limit_reconciler import ble, setup
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+    from TWCManager.Vehicle.Reconcile.Reconciler import RETRY
+
+    m, r, v, c = setup(ble(O.Outcome(O.DONE), O.Outcome(O.DONE)))
+    v.observe("chargeCurrentRequest", 32, "TeslaBLE")
+    m.desired.set(VIN, AMPS, 16, "distributor")
+    assert r.pass_() == 1 and m.desired.record(VIN, AMPS).settledAt is not None
+    assert pendingCommands(m, v) == []
+    c.t += 10
+    v.observe("chargeCurrentRequest", 32, "TeslaMateVehicle")
+    assert [row["aspect"] for row in pendingCommands(m, v)] == [AMPS]
+    c.t += RETRY[AMPS]
+    assert r.pass_() == 1
+    c.t += 10
+    v.observe("chargeCurrentRequest", 16, "TeslaMateVehicle")
+    assert pendingCommands(m, v) == [] and r.pass_() == 0
+
+
+def test_pending_shows_a_limit_held_asleep_until_the_car_reports_it():
+    # The box after a restart: the hold ran before any limit was known, then
+    # TeslaMate reported the car already at the desired limit
+    from tests.unit.test_limit_reconciler import ble, setup
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    m, r, v, c = setup(ble())
+    v.observe("state", "asleep", "TeslaBLE")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    assert r.pass_() == 1 and m.desired.record(VIN, CHARGE_LIMIT).heldAt is not None
+    assert pending(m)[CHARGE_LIMIT].startswith("held: asleep via BLE")
+    c.t += 30
+    v.observe("chargeLimit", 50, "TeslaMateVehicle")
+    assert pending(m) == {} and r.pass_() == 0

@@ -25,7 +25,7 @@ from TWCManager.Vehicle.Registry.VIN import (
     vehicleRecordKey,
 )
 from TWCManager.Vehicle.Presence import HOME, NOT_HOME, PRESUMED, presence
-from TWCManager.Vehicle.Reconcile.Belief import known
+from TWCManager.Vehicle.Reconcile.Belief import known, newerReading
 from TWCManager.Vehicle.Reconcile.Outcome import RULES
 from TWCManager.Vehicle.Reconcile.Rules import satisfied
 
@@ -90,10 +90,8 @@ def heldLimitText(master, vehicle):
     limit = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
     if limit is None:
         return "\u2014"
-    return "%s%% (car's own limit: %s%%, restored when released)" % (
-        limit.held,
-        limit.outside,
-    )
+    # The held limit, then the car's own one a release puts back
+    return "%s%% (%s%%)" % (limit.held, limit.outside)
 
 
 PRESENCE_TEXT = {HOME: "Home", PRESUMED: "Probably home", NOT_HOME: "Away"}
@@ -113,7 +111,11 @@ def pendingCommands(master, vehicle):
                 sourceName(sent.provider),
                 ageText(now - sent.since),
             )
-        elif rec.settledAt or satisfied(aspect, d.value, known(vehicle, aspect)):
+        elif satisfied(aspect, d.value, known(vehicle, aspect)) or (
+            # Settled, the reconciler waits for a reading saying otherwise
+            rec.settledAt is not None
+            and not newerReading(vehicle, aspect, rec.settledAt)
+        ):
             continue
         elif last and not why:
             why = "%s via %s, %s" % (

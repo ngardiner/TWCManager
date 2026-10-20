@@ -8,7 +8,7 @@ import itertools
 import logging
 import threading
 
-from ..Presence import NOT_HOME, PRESUMED, presence
+from ..Presence import NOT_HOME, PRESUMED, REACH_WINDOW, asleep, presence
 from ..Providers import Capability as C
 from .Desired import AMPS, CHARGE_LIMIT, CHARGING, FIELD_FOR
 from . import Outcome as O
@@ -87,9 +87,12 @@ def _call(provider, capability, vin, value):
     return method(vin)
 
 
-def _wake(provider, vin, capability):
+def _wake(provider, vehicle, capability):
     # The outcome that ends the attempt, or None to send the command
+    vin = vehicle.key
     woke = checked(provider, C.WAKE, provider.wake(vin))
+    if woke.kind == O.DONE:
+        vehicle.observe("state", "online", provider.name)
     logger.info(
         "%s wake for %s before %s: %s",
         provider.name,
@@ -134,16 +137,23 @@ def runAttempt(reconciler, attempt) -> O.Outcome:
     # unknown, and a billed write never goes blind
     wakeFirst = attempt.wake and not provider.local and provider.declares(C.WAKE)
     try:
-        ping = provider.name == "TeslaBLE" and aspect and not isStop(attempt)
+        ble = provider.name == "TeslaBLE" and aspect and not isStop(attempt)
         state = presence(master, vehicle)
-        if ping and state == PRESUMED:
-            # A car that may be away: the sleep-safe ping comes first
+        # A message that may not wake leaves a sleeping car alone. The
+        # sleep-safe ping first for a car that may be away, or asleep and not
+        # seen awake lately
+        quiet = ble and not attempt.wake and state != NOT_HOME
+        known = asleep(vehicle, master.vehicleRegistry.now() - REACH_WINDOW)
+        check = state == PRESUMED or quiet and known is None
+        if ble and check and not (quiet and known):
             if not provider.module.ping(vin):
                 return O.Outcome(O.UNREACHABLE, "no BLE answer")
+        if quiet and asleep(vehicle):
+            return O.ASLEEP
         if wakeFirst:
             # Only a car that may be here is woken
             early = state == NOT_HOME and reconciler.inapplicable(vehicle, attempt)
-            early = early or _wake(provider, vin, attempt.capability)
+            early = early or _wake(provider, vehicle, attempt.capability)
             if early is not None:
                 return early
         field = FIELD_FOR[aspect] if aspect is not None else None
@@ -170,7 +180,7 @@ def runAttempt(reconciler, attempt) -> O.Outcome:
         if early is not None:
             return _tagged(early, "rules: ")
         if attempt.wake and not wakeFirst and provider.declares(C.WAKE):
-            early = _wake(provider, vin, attempt.capability)
+            early = _wake(provider, vehicle, attempt.capability)
             if early is not None:
                 return early
         elif (

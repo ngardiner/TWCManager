@@ -89,8 +89,8 @@ def test_held_limit_reads_the_vin_store_after_adoption():
     # a legacy numeric-ID entry shows once a vehicle list resolves it
     assert heldLimitText(m, v2) == "—"
     m.heldLimits.resolveLegacyIds({42: vin2})
-    assert heldLimitText(m, v2) == "60% (car's own limit: 85%, restored when released)"
-    assert "80% (car's own limit: 90%" in heldLimitText(m, m.vehicleRegistry.get(VIN))
+    assert heldLimitText(m, v2) == "60% (85%)"
+    assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "80% (90%)"
     m.heldLimits.remove(VIN)
     assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "—"
 
@@ -100,8 +100,8 @@ def test_list_renders_registry_rows():
     html = render(m)
     assert f"/vehicleDetail/{VIN}" in html and "TestCar" in html
     assert "BLE: paired" in html and "TeslaBLE" not in html
-    assert "80% (car&#39;s own limit: 90%, restored when released)" in html
-    assert "Charge limit set by TWCManager" in html and "Held limit" not in html
+    assert "<td>80% (90%)</td>" in html
+    assert "Charge limit (car's own)" in html and "set by TWCManager" not in html
     assert "Unknown car on TWC 8244" in html and "Charge history" in html
     assert 'action="/vehicle/add"' in html
 

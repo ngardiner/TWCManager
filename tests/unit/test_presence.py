@@ -113,6 +113,31 @@ def twcNames(m, v, c, state=0x03):
     return s
 
 
+def test_a_car_named_on_its_twc_after_an_unended_drive_is_not_driving():
+    # The drive's end was never reported: the TWC naming the car, or the
+    # car drawing current, says it has stopped, and its limit goes
+    m, v, c = placed()
+    p = scriptedBle(m)
+    v.observe("chargeLimit", 80, TM)
+    v.observe("state", "driving", TM)
+    assert P.drivingNow(v)
+    twcNames(m, v, c)
+    assert not P.drivingNow(v) and P.presence(m, v) == P.HOME
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    m.reconciler.pass_()
+    assert ("setChargeLimit", VIN, 50) in p.calls
+    for at, evidence in (
+        (HOME, ("actualCurrent", 48, "Gen2TWC")),
+        (AWAY, ("chargingState", "Charging", "FleetAPI")),  # a charger elsewhere
+        (HOME, ("pluggedIn", True, "Gen2TWC")),
+    ):
+        m, v, c = placed(at)
+        v.observe("state", "driving", TM)
+        later(c)
+        v.observe(*evidence)
+        assert not P.drivingNow(v), evidence
+
+
 def test_twc_vin_is_overridden_by_a_newer_drive_start_or_outside_fix():
     m, r, v, c = home()
     twcNames(m, v, c)
