@@ -4,6 +4,7 @@
 # serial thread's heartbeat sends, so its attempts run inline on the
 # submitter's thread. Attempts carry the registry's time.time stamps, and no
 # lock is held while one runs.
+import collections
 import itertools
 import logging
 import threading
@@ -35,14 +36,21 @@ _badReturns = set()
 _badLock = threading.Lock()
 
 
+# BLE work that is no command (a scan, an attribution): one pending per
+# (key, kind), in turn on the BLE worker
+Job = collections.namedtuple("Job", "key kind run")
+
+
 def entryKey(attempt) -> tuple:
+    if isinstance(attempt, Job):
+        return (attempt.key, attempt.kind)
     if attempt.aspect is not None:
         return (attempt.key, attempt.aspect)
     return (attempt.key, "debug", next(_sequence))
 
 
 def isStop(attempt) -> bool:
-    return attempt.capability == C.STOP_CHARGING
+    return getattr(attempt, "capability", None) == C.STOP_CHARGING
 
 
 def writtenValue(aspect, value):

@@ -24,7 +24,7 @@ from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
 from TWCManager.Vehicle.Reconcile.Reconciler import PAID_AFTER, RESTORE_RETRY, RETRY
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
 from tests.unit.gen2_helpers import drive as heartbeat, offersThenBeat
-from tests.unit.reconcile_helpers import AWAY, HOME, placeAt
+from tests.unit.reconcile_helpers import AWAY, HOME, placeAt, runPending
 from tests.unit.teslatokens import fleet_token, new_api, owner_token
 from tests.unit.test_limit_reconciler import VIN, setup
 
@@ -2027,16 +2027,8 @@ def test_plug_in_on_a_vin_twc_comes_home_with_one_apply(requests_mock, monkeypat
 
 
 def attributeQueued(m):
-    # What the background thread does with the serial thread's attribution
-    # tasks; every other queued task is dropped, as this harness never runs
-    # them
-    while not m.backgroundTasksQueue.empty():
-        task = m.backgroundTasksQueue.get()
-        m.doneBackgroundTask(task)
-        s = m.slaveTWCs.get(task.get("slaveTWC"))
-        if task.get("cmd") == "attributePlug" and s:
-            amps = (s.reportedAmpsMax, s.reportedAmpsActual)
-            Presence.attribute(m, s.twcid, "Gen2TWC", *amps)
+    # What the BLE worker does with the serial thread's attribution jobs
+    runPending(m.reconciler.ble)
 
 
 def chargeRead(**cars):
@@ -2198,4 +2190,29 @@ def test_a_returning_car_on_an_unnamed_gen2_asleep_starts_over_ble(
     m.startCarsCharging(VIN)
     beats(m, r, c, s, 60, 0x03, 6.0)
     assert "charging-start" in bleCommands(b)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_plug_attributed_before_the_policy_pass_sends_a_held_car_nothing(
+    requests_mock, monkeypatch
+):
+    # The no-GPS plug/unplug cycle with each attribution run as the BLE
+    # worker runs it, at once: the car is named before the policy's first
+    # pass and already reads its held 50, so nothing is restored or applied
+    # while it is plugged; the unplug restores 80 once; paid == (0, 0, 0)
+    m, r, v, c, api = install(located=False, held=(80, 50))
+    b = realBle(m)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    v.observe("bleReach", True, "TeslaBLE")
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244"
+    policy = cycles(m, 50)
+    for _ in range(60):
+        beats(m, r, c, s, 10, 0x03, 32.0, policy)
+        attributeQueued(m)
+    assert Presence.presence(m, v) == Presence.HOME and limits(b) == []
+    beats(m, r, c, s, 120, 0x00, 0.0, policy)
+    assert Presence.presence(m, v) == Presence.NOT_HOME
+    assert limits(b) == [80] and m.heldLimits.get(VIN) is None
     assert paid(requests_mock) == (0, 0, 0)

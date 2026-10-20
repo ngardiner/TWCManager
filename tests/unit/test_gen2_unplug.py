@@ -116,13 +116,13 @@ def test_an_unnamed_session_outlasts_a_waking_00_and_departs_no_one(
     rig, monkeypatch, caplog
 ):
     m, v, c, s = rig
-    tasks = []
-    monkeypatch.setattr(m, "queue_background_task", lambda t, delay=0: tasks.append(t))
+    jobs = []
+    monkeypatch.setattr(m.reconciler, "submitJob", lambda *job: jobs.append(job[:2]))
     caplog.set_level(logging.INFO)
     beats(m, s, c, 400, 0x03, 32.0)
     beats(m, s, c, 20, 0x00, 32.0)  # a car waking
     beats(m, s, c, 60, 0x03, 32.0)
-    assert [t["cmd"] for t in tasks].count("attributePlug") == 1
+    assert jobs.count(("8244", "attribute")) == 1
     assert m.vehicleRegistry.vehicleAt("8244").isAnonymous
     beats(m, s, c, 120, 0x00, 0.0)  # it left
     assert m.vehicleRegistry.vehicleAt("8244") is None

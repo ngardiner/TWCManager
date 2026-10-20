@@ -121,6 +121,9 @@ class VehicleReconciler(threading.Thread):
             return True
         return (self.ble if worker == "ble" else self.cloud).put(attempt)
 
+    def submitJob(self, key, kind, run) -> bool:
+        return self.ble.put(Run.Job(key, kind, run))
+
     def cancel(self, key) -> int:
         # Pending stops for key only; a running attempt is left alone
         return sum(
@@ -129,6 +132,9 @@ class VehicleReconciler(threading.Thread):
         )
 
     def _run(self, attempt) -> O.Outcome:
+        if isinstance(attempt, Run.Job):
+            # The queue logs a job that raises
+            return attempt.run()
         try:
             return Run.runAttempt(self, attempt)
         except Exception as e:
@@ -533,6 +539,8 @@ class VehicleReconciler(threading.Thread):
 
     def report(self, attempt, outcome) -> None:
         # On a queue's or the submitter's thread. Never submits or cancels
+        if isinstance(attempt, Run.Job):
+            return
         if isinstance(outcome, BaseException):
             # A queue's run raised past _run (SystemExit)
             outcome = O.Outcome(O.ERROR, type(outcome).__name__)

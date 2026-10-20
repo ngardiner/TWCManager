@@ -345,7 +345,11 @@ def pick(master, offered=None, actual=0, read=False):
         # a live feed saying unplugged rules the car out
         if telemetryPlug(v) is False:
             return False
-        if read and "TeslaBLE" in v.claims and not fresh(v, "chargingState"):
+        ble = read and "TeslaBLE" in v.claims and not fresh(v, "chargingState")
+        if ble and asleep(v, now - REACH_WINDOW) is None:
+            # A charge read may wake the car: the sleep-safe check first
+            master.providerOrder.provider("TeslaBLE").module.ping(v.vin)
+        if ble and not asleep(v):
             v.read("chargingState", 0, providers=("TeslaBLE",), force=True)
         state, pilot, amps = (fresh(v, f) for f in _BLE_CHARGE)
         plugged = state and _plug("chargingState", state)
@@ -364,7 +368,8 @@ def pick(master, offered=None, actual=0, read=False):
 
 
 def attribute(master, pointId, source, offered=None, actual=0) -> Optional[str]:
-    # Background thread: names an anonymous session's car, plugged in there
+    # Names an anonymous session's car, plugged in there. Given an offer it
+    # may read over BLE, so it runs on the BLE worker
     if not getattr(master.vehicleRegistry.vehicleAt(pointId), "isAnonymous", 0):
         return None
     v = pick(master, offered, actual, read=offered is not None)

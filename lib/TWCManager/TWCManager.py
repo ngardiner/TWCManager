@@ -41,7 +41,6 @@ import yaml
 import threading
 from TWCManager.ControlTick import ControlTick
 from TWCManager.TWCMaster import TWCMaster
-from TWCManager.Vehicle import Presence
 from TWCManager.Vehicle.Providers.Order import registerProviders
 from TWCManager.Vehicle.Reconcile.Targets import onDeparture
 from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
@@ -360,12 +359,6 @@ def background_tasks_thread(master):
                     master.getSlaveLifetimekWh()
                 elif task["cmd"] == "getVehicleVIN":
                     master.getVehicleVIN(task["slaveTWC"], task["vinPart"])
-                elif task["cmd"] == "attributePlug":
-                    # BLE reads take seconds: here, never on the serial loop
-                    s = master.slaveTWCs.get(task["slaveTWC"])
-                    if s:
-                        amps = (s.reportedAmpsMax, s.reportedAmpsActual)
-                        Presence.attribute(master, s.twcid, "Gen2TWC", *amps)
                 elif task["cmd"] == "snapHistoryData":
                     master.snapHistoryData()
                 elif task["cmd"] == "updateStatus":
@@ -378,11 +371,6 @@ def background_tasks_thread(master):
                         requests.post(task["url"], json=body)
                 elif task["cmd"] == "saveSettings":
                     master.saveSettings()
-                elif task["cmd"] == "bleScan":
-                    # Range scans take seconds: here, never on the serial loop.
-                    ble = master.getModuleByName("TeslaBLE")
-                    if ble:
-                        ble.runPendingScans()
                 elif task["cmd"] == "expireVehicles":
                     master.expireVehicles()
                 elif task["cmd"] == "sunrise":
@@ -403,16 +391,6 @@ def background_tasks_thread(master):
         # backgroundTasksQueue.join() can then be used to block until all tasks
         # in the queue are done.
         master.doneBackgroundTask(task)
-
-        if task.get("cmd") == "bleScan":
-            # A scan request made between the drain's last check and
-            # doneBackgroundTask was coalesced into this task; queue it now.
-            try:
-                ble = master.getModuleByName("TeslaBLE")
-                if ble:
-                    ble.requeueIfRequested()
-            except Exception as e:
-                logger.error(f"bleScan requeue failed: {type(e).__name__}")
 
 
 def check_green_energy():

@@ -74,9 +74,6 @@ class TeslaBLE:
     SCAN_PENDING_MAX = 120
     # A request for a car scanned (or being scanned) this recently is ignored.
     SCAN_DEBOUNCE = 10
-    # One bleScan task drains requests at most this many times; anything left
-    # is picked up by requeueIfRequested after the task finishes.
-    SCAN_DRAIN_PASSES = 3
     # bluetoothctl output meaning the scan never ran (no adapter, bluetoothd
     # down, discovery refused); compared case-insensitively.
     SCAN_ERROR_TEXT = (
@@ -101,7 +98,7 @@ class TeslaBLE:
         # VIN -> request time for scans not yet run. Guarded by its own lock,
         # never held while taking _bleLock.
         self._scanRequests = {}
-        # VINs a drain has taken and not finished scanning; same lock.
+        # VINs the BLE worker is scanning; same lock.
         self._scanInProgress = set()
         self._scanLock = threading.Lock()
         # How this thread's last _sendCommand_internal failed: .refused on a
@@ -1137,7 +1134,7 @@ class TeslaBLE:
         }
 
     def requestRangeScan(self, vin):
-        """Queue a range scan; safe from any thread (it only queues). Ignored
+        """Queue a range scan on the BLE worker; safe from any thread. Ignored
         for a car being scanned or scanned in the last SCAN_DEBOUNCE s."""
         if not isinstance(vin, str) or not isWellFormedVIN(vin):
             return
@@ -1150,38 +1147,26 @@ class TeslaBLE:
             if last is not None and time.time() - last < self.SCAN_DEBOUNCE:
                 return
             self._scanRequests[vin] = time.time()
-        self.master.queue_background_task({"cmd": "bleScan"})
-
-    def runPendingScans(self):
-        """Background task: scan for every requested VIN. The queue keeps one
-        bleScan task, so requests arriving while this runs are drained here,
-        for at most SCAN_DRAIN_PASSES rounds; requeueIfRequested picks up the
-        rest once the task is done."""
-        for _ in range(self.SCAN_DRAIN_PASSES):
+        job = lambda: self._scanRequested(vin)
+        if not self.master.reconciler.submitJob(vin, "scan", job):
+            # The worker has stopped: nothing will scan, so show none pending
             with self._scanLock:
-                vins = sorted(self._scanRequests)
-                self._scanRequests.clear()
-                # Same critical section: a VIN is never in neither map.
-                self._scanInProgress.update(vins)
-            if not vins:
-                return
-            for vin in vins:
-                try:
-                    self.scanForVehicleInRange(vin)
-                except Exception as e:
-                    logger.error(f"BLE scan for {vin} failed: {type(e).__name__}")
-                finally:
-                    with self._scanLock:
-                        self._scanInProgress.discard(vin)
+                self._scanRequests.pop(vin, None)
+            logger.warning(
+                "BLE scan for %s not queued: the BLE worker has stopped", vin
+            )
 
-    def requeueIfRequested(self):
-        """Called after the bleScan task is marked done: a request that came
-        in after the drain's last check was coalesced into the finishing
-        task, so queue one more. Queues at most one task per call."""
+    def _scanRequested(self, vin):
+        # The BLE worker's job: one scan, then the page stops showing it
         with self._scanLock:
-            pending = bool(self._scanRequests)
-        if pending:
-            self.master.queue_background_task({"cmd": "bleScan"})
+            self._scanRequests.pop(vin, None)
+            # Same critical section: a VIN is never in neither map.
+            self._scanInProgress.add(vin)
+        try:
+            return self.scanForVehicleInRange(vin)
+        finally:
+            with self._scanLock:
+                self._scanInProgress.discard(vin)
 
     def blePairingAttempt(self, vin):
         """The last pairing attempt this run: {"ok", "at", "message"}, or None.

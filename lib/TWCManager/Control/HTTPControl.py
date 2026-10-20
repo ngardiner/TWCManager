@@ -130,7 +130,7 @@ def pendingCommands(master, vehicle):
 def vehicleLocalMgmt(master, op, vin):
     """BLE actions from the vehicle page; returns the redirect location.
 
-    "scan" only queues a request: the scan runs on the background thread."""
+    "scan" only queues a request: the scan runs on the BLE worker."""
     vin = str(vin or "").strip()
     if not isWellFormedVIN(vin):
         return "/vehicles"

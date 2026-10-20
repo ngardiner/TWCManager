@@ -250,11 +250,6 @@ class Gen3TWC(EVSEInstance):
                 and guessKey is not None
                 and guessKey != self.cloudVin.upper()
             ):
-                # The guess was wrong: it is no longer at this point, nor
-                # plugged in as far as this unit knows
-                guess = registry.get(guessKey)
-                if guess is not None:
-                    guess.observe("pluggedIn", False, "Gen3TWC")
                 logger.info(
                     "Gen3TWC %s: the energy site names %s here, not %s",
                     self._ip,

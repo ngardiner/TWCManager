@@ -10,6 +10,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Provider import Provider
 from TWCManager.Vehicle.Reconcile.Outcome import ERROR, Outcome
+from TWCManager.Vehicle.Reconcile.Run import Job
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 
@@ -159,11 +160,14 @@ def make_order(settings=None, *providers):
 
 class InlineQueue(VehicleCommandQueue):
     # Test-only: runs each attempt at once on the caller's thread, reporting
-    # it as a started queue would. Closed, it takes stops only
+    # it as a started queue would. Closed, it takes stops only. A job waits
+    # until the test runs it (runPending), as a busy worker would leave it
     def start(self):
         pass
 
     def put(self, entry) -> bool:
+        if isinstance(entry, Job):
+            return super().put(entry)
         if self._draining and not self._isHigh(entry):
             self._lose([(entry, "dropped")])
             return False
@@ -190,6 +194,12 @@ def inline(reconciler):
         for q in (reconciler.ble, reconciler.cloud)
     )
     return reconciler
+
+
+def runPending(q):
+    # A worker's loop on the caller's thread, until nothing is pending
+    while entries(q):
+        q._runOne(q._next())
 
 
 def entries(q):

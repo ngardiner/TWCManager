@@ -28,6 +28,7 @@ from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile.Belief import newerReading
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, targetsFor
+from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED
 from TWCManager.Vehicle import Presence
 
 logger = LoggerFactory.get_logger("Master", "Master")
@@ -134,8 +135,9 @@ class TWCMaster:
         self.desired = DesiredStore()
         self.vehicleRegistry.removed = self._vehicleRemoved
         self.reconciler = VehicleReconciler(self)
-        # The policy's charge limit; None while it sets none
-        self.policyLimit = None
+        # The policy's charge limit: None while it sets none, UNDECIDED before
+        # its first pass
+        self.policyLimit = UNDECIDED
         # Start of the forgetting interval: the first expiry pass runs an
         # hour after startup, once providers have reclaimed their cars, so a
         # persisted car Fleet still lists is not expired and re-created.
@@ -350,8 +352,8 @@ class TWCMaster:
 
     @staticmethod
     def _taskKey(task):
-        # Per cmd; a TWC's VIN query and attribution dedupe per TWC
-        if task["cmd"] in ("getVehicleVIN", "attributePlug"):
+        # Per cmd; a TWC's VIN query dedupes per TWC
+        if task["cmd"] == "getVehicleVIN":
             return (task["cmd"], bytes(task.get("slaveTWC") or b""))
         return task["cmd"]
 
@@ -1520,13 +1522,15 @@ class TWCMaster:
             twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
             if begin:
                 self.vehicleRegistry.beginPlugSession(twcid)
-                # A TWC that reads VINs names its car itself. A car waking
-                # flickers 00: the session it ended had its attribution
-                vins = (self.settings.get("SlaveTWCs") or {}).get(twcid) or {}
+                # A car waking flickers 00: the session it ended had its
+                # attribution. A VIN read, once the car draws, replaces it
                 flicker = time.time() < slaveTWC.anonEndedAt + slaveTWC.UNPLUG_DEBOUNCE
-                if not vins.get("supportsVINQuery") and not flicker:
-                    task = {"cmd": "attributePlug", "slaveTWC": slaveTWC.TWCID}
-                    self.queue_background_task(task)
+                if not flicker:
+                    s = slaveTWC
+                    attribute = lambda: Presence.attribute(
+                        self, twcid, "Gen2TWC", s.reportedAmpsMax, s.reportedAmpsActual
+                    )
+                    self.reconciler.submitJob(twcid, "attribute", attribute)
                 return
             cars = [self.vehicleRegistry.vehicleAt(twcid)]
             if cars == [None] or cars[0].isAnonymous:

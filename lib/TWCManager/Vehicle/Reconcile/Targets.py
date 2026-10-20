@@ -9,6 +9,9 @@ from ..Providers import Capability as C
 from ..Registry.Fields import READ_MAX_AGE
 from .Desired import CHARGE_LIMIT, RELEASE
 
+# The policy's limit before its first pass, which decides for every car
+UNDECIDED = object()
+
 
 def presentVehicles(master, capability) -> List:
     order = master.providerOrder
@@ -59,6 +62,8 @@ def applyPolicyLimit(master, limit: Optional[int], decision: bool) -> int:
 def onArrival(master, vehicle) -> None:
     # A plug-in here is a decision for this car alone: it ends an adopted
     # value. The plug is checked now, not taken from the event
+    if master.policyLimit is UNDECIDED:
+        return
     if vehicle.vin and Presence.pluggedHere(master, vehicle):
         if master.providerOrder.candidates(vehicle, C.SET_CHARGE_LIMIT):
             _apply(master, vehicle, master.policyLimit, decision=True)

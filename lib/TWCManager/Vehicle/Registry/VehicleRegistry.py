@@ -240,9 +240,13 @@ class VehicleRegistry:
             for field, obs in anon.snapshot().items():
                 v.observe(field, obs.value, obs.source, at=obs.at)
         # One car per point: the one it names now
+        source = "Gen3TWC" if pointId.startswith("Gen3TWC-") else "Gen2TWC"
         for other in self._attributedTo(pointId):
             if other is not v:
                 other.observe("twcVin", None, "TWC", seen=False)
+                # Nor plugged in there, if it was guessed to be
+                if getattr(other.reported("pluggedIn").get(source), "value", 0):
+                    other.observe("pluggedIn", False, source)
         v.observe("twcVin", pointId, "TWC")
         return "confirmed"
 

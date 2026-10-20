@@ -11,7 +11,7 @@ from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, RELEASE
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit, HeldLimits
 from TWCManager.Vehicle.Presence import HOME as AT_HOME, NOT_HOME, PRESUMED, candidates, presence
-from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, onDeparture, presentVehicles, targetsFor
+from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED, applyPolicyLimit, onArrival, onDeparture, presentVehicles, targetsFor
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.gen2_helpers import drive as heartbeat
 from tests.unit.reconcile_helpers import AWAY, HOME, bleAnswers, inline, placeAt
@@ -72,7 +72,7 @@ def test_master_wires_store_and_reconciler_on_one_clock():
     m, s = make(); assert m.reconciler.master is m and m.desired._clock is time.time and m.desired.changed == m.reconciler.wake
     m.vehicleRegistry.getOrCreate(VIN, "t"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.vehicleRegistry.forget(VIN)
     assert m.desired.peek(VIN) is None                                     # registry.removed wired
-    assert m.policyLimit is None and m.reconciler.desired is m.desired
+    assert m.policyLimit is UNDECIDED and m.reconciler.desired is m.desired
 
 def test_debug_route_submits_through_the_master_reconciler():               # ledger L35
     from tests.unit.test_registry_callers import _handler, _post

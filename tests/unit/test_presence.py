@@ -1212,6 +1212,76 @@ def test_an_anonymous_point_s_offer_covers_the_cars_it_fans_out_to(monkeypatch):
     assert s.vehicleKey == "anon:8244" and m.offered[VIN] == 0
 
 
+def vinReadingGen2(requests_mock, monkeypatch, located=True):
+    # The box after a restart: one car, plugged in and asleep, on a Gen2
+    # that reads VINs but has read none this session. Unlocated, nothing but
+    # its name is known, and the sleep-safe check answers asleep
+    from tests.unit.test_command_path_parity import gen2, install, realBle
+
+    m, r, v, c, api = install(fleet=True, located=located)
+    b = realBle(m, ping=located or (lambda vin: asleepPing(m, vin)))
+    b.fetched = []
+    b._fetch_state_json = lambda vin, kind: b.fetched.append(vin)
+    m.settings["SlaveTWCs"] = {"8244": {"supportsVINQuery": 1}}
+    return m, v, c, b, lambda: gen2(monkeypatch, m, c, vin=None)
+
+
+def asleepPing(m, vin):
+    m.vehicleRegistry.get(vin).observe("state", "asleep", "TeslaBLE")
+    return True
+
+
+def test_a_vin_reading_twc_attributes_a_sleeping_car_without_reading_it(
+    requests_mock, monkeypatch
+):
+    from tests.unit.test_command_path_parity import attributeQueued, paid
+
+    m, v, c, b, plug = vinReadingGen2(requests_mock, monkeypatch)
+    v.observe("pluggedIn", True, TM)
+    v.observe("state", "asleep", TM)
+    c.t += 600  # plugged in long before the restart
+    s = plug()
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and s.vehicleKey == VIN
+    assert b.fetched == [] and b.pings == [] and b.runs == []
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_an_unknown_sleep_state_is_checked_before_any_charge_read(
+    requests_mock, monkeypatch
+):
+    # The check says asleep, so no charge read runs; its contact names the car
+    from tests.unit.test_command_path_parity import attributeQueued, paid
+
+    m, v, c, b, plug = vinReadingGen2(requests_mock, monkeypatch, located=False)
+    s = plug()
+    attributeQueued(m)
+    assert b.pings == [VIN] and b.fetched == [] and b.runs == []
+    assert v.value("twcVin") == "8244" and paid(requests_mock) == (0, 0, 0)
+
+
+def test_the_twcs_vin_read_overrides_an_attribution(requests_mock, monkeypatch):
+    from tests.unit.test_command_path_parity import attributeQueued
+
+    m, v, c, b, plug = vinReadingGen2(requests_mock, monkeypatch)
+    v.observe("pluggedIn", True, TM)
+    v.observe("state", "asleep", TM)
+    c.t += 600
+    s = plug()
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244"
+    c.t += 10
+    s.currentVIN = VIN2
+    for _ in range(2):  # an unknown VIN is confirmed by a second read
+        m.recordVehicleVIN(s)
+    two = m.vehicleRegistry.get(VIN2)
+    assert s.vehicleKey == VIN2 and two.value("twcVin") == "8244"
+    assert (
+        v.value("twcVin") is None and v.reported("pluggedIn")["Gen2TWC"].value is False
+    )
+    assert v.markAt("unplug") == c.t
+
+
 def cloudFix(v, at, source="FleetAPI", gpsAsOf=None):
     if gpsAsOf is not None:
         v.observe("gpsAsOf", gpsAsOf, source)
