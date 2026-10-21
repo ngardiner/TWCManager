@@ -3,12 +3,14 @@
     <b>Success, your Tesla API tokens have been stored.</b>
   </font>
   {% set carapi = master.getModuleByName("TeslaAPI") %}
-  {% if carapi and carapi.readOnly %}
-  <p>This is a read-only Owner API token: TWCManager can read your vehicle
-     state, but Tesla does not accept vehicle commands with it, and the
+  {% if carapi and carapi.ownerTokenOnly %}
+  <p>This is an Owner API token: TWCManager can read your vehicle state with
+     it. Tesla accepts vehicle commands with it only for vehicles it reports
+     as not needing signed commands (<code>command_signing</code> "off");
+     TWCManager checks each vehicle and treats the rest as read-only. The
      Vehicle Command proxy only takes Fleet API tokens. To <b>drive
-     charging</b> (start/stop/rate-limit), use the TeslaBLE module, which
-     sends commands to the car over Bluetooth. See the
+     charging</b> (start/stop/rate-limit) on the other vehicles, use the
+     TeslaBLE module, which sends commands to the car over Bluetooth. See the
      <a href="https://github.com/ngardiner/TWCManager/blob/main/docs/modules/Vehicle_TeslaBLE.md" target="_blank">TeslaBLE</a> docs.</p>
   {% else %}
   <p>TWCManager can now read your vehicle state. To <b>drive charging</b>
