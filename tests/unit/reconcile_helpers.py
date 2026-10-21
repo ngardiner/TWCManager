@@ -159,15 +159,15 @@ def make_order(settings=None, *providers):
 
 
 class InlineQueue(VehicleCommandQueue):
-    # Test-only: runs each attempt and plug check at once on the caller's
-    # thread, reporting it as a started queue would. Closed, it takes stops
-    # only. Another job waits until the test runs it (runPending), as a busy
-    # worker would leave it
+    # Test-only: runs each attempt, plug check and online check at once on
+    # the caller's thread, reporting it as a started queue would. Closed, it
+    # takes stops only. Another job waits until the test runs it
+    # (runPending), as a busy worker would leave it
     def start(self):
         pass
 
     def put(self, entry) -> bool:
-        if isinstance(entry, Job) and entry.kind != "plugCheck":
+        if isinstance(entry, Job) and entry.kind not in ("plugCheck", "onlineCheck"):
             return super().put(entry)
         if self._draining and not self._isHigh(entry):
             self._lose([(entry, "dropped")])

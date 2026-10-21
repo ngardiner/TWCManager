@@ -66,7 +66,7 @@ The approach taken is to replace the API calls where an appropriate BLE replacem
 
 * *Why does TWCManager sometimes not send a command to a sleeping car?*
 
-Lowering a charge limit never wakes the car. Before a BLE command that may not wake the car, TWCManager runs a sleep-safe check (the car's answer says whether it is asleep). If the car is asleep, the command waits, and this is logged once. While the car is known to be asleep, TWCManager runs nothing at all, so it does not retry every few minutes. (A Fleet API online check that finds the car asleep counts too.)
+Lowering a charge limit never wakes the car. Before a BLE command that may not wake the car, TWCManager runs a sleep-safe check (the car's answer says whether it is asleep); before such a Tesla API command, the free online check. If the car is asleep, the command waits, and this is logged once. While the car is known to be asleep, TWCManager runs nothing at all, so it does not retry every few minutes. The one exception is the Tesla API's free online check for a car no live telemetry feed reports on: it looks again every 15 minutes while the car is home, and every 30 minutes elsewhere. An asleep answer changes nothing and is not logged again; an awake one sends the command.
 
 The car counts as awake again on a sign of life: a newer awake state from any source, a plug or unplug, a drive start or end, current drawn, or a successful wake. The waiting command is then tried again. Commands that may wake the car still wake it, except while the car's charger is offered 0 A; once the offer rises, the car is woken for the raise.
 

@@ -84,13 +84,15 @@ class _TeslaAPIProvider(Provider):
             return Outcome(UNSUPPORTED, "disconnected")
         return outcome
 
+    def online(self, vehicle) -> Optional[bool]:
+        # The free online check (cached), for a car this slot commands
+        slot = getattr(self.carapi, self.slotName)
+        if vehicle is None or not self.carapi.canCommand(vehicle, slot):
+            return None
+        return self.carapi.onlineState(vehicle, now=self.clock())
+
     def stopCharging(self, vin: str) -> Outcome:
-        vehicle = self._listed(vin)
-        if (
-            vehicle is not None
-            and self.carapi.canCommand(vehicle, getattr(self.carapi, self.slotName))
-            and self.carapi.onlineState(vehicle, now=self.clock()) is False
-        ):
+        if self.online(self._listed(vin)) is False:
             # An asleep car is not charging: settled, never sent
             return Outcome(SATISFIED, "asleep, not charging")
         return self._command(vin, "charge_stop")

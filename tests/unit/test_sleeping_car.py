@@ -16,12 +16,15 @@ from tests.unit.test_command_path_parity import (
     VIN,
     FleetCar,
     bleCommands,
+    commands,
+    counts,
     install,
     paid,
     passes,
     quiet,  # noqa: F401  (autouse: no real sleeps, unanswered URLs counted)
     realBle,
 )
+from tests.unit.reconcile_helpers import AWAY, placeAt
 from tests.unit.test_limit_reconciler import setup
 
 # body-controller-state's answer, as the live box's tesla-control prints it
@@ -156,6 +159,85 @@ def test_a_fleet_online_check_that_finds_it_asleep_suppresses_ble(requests_mock)
     passes(r, c, 3600, each=noise(v, c))
     assert b._tool.call_count == 0 and bleCommands(b) == []
     assert paid(requests_mock) == (0, 0, 0)
+
+
+def onlineChecks(requests_mock):
+    return sum(
+        q.method == "GET" and q.url.split("?")[0].endswith(VIN)
+        for q in requests_mock.request_history
+    )
+
+
+@pytest.mark.parametrize("state", ["asleep", "offline"])
+def test_a_fleet_lowering_to_a_car_found_asleep_holds_and_checks_each_15_min(
+    requests_mock, state
+):
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state=state, limit=90)
+    v.observe("batteryLevel", 80, TM)  # above the new limit: the car quiesces
+    v.observe("chargeLimit", 90, TM)
+    m.setPolicyLimit(70, transition=True)
+    idle = lambda: v.observe("actualCurrent", 0, "Gen2TWC", seen=False)  # noqa: E731
+    passes(r, c, 3600 - 60, step=60, each=idle)
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert rec.lastOutcome == O.ASLEEP and paid(requests_mock) == (0, 0, 0)
+    assert onlineChecks(requests_mock) == 4  # at once, then every 15 min at home
+    car.state = "online"
+    passes(r, c, 900, step=60)
+    assert commands(requests_mock) == ["set_charge_limit"]
+
+
+def test_a_fleet_restore_to_a_car_away_and_asleep_is_checked_each_30_min(
+    requests_mock,
+):
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    FleetCar(requests_mock, state="asleep", limit=50, at=AWAY)
+    v.observe("chargeLimit", 50, TM)
+    c.t += 1
+    placeAt(m, v, AWAY)
+    m.setPolicyLimit(50, transition=False)
+    passes(r, c, 3600 - 60, step=60)
+    assert onlineChecks(requests_mock) == 2 and paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_live_feed_replaces_the_online_checks_of_a_car_held_asleep(
+    requests_mock, caplog
+):
+    caplog.set_level(logging.INFO)
+    m, r, v, c, api = install(fleet=True)
+    m.vehicleRegistry.registerLiveness(TM, lambda vehicle: c())
+    FleetCar(requests_mock, state="online", limit=90)
+    v.observe("state", "asleep", TM)
+    v.observe("batteryLevel", 80, TM)
+    v.observe("chargeLimit", 90, TM)
+    m.setPolicyLimit(70, transition=True)
+    passes(r, c, 3600, step=60, each=noise(v, c))
+    assert m.desired.record(VIN, CHARGE_LIMIT).lastOutcome == O.ASLEEP
+    assert len(helds(caplog)) == 1 and requests_mock.call_count == 0
+    c.t += 1
+    v.observe("state", "online", TM)
+    passes(r, c, 60)
+    assert commands(requests_mock) == ["set_charge_limit"]
+
+
+def test_a_cloud_command_with_no_online_check_holds_for_a_car_known_asleep(
+    requests_mock,
+):
+    from tests.unit.test_command_path_parity import realHa
+
+    m, r, v, c, api = install()
+    realHa(m, requests_mock, (VIN, {"charge_limit_number": "number.limit"}))
+    v.observe("state", "asleep", TM)
+    v.observe("batteryLevel", 80, TM)  # above the new limit: the car quiesces
+    v.observe("chargeLimit", 90, TM)
+    m.setPolicyLimit(70, transition=True)
+    passes(r, c, 600, step=60)
+    assert m.desired.record(VIN, CHARGE_LIMIT).lastOutcome == O.ASLEEP
+    assert counts(requests_mock)["ha"] == 0
+    c.t += 1
+    v.observe("state", "online", TM)
+    passes(r, c, 60)
+    assert counts(requests_mock)["ha"] == 1
 
 
 def test_a_fleet_wake_is_a_sign_of_life(requests_mock):
@@ -317,3 +399,54 @@ def test_a_newer_offline_is_not_a_sign_of_life():
     c.t += 1
     v.observe("state", "offline", "FleetTelemetryMQTT")
     assert Presence.asleep(v)
+
+
+def test_a_fleet_restore_held_asleep_logs_once_and_rechecks_without_replanning(
+    requests_mock, caplog
+):
+    # Fleet-only, no feed: the restore finds the car asleep and holds. Each
+    # free recheck that finds it still asleep neither plans the restore again
+    # nor logs the hold again; the car next seen online gets the limit once
+    caplog.set_level(logging.INFO)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    car = FleetCar(requests_mock, state="asleep", limit=50)
+    v.observe("chargeLimit", 50, "FleetAPI", at=c() - 600)
+    v.observe("batteryLevel", 95, "FleetAPI", at=c() - 600)  # it won't charge
+    m.setPolicyLimit(-1, transition=True)
+    idle = lambda: v.observe("actualCurrent", 0, "Gen2TWC", seen=False)  # noqa: E731
+    passes(r, c, 4 * 3600, step=60, each=idle)
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert rec.lastOutcome == O.ASLEEP and paid(requests_mock) == (0, 0, 0)
+    attempts = [r for r in caplog.records if "setChargeLimit for" in r.getMessage()]
+    assert len(helds(caplog)) == 1 and len(attempts) == 1
+    # The free check still looks, at home every 15 minutes
+    assert 4 * 3600 // 900 <= onlineChecks(requests_mock) <= 4 * 3600 // 900 + 2
+    car.state = "online"
+    passes(r, c, 900, step=60, each=idle)
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert car.charge["charge_limit_soc"] == 90
+
+
+def test_a_fleet_rate_held_asleep_waits_for_life_not_heartbeats(requests_mock, caplog):
+    # Under mode 2 the Fleet API carries the rate, and a billed provider never
+    # wakes for amps: the rate holds on an asleep car. The TWC's heartbeat
+    # is no sign of life, so the hold is logged once; the free check that
+    # finds the car online sends the rate
+    from tests.unit.test_amps_reconciler import point
+
+    caplog.set_level(logging.INFO)
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state="asleep", charging="Charging")
+    pt, s = point(m, v, 2)
+    v.observe("chargingState", "Charging", "FleetAPI", at=c() - 600)
+
+    def each():
+        pt.setTargetPower(10 * 240)
+        v.observe("actualCurrent", 0, "Gen2TWC", seen=False)
+
+    passes(r, c, 2 * 3600, step=10, each=each)
+    assert len(helds(caplog)) == 1 and paid(requests_mock) == (0, 0, 0)
+    assert onlineChecks(requests_mock) <= 2 * 3600 // 900 + 2
+    car.state = "online"
+    passes(r, c, 900, step=10, each=each)
+    assert commands(requests_mock) == ["set_charging_amps"]

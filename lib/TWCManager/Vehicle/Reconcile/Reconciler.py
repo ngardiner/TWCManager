@@ -121,8 +121,8 @@ class VehicleReconciler(threading.Thread):
             return True
         return (self.ble if worker == "ble" else self.cloud).put(attempt)
 
-    def submitJob(self, key, kind, run) -> bool:
-        return self.ble.put(Run.Job(key, kind, run))
+    def submitJob(self, key, kind, run, worker="ble") -> bool:
+        return getattr(self, worker).put(Run.Job(key, kind, run))
 
     def cancel(self, key) -> int:
         # Pending stops for key only; a running attempt is left alone
@@ -227,7 +227,16 @@ class VehicleReconciler(threading.Thread):
         # A drive's hold can change only once the car stops
         driving = rec.lastOutcome == (O.SATISFIED, O.HELD + "driving")
         driving = driving and Presence.decide(self.master, vehicle)[1] == "driving"
-        if rec.heldAt is not None and (vehicle.lastObservedAt <= rec.heldAt or driving):
+        if self._asleepCheckDue(vehicle, rec, now):
+            # The free online check alone: its answer is an observation, so
+            # an awake car is a sign of life that plans this again, and an
+            # asleep one is no news
+            p = self.master.providerOrder.provider(rec.lastProvider)
+            rec.checkedAt = now
+            self.submitJob(key, "onlineCheck", lambda: p.online(vehicle), "cloud")
+            return None
+        waiting = rec.heldAt is not None
+        if waiting and (vehicle.lastObservedAt <= rec.heldAt or driving):
             # Held: only newer evidence (or a new desire) plans it again
             return None
         k = B.known(vehicle, aspect)
@@ -321,8 +330,13 @@ class VehicleReconciler(threading.Thread):
         # Only a car expected to charge is woken; a restore or stop never is
         quiet = B.whyQuiet(self.master, vehicle)
         wakes = quiet is None and not d.restore and d.value is not False
-        if not wakes and last == O.ASLEEP and Presence.asleep(vehicle):
-            # Asleep: only a sign of life, or a message that may wake
+        asleep = Presence.asleep(vehicle, rec.heldAt or 0) is not False
+        # A billed provider never wakes for amps
+        holder = self.master.providerOrder.provider(rec.lastProvider)
+        mayWake = wakes and (aspect != AMPS or getattr(holder, "local", False))
+        if not mayWake and last == O.ASLEEP and asleep:
+            # Asleep (or offline): only a sign of life since the hold (the
+            # cloud's next check may find one), or a message that may wake
             return None
         reached = rec.paidSends and B.reachedCar(
             vehicle, field, rec.paidAt, rec.paidSaw
@@ -470,6 +484,17 @@ class VehicleReconciler(threading.Thread):
             and last.detail in _REFUSALS
             or limit.unread >= 2
         )
+
+    def _asleepCheckDue(self, vehicle, rec, now) -> bool:
+        # A cloud hold's free online check runs again on the asleep cadence,
+        # unless a live feed will report the car waking
+        p = self.master.providerOrder.provider(rec.lastProvider)
+        if rec.lastOutcome != O.ASLEEP or getattr(p, "local", True):
+            return False
+        home = Presence.presence(self.master, vehicle) == Presence.HOME
+        gap = Presence.HOME_ASLEEP_SECS if home else Presence.AWAY_ASLEEP_SECS
+        due = now - max(rec.lastOutcomeAt, rec.checkedAt) >= gap
+        return due and not Presence.covered(self.master, vehicle)
 
     def _held(self, vehicle):
         return self.master.heldLimits.get(vehicle.vin) if vehicle.vin else None

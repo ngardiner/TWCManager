@@ -15,6 +15,9 @@ SEND, NOT_HERE, HOLD = "send", "not here", "hold"
 HOME_RADIUS_FT = 1000
 HOME_FIX_MAX_AGE = 600.0
 REACH_WINDOW = 300.0
+# The least time between status checks of a car known asleep that no live
+# feed reports on: at home, and anywhere else
+HOME_ASLEEP_SECS, AWAY_ASLEEP_SECS = 900.0, 1800.0
 PILOT_MATCH_TOLERANCE, PLUGGED_JUST_NOW = 1, 120.0
 _BLE_CHARGE = ("chargingState", "availableCurrent", "actualCurrent")
 # A fast charger type other than these is not a home charger
@@ -229,6 +232,11 @@ def drivingNow(v) -> bool:
     stopped += [charging.at] if charging and charging.value == "Charging" else []
     stopped += [amps.at] if amps is not None and (amps.value or 0) >= 1 else []
     return driving is not None and driving.at >= max(stopped)
+
+
+def covered(master, v) -> bool:
+    # A live report-on-change feed tells of the car's changes itself
+    return isinstance(master.vehicleRegistry.sourceLiveAt(v.syncSource, v), float)
 
 
 def asleep(v, lately=NEVER) -> Optional[bool]:

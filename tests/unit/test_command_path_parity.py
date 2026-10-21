@@ -1000,10 +1000,8 @@ def test_vanished_car_restore_with_fleet_is_bounded(requests_mock):
     placeAt(m, v, AWAY)
     m.setPolicyLimit(50, transition=False)
     passes(r, c, 3 * 3600, step=60)
-    assert (
-        paid(requests_mock)[1] == 0 and paid(requests_mock)[2] <= 2
-    )  # never a wake; at most 2 commands for the desire
-    assert commands(requests_mock) == ["set_charge_limit"] * 2
+    # The free online check finds it asleep and holds the restore
+    assert commands(requests_mock) == [] and paid(requests_mock) == (0, 0, 0)
 
 
 # Row 18 is test_reconciler_queues.py::test_drain_runs_pending_stops_only (no HTTP)
@@ -1621,18 +1619,16 @@ def test_fleet_only_unplug_one_remote_restore_plug_one_remote_apply(
     assert car.charge["charge_limit_soc"] == 50 and paid(requests_mock) == (1, 0, 2)
 
 
-def test_fleet_only_failed_remote_restore_is_retried_per_restore_retry(
-    requests_mock,
-):
-    # Scenario 18: asleep, never woken for a restore; the paid send and its
-    # one blind retry: paid == (0, 0, 2)
+def test_fleet_only_restore_to_a_car_found_asleep_is_held(requests_mock):
+    # Scenario 18: asleep, never woken for a restore; its free online check
+    # holds it: paid == (0, 0, 0)
     m, r, v, c, api = install(fleet=True, held=(90, 50))
     FleetCar(requests_mock, state="asleep", limit=50)
     v.observe("chargeLimit", 50, TM)
     unplugAtHome(v, c)
     passes(r, c, 3 * RESTORE_RETRY, step=60, each=cycles(m, 50))
-    assert commands(requests_mock) == ["set_charge_limit"] * 2
-    assert paid(requests_mock) == (0, 0, 2)
+    assert commands(requests_mock) == []
+    assert paid(requests_mock) == (0, 0, 0)
 
 
 def test_2026_10_11_unplug_ble_silence_inside_radius_policy_cycles_send_nothing(

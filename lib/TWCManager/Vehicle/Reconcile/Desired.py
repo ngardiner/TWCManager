@@ -93,6 +93,7 @@ class AttemptRecord:
         wakeCheckBy=None,
         settledAt=None,
         heldAt=None,  # a hold: when, and the paid requests attempts that held made
+        checkedAt=0,  # a cloud hold's last free online check
         paidSpent=0,
         unread=0,  # sends that found the current value unreadable (a limit's backstop)
         clearedValue=None,  # the value a clearIf withdrew; set() may take the record back

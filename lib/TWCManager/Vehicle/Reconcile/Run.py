@@ -36,8 +36,8 @@ _badReturns = set()
 _badLock = threading.Lock()
 
 
-# BLE work that is no command (a scan, an attribution): one pending per
-# (key, kind), in turn on the BLE worker
+# Work that is no command (a scan, an attribution, an online check): one
+# pending per (key, kind), in turn on its worker
 Job = collections.namedtuple("Job", "key kind run")
 
 
@@ -186,6 +186,12 @@ def runAttempt(reconciler, attempt) -> O.Outcome:
             believed = uncompleted(vehicle, believed)
         if read and satisfied(aspect, attempt.value, believed):
             return O.Outcome(O.SATISFIED, "read")
+        if not (provider.local or attempt.wake or isStop(attempt)):
+            # Asleep by its free online check, or known asleep without one:
+            # the command cannot reach it
+            awake = provider.online(vehicle)
+            if awake is False or awake is None and asleep(vehicle):
+                return O.ASLEEP
         value, early = reconciler.beforeWrite(vehicle, attempt, provider, believed)
         if early is not None:
             return _tagged(early, "rules: ")

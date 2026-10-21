@@ -60,6 +60,10 @@ class Provider:
         # called with no lock held. Never wakes the car unless allowWake.
         return False
 
+    def online(self, vehicle) -> Optional[bool]:
+        # A free check that the car is awake to take a command; None: unknown
+        return None
+
     def covers(self, vehicle, amps) -> bool:
         span = self.ampsRange(vehicle)
         return span is not None and span[0] <= amps <= span[1]
