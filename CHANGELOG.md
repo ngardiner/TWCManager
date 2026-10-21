@@ -73,6 +73,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: Check for a car coming online after a Fleet API wake_up instead of waking it again 30 minutes later (#699)
     * (@MikeBishop) - Fix: Stale TeslaMate asleep state no longer stops the free vehicle state check (#699)
     * (@MikeBishop) - Fix: Allow Owner API commands per vehicle when Tesla reports `command_signing: off`; other vehicles stay read-only (#659)
+    * (@MikeBishop) - Fix: Run tesla-control in the host network namespace under Docker, and a BLE command timeout no longer kills TWCManager (#711)
 
 ## v1.3.4 - 2026-04-24
 * Features
