@@ -391,9 +391,6 @@ class TeslaBLE:
                 "cloud_key",
             ]
 
-            if self.isDocker():
-                command_string.insert(0, "nsenter --net=/rootns/net ")
-
             # Use improved timeout handling (pairing takes longer)
             stdout, stderr, return_code = self._run_command_with_timeout(
                 command_string,
@@ -479,9 +476,6 @@ class TeslaBLE:
                 self.pipeName,
                 command,
             ]
-            if self.isDocker():
-                command_string.insert(0, "nsenter --net=/rootns/net ")
-
             if args:
                 command_string.append(str(args))
 
@@ -1013,16 +1007,21 @@ class TeslaBLE:
         Args:
             command_string: List of command arguments
             timeout: Timeout in seconds
-            use_process_group: Whether to use process groups (for Docker compatibility)
+            use_process_group: Run it in its own process group, killed whole
+                on a timeout
 
         Returns:
             Tuple of (stdout, stderr, return_code) or (None, None, None) on timeout
         """
         try:
-            # Prepare preexec_fn for process group creation
+            if self.isDocker() and command_string[0] == self.binaryPath:
+                # tesla-control opens the adapter in the host's network
+                # namespace; each word is its own argument (no shell)
+                command_string = ["nsenter", "--net=/rootns/net"] + command_string
             preexec_fn = None
-            if use_process_group and not self.isDocker():
-                # Create new process group (only works on Unix, not in Docker)
+            if use_process_group:
+                # The timeout kills the child's whole group, which must not
+                # be TWCManager's own
                 preexec_fn = os.setsid
 
             logger.debug(
