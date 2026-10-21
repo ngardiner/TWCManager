@@ -24,6 +24,8 @@ class TWCMaster:
     backgroundTasksCmds = {}
     backgroundTasksLock = threading.Lock()
     backgroundTasksDelayed = []
+    # Minimum seconds between charge start/stop commands per car
+    CHARGE_COMMAND_INTERVAL = 60
     config = None
     consumptionValues = {}
     consumptionAmpsValues = {}
@@ -86,6 +88,8 @@ class TWCMaster:
         self.config = config
         self.debugOutputToFile = config["config"].get("debugOutputToFile", False)
         self.TWCID = TWCID
+        # Per-VIN (None: every car) time of the last charge command
+        self.lastChargeCommandTime = {}
         self.subtractChargerLoad = config["config"].get("subtractChargerLoad", False)
         self.treatGenerationAsGridDelivery = config["config"].get(
             "treatGenerationAsGridDelivery", False
@@ -125,8 +129,36 @@ class TWCMaster:
         else:
             return 0
 
-    def cancelStopCarsCharging(self):
-        self.delete_background_task({"cmd": "charge", "charge": False})
+    def cancelStopCarsCharging(self, vin=None):
+        # A queued stop always carries a vin key, so match on charge alone
+        # rather than the whole task (closes #667)
+        self.getBackgroundTasksLock()
+        try:
+            task = self.backgroundTasksCmds.get("charge")
+            if (
+                task
+                and task.get("charge") is False
+                and self._sameCars(task.get("vin"), vin)
+            ):
+                del task["cmd"]
+                del self.backgroundTasksCmds["charge"]
+        finally:
+            self.releaseBackgroundTasksLock()
+
+    @staticmethod
+    def _sameCars(vin, other):
+        # A charge command without a vin applies to every car
+        return not vin or not other or vin == other
+
+    def _chargeCommandTooSoon(self, vin):
+        now = time.time()
+        for last_vin, last in self.lastChargeCommandTime.items():
+            if (
+                self._sameCars(vin, last_vin)
+                and now - last < self.CHARGE_COMMAND_INTERVAL
+            ):
+                return True
+        return False
 
     def checkForUpdates(self):
         # This function is used by the Web UI and later on will be used by the console to detect TWCManager Updates
@@ -309,6 +341,9 @@ class TWCMaster:
                 result = self.backgroundTasksQueue.get(timeout=30)
             except queue.Empty:
                 continue
+
+            if result.get("cmd") == "charge":
+                self.lastChargeCommandTime[result.get("vin") or None] = time.time()
 
         return result
 
@@ -1093,6 +1128,15 @@ class TWCMaster:
 
         self.getBackgroundTasksLock()
         try:
+            if (
+                task["cmd"] == "charge"
+                and task["cmd"] not in self.backgroundTasksCmds
+                and self._chargeCommandTooSoon(task.get("vin"))
+            ):
+                # Callers re-request every loop while they want a change, so
+                # a refused command isn't retried back to back
+                logger.debug("Not queuing %r; too soon after the last one", task)
+                return
             if task["cmd"] in self.backgroundTasksCmds:
                 # Some tasks, like cmd='charge', will be called once per second until
                 # a charge starts or we determine the car is done charging.  To avoid

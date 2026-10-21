@@ -57,6 +57,8 @@ This release maintains support for Tesla Owner API (owner-api.teslamotors.com) w
     * (@MikeBishop) - Fix: TeslaMate telemetry now attaches to the API vehicle when BLE handles all commands (#678)
     * (@MikeBishop) - Evaluate charging policy on its own thread instead of the RS485 loop, only when acting as master (#686)
     * (@MikeBishop) - Fix: TeslaMate token sync now accepts resyncs and reads tokens from current TeslaMate versions (#681)
+    * Fix: Cancel a pending stop-charging command when charging should continue (closes #667)
+    * Fix: Send at most one charge start/stop command per vehicle per minute, so a refused stop is no longer retried every loop
     * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
     * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
     * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
