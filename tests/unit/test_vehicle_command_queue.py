@@ -239,9 +239,7 @@ class TestCallbacksAndErrors:
 
     # The worker re-raises SystemExit, which pytest reports as an unhandled
     # thread exception; that is the behaviour under test, not a failure.
-    @pytest.mark.filterwarnings(
-        "ignore::pytest.PytestUnhandledThreadExceptionWarning"
-    )
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
     def test_base_exception_in_dispatch_clears_busy(self, q, module):
         raised = threading.Event()
 
@@ -313,3 +311,161 @@ class TestDrain:
         start = time.monotonic()
         assert q.drain_high_priority(timeout=WAIT) is True
         assert time.monotonic() - start < 0.5
+
+
+@pytest.fixture
+def unlimited(q, monkeypatch):
+    """Turn off the per-car charge interval for tests about other behaviour."""
+    monkeypatch.setattr(q, "CHARGE_COMMAND_INTERVAL", 0)
+    return q
+
+
+class TestPerVehicleCharge:
+    def test_charge_commands_for_different_cars_both_run(self, unlimited, module):
+        q = unlimited
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        q.put({"cmd": "charge", "charge": False, "vin": "V2"})
+        q.put({"cmd": "charge", "charge": True, "vin": "V3"})
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [
+            ("applyChargeLimit", 80),
+            ("charge", False, "V1"),
+            ("charge", False, "V2"),
+            ("charge", True, "V3"),
+        ]
+
+    def test_vehicleless_start_replaces_every_pending_stop(self, unlimited, module):
+        q = unlimited
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        q.put({"cmd": "charge", "charge": False, "vin": "V2"})
+        q.put({"cmd": "charge", "charge": True})
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [("applyChargeLimit", 80), ("charge", True, None)]
+
+    def test_empty_vin_means_every_car(self, unlimited, module):
+        q = unlimited
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "charge", "charge": True, "vin": "V1"})
+        q.put({"cmd": "charge", "charge": False, "vin": ""})
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [("applyChargeLimit", 80), ("charge", False, "")]
+
+
+class TestCancelStop:
+    def test_cancels_pending_stop_for_the_car(self, unlimited, module):
+        q = unlimited
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        q.put({"cmd": "charge", "charge": False, "vin": "V2"})
+        assert q.cancel_stop("V1") == 1
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [("applyChargeLimit", 80), ("charge", False, "V2")]
+
+    def test_cancels_a_stop_for_every_car(self, unlimited, module):
+        q = unlimited
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "charge", "charge": False, "vin": None})
+        assert q.cancel_stop("V1") == 1
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [("applyChargeLimit", 80)]
+
+    @pytest.mark.parametrize("vin", [None, ""])
+    def test_without_vin_cancels_every_stop(self, unlimited, module, vin):
+        q = unlimited
+        block_worker(q, module, {"cmd": "applyChargeLimit", "limit": 80})
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        q.put({"cmd": "charge", "charge": False, "vin": "V2"})
+        assert q.cancel_stop(vin) == 2
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [("applyChargeLimit", 80)]
+
+    def test_leaves_starts_and_other_commands(self, unlimited, module):
+        q = unlimited
+        block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
+        q.put({"cmd": "charge", "charge": True, "vin": "V1"})
+        q.put({"cmd": "applyChargeLimit", "limit": 80})
+        assert q.cancel_stop("V1") == 0
+        module.gate.set()
+        wait_idle(q)
+        assert module.calls == [
+            ("setChargeRate", 6, None),
+            ("charge", True, "V1"),
+            ("applyChargeLimit", 80),
+        ]
+
+    def test_not_during_shutdown(self, unlimited, module):
+        q = unlimited
+        block_worker(q, module, {"cmd": "setChargeRate", "amps": 6, "vehicle": None})
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        drainer = threading.Thread(target=lambda: q.drain_high_priority(timeout=WAIT))
+        drainer.start()
+        deadline = time.monotonic() + WAIT
+        while not q._draining and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert q.cancel_stop("V1") == 0
+        module.gate.set()
+        drainer.join(WAIT)
+        assert module.calls == [("setChargeRate", 6, None), ("charge", False, "V1")]
+
+
+class TestChargeInterval:
+    def test_repeat_within_interval_is_dropped(self, q, module):
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        wait_idle(q)
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        q.put({"cmd": "charge", "charge": True, "vin": "V1"})
+        wait_idle(q)
+        assert module.calls == [("charge", False, "V1")]
+
+    def test_other_car_is_not_limited(self, q, module):
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        wait_idle(q)
+        q.put({"cmd": "charge", "charge": False, "vin": "V2"})
+        wait_idle(q)
+        assert module.calls == [("charge", False, "V1"), ("charge", False, "V2")]
+
+    def test_vehicleless_command_waits_for_any_car(self, q, module):
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        wait_idle(q)
+        q.put({"cmd": "charge", "charge": True})
+        wait_idle(q)
+        assert module.calls == [("charge", False, "V1")]
+
+    def test_runs_again_after_interval(self, q, module, monkeypatch):
+        clock = [1000.0]
+        monkeypatch.setattr(
+            "TWCManager.VehicleCommandQueue.time.monotonic", lambda: clock[0]
+        )
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        wait_idle(q)
+        clock[0] += q.CHARGE_COMMAND_INTERVAL - 1
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        wait_idle(q)
+        clock[0] += 1
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        wait_idle(q)
+        assert module.calls == [("charge", False, "V1"), ("charge", False, "V1")]
+
+    def test_failed_attempt_counts(self, q, module):
+        module.result = False
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        wait_idle(q)
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        wait_idle(q)
+        assert module.calls == [("charge", False, "V1")]
+
+    def test_shutdown_stop_ignores_interval(self, q, module):
+        q.put({"cmd": "charge", "charge": True, "vin": "V1"})
+        wait_idle(q)
+        q._draining = True
+        q.put({"cmd": "charge", "charge": False, "vin": "V1"})
+        assert q.drain_high_priority(timeout=WAIT) is True
+        assert module.calls == [("charge", True, "V1"), ("charge", False, "V1")]

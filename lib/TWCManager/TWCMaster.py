@@ -163,8 +163,10 @@ class TWCMaster:
         else:
             return 0
 
-    def cancelStopCarsCharging(self):
-        self.delete_background_task({"cmd": "charge", "charge": False})
+    def cancelStopCarsCharging(self, vin=None):
+        # Charge commands go to the vehicle command queue, not the background
+        # task table, so a pending stop is cancelled there (closes #667).
+        self.vehicleCommandQueue.cancel_stop(vin)
 
     def checkForUpdates(self):
         # This function is used by the Web UI and later on will be used by the console to detect TWCManager Updates
@@ -1891,7 +1893,7 @@ class TWCMaster:
         # below
         stopMode = int(self.settings.get("chargeStopMode", 1))
         if stopMode == 1:
-            self.queue_background_task({"cmd": "charge", "charge": True})
+            self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
             self.getModuleByName("Policy").clearOverride()
         elif stopMode == 2:
             self.settings["respondToSlaves"] = 1

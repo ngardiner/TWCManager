@@ -6,11 +6,17 @@
 # time against the vehicle module (normally VehiclePriority), which keeps
 # its synchronous BLE -> Fleet API fallback.
 #
-# Pending commands coalesce: setChargeRate per vehicle, charge and
-# applyChargeLimit per command (matching the background task queue).
+# Pending commands coalesce: setChargeRate and charge per vehicle,
+# applyChargeLimit per command. A charge command without a vin applies to
+# every car, so it replaces, and is replaced by, any pending charge command.
 # Stop-charging commands run before anything else.
+#
+# A car gets at most one charge start/stop attempt per
+# CHARGE_COMMAND_INTERVAL. Callers re-request every loop while they want a
+# change, so a refused command isn't retried back to back.
 import collections
 import threading
+import time
 import traceback
 
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -19,6 +25,8 @@ logger = LoggerFactory.get_logger("VehicleCommandQueue", "Vehicle")
 
 
 class VehicleCommandQueue:
+    CHARGE_COMMAND_INTERVAL = 60
+
     _DISPATCH = {
         "charge": lambda module, task: module.car_api_charge(task),
         "applyChargeLimit": lambda module, task: module.applyChargeLimit(
@@ -37,16 +45,27 @@ class VehicleCommandQueue:
         self._busy = False
         self._draining = False
         self._thread = None
+        # Per-VIN (None: every car) time of the last charge attempt
+        self._lastChargeTime = {}
 
     @staticmethod
     def _key(task):
         cmd = task["cmd"]
+        if cmd == "charge":
+            # TWCSlave passes "" when it hasn't read the car's VIN
+            return (cmd, task.get("vin") or None)
         if cmd != "setChargeRate":
-            # A vehicle-less charge start applies to every car, so a later
-            # stop for one car must replace it rather than run alongside it.
             return (cmd, None)
         vehicle = task.get("vehicle")
         return (cmd, getattr(vehicle, "VIN", vehicle))
+
+    @staticmethod
+    def _replaces(key, other):
+        # A charge command for every car (vin None) and one for a single car
+        # overlap, so the newer one replaces the older.
+        if key[0] != "charge" or other[0] != "charge":
+            return key == other
+        return key[1] is None or other[1] is None or key[1] == other[1]
 
     @staticmethod
     def _is_high_priority(task):
@@ -71,14 +90,48 @@ class VehicleCommandQueue:
                 if self._draining and not high:
                     logger.debug("Shutting down; dropping vehicle command %r", task)
                     return
-                table, other = (
-                    (self._high, self._low) if high else (self._low, self._high)
-                )
-                other.pop(key, None)
+                if key[0] == "charge" and not self._draining:
+                    since = time.monotonic() - max(
+                        (
+                            t
+                            for k, t in self._lastChargeTime.items()
+                            if self._replaces(key, ("charge", k))
+                        ),
+                        default=float("-inf"),
+                    )
+                    if since < self.CHARGE_COMMAND_INTERVAL:
+                        logger.debug(
+                            "Not sending %r; last charge command %ds ago",
+                            task,
+                            since,
+                        )
+                        return
+                table = self._high if high else self._low
+                for pending in (self._high, self._low):
+                    for k in [k for k in pending if self._replaces(key, k)]:
+                        # The same key in the same table keeps its place
+                        if not (pending is table and k == key):
+                            del pending[k]
                 table[key] = (task, callback)
                 self._cond.notify_all()
         except Exception:
             logger.error("Failed to queue vehicle command: %s", traceback.format_exc())
+
+    def cancel_stop(self, vin=None):
+        # Drop pending stop-charging commands for this car, and any stop for
+        # every car; with no vin, drop every pending stop. A stop already
+        # running can't be cancelled. Not during shutdown, which must send
+        # its stops.
+        vin = vin or None
+        with self._cond:
+            if self._draining:
+                return 0
+            keys = [k for k in self._high if vin is None or k[1] is None or k[1] == vin]
+            for k in keys:
+                del self._high[k]
+            if keys:
+                logger.debug("Cancelled %d pending stop command(s)", len(keys))
+            return len(keys)
 
     def drain_high_priority(self, timeout):
         with self._cond:
@@ -103,7 +156,9 @@ class VehicleCommandQueue:
         with self._cond:
             self._cond.wait_for(lambda: self._high or self._low)
             table = self._high if self._high else self._low
-            _, entry = table.popitem(last=False)
+            key, entry = table.popitem(last=False)
+            if key[0] == "charge":
+                self._lastChargeTime[key[1]] = time.monotonic()
             self._busy = True
             return entry
 

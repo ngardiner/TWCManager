@@ -558,7 +558,7 @@ class TWCSlave:
                         + str(self.reportedAmpsActual)
                         + " < 4"
                     )
-                    self.master.cancelStopCarsCharging()
+                    self.master.cancelStopCarsCharging(self.currentVIN)
                 else:
                     # Car is trying to charge, so stop it via car API.
                     # car_api_charge() will prevent telling the car to start or stop
@@ -1062,7 +1062,7 @@ class TWCSlave:
         desiredAmpsOffered = self.set_last_amps_offered(desiredAmpsOffered)
 
         if desiredAmpsOffered > 0:
-            self.master.cancelStopCarsCharging()
+            self.master.cancelStopCarsCharging(self.currentVIN)
 
         # See notes in send_slave_heartbeat() for details on how we transmit
         # desiredAmpsOffered and the meaning of the code in
