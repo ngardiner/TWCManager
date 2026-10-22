@@ -39,7 +39,7 @@ VEHICLE_DATA = {
         "vehicle_state": {"vehicle_name": "Car"},
     }
 }
-LISTING = {"count": 1, "response": [{"id": 1, "vin": "VIN1", "display_name": "Car"}]}
+LISTING = {"count": 1, "response": [{"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"}]}
 CMD_OK = {"response": {"result": True, "reason": ""}}
 
 
@@ -89,7 +89,7 @@ def test_reads_use_owner_when_usable(no_threads, requests_mock):
     api = new_api()
     owner, _ = store_both(api)
     vehicle = add_home_vehicle(api)
-    data = requests_mock.get(OWNER_API_URL + "/VIN1/vehicle_data", json=VEHICLE_DATA)
+    data = requests_mock.get(OWNER_API_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA)
     fleet = fleet_calls(requests_mock)
 
     assert vehicle.update_vehicle_data() is True
@@ -104,7 +104,7 @@ def test_reads_use_fleet_without_owner(no_threads, requests_mock):
     token = fleet_token()
     api.storeToken(token)
     vehicle = add_home_vehicle(api)
-    data = requests_mock.get(FLEET_NA_URL + "/VIN1/vehicle_data", json=VEHICLE_DATA)
+    data = requests_mock.get(FLEET_NA_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA)
 
     assert vehicle.update_vehicle_data() is True
 
@@ -130,7 +130,7 @@ def test_commands_use_fleet_only(no_threads, requests_mock):
     _, fleet = store_both(api)
     vehicle = add_home_vehicle(api)
     cmd = requests_mock.post(
-        FLEET_NA_URL + "/VIN1/command/set_charging_amps", json=CMD_OK
+        FLEET_NA_URL + "/5YJ3E1EA1KF000001/command/set_charging_amps", json=CMD_OK
     )
 
     assert api.setChargeRate(10, vehicle) == CMD_OK
@@ -222,7 +222,7 @@ def test_rejected_refresh_clears_only_that_slot(requests_mock):
 
 def expired_then(requests_mock, responses):
     return requests_mock.get(
-        FLEET_NA_URL + "/VIN1/vehicle_data",
+        FLEET_NA_URL + "/5YJ3E1EA1KF000001/vehicle_data",
         [{"status_code": 401, "text": "token expired"}] + responses,
     )
 
@@ -238,7 +238,7 @@ def test_get_car_api_expired_401_refreshes_once_and_retries(no_threads, requests
         json={"access_token": newAccess, "refresh_token": "r2", "expires_in": 28800},
     )
 
-    assert vehicle.get_car_api("VIN1/vehicle_data", checkReady=False) == (
+    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
         True,
         {"ok": True},
     )
@@ -260,7 +260,7 @@ def test_get_car_api_refreshes_at_most_once(no_threads, requests_mock):
         json={"access_token": fleet_token(), "refresh_token": "r", "expires_in": 60},
     )
 
-    assert vehicle.get_car_api("VIN1/vehicle_data", checkReady=False) == (
+    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
         False,
         None,
     )
@@ -274,10 +274,10 @@ def test_get_car_api_connection_error_returns_false(no_threads, requests_mock):
     api.storeToken(fleet_token())
     vehicle = add_home_vehicle(api)
     requests_mock.get(
-        FLEET_NA_URL + "/VIN1/vehicle_data", exc=requests.exceptions.ConnectionError
+        FLEET_NA_URL + "/5YJ3E1EA1KF000001/vehicle_data", exc=requests.exceptions.ConnectionError
     )
 
-    assert vehicle.get_car_api("VIN1/vehicle_data", checkReady=False) == (
+    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (
         False,
         None,
     )
@@ -360,12 +360,12 @@ def test_owner_401_clears_owner_and_next_read_uses_fleet(
     owner, fleet = store_both(api)
     vehicle = add_home_vehicle(api)
     ownerData = requests_mock.get(
-        OWNER_API_URL + "/VIN1/vehicle_data",
+        OWNER_API_URL + "/5YJ3E1EA1KF000001/vehicle_data",
         status_code=401,
         json={"error": "invalid bearer"},
     )
     fleetData = requests_mock.get(
-        FLEET_NA_URL + "/VIN1/vehicle_data", json=VEHICLE_DATA
+        FLEET_NA_URL + "/5YJ3E1EA1KF000001/vehicle_data", json=VEHICLE_DATA
     )
 
     assert vehicle.update_vehicle_data() is False
@@ -414,11 +414,11 @@ def test_synced_401_expired_clears_without_refresh(no_threads, requests_mock):
     api.storeToken(owner_token(), "", "synced")
     vehicle = add_home_vehicle(api)
     requests_mock.get(
-        OWNER_API_URL + "/VIN1/vehicle_data", status_code=401, text="token expired"
+        OWNER_API_URL + "/5YJ3E1EA1KF000001/vehicle_data", status_code=401, text="token expired"
     )
     refresh = requests_mock.post(AUTH_TOKEN_URL, json={})
 
-    assert vehicle.get_car_api("VIN1/vehicle_data", checkReady=False) == (False, None)
+    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (False, None)
 
     assert refresh.call_count == 0
     assert api.ownerSlot.accessToken == ""
@@ -429,9 +429,9 @@ def test_5xx_and_429_do_not_pause_or_clear(no_threads, requests_mock, code):
     api = new_api()
     owner, _ = store_both(api)
     vehicle = add_home_vehicle(api)
-    requests_mock.get(OWNER_API_URL + "/VIN1/vehicle_data", status_code=code)
+    requests_mock.get(OWNER_API_URL + "/5YJ3E1EA1KF000001/vehicle_data", status_code=code)
 
-    assert vehicle.get_car_api("VIN1/vehicle_data", checkReady=False) == (False, None)
+    assert vehicle.get_car_api("5YJ3E1EA1KF000001/vehicle_data", checkReady=False) == (False, None)
 
     assert api.ownerSlot.accessToken == owner
     assert api.ownerSlot.pausedUntil == 0

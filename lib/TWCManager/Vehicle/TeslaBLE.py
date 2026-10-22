@@ -4,16 +4,21 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
 import functools
+import hashlib
 import json
 import logging
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import subprocess
 import threading
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource
+from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("TeslaBLE", "Vehicle")
 
@@ -95,8 +100,50 @@ class TeslaBLE:
     pipeName = "/tmp/ble_data"
     pipeOpen = False  # Track pipe state
 
+    # tesla-control's ErrKeyNotPaired (vehicle-command pkg/protocol/error.go)
+    KEY_REFUSED_TEXT = "your public key has not been paired with the vehicle"
+    # After a pairing request reaches the car, the owner has this long to
+    # tap the key card; a key refusal inside it is expected, not a refusal.
+    PAIRING_WINDOW = 600
+    # bluetoothctl listens this long per range scan.
+    SCAN_SECONDS = 8
+    # A request not served in this long no longer shows as "Scanning...".
+    SCAN_PENDING_MAX = 120
+    # A request for a car scanned (or being scanned) this recently is ignored.
+    SCAN_DEBOUNCE = 10
+    # One bleScan task drains requests at most this many times; anything left
+    # is picked up by requeueIfRequested after the task finishes.
+    SCAN_DRAIN_PASSES = 3
+    # bluetoothctl output meaning the scan never ran (no adapter, bluetoothd
+    # down, discovery refused); compared case-insensitively.
+    SCAN_ERROR_TEXT = (
+        "no default controller",
+        "waiting to connect to bluetoothd",
+        "failed to start discovery",
+    )
+    STATUS_LABELS = {
+        "pairing": "Pairing (tap your key card in the car)",
+        "paired": "Paired",
+        "pairing_failed": "Pairing failed",
+        "refused": "Key refused (re-pair)",
+    }
+
     def __init__(self, master):
+        self.registry = VehicleRegistry.forMaster(master)
         self._bleLock = threading.Lock()
+        # Last pairing attempt per VIN: transient, for the vehicle page.
+        self._pairingAttempts = {}
+        # Last range scan per VIN: {"inRange", "at"}; transient.
+        self._rangeScan = {}
+        # VIN -> request time for scans not yet run. Guarded by its own lock,
+        # never held while taking _bleLock.
+        self._scanRequests = {}
+        # VINs a drain has taken and not finished scanning; same lock.
+        self._scanInProgress = set()
+        self._scanLock = threading.Lock()
+        # Set by _sendCommand_internal on a key refusal so the retry loop
+        # (same thread) stops: a refused key is refused again on retry.
+        self._keyRefusal = threading.local()
         self.master = master
         try:
             self.config = self.master.config
@@ -182,6 +229,9 @@ class TeslaBLE:
         else:
             logger.info(f"tesla-control binary found at: {self.binaryPath}")
 
+        # Reads cascade BLE first (local and free), then the cloud.
+        self.registry.registerReadSource(TeslaBLEReadSource(self, master))
+
     def _scheduleBlocksStart(self, vin):
         # Don't override the car's own Scheduled Charging / Departure timer
         # with a BLE start command (see TeslaAPI.car_api_charge for the
@@ -265,12 +315,16 @@ class TeslaBLE:
                     logger.error("No vehicles configured for BLE operation")
                     return False
 
+                targets = self._allVehicleTargets()
+                if not targets:
+                    logger.warning("No vehicle has a usable BLE key")
+                    return False
+
                 success_count = 0
                 attempted_count = 0
                 skipped_count = 0
-                total_vehicles = len(self.master.settings["Vehicles"])
 
-                for vehicle in self.master.settings["Vehicles"].keys():
+                for vehicle in targets:
                     try:
                         if charge:
                             if self._stopAskingToStartCharging.get(vehicle):
@@ -412,6 +466,12 @@ class TeslaBLE:
         Pair with a vehicle using BLE key exchange.
         Returns True on success, False on failure.
         """
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
+            logger.error("BLE pairing refused: not a well-formed VIN")
+            return False
+        vin = self._settingsKey(vin)
+        success = False
+        reason = "Pairing request failed"
         try:
             logger.info(f"Initiating BLE pairing with vehicle {vin}")
 
@@ -423,11 +483,13 @@ class TeslaBLE:
                 logger.error(
                     "tesla-control binary not available or not executable for pairing"
                 )
+                reason = "tesla-control is not available"
                 return False
 
             # Send public key before pairing
             if not self.sendPublicKey(vin):
                 logger.error(f"Failed to send public key for pairing with {vin}")
+                reason = "Could not prepare the public key"
                 return False
 
             command_string = [
@@ -451,6 +513,7 @@ class TeslaBLE:
 
             if stdout is None and stderr is None:
                 logger.error(f"BLE pairing with {vin} timed out or failed")
+                reason = "Pairing request timed out; is the car in range?"
                 return False
 
             # Check both stdout and stderr for pairing result
@@ -462,15 +525,18 @@ class TeslaBLE:
             logger.info(f"BLE pairing with {vin}: {'success' if success else 'failed'}")
             if not success:
                 logger.debug(f"Pairing output: {output[:200]}...")
+                reason = "The car did not accept the pairing request"
 
             return success
 
         except Exception as e:
             logger.error(f"peerWithVehicle exception for {vin}: {e}")
+            success = False
             return False
         finally:
             # Always ensure pipe is closed after pairing attempt
             self._ensure_pipe_closed()
+            self._safeNote(self._notePairingResult, vin, success, reason)
 
     def sendCommand(self, vin, command, args=None):
         """
@@ -488,11 +554,13 @@ class TeslaBLE:
         Internal sendCommand implementation (called by retry wrapper).
         Returns command output string or None on failure.
         """
+        self._keyRefusal.refused = False
         try:
             # Validate inputs
             if not vin or not command:
                 logger.error("sendCommand called with invalid vin or command")
                 return None
+            vin = self._settingsKey(vin)
 
             if (
                 not self.binaryPath
@@ -556,12 +624,17 @@ class TeslaBLE:
                     logger.debug(
                         f"BLE command '{command}' already satisfied: {output[:200]}"
                     )
+                    # The car executed and answered a signed command.
+                    self._safeNote(self._noteBleProof, vin)
                     return output
 
                 logger.warning(
                     f"BLE command '{command}' failed with return code {return_code}: {output}"
                 )
                 logger.warning(f"BLE command full error output: {output}")
+                if self._isKeyRefusal(output):
+                    self._keyRefusal.refused = True
+                    self._safeNote(self._noteBleRefusal, vin, output)
                 return None
 
             logger.debug(
@@ -569,6 +642,7 @@ class TeslaBLE:
                 if len(output) > 200
                 else output
             )
+            self._safeNote(self._noteBleProof, vin)
             return output or "ok"
 
         except Exception as e:
@@ -577,6 +651,17 @@ class TeslaBLE:
         finally:
             # Always ensure pipe is closed after command
             self._ensure_pipe_closed()
+
+    def _stampWrite(self, vin, field, value):
+        """Record a command that just succeeded as our own write. Only an
+        existing registry vehicle is stamped; a write path never creates one.
+        The registry lock is a leaf, so holding _bleLock here is fine."""
+        try:
+            v = self.registry.get(str(vin).upper())
+            if v is not None:
+                v.noteWrite(field, value, "TeslaBLE")
+        except Exception as e:
+            logger.debug(f"Could not stamp {field} write for {vin}: {e}")
 
     def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
         """
@@ -605,6 +690,8 @@ class TeslaBLE:
                     return False
 
                 success = self.parseCommandOutput(ret)
+                if success:
+                    self._stampWrite(vehicle, "availableCurrent", charge_rate)
                 logger.info(
                     f"Set charge rate {charge_rate}A for {vehicle}: {'success' if success else 'failed'}"
                 )
@@ -618,10 +705,15 @@ class TeslaBLE:
                     logger.error("No vehicles configured for charge rate setting")
                     return False
 
-                success_count = 0
-                total_vehicles = len(self.master.settings["Vehicles"])
+                targets = self._allVehicleTargets()
+                if not targets:
+                    logger.warning("No vehicle has a usable BLE key")
+                    return False
 
-                for vehicle_vin in self.master.settings["Vehicles"].keys():
+                success_count = 0
+                total_vehicles = len(targets)
+
+                for vehicle_vin in targets:
                     try:
                         # Wake vehicle first - don't fail if wake fails, but log it
                         wake_result = self.wakeVehicle(vehicle_vin)
@@ -635,6 +727,9 @@ class TeslaBLE:
                         )
                         if ret is not None and self.parseCommandOutput(ret):
                             success_count += 1
+                            self._stampWrite(
+                                vehicle_vin, "availableCurrent", charge_rate
+                            )
                             logger.debug(
                                 f"Set charge rate successful for vehicle {vehicle_vin}"
                             )
@@ -683,12 +778,16 @@ class TeslaBLE:
                 f"Applying charge limit {limit}{'% to all vehicles' if limit != -1 else ' (restore default) to all vehicles'}"
             )
 
+            targets = self._allVehicleTargets()
+            if not targets:
+                logger.warning("No vehicle has a usable BLE key")
+                return False
+
             success_count = 0
             attempted_count = 0
             skipped_count = 0
-            total_vehicles = len(self.master.settings["Vehicles"])
 
-            for vehicle_vin in self.master.settings["Vehicles"].keys():
+            for vehicle_vin in targets:
                 try:
                     # Skip if we've already successfully applied this exact limit to this vehicle
                     if (
@@ -737,6 +836,7 @@ class TeslaBLE:
                     )
                     if ret is not None and self.parseCommandOutput(ret):
                         success_count += 1
+                        self._stampWrite(vehicle_vin, "chargeLimit", target_limit)
                         if limit == -1:
                             # Restore: remove the flag and saved limit
                             self._stopTryingToApplyLimit.pop(vehicle_vin, None)
@@ -848,7 +948,7 @@ class TeslaBLE:
 
         # Ensure we have a Private Key defined for each known vehicle
         if self.master.settings.get("Vehicles", None):
-            for vehicle in self.master.settings["Vehicles"].keys():
+            for vehicle in list(self.master.settings["Vehicles"].keys()):
                 if not "privKey" in self.master.settings["Vehicles"][vehicle]:
                     logger.log(
                         logging.INFO2,
@@ -859,32 +959,33 @@ class TeslaBLE:
                     private_key = ec.generate_private_key(
                         ec.SECP256R1(), default_backend()
                     )
-                    self.master.settings["Vehicles"][vehicle]["privKey"] = (
-                        base64.b64encode(
-                            private_key.private_bytes(
-                                serialization.Encoding.PEM,
-                                serialization.PrivateFormat.PKCS8,
-                                serialization.NoEncryption(),
-                            )
-                        ).decode()
-                    )
-                    public_key = private_key.public_key()
-                    self.master.settings["Vehicles"][vehicle]["pubKey"] = (
-                        base64.b64encode(
-                            public_key.public_bytes(
-                                serialization.Encoding.X962,
-                                serialization.PublicFormat.UncompressedPoint,
-                            )
-                        ).decode()
-                    )
-                    self.master.settings["Vehicles"][vehicle]["pubKeyPEM"] = (
-                        base64.b64encode(
-                            public_key.public_bytes(
-                                serialization.Encoding.PEM,
-                                serialization.PublicFormat.SubjectPublicKeyInfo,
-                            )
-                        ).decode()
-                    )
+                    with self.master.settingsLock:
+                        self.master.settings["Vehicles"][vehicle]["privKey"] = (
+                            base64.b64encode(
+                                private_key.private_bytes(
+                                    serialization.Encoding.PEM,
+                                    serialization.PrivateFormat.PKCS8,
+                                    serialization.NoEncryption(),
+                                )
+                            ).decode()
+                        )
+                        public_key = private_key.public_key()
+                        self.master.settings["Vehicles"][vehicle]["pubKey"] = (
+                            base64.b64encode(
+                                public_key.public_bytes(
+                                    serialization.Encoding.X962,
+                                    serialization.PublicFormat.UncompressedPoint,
+                                )
+                            ).decode()
+                        )
+                        self.master.settings["Vehicles"][vehicle]["pubKeyPEM"] = (
+                            base64.b64encode(
+                                public_key.public_bytes(
+                                    serialization.Encoding.PEM,
+                                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                                )
+                            ).decode()
+                        )
                     self.master.queue_background_task({"cmd": "saveSettings"})
         else:
             logger.log(logging.INFO2, "No known vehicles.")
@@ -931,6 +1032,7 @@ class TeslaBLE:
         """Run `tesla-control state STATE_TYPE` and return parsed JSON dict, or None."""
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
             return None
+        vin = self._settingsKey(vin)
         if not self.master.settings.get("Vehicles", {}).get(vin):
             return None
 
@@ -954,8 +1056,16 @@ class TeslaBLE:
                 logger.debug(
                     f"BLE state {state_type} failed for {vin} (rc={return_code})"
                 )
+                if stderr:
+                    self._safeNote(
+                        self._noteBleRefusal,
+                        vin,
+                        stderr.decode("utf-8", errors="ignore"),
+                    )
                 return None
-            return json.loads(stdout.decode("utf-8"))
+            state = json.loads(stdout.decode("utf-8"))
+            self._safeNote(self._noteBleProof, vin)
+            return state
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
             logger.debug(f"BLE state {state_type} JSON parse error for {vin}: {e}")
             return None
@@ -1108,7 +1218,13 @@ class TeslaBLE:
 
         for attempt in range(self.maxRetries + 1):
             try:
+                self._keyRefusal.refused = False
                 result = func(vin, *args, **kwargs)
+
+                if result is None and getattr(self._keyRefusal, "refused", False):
+                    # Not transient: the car refuses this key until re-paired.
+                    logger.debug(f"BLE key refused by {vin}; not retrying")
+                    return None
 
                 if result is not None:
                     # Success
@@ -1473,7 +1589,436 @@ class TeslaBLE:
     def updateSettings(self):
         # Called by TWCMaster when settings are read/updated
         self.scanForVehicles()
+        self._claimKeyedVehicles()
         return True
+
+    # BLE pairing status and registry claims
+    #
+    # settings["Vehicles"][vin]["ble"] = {"status": ..., "since": epoch}
+    # with status one of pairing, paired, pairing_failed, refused. A key is
+    # proven when the car accepts a command or answers a state read signed
+    # with it; tesla-control's ErrKeyNotPaired text means the car dropped it.
+    # Lock order: _bleLock (callers may hold it) -> settingsLock -> registry
+    # and vehicle locks, which are only taken after settingsLock is released.
+
+    def _safeNote(self, fn, *args):
+        # Status bookkeeping must never turn a command result into a failure.
+        try:
+            fn(*args)
+        except Exception as e:
+            logger.debug(f"BLE status update failed: {type(e).__name__}")
+
+    def _settingsKey(self, vin):
+        """The settings["Vehicles"] key for this VIN, matched without regard
+        to case (older releases stored form VINs as typed); upper case for a
+        VIN not stored yet."""
+        if not isinstance(vin, str):
+            return vin
+        with self.master.settingsLock:
+            vehicles = self.master.settings.get("Vehicles") or {}
+            if vin in vehicles:
+                return vin
+            upper = vin.upper()
+            if upper in vehicles:
+                return upper
+            for key in list(vehicles):
+                if isinstance(key, str) and key.upper() == upper:
+                    return key
+        return upper
+
+    def _storedStatus(self, vin):
+        vin = self._settingsKey(vin)
+        with self.master.settingsLock:
+            rec = (self.master.settings.get("Vehicles") or {}).get(vin)
+            ble = rec.get("ble") if isinstance(rec, dict) else None
+            if isinstance(ble, dict) and ble.get("status"):
+                return {"status": ble["status"], "since": ble.get("since")}
+        return {"status": "unpaired", "since": None}
+
+    def bleStatus(self, vin):
+        """Pairing status for the vehicle page.
+
+        status/since are the persisted pairing state; label is what the
+        page shows: the pairing state when there is one, otherwise the last
+        range scan's result ("Range unknown" before any scan, when no scan
+        is possible, or when the last scan gave no answer)."""
+        st = self._storedStatus(vin)
+        rng = self.rangeStatus(vin)
+        now = time.time()
+        canScan = self.canScan()
+        label = self.STATUS_LABELS.get(st["status"])
+        if label is None:
+            if rng["inRange"] is True:
+                label = "In range (not paired)"
+            elif rng["inRange"] is False:
+                label = "Not in range"
+            else:
+                label = "Range unknown"
+        since = st["since"]
+        attempt = self.blePairingAttempt(vin)
+        if attempt and isinstance(attempt.get("at"), (int, float)):
+            attempt["age"] = max(0.0, now - attempt["at"])
+        st.update(
+            {
+                "label": label,
+                "sinceAge": (
+                    max(0.0, now - since) if isinstance(since, (int, float)) else None
+                ),
+                "inRange": rng["inRange"],
+                "scannedAt": rng["at"],
+                "lastScanAge": (
+                    max(0.0, now - rng["at"]) if rng["at"] is not None else None
+                ),
+                "scanPending": rng["pending"],
+                "canScan": canScan,
+                "attempt": attempt,
+            }
+        )
+        return st
+
+    # Range scan
+    #
+    # tesla-control has no scan subcommand; the car advertises the local
+    # name bleLocalName(vin), which BlueZ's bluetoothctl reports while
+    # scanning. Scans share the adapter with tesla-control, so they run
+    # under _bleLock on the background-task thread; the HTTP thread only
+    # queues a request.
+
+    @staticmethod
+    def bleLocalName(vin):
+        # vehicle-command pkg/connector/ble VehicleLocalName
+        digest = hashlib.sha1(vin.upper().encode("ascii")).hexdigest()
+        return "S" + digest[:16] + "C"
+
+    def canScan(self):
+        return not self.isDocker() and shutil.which("bluetoothctl") is not None
+
+    @_serialized
+    def scanForVehicleInRange(self, vin):
+        """Scan for the car's BLE advertisement. True/False, or None when no
+        scan is possible (Docker or no bluetoothctl) or the scan gave no
+        answer (timed out, failed, or BlueZ reported an error)."""
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
+            return None
+        vin = vin.upper()
+        if not self.canScan():
+            return None
+        stdout, stderr, code = self._run_command_with_timeout(
+            ["bluetoothctl", "--timeout", str(self.SCAN_SECONDS), "scan", "on"],
+            timeout=self.SCAN_SECONDS + 4,
+            use_process_group=True,
+        )
+        # [DEL] lines report BlueZ forgetting a device it no longer hears;
+        # they carry the cached name and address, so they say nothing here.
+        lines = [
+            line
+            for line in self._stripAnsi(stdout).splitlines()
+            if not line.lstrip().startswith("[DEL]")
+        ]
+        output = "\n".join(lines)
+        name = self.bleLocalName(vin)
+        inRange = name in output
+        failure = None
+        if stdout is None:
+            failure = "timed out"
+        if not inRange and failure is None:
+            errors = (output + "\n" + self._stripAnsi(stderr)).lower()
+            if any(text in errors for text in self.SCAN_ERROR_TEXT):
+                failure = "bluetoothctl reported an error"
+            elif code != 0:
+                # A match above wins whatever the exit code; without one, a
+                # failed run says nothing about the car.
+                failure = f"bluetoothctl exited {code}"
+        if not inRange and failure is None:
+            # BlueZ prints a device's name only when it learns it; a car it
+            # already holds (an earlier scan, or tesla-control) shows up by
+            # address alone, so look the address up.
+            heard = self._heardAddresses(lines)
+            if heard:
+                known = self._bluezAddresses(name)
+                if known is None:
+                    failure = "device lookup failed"
+                else:
+                    inRange = bool(heard & known)
+        if failure is not None:
+            self._rangeScan[vin] = {"inRange": None, "at": time.time()}
+            logger.warning(f"BLE scan for {vin}: range unknown ({failure})")
+            return None
+        self._rangeScan[vin] = {"inRange": inRange, "at": time.time()}
+        logger.info(f"BLE scan for {vin}: {'in range' if inRange else 'not in range'}")
+        v = self.registry.get(vin)
+        if v is not None:
+            # Not a sighting: a scan that misses the car says nothing new.
+            self._safeNote(v.observe, "bleReach", inRange, "TeslaBLE", None, False)
+        return inRange
+
+    @staticmethod
+    def _stripAnsi(data):
+        return re.sub(r"\x1b\[[0-9;]*m", "", (data or b"").decode("utf-8", "replace"))
+
+    # Lines that mean BlueZ heard a device during this scan: a new device, or
+    # a fresh numeric RSSI ("RSSI: -60" or "RSSI: 0xffffffb2 (-78)"). Not
+    # "RSSI is nil", "Connected: no" and the like, which a device that is not
+    # advertising can produce.
+    _HEARD_RE = re.compile(
+        r"\[(?:NEW\] Device ([0-9A-Fa-f:]{17})\b"
+        r"|CHG\] Device ([0-9A-Fa-f:]{17}) RSSI: (?:0x[0-9A-Fa-f]+|-?\d+))"
+    )
+
+    def _heardAddresses(self, lines):
+        macs = set()
+        for line in lines:
+            m = self._HEARD_RE.search(line)
+            if m:
+                macs.add((m.group(1) or m.group(2)).upper())
+        return macs
+
+    def _bluezAddresses(self, name):
+        """Addresses BlueZ holds under the car's local name, or None when
+        bluetoothctl did not answer or failed (its output is then no list)."""
+        stdout, stderr, code = self._run_command_with_timeout(
+            ["bluetoothctl", "devices"], timeout=5, use_process_group=True
+        )
+        if stdout is None or code != 0:
+            return None
+        macs = set()
+        for line in self._stripAnsi(stdout).splitlines():
+            parts = line.strip().split(" ", 2)
+            if len(parts) == 3 and parts[0] == "Device" and parts[2].strip() == name:
+                macs.add(parts[1].upper())
+        return macs
+
+    def rangeStatus(self, vin):
+        vin = vin.upper() if isinstance(vin, str) else vin
+        # Unlocked read: _rangeScan entries are replaced whole, never mutated,
+        # and a single dict get is atomic under the GIL.
+        scan = self._rangeScan.get(vin) or {}
+        with self._scanLock:
+            requested = self._scanRequests.get(vin)
+            scanning = vin in self._scanInProgress
+        pending = scanning or (
+            requested is not None and time.time() - requested < self.SCAN_PENDING_MAX
+        )
+        return {
+            "inRange": scan.get("inRange"),
+            "at": scan.get("at"),
+            "pending": pending,
+        }
+
+    def requestRangeScan(self, vin):
+        """Queue a range scan; safe from any thread (it only queues). Ignored
+        for a car being scanned or scanned in the last SCAN_DEBOUNCE s."""
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
+            return
+        vin = vin.upper()
+        # Unlocked read, as in rangeStatus.
+        last = (self._rangeScan.get(vin) or {}).get("at")
+        with self._scanLock:
+            if vin in self._scanInProgress:
+                return
+            if last is not None and time.time() - last < self.SCAN_DEBOUNCE:
+                return
+            self._scanRequests[vin] = time.time()
+        self.master.queue_background_task({"cmd": "bleScan"})
+
+    def runPendingScans(self):
+        """Background task: scan for every requested VIN. The queue keeps one
+        bleScan task, so requests arriving while this runs are drained here,
+        for at most SCAN_DRAIN_PASSES rounds; requeueIfRequested picks up the
+        rest once the task is done."""
+        for _ in range(self.SCAN_DRAIN_PASSES):
+            with self._scanLock:
+                vins = sorted(self._scanRequests)
+                self._scanRequests.clear()
+                # Same critical section: a VIN is never in neither map.
+                self._scanInProgress.update(vins)
+            if not vins:
+                return
+            for vin in vins:
+                try:
+                    self.scanForVehicleInRange(vin)
+                except Exception as e:
+                    logger.error(f"BLE scan for {vin} failed: {type(e).__name__}")
+                finally:
+                    with self._scanLock:
+                        self._scanInProgress.discard(vin)
+
+    def requeueIfRequested(self):
+        """Called after the bleScan task is marked done: a request that came
+        in after the drain's last check was coalesced into the finishing
+        task, so queue one more. Queues at most one task per call."""
+        with self._scanLock:
+            pending = bool(self._scanRequests)
+        if pending:
+            self.master.queue_background_task({"cmd": "bleScan"})
+
+    def blePairingAttempt(self, vin):
+        """The last pairing attempt this run: {"ok", "at", "message"}, or None.
+
+        Transient: a failed re-pair of a paired car is reported here, not as
+        its status."""
+        if not isinstance(vin, str):
+            return None
+        attempt = self._pairingAttempts.get(vin.upper())
+        return dict(attempt) if attempt else None
+
+    def _isKeyRefusal(self, output):
+        return bool(output) and self.KEY_REFUSED_TEXT in output.lower()
+
+    def _setBleStatus(self, vin, status, pairingSent=None):
+        if not isinstance(vin, str) or not isWellFormedVIN(vin):
+            return
+        vin = self._settingsKey(vin)
+        now = time.time()
+        with self.master.settingsLock:
+            vehicles = self.master.settings.setdefault("Vehicles", {})
+            rec = vehicles.get(vin)
+            if not isinstance(rec, dict):
+                if status == "pairing_failed":
+                    # A failed request for a VIN we hold nothing for (the
+                    # key could not even be prepared) is no reason to start
+                    # a record; the attempt is still shown on the page.
+                    return
+                rec = vehicles[vin] = {
+                    "chargeSessions": 0,
+                    "startkWh": 0,
+                    "totalkWh": 0,
+                }
+            old = rec.get("ble") if isinstance(rec.get("ble"), dict) else {}
+            ble = {"status": status, "since": now}
+            if old.get("status") == status and old.get("since"):
+                ble["since"] = old["since"]
+            sent = pairingSent if pairingSent is not None else old.get("pairingSent")
+            if sent is not None:
+                ble["pairingSent"] = sent
+            rec["ble"] = ble
+        self.master.queue_background_task({"cmd": "saveSettings"})
+
+        if status in ("paired", "pairing"):
+            try:
+                v = self.registry.getOrCreate(vin, "TeslaBLE")
+            except ValueError:
+                return
+            if status == "paired":
+                v.claim("TeslaBLE", True, "paired")
+            else:
+                self._claimUnproven(v)
+        elif status == "refused":
+            v = self.registry.get(vin)
+            if v is not None:
+                v.dropClaim("TeslaBLE")
+        # pairing_failed leaves any claim as it was: a request that did not
+        # reach the car says nothing about the key the car already holds.
+
+    def _claimUnproven(self, v):
+        # BLE is still tried, the car is not managed, and the claim does not
+        # keep an unseen car in the registry past the forget window.
+        v.claim("TeslaBLE", False, "unproven", keepsAlive=False)
+
+    def _noteBleProof(self, vin):
+        if self._storedStatus(vin)["status"] != "paired":
+            logger.info(f"BLE key for {vin} accepted")
+            self._setBleStatus(vin, "paired")
+
+    def _notePairingResult(self, vin, ok, reason):
+        now = time.time()
+        self._pairingAttempts[vin.upper()] = {
+            "ok": bool(ok),
+            "at": now,
+            "message": (
+                "Pairing request sent; tap your key card on the car" if ok else reason
+            ),
+        }
+        paired = self._storedStatus(vin)["status"] == "paired"
+        if ok:
+            # A paired car stays paired; the window still opens, so a
+            # refusal before the owner taps the card is not a refusal.
+            self._setBleStatus(vin, "paired" if paired else "pairing", now)
+        elif not paired:
+            # Only a key refusal changes a paired car's status.
+            self._setBleStatus(vin, "pairing_failed")
+
+    def _inPairingWindow(self, vin):
+        vin = self._settingsKey(vin)
+        with self.master.settingsLock:
+            rec = (self.master.settings.get("Vehicles") or {}).get(vin)
+            ble = rec.get("ble") if isinstance(rec, dict) else None
+            sent = ble.get("pairingSent") if isinstance(ble, dict) else None
+        return (
+            isinstance(sent, (int, float)) and time.time() - sent < self.PAIRING_WINDOW
+        )
+
+    def _noteBleRefusal(self, vin, output):
+        if not self._isKeyRefusal(output):
+            return False
+        if self._inPairingWindow(vin):
+            # The owner has not tapped the key card yet.
+            logger.debug(f"BLE key for {vin} not yet accepted; pairing in progress")
+            return True
+        # Retries see the same refusal: record it once.
+        if self._storedStatus(vin)["status"] != "refused":
+            logger.info(f"BLE key for {vin} refused; re-pair from the vehicle page")
+            self._setBleStatus(vin, "refused")
+        return True
+
+    def _allVehicleTargets(self):
+        """VINs an all-vehicle command is sent to: every one with a key the
+        car has not refused. A key with no recorded pairing state (every
+        pre-1.4.0 key) is still tried; a refused key or a VIN without one
+        would only cost a tesla-control timeout per command."""
+        with self.master.settingsLock:
+            entries = list((self.master.settings.get("Vehicles") or {}).items())
+        targets = []
+        for vin, rec in entries:
+            if not isinstance(rec, dict) or "privKey" not in rec:
+                continue
+            ble = rec.get("ble")
+            if isinstance(ble, dict) and ble.get("status") == "refused":
+                continue
+            targets.append(vin)
+        return targets
+
+    def _claimKeyedVehicles(self):
+        # The one place settings["Vehicles"] feeds the registry: it is the BLE
+        # key store. Releases before 1.4.0 never recorded pairing, and
+        # scanForVehicles makes a key for every known VIN, so a key is the
+        # only evidence there is. On the upgrade boot (no saved registry yet)
+        # every keyed VIN is seeded with an unproven claim, which keeps BLE
+        # being tried without making the car managed; proof moves a claim to
+        # paired, a refusal drops it. Later boots claim only cars the
+        # registry still holds, plus paired ones, so an expired or forgotten
+        # car is not brought back on every restart.
+        with self.master.settingsLock:
+            blob = self.master.settings.get("vehicleRegistry")
+            upgradeBoot = not (
+                isinstance(blob, dict) and isinstance(blob.get("vehicles"), dict)
+            )
+            entries = list((self.master.settings.get("Vehicles") or {}).items())
+            seeds = []
+            for vin, rec in entries:
+                if not isinstance(rec, dict) or "privKey" not in rec:
+                    continue
+                if not isinstance(vin, str) or not isWellFormedVIN(vin):
+                    continue
+                ble = rec.get("ble")
+                status = ble.get("status") if isinstance(ble, dict) else None
+                seeds.append((vin, status))
+        for vin, status in seeds:
+            try:
+                if status == "paired":
+                    self.registry.getOrCreate(vin, "TeslaBLE").claim(
+                        "TeslaBLE", True, "paired"
+                    )
+                    continue
+                if upgradeBoot:
+                    v = self.registry.getOrCreate(vin, "TeslaBLE")
+                else:
+                    v = self.registry.get(vin)
+            except ValueError:
+                continue
+            # A refused key is not claimed; the upgrade boot still lists the car.
+            if v is not None and status != "refused":
+                self._claimUnproven(v)
 
     def __del__(self):
         self._stop_dbus_session()

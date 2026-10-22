@@ -12,15 +12,20 @@ import time
 
 import pytest
 
+from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.teslatokens import (  # noqa: F401 (no_threads is a fixture)
     FLEET_NA_URL,
+    FakeMaster,
     fleet_token,
     new_api,
     no_threads,
 )
 
-STATE_URL = FLEET_NA_URL + "/VIN1"
-WAKE_URL = FLEET_NA_URL + "/VIN1/wake_up"
+# The registry takes only a well-formed VIN.
+VIN = "5YJ3E1EA1KF000001"
+STATE_URL = FLEET_NA_URL + "/" + VIN
+WAKE_URL = STATE_URL + "/wake_up"
 
 
 class Clock:
@@ -52,7 +57,7 @@ def car_state(requests_mock):
         value = "asleep"
 
     def reply(request, context):
-        return {"response": {"state": State.value, "vin": "VIN1"}}
+        return {"response": {"state": State.value, "vin": VIN}}
 
     requests_mock.get(STATE_URL, json=reply)
     requests_mock.post(WAKE_URL, json={"response": {"state": "offline"}})
@@ -63,9 +68,12 @@ def car_state(requests_mock):
 
 @pytest.fixture
 def api(no_threads, clock, car_state):
-    a = new_api()
+    # Observations are stamped and aged on the test clock.
+    master = FakeMaster()
+    master.vehicleRegistry = VehicleRegistry(master.config, clock=clock)
+    a = new_api(master)
     a.storeToken(fleet_token())
-    a.addVehicle({"id": 1, "vin": "VIN1", "display_name": "Car"})
+    a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
     vehicle = a.getCarApiVehicles()[0]
     vehicle.atHome = True
     return a
@@ -89,6 +97,11 @@ def _wakes(requests_mock):
 
 def _no_vehicle_data(requests_mock):
     return not any("vehicle_data" in r.url for r in requests_mock.request_history)
+
+
+def _teslamate(vehicle, state, stamp):
+    # A TeslaMate state observation stamped at `stamp`.
+    vehicle.vehicle.observe("state", state, "TeslaMateVehicle", at=stamp)
 
 
 def _send_first_wake(api, clock):
@@ -172,10 +185,8 @@ def test_fresh_telemetry_online_needs_no_request(api, clock, requests_mock):
     vehicle = api.getCarApiVehicles()[0]
 
     # TeslaMate reports the car online.
-    vehicle.syncSource = "TeslaMateVehicle"
-    vehicle.syncState = "online"
     clock.advance(30)
-    vehicle.syncTimestamp = clock.now
+    _teslamate(vehicle, "online", clock.now)
 
     assert api.car_api_available(charge=True) is True
     assert len(requests_mock.request_history) == before
@@ -186,12 +197,10 @@ def test_fresh_telemetry_asleep_needs_no_request(api, clock, requests_mock):
     _send_first_wake(api, clock)
     before = len(requests_mock.request_history)
     vehicle = api.getCarApiVehicles()[0]
-    vehicle.syncSource = "TeslaMateVehicle"
-    vehicle.syncState = "asleep"
 
     for _ in range(10):
         clock.advance(60)
-        vehicle.syncTimestamp = clock.now
+        _teslamate(vehicle, "asleep", clock.now)
         assert api.car_api_available(charge=True) is False
     assert len(requests_mock.request_history) == before
 
@@ -202,12 +211,12 @@ def test_state_check_uses_owner_slot_when_present(no_threads, clock, requests_mo
     a = new_api()
     a.storeToken(fleet_token())
     a.storeToken(owner_token())
-    a.addVehicle({"id": 1, "vin": "VIN1", "display_name": "Car"})
+    a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
     vehicle = a.getCarApiVehicles()[0]
     vehicle.atHome = True
     assert a.slotFor("read") is a.ownerSlot
 
-    requests_mock.get(OWNER_API_URL + "/VIN1", json={"response": {"state": "asleep"}})
+    requests_mock.get(OWNER_API_URL + "/" + VIN, json={"response": {"state": "asleep"}})
     requests_mock.post(WAKE_URL, json={"response": {"state": "offline"}})
     _send_first_wake(a, clock)
     clock.advance(a.POST_WAKE_POLL_SECS)
@@ -215,8 +224,8 @@ def test_state_check_uses_owner_slot_when_present(no_threads, clock, requests_mo
 
     state_gets = [r for r in requests_mock.request_history if r.method == "GET"]
     assert state_gets
-    assert all(r.url == OWNER_API_URL + "/VIN1" for r in state_gets)
-    assert _count(requests_mock, "GET", OWNER_API_URL + "/VIN1") == 3
+    assert all(r.url == OWNER_API_URL + "/" + VIN for r in state_gets)
+    assert _count(requests_mock, "GET", OWNER_API_URL + "/" + VIN) == 3
 
 
 def test_telemetry_from_before_wake_is_not_trusted(
@@ -226,9 +235,7 @@ def test_telemetry_from_before_wake_is_not_trusted(
     vehicle = api.getCarApiVehicles()[0]
     # TeslaMate's last word is 'asleep', from before the wake we sent: it
     # can't tell us whether the wake worked.
-    vehicle.syncSource = "TeslaMateVehicle"
-    vehicle.syncState = "asleep"
-    vehicle.syncTimestamp = woke - 10
+    _teslamate(vehicle, "asleep", woke - 10)
 
     car_state.value = "online"
     clock.advance(api.POST_WAKE_POLL_SECS)
@@ -248,7 +255,11 @@ class _FakeBLE:
 def test_ble_read_does_not_move_wake_window(api, clock, requests_mock):
     woke = _send_first_wake(api, clock)
     vehicle = api.getCarApiVehicles()[0]
-    api.master.modules["TeslaBLE"] = _FakeBLE()
+    ble = _FakeBLE()
+    api.master.modules["TeslaBLE"] = ble
+    # Reads cascade BLE first for a car TeslaBLE has claimed.
+    api.registry.registerReadSource(TeslaBLEReadSource(ble, api.master))
+    vehicle.vehicle.claim("TeslaBLE", True, "paired")
 
     # A BLE location read inside the window touches lastAPIAccessTime.
     clock.advance(300)
@@ -267,12 +278,6 @@ def test_ble_read_does_not_move_wake_window(api, clock, requests_mock):
     clock.now = woke + 30 * 60 + 1
     api.car_api_available(charge=True)
     assert _wakes(requests_mock) == 2
-
-
-def _teslamate(vehicle, state, stamp):
-    vehicle.syncSource = "TeslaMateVehicle"
-    vehicle.syncState = state
-    vehicle.syncTimestamp = stamp
 
 
 def test_stale_telemetry_asleep_does_not_cause_rewakes(

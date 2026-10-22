@@ -584,9 +584,7 @@ class TWCSlave:
                 # some unexpected case from never starting a charge. It also
                 # seems less confusing to see in the output that we always try
                 # to start API charging after the car stops taking a charge.
-                for vehicle in self.master.getModuleByName(
-                    "TeslaAPI"
-                ).getCarApiVehicles():
+                for vehicle in self.master.vehicleRegistry.attached("TeslaAPI"):
                     vehicle.stopAskingToStartCharging = False
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
@@ -1238,15 +1236,11 @@ class TWCSlave:
         ) * self.master.getRealPowerFactor(self.reportedAmpsActual)
 
     def getLastVehicle(self):
-        currentVehicle = None
-        lastVehicle = None
-        for vehicle in self.master.getModuleByName("TeslaAPI").getCarApiVehicles():
-            if self.currentVIN == vehicle.VIN:
-                currentVehicle = vehicle
-            if self.lastVIN == vehicle.VIN:
-                lastVehicle = vehicle
-        if currentVehicle != None:
-            return currentVehicle
-        if lastVehicle != None:
-            return lastVehicle
+        # Registry lookups only: never creates a vehicle, never reads one.
+        reg = self.master.vehicleRegistry
+        for vin in (self.currentVIN, self.lastVIN):
+            v = reg.get(vin) if vin else None
+            car = v.attachment("TeslaAPI") if v else None
+            if car:
+                return car
         return None

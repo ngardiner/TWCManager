@@ -14,8 +14,10 @@ import math
 import random
 import requests
 import bisect
+import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
+from TWCManager.Vehicle.Registry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -31,6 +33,9 @@ class TWCMaster:
     backgroundTasksCmds = {}
     backgroundTasksLock = threading.Lock()
     backgroundTasksDelayed = []
+    # Tie-breaker for delayed tasks due at the same instant: entries never
+    # fall through to comparing task dicts.
+    _delaySeq = itertools.count()
     config = None
     consumptionValues = {}
     consumptionAmpsValues = {}
@@ -106,6 +111,17 @@ class TWCMaster:
         self.vehicleCommandQueue = VehicleCommandQueue(
             self._resolveVehicleCommandModule
         )
+        # Guards mutation of self.settings from non-serial threads; saves
+        # serialise under it and write the file outside it. Lock order:
+        # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
+        # The serial thread takes it too (recordVehicleVIN), so nothing
+        # under it may do I/O, on any thread.
+        self.settingsLock = threading.RLock()
+        self.vehicleRegistry = VehicleRegistry(config)
+        # Start of the forgetting interval: the first expiry pass runs an
+        # hour after startup, once providers have reclaimed their cars, so a
+        # persisted car Fleet still lists is not expired and re-created.
+        self.lastVehicleExpiry = time.time()
         self.settings = {
             "chargeNowAmps": 0,
             "chargeStopMode": "1",
@@ -164,9 +180,16 @@ class TWCMaster:
             return 0
 
     def cancelStopCarsCharging(self, vin=None):
-        # Charge commands go to the vehicle command queue, not the background
-        # task table, so a pending stop is cancelled there (closes #667).
-        self.vehicleCommandQueue.cancel_stop(vin)
+        # Drop pending stop-charging commands for this VIN (or every VIN when
+        # vin is None). A vehicle-less stop applies to every car, so it is
+        # cancelled too. Returns how many were removed. Closes #667 for the
+        # vehicle queue path.
+        vin = vin or None
+        return self.vehicleCommandQueue.cancel(
+            "charge",
+            lambda task: not task.get("charge")
+            and (vin is None or task.get("vin") in (vin, None)),
+        )
 
     def checkForUpdates(self):
         # This function is used by the Web UI and later on will be used by the console to detect TWCManager Updates
@@ -311,19 +334,28 @@ class TWCMaster:
     def countSlaveTWC(self):
         return int(len(self.slaveTWCRoundRobin))
 
+    @staticmethod
+    def _taskKey(task):
+        # Tasks dedupe per cmd, except VIN queries, which dedupe per TWC so
+        # one TWC's query never replaces another's, and home checks, per VIN.
+        if task["cmd"] == "getVehicleVIN":
+            return ("getVehicleVIN", bytes(task.get("slaveTWC") or b""))
+        if task["cmd"] == "vehicleIsDefinitelyHome":
+            # Per VIN, so two TWCs' cars are both checked.
+            return ("vehicleIsDefinitelyHome", task.get("vin"))
+        return task["cmd"]
+
     def delete_background_task(self, task):
-        if (
-            task["cmd"] in self.backgroundTasksCmds
-            and self.backgroundTasksCmds[task["cmd"]] == task
-        ):
-            del self.backgroundTasksCmds[task["cmd"]]["cmd"]
-            del self.backgroundTasksCmds[task["cmd"]]
+        key = self._taskKey(task)
+        if key in self.backgroundTasksCmds and self.backgroundTasksCmds[key] == task:
+            del self.backgroundTasksCmds[key]["cmd"]
+            del self.backgroundTasksCmds[key]
 
     def doneBackgroundTask(self, task):
         # Delete task['cmd'] from backgroundTasksCmds such that
         # queue_background_task() can queue another task['cmd'] in the future.
         if "cmd" in task:
-            del self.backgroundTasksCmds[task["cmd"]]
+            del self.backgroundTasksCmds[self._taskKey(task)]
 
         # task_done() must be called to let the queue know the task is finished.
         # backgroundTasksQueue.join() can then be used to block until all tasks
@@ -337,12 +369,21 @@ class TWCMaster:
         result = None
 
         while result is None:
-            # Insert any delayed tasks
-            while (
-                self.backgroundTasksDelayed
-                and self.backgroundTasksDelayed[0][0] <= datetime.now()
-            ):
-                self.queue_background_task(self.backgroundTasksDelayed.pop(0)[1])
+            # Insert any delayed tasks. Taken under the tasks lock (the serial
+            # thread adds to the list) and queued after it is released:
+            # queue_background_task takes it too.
+            due = []
+            self.getBackgroundTasksLock()
+            try:
+                while (
+                    self.backgroundTasksDelayed
+                    and self.backgroundTasksDelayed[0][0] <= datetime.now()
+                ):
+                    due.append(self.backgroundTasksDelayed.pop(0)[-1])
+            finally:
+                self.releaseBackgroundTasksLock()
+            for task in due:
+                self.queue_background_task(task)
 
             # Get the next task
             try:
@@ -804,6 +845,12 @@ class TWCMaster:
             del self.slaveTWCs[deleteSlaveID]
         except KeyError:
             pass
+        # A retired TWC's plug session (its anonymous car) ends with it.
+        try:
+            twcid = "%02X%02X" % (deleteSlaveID[0], deleteSlaveID[1])
+            self.vehicleRegistry.endPlugSession(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry plug session update failed: %s", e)
 
     def getChargerLoad(self):
         # Calculate in watts the load that the charger is generating so
@@ -1019,29 +1066,32 @@ class TWCMaster:
 
         if not os.path.exists(fileName):
             # Initialize with class defaults if file doesn't exist
-            self.settings = {
-                "chargeNowAmps": 0,
-                "chargeStopMode": "1",
-                "chargeNowTimeEnd": 0,
-                "homeLat": 10000,
-                "homeLon": 10000,
-                "hourResumeTrackGreenEnergy": -1,
-                "kWhDelivered": 119,
-                "nonScheduledAmpsMax": 0,
-                "respondToSlaves": 1,
-                "scheduledAmpsDaysBitmap": 0x7F,
-                "scheduledAmpsEndHour": -1,
-                "scheduledAmpsMax": 0,
-                "scheduledAmpsStartHour": -1,
-                "sendServerTime": 0,
-            }
+            with self.settingsLock:
+                self.settings = {
+                    "chargeNowAmps": 0,
+                    "chargeStopMode": "1",
+                    "chargeNowTimeEnd": 0,
+                    "homeLat": 10000,
+                    "homeLon": 10000,
+                    "hourResumeTrackGreenEnergy": -1,
+                    "kWhDelivered": 119,
+                    "nonScheduledAmpsMax": 0,
+                    "respondToSlaves": 1,
+                    "scheduledAmpsDaysBitmap": 0x7F,
+                    "scheduledAmpsEndHour": -1,
+                    "scheduledAmpsMax": 0,
+                    "scheduledAmpsStartHour": -1,
+                    "sendServerTime": 0,
+                }
             return
 
-        # Try to load the main settings file
+        # Read and parse the file(s) into a local with no lock held; the
+        # result is assigned under settingsLock below.
+        loaded = None
         loadSuccess = False
         with open(fileName, "r") as inconfig:
             try:
-                self.settings = json.load(inconfig)
+                loaded = json.load(inconfig)
                 loadSuccess = True
             except Exception as e:
                 logger.info(
@@ -1056,7 +1106,7 @@ class TWCMaster:
             )
             try:
                 with open(backupFileName, "r") as inconfig:
-                    self.settings = json.load(inconfig)
+                    loaded = json.load(inconfig)
                     loadSuccess = True
                 logger.info("Successfully restored settings from backup file")
                 # Restore the backup to the main file
@@ -1101,9 +1151,15 @@ class TWCMaster:
             "scheduledAmpsStartHour": -1,
             "sendServerTime": 0,
         }
-        for key, value in defaults.items():
-            if key not in self.settings:
-                self.settings[key] = value
+        with self.settingsLock:
+            if loaded is not None:
+                self.settings = loaded
+            for key, value in defaults.items():
+                if key not in self.settings:
+                    self.settings[key] = value
+            registryBlob = self.settings.get("vehicleRegistry")
+        # load() tolerates a missing or corrupt blob
+        self.vehicleRegistry.load(registryBlob)
 
         # Step 2 - Send settings to other modules
         # Migration and restore run whether or not token sync is on. The
@@ -1142,25 +1198,26 @@ class TWCMaster:
             mod["ref"].updateSettings()
 
         # If particular details are missing from the Settings dict, create them
-        if not self.settings.get("VehicleGroups", None):
-            self.settings["VehicleGroups"] = {}
-        if not self.settings["VehicleGroups"].get("Allow Charging", None):
-            self.settings["VehicleGroups"]["Allow Charging"] = {
-                "Description": "Built-in Group - Vehicles in this Group can charge on managed TWCs",
-                "Built-in": 1,
-                "Members": [],
-            }
-        if not self.settings["VehicleGroups"].get("Deny Charging", None):
-            self.settings["VehicleGroups"]["Deny Charging"] = {
-                "Description": "Built-in Group - Vehicles in this Group cannot charge on managed TWCs",
-                "Built-in": 1,
-                "Members": [],
-            }
-        # Fill in old defaults as bridge
-        if not self.settings.get("sunrise", None):
-            self.settings["sunrise"] = 6
-        if not self.settings.get("sunset", None):
-            self.settings["sunset"] = 20
+        with self.settingsLock:
+            if not self.settings.get("VehicleGroups", None):
+                self.settings["VehicleGroups"] = {}
+            if not self.settings["VehicleGroups"].get("Allow Charging", None):
+                self.settings["VehicleGroups"]["Allow Charging"] = {
+                    "Description": "Built-in Group - Vehicles in this Group can charge on managed TWCs",
+                    "Built-in": 1,
+                    "Members": [],
+                }
+            if not self.settings["VehicleGroups"].get("Deny Charging", None):
+                self.settings["VehicleGroups"]["Deny Charging"] = {
+                    "Description": "Built-in Group - Vehicles in this Group cannot charge on managed TWCs",
+                    "Built-in": 1,
+                    "Members": [],
+                }
+            # Fill in old defaults as bridge
+            if not self.settings.get("sunrise", None):
+                self.settings["sunrise"] = 6
+            if not self.settings.get("sunset", None):
+                self.settings["sunset"] = 20
 
     def master_id_conflict(self):
         # We're playing fake slave, and we got a message from a master with our TWCID.
@@ -1226,6 +1283,7 @@ class TWCMaster:
 
                     # Record start of current charging session
                     self.recordVehicleSessionStart(slaveTWC)
+                    self._plugSession(slaveTWC, True)
             else:
                 if slaveTWC.isCharging == 1:
                     # Amps have dropped below threshold. Start debounce timer to
@@ -1252,6 +1310,7 @@ class TWCMaster:
 
                         # Close off the current charging session
                         self.recordVehicleSessionEnd(slaveTWC)
+                        self._plugSession(slaveTWC, False)
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
             carsCharging += slaveTWC.isCharging
@@ -1272,10 +1331,18 @@ class TWCMaster:
 
     def queue_background_task(self, task, delay=0):
         if delay > 0:
-            bisect.insort(
-                self.backgroundTasksDelayed,
-                (datetime.now() + timedelta(seconds=delay), task),
-            )
+            self.getBackgroundTasksLock()
+            try:
+                bisect.insort(
+                    self.backgroundTasksDelayed,
+                    (
+                        datetime.now() + timedelta(seconds=delay),
+                        next(self._delaySeq),
+                        task,
+                    ),
+                )
+            finally:
+                self.releaseBackgroundTasksLock()
             return
 
         if task["cmd"] in VEHICLE_COMMANDS:
@@ -1284,17 +1351,18 @@ class TWCMaster:
 
         self.getBackgroundTasksLock()
         try:
-            if task["cmd"] in self.backgroundTasksCmds:
+            key = self._taskKey(task)
+            if key in self.backgroundTasksCmds:
                 # Some tasks, like cmd='charge', will be called once per second until
                 # a charge starts or we determine the car is done charging.  To avoid
                 # wasting memory queing up a bunch of these tasks when we're handling
                 # a charge cmd already, don't queue two of the same task.
-                self.backgroundTasksCmds[task["cmd"]].update(task)
+                self.backgroundTasksCmds[key].update(task)
                 return
 
             # Insert task['cmd'] in backgroundTasksCmds to prevent queuing another
             # task['cmd'] till we've finished handling this one.
-            self.backgroundTasksCmds[task["cmd"]] = task
+            self.backgroundTasksCmds[key] = task
         finally:
             self.releaseBackgroundTasksLock()
 
@@ -1404,34 +1472,66 @@ class TWCMaster:
             },
         )
 
-    def recordVehicleVIN(self, slaveTWC):
-        # Record Slave TWC ID as being capable of reporting VINs, if it is not
-        # already.
-        twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
-        if not self.settings.get("SlaveTWCs", None):
-            self.settings["SlaveTWCs"] = {}
-        if not self.settings["SlaveTWCs"].get(twcid, None):
-            self.settings["SlaveTWCs"][twcid] = {}
-        if not self.settings["SlaveTWCs"][twcid].get("supportsVINQuery", 0):
-            self.settings["SlaveTWCs"][twcid]["supportsVINQuery"] = 1
-            self.queue_background_task({"cmd": "saveSettings"})
+    def _plugSession(self, slaveTWC, begin):
+        # Serial thread: registry calls are short dict work; never let one
+        # raise into the RS-485 loop.
+        try:
+            twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+            if begin:
+                self.vehicleRegistry.beginPlugSession(twcid)
+            else:
+                self.vehicleRegistry.endPlugSession(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry plug session update failed: %s", e)
 
-        # Increment sessions counter for this VIN in persistent settings file
-        if not self.settings.get("Vehicles", None):
-            self.settings["Vehicles"] = {}
-        if not self.settings["Vehicles"].get(slaveTWC.currentVIN, None):
-            self.settings["Vehicles"][slaveTWC.currentVIN] = {
-                "chargeSessions": 1,
-                "startkWh": slaveTWC.lifetimekWh,
-                "totalkWh": 0,
-            }
-        else:
-            self.settings["Vehicles"][slaveTWC.currentVIN]["chargeSessions"] += 1
-            self.settings["Vehicles"][slaveTWC.currentVIN][
-                "startkWh"
-            ] = slaveTWC.lifetimekWh
-            if not self.settings["Vehicles"][slaveTWC.currentVIN].get("totalkWh", None):
-                self.settings["Vehicles"][slaveTWC.currentVIN]["totalkWh"] = 0
+    def recordVehicleVIN(self, slaveTWC):
+        twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+        # A VIN no known vehicle has is confirmed by a second matching read
+        # before it creates a vehicle or a session record.
+        try:
+            status = self.vehicleRegistry.observeTwcVin(twcid, slaveTWC.currentVIN)
+            if status == "pending":
+                self.queue_background_task(
+                    {"cmd": "getVehicleVIN", "slaveTWC": slaveTWC.TWCID, "vinPart": 0},
+                    delay=5,
+                )
+                # retryVINQuery re-asks on the first read's budget if this
+                # confirmation read is lost.
+                slaveTWC.lastVINQuery = time.time()
+                slaveTWC.vinQueryAttempt = 1
+                return
+        except Exception as e:
+            logger.warning("Vehicle registry VIN update failed: %s", e)
+            return
+        if status != "confirmed":
+            return
+
+        vin = slaveTWC.currentVIN
+        with self.settingsLock:
+            # Record Slave TWC ID as being capable of reporting VINs, if it is
+            # not already.
+            if not self.settings.get("SlaveTWCs", None):
+                self.settings["SlaveTWCs"] = {}
+            if not self.settings["SlaveTWCs"].get(twcid, None):
+                self.settings["SlaveTWCs"][twcid] = {}
+            if not self.settings["SlaveTWCs"][twcid].get("supportsVINQuery", 0):
+                self.settings["SlaveTWCs"][twcid]["supportsVINQuery"] = 1
+
+            # Increment sessions counter for this VIN in persistent settings file
+            if not self.settings.get("Vehicles", None):
+                self.settings["Vehicles"] = {}
+            if not self.settings["Vehicles"].get(vin, None):
+                self.settings["Vehicles"][vin] = {
+                    "chargeSessions": 1,
+                    "startkWh": slaveTWC.lifetimekWh,
+                    "totalkWh": 0,
+                }
+            else:
+                entry = self.settings["Vehicles"][vin]
+                entry["chargeSessions"] = entry.get("chargeSessions", 0) + 1
+                entry["startkWh"] = slaveTWC.lifetimekWh
+                entry.setdefault("totalkWh", 0)
+        # Saved outside the lock: the save serialises under it itself.
         self.queue_background_task({"cmd": "saveSettings"})
 
         # Update Charge Session details in logging modules
@@ -1447,10 +1547,16 @@ class TWCMaster:
             },
         )
 
-        # If vehicle is charging, it's at home no matter what we previously thought.
+        # If vehicle is charging, it's at home no matter what we previously
+        # thought. The check reads the vehicle (BLE, HTTP), so it runs on the
+        # background thread, not this (serial) one.
+        self.queue_background_task({"cmd": "vehicleIsDefinitelyHome", "vin": vin})
+
+    def vehicleIsDefinitelyHome(self, vin):
+        # Background thread: may do vehicle I/O.
         tesla_api = self.getModuleByName("TeslaAPI")
         if tesla_api:
-            tesla_api.vehicleIsDefinitelyHome(slaveTWC.currentVIN)
+            tesla_api.vehicleIsDefinitelyHome(vin)
 
     def releaseBackgroundTasksLock(self):
         self.backgroundTasksLock.release()
@@ -1479,15 +1585,24 @@ class TWCMaster:
             logger.warning("Tried to released module %s that was not loaded", module)
 
     def removeNormalChargeLimit(self, ID):
-        if "chargeLimits" in self.settings and str(ID) in self.settings["chargeLimits"]:
-            del self.settings["chargeLimits"][str(ID)]
+        with self.settingsLock:
+            if (
+                "chargeLimits" in self.settings
+                and str(ID) in self.settings["chargeLimits"]
+            ):
+                del self.settings["chargeLimits"][str(ID)]
+                changed = True
+            else:
+                changed = False
+        if changed:
             self.queue_background_task({"cmd": "saveSettings"})
 
     def resetChargeNowAmps(self):
         # Sets chargeNowAmps back to zero, so we follow the green energy
         # tracking again
-        self.settings["chargeNowAmps"] = 0
-        self.settings["chargeNowTimeEnd"] = 0
+        with self.settingsLock:
+            self.settings["chargeNowAmps"] = 0
+            self.settings["chargeNowTimeEnd"] = 0
         self.queue_background_task({"cmd": "saveSettings"})
 
     def retryVINQuery(self):
@@ -1498,7 +1613,7 @@ class TWCMaster:
                 if (
                     slaveTWC.lastVINQuery > 0
                     and slaveTWC.vinQueryAttempt < 6
-                    and not slaveTWC.currentVIN
+                    and (not slaveTWC.currentVIN or self._vinPending(slaveTWC))
                 ):
                     if (time.time() - slaveTWC.lastVINQuery) >= 60:
                         self.queue_background_task(
@@ -1513,12 +1628,28 @@ class TWCMaster:
             else:
                 slaveTWC.lastVINQuery = 0
 
-    def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
-        if not "chargeLimits" in self.settings:
-            self.settings["chargeLimits"] = dict()
+    def _vinPending(self, slaveTWC):
+        try:
+            twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
+            return self.vehicleRegistry.isPending(twcid)
+        except Exception as e:
+            logger.warning("Vehicle registry pending check failed: %s", e)
+            return False
 
-        self.settings["chargeLimits"][str(ID)] = (outsideLimit, lastApplied)
+    def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
+        with self.settingsLock:
+            if not "chargeLimits" in self.settings:
+                self.settings["chargeLimits"] = dict()
+
+            self.settings["chargeLimits"][str(ID)] = (outsideLimit, lastApplied)
         self.queue_background_task({"cmd": "saveSettings"})
+
+    def expireVehicles(self):
+        # Forget unclaimed, unasserted vehicles unseen past the forget window
+        expired = self.vehicleRegistry.expire()
+        if expired:
+            self.queue_background_task({"cmd": "saveSettings"})
+        return expired
 
     def saveSettings(self):
         # Saves the volatile application settings (such as charger timings,
@@ -1529,21 +1660,33 @@ class TWCMaster:
 
         # Step 1 - Merge any config from other modules
         carapi = self.getModuleByName("TeslaAPI")
-        self.settings["carApiBearerToken"] = carapi.fleetSlot.accessToken
-        self.settings["carApiRefreshToken"] = carapi.fleetSlot.refreshToken
-        self.settings["carApiTokenExpireTime"] = carapi.fleetSlot.expireTime
-        self.settings["ownerApiBearerToken"] = carapi.ownerSlot.accessToken
-        self.settings["ownerApiRefreshToken"] = carapi.ownerSlot.refreshToken
-        self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
-        self.settings["carApiTokenSource"] = carapi.fleetSlot.source
-        self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
+        with self.settingsLock:
+            self.settings["carApiBearerToken"] = carapi.fleetSlot.accessToken
+            self.settings["carApiRefreshToken"] = carapi.fleetSlot.refreshToken
+            self.settings["carApiTokenExpireTime"] = carapi.fleetSlot.expireTime
+            self.settings["ownerApiBearerToken"] = carapi.ownerSlot.accessToken
+            self.settings["ownerApiRefreshToken"] = carapi.ownerSlot.refreshToken
+            self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
+            self.settings["carApiTokenSource"] = carapi.fleetSlot.source
+            self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
+            self.settings["vehicleRegistry"] = self.vehicleRegistry.toJSON()
+            try:
+                # Keep default arguments (C encoder): adding indent/default/cls
+                # would reintroduce the concurrent-mutation race.
+                payload = json.dumps(self.settings)
+            except TypeError as e:
+                logger.info("Exception raised while attempting to save settings file:")
+                logger.info(str(e))
+                self.lastSaveFailed = 1
+                return
 
-        # Step 2 - Write the settings dict to a JSON file atomically
+        # Step 2 - Write the serialised settings to a JSON file atomically,
+        # outside the lock so file I/O never blocks settings writers
         # Use temp file + rename to ensure atomic write and prevent corruption
         try:
             # Write to temp file first
             with open(tempFileName, "w") as outconfig:
-                json.dump(self.settings, outconfig)
+                outconfig.write(payload)
                 outconfig.flush()
                 os.fsync(outconfig.fileno())
 
@@ -1600,7 +1743,8 @@ class TWCMaster:
             key: The setting key to set
             value: The value to set
         """
-        self.settings[key] = value
+        with self.settingsLock:
+            self.settings[key] = value
 
     def send_master_linkready1(self):
         logger.log(logging.INFO8, "Send master linkready1")
@@ -1739,10 +1883,12 @@ class TWCMaster:
         elif amps < 0:
             logger.info("setChargeNowAmps failed as specified amps is less than 0")
         else:
-            self.settings["chargeNowAmps"] = amps
+            with self.settingsLock:
+                self.settings["chargeNowAmps"] = amps
 
     def setChargeNowTimeEnd(self, timeadd):
-        self.settings["chargeNowTimeEnd"] = time.time() + timeadd
+        with self.settingsLock:
+            self.settings["chargeNowTimeEnd"] = time.time() + timeadd
 
     def setConsumption(self, source, value):
         # Accepts consumption values from one or more data sources
@@ -1762,17 +1908,21 @@ class TWCMaster:
         self.generationValues[source] = value
 
     def setHomeLat(self, lat):
-        self.settings["homeLat"] = lat
+        with self.settingsLock:
+            self.settings["homeLat"] = lat
 
     def setHomeLon(self, lon):
-        self.settings["homeLon"] = lon
+        with self.settingsLock:
+            self.settings["homeLon"] = lon
 
     def setHourResumeTrackGreenEnergy(self, hour):
-        self.settings["hourResumeTrackGreenEnergy"] = hour
+        with self.settingsLock:
+            self.settings["hourResumeTrackGreenEnergy"] = hour
 
     def setkWhDelivered(self, kWh):
-        self.settings["kWhDelivered"] = kWh
-        return True
+        with self.settingsLock:
+            self.settings["kWhDelivered"] = kWh
+            return True
 
     def setMasterTWCID(self, twcid):
         # This is called when TWCManager is in Slave mode, to track the
@@ -1821,29 +1971,37 @@ class TWCMaster:
         self.queue_background_task({"cmd": "updateStatus"})
 
     def setNonScheduledAmpsMax(self, amps):
-        self.settings["nonScheduledAmpsMax"] = amps
+        with self.settingsLock:
+            self.settings["nonScheduledAmpsMax"] = amps
 
     def setSendServerTime(self, val):
-        self.settings["sendServerTime"] = val
+        with self.settingsLock:
+            self.settings["sendServerTime"] = val
 
     def setScheduledAmpsDaysBitmap(self, bitmap):
-        self.settings["scheduledAmpsDaysBitmap"] = bitmap
+        with self.settingsLock:
+            self.settings["scheduledAmpsDaysBitmap"] = bitmap
 
     def setScheduledAmpsBatterySize(self, batterySize):
         if batterySize > 40:
-            self.settings["scheduledAmpsBatterySize"] = batterySize
+            with self.settingsLock:
+                self.settings["scheduledAmpsBatterySize"] = batterySize
 
     def setScheduledAmpsMax(self, amps):
-        self.settings["scheduledAmpsMax"] = amps
+        with self.settingsLock:
+            self.settings["scheduledAmpsMax"] = amps
 
     def setScheduledAmpsStartHour(self, hour):
-        self.settings["scheduledAmpsStartHour"] = hour
+        with self.settingsLock:
+            self.settings["scheduledAmpsStartHour"] = hour
 
     def setScheduledAmpsEndHour(self, hour):
-        self.settings["scheduledAmpsEndHour"] = hour
+        with self.settingsLock:
+            self.settings["scheduledAmpsEndHour"] = hour
 
     def setScheduledAmpsFlexStart(self, enabled):
-        self.settings["scheduledAmpsFlexStart"] = enabled
+        with self.settingsLock:
+            self.settings["scheduledAmpsFlexStart"] = enabled
 
     def setSpikeAmps(self, amps):
         self.spikeAmpsToCancel6ALimit = amps
@@ -1870,27 +2028,29 @@ class TWCMaster:
         if avgCurrent > 0:
             periodTimestamp = snaptime - timedelta(minutes=5)
 
-            if not "history" in self.settings:
-                self.settings["history"] = []
+            with self.settingsLock:
+                if not "history" in self.settings:
+                    self.settings["history"] = []
 
-            self.settings["history"].append(
-                (
-                    periodTimestamp.isoformat(timespec="seconds"),
-                    self.convertAmpsToWatts(avgCurrent)
-                    * self.getRealPowerFactor(avgCurrent),
+                self.settings["history"].append(
+                    (
+                        periodTimestamp.isoformat(timespec="seconds"),
+                        self.convertAmpsToWatts(avgCurrent)
+                        * self.getRealPowerFactor(avgCurrent),
+                    )
                 )
-            )
 
-            self.settings["history"] = [
-                e
-                for e in self.settings["history"]
-                if datetime.fromisoformat(e[0]) >= (now - timedelta(days=2))
-            ]
+                self.settings["history"] = [
+                    e
+                    for e in self.settings["history"]
+                    if datetime.fromisoformat(e[0]) >= (now - timedelta(days=2))
+                ]
             self.queue_background_task({"cmd": "saveSettings"})
 
     def startCarsCharging(self, vin=None):
         # This function is the opposite functionality to the stopCarsCharging function
         # below
+        vin = vin or None
         stopMode = int(self.settings.get("chargeStopMode", 1))
         if stopMode == 1:
             self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
@@ -1910,6 +2070,7 @@ class TWCMaster:
         # 1 = Stop the car(s) charging via the Tesla API
         # 2 = Stop the car(s) charging by refusing to respond to slave TWCs
         # 3 = Send TWC Stop command to each slave
+        vin = vin or None
         stopMode = int(self.settings.get("chargeStopMode", 1))
         if stopMode == 1:
             self.queue_background_task({"cmd": "charge", "charge": False, "vin": vin})

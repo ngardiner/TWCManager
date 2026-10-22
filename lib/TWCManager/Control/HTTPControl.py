@@ -18,8 +18,127 @@ import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Control.APIValidator import APIValidator
+from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
+
+
+def ageText(seconds):
+    if seconds is None:
+        return "never"
+    seconds = int(seconds)
+    if seconds < 60:
+        return "%d s ago" % seconds
+    if seconds < 3600:
+        return "%d min ago" % (seconds // 60)
+    if seconds < 86400:
+        return "%d h ago" % (seconds // 3600)
+    return "%d d ago" % (seconds // 86400)
+
+
+def heldLimitText(master, vehicle):
+    # BLE keys chargeLimits by VIN; the Fleet API path keys them by numeric ID.
+    found, outside, applied = (False, None, None)
+    if vehicle.vin:
+        found, outside, applied = master.getNormalChargeLimit(vehicle.vin)
+    if not found:
+        car = vehicle.attachment("TeslaAPI")
+        if car is not None and getattr(car, "ID", None) is not None:
+            found, outside, applied = master.getNormalChargeLimit(car.ID)
+    if not found:
+        return "\u2014"
+    if applied in (-1, 0, None):
+        return "%s%% (restored)" % outside
+    return "%s%% (holding %s%%)" % (outside, applied)
+
+
+def vehicleLocalMgmt(master, op, vin):
+    """BLE actions from the vehicle page; returns the redirect location.
+
+    "scan" only queues a request: the scan runs on the background thread."""
+    vin = str(vin or "").strip()
+    if not isWellFormedVIN(vin):
+        return "/vehicles"
+    ble = master.getModuleByName("TeslaBLE")
+    if ble and op == "pair":
+        ble.peerWithVehicle(vin)
+    elif ble and op == "scan":
+        ble.requestRangeScan(vin)
+    return "/vehicleDetail/" + vin
+
+
+def addVehicleByVIN(master, vin):
+    try:
+        vehicle = master.vehicleRegistry.addUserAsserted(str(vin or "").strip().upper())
+    except ValueError as e:
+        return "/vehicles?error=" + urllib.parse.quote_plus(str(e))
+    vin = vehicle.vin
+    with master.settingsLock:
+        known = master.settings.setdefault("Vehicles", {})
+        if not any(k.upper() == vin for k in known):
+            # addedByVIN: Forget may remove this record (and its key).
+            known[vin] = {
+                "chargeSessions": 0,
+                "startkWh": 0,
+                "totalkWh": 0,
+                "addedByVIN": True,
+            }
+    # Outside the lock: key generation may do I/O
+    ble = master.getModuleByName("TeslaBLE")
+    if ble:
+        ble.scanForVehicles()
+    master.queue_background_task({"cmd": "saveSettings"})
+    return "/vehicleDetail/" + vin
+
+
+def _vehicleRecordKey(vehicles, vin):
+    # settings["Vehicles"] keys may be in any case (as _settingsKey).
+    for key in list(vehicles):
+        if isinstance(key, str) and key.upper() == vin:
+            return key
+    return None
+
+
+def canForgetVehicle(master, vin):
+    """Phase 1's narrow Forget: a car the user added by VIN that no provider
+    has attached to and whose BLE key was never proven (a mistyped VIN).
+    Forgetting anything else is Phase 6: a provider would bring it back."""
+    if not isinstance(vin, str) or not isWellFormedVIN(vin):
+        return False
+    vehicle = master.vehicleRegistry.get(vin)
+    if vehicle is None or not vehicle.userAsserted or vehicle.attachmentNames():
+        return False
+    with master.settingsLock:
+        vehicles = master.settings.get("Vehicles") or {}
+        rec = vehicles.get(_vehicleRecordKey(vehicles, vehicle.vin))
+        ble = rec.get("ble") if isinstance(rec, dict) else None
+        return not (isinstance(ble, dict) and ble.get("status") == "paired")
+
+
+def forgetVehicle(master, vin):
+    """The Forget action; returns the redirect location."""
+    vin = str(vin or "").strip().upper()
+    if not isWellFormedVIN(vin):
+        return "/vehicles"
+    if not canForgetVehicle(master, vin):
+        return "/vehicleDetail/" + vin
+    master.vehicleRegistry.forget(vin)
+    with master.settingsLock:
+        vehicles = master.settings.get("Vehicles") or {}
+        key = _vehicleRecordKey(vehicles, vin)
+        rec = vehicles.get(key)
+        # Only a record Add-by-VIN made, and only while it holds no charge
+        # history: history is not ours to drop. The record holds the
+        # (never paired) BLE key, so that goes with it.
+        if (
+            isinstance(rec, dict)
+            and rec.get("addedByVIN")
+            and not rec.get("chargeSessions")
+            and not rec.get("totalkWh")
+        ):
+            del vehicles[key]
+    master.queue_background_task({"cmd": "saveSettings"})
+    return "/vehicles"
 
 
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
@@ -206,7 +325,26 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(optionList=self.optionList)
             self.templateEnv.globals.update(timeList=self.timeList)
             self.templateEnv.globals.update(
-                vehicles=master.getModuleByName("TeslaAPI").getCarApiVehicles
+                vehicles=lambda: master.vehicleRegistry.vehicles()
+            )
+            self.templateEnv.globals.update(ageText=ageText)
+            self.templateEnv.globals.update(
+                heldLimitText=lambda v: heldLimitText(master, v)
+            )
+            self.templateEnv.globals.update(registry=master.vehicleRegistry)
+            self.templateEnv.globals.update(
+                canForget=lambda vin: canForgetVehicle(master, vin)
+            )
+            bleModule = master.getModuleByName("TeslaBLE")
+            self.templateEnv.globals.update(
+                bleStatus=lambda vin: bleModule.bleStatus(vin) if bleModule else None
+            )
+            self.templateEnv.globals.update(
+                locatedVehicles=lambda: [
+                    v
+                    for v in master.vehicleRegistry.vehicles()
+                    if v.value("lat") is not None and v.value("lon") is not None
+                ]
             )
             teslaModule = master.getModuleByName("TeslaAPI")
             self.templateEnv.globals.update(
@@ -312,8 +450,9 @@ def CreateHTTPHandlerClass(master):
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
 
-                if not master.settings.get("consumptionOffset", None):
-                    master.settings["consumptionOffset"] = {}
+                with master.settingsLock:
+                    if not master.settings.get("consumptionOffset", None):
+                        master.settings["consumptionOffset"] = {}
 
                 json_data = json.dumps(master.settings["consumptionOffset"])
                 self.wfile.write(json_data.encode("utf-8"))
@@ -509,11 +648,12 @@ def CreateHTTPHandlerClass(master):
                     and len(name) < 32
                     and not self.checkForUnsafeCharactters(name)
                 ):
-                    if not master.settings.get("consumptionOffset", None):
-                        master.settings["consumptionOffset"] = {}
-                    master.settings["consumptionOffset"][name] = {}
-                    master.settings["consumptionOffset"][name]["value"] = value
-                    master.settings["consumptionOffset"][name]["unit"] = unit
+                    with master.settingsLock:
+                        if not master.settings.get("consumptionOffset", None):
+                            master.settings["consumptionOffset"] = {}
+                        master.settings["consumptionOffset"][name] = {}
+                        master.settings["consumptionOffset"][name]["value"] = value
+                        master.settings["consumptionOffset"][name]["unit"] = unit
                     master.queue_background_task({"cmd": "saveSettings"})
 
                     self.send_response(200)
@@ -621,7 +761,8 @@ def CreateHTTPHandlerClass(master):
 
                 if master.settings.get("consumptionOffset", None):
                     if offset_name in master.settings["consumptionOffset"]:
-                        del master.settings["consumptionOffset"][offset_name]
+                        with master.settingsLock:
+                            master.settings["consumptionOffset"].pop(offset_name, None)
                         master.queue_background_task({"cmd": "saveSettings"})
                         self.send_response(200)
                         self.send_header("Content-type", "application/json")
@@ -778,12 +919,15 @@ def CreateHTTPHandlerClass(master):
                     self.end_headers()
                     return
                 command = str(data.get("commandName", None))
-                vehicle = str(data.get("vehicleID", None))
+                vin = data.get("vehicleVIN", None)
                 params = str(data.get("parameters", None))
 
-                res = master.getModuleByName("TeslaAPI").apiDebugInterface(
-                    command, vehicle, params
-                )
+                carapi = master.getModuleByName("TeslaAPI")
+                if carapi is None:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                res = carapi.apiDebugInterface(command, vin, params)
                 if res == True:
                     self.send_response(200)
                     self.end_headers()
@@ -806,7 +950,8 @@ def CreateHTTPHandlerClass(master):
                     and not self.checkForUnsafeCharactters(setting)
                     and not self.checkForUnsafeCharactters(value)
                 ):
-                    master.settings[setting] = value
+                    with master.settingsLock:
+                        master.settings[setting] = value
                 self.send_response(204)
                 self.end_headers()
 
@@ -881,8 +1026,9 @@ def CreateHTTPHandlerClass(master):
                         lon = float(lon)
                         # Validate latitude and longitude ranges
                         if -90 <= lat <= 90 and -180 <= lon <= 180:
-                            master.settings["homeLat"] = lat
-                            master.settings["homeLon"] = lon
+                            with master.settingsLock:
+                                master.settings["homeLat"] = lat
+                                master.settings["homeLon"] = lon
                             master.queue_background_task({"cmd": "saveSettings"})
                             self.send_response(204)
                             self.end_headers()
@@ -920,7 +1066,8 @@ def CreateHTTPHandlerClass(master):
                         )
                         return
 
-                    master.settings["greenEnergyAmpsOffset"] = offset_val
+                    with master.settingsLock:
+                        master.settings["greenEnergyAmpsOffset"] = offset_val
                     master.queue_background_task({"cmd": "saveSettings"})
                     self.send_response(204)
                     self.end_headers()
@@ -1167,6 +1314,10 @@ def CreateHTTPHandlerClass(master):
                 self.do_API_GET()
                 return
 
+            self.addVehicleError = urllib.parse.parse_qs(self.url.query).get(
+                "error", [""]
+            )[0]
+
             webroutes = [
                 {"route": "/debug", "tmpl": "debug.html.j2"},
                 {"route": "/schedule", "tmpl": "schedule.html.j2"},
@@ -1322,7 +1473,8 @@ def CreateHTTPHandlerClass(master):
                     and len(group) > 0
                     and group in master.settings["VehicleGroups"]
                 ):
-                    del master.settings["VehicleGroups"][group]
+                    with master.settingsLock:
+                        master.settings["VehicleGroups"].pop(group, None)
                     master.queue_background_task({"cmd": "saveSettings"})
                     self.send_response(302)
                     self.send_header("Location", "/vehicles")
@@ -1456,7 +1608,10 @@ def CreateHTTPHandlerClass(master):
 
                 if op == "add":
                     try:
-                        master.settings["VehicleGroups"][group]["Members"].append(vin)
+                        with master.settingsLock:
+                            master.settings["VehicleGroups"][group]["Members"].append(
+                                vin
+                            )
                     except ValueError:
                         logger.error(
                             "Error adding vehicle %s to group %s" % (vin, group)
@@ -1464,7 +1619,10 @@ def CreateHTTPHandlerClass(master):
 
                 elif op == "remove":
                     try:
-                        master.settings["VehicleGroups"][group]["Members"].remove(vin)
+                        with master.settingsLock:
+                            master.settings["VehicleGroups"][group]["Members"].remove(
+                                vin
+                            )
                     except ValueError:
                         logger.error(
                             "Error removing vehicle %s from group %s" % (vin, group)
@@ -1486,13 +1644,29 @@ def CreateHTTPHandlerClass(master):
                 return
 
             if self.url.path == "/vehicle/localMgmt":
-                op = self.getFieldValue("operation")
-                vin = self.getFieldValue("vin")
-
-                self.master.getModuleByName("TeslaBLE").peerWithVehicle(vin)
-
+                location = vehicleLocalMgmt(
+                    self.master,
+                    self.getFieldValue("operation"),
+                    self.getFieldValue("vin"),
+                )
                 self.send_response(302)
-                self.send_header("Location", "/vehicleDetail/" + vin)
+                self.send_header("Location", location)
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            if self.url.path == "/vehicle/forget":
+                location = forgetVehicle(self.master, self.getFieldValue("vin"))
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            if self.url.path == "/vehicle/add":
+                location = addVehicleByVIN(self.master, self.getFieldValue("vin"))
+                self.send_response(302)
+                self.send_header("Location", location)
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
                 return
@@ -1608,13 +1782,18 @@ def CreateHTTPHandlerClass(master):
         def process_home_location(self):
             # If unset was selected, unset account
             if "unset" in self.fields:
-                del master.settings["homeLat"]
-                del master.settings["homeLon"]
+                with master.settingsLock:
+                    # Already unset (a second click) is not an error.
+                    master.settings.pop("homeLat", None)
+                    master.settings.pop("homeLon", None)
 
             # If learn was selected, learn location
             if "learn" in self.fields:
-                loc = self.getFieldValue("vehicle").split(",")
-                if len(loc) >= 2:
+                selected = str(self.getFieldValue("vehicle") or "")
+                loc = selected.split(",")
+                if not selected:
+                    logger.info("No vehicle selected; home location unchanged")
+                elif len(loc) >= 2:
                     master.setHomeLon(loc[0])
                     master.setHomeLat(loc[1])
                 else:
@@ -1636,86 +1815,90 @@ def CreateHTTPHandlerClass(master):
             # Check that schedule dict exists within settings.
             # If not, this would indicate that this is the first time
             # we have saved the new schedule settings
-            if master.settings.get("Schedule", None) == None:
-                master.settings["Schedule"] = {}
+            with master.settingsLock:
+                if master.settings.get("Schedule", None) == None:
+                    master.settings["Schedule"] = {}
 
-            # Slight issue with checkboxes, you have to default them all to
-            # false, otherwise if one is unticked it is just not sent via form data
-            days = [
-                "Sunday",
-                "Monday",
-                "Tuesday",
-                "Wednesday",
-                "Thursday",
-                "Friday",
-                "Saturday",
-            ]
-            for day in days:
-                if master.settings["Schedule"].get(day, None) == None:
-                    master.settings["Schedule"][day] = {}
-                master.settings["Schedule"][day]["enabled"] = ""
-                master.settings["Schedule"][day]["flex"] = ""
+                # Slight issue with checkboxes, you have to default them all to
+                # false, otherwise if one is unticked it is just not sent via form data
+                days = [
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                ]
+                for day in days:
+                    if master.settings["Schedule"].get(day, None) == None:
+                        master.settings["Schedule"][day] = {}
+                    master.settings["Schedule"][day]["enabled"] = ""
+                    master.settings["Schedule"][day]["flex"] = ""
 
-            # Detect schedule keys. Rather than saving them in a flat
-            # structure, we'll store them multi-dimensionally
-            fieldsout = self.fields.copy()
-            ct = re.compile(
-                r"(?P<trigger>enabled|end|flex|start)(?P<day>.*?)ChargeTime"
-            )
-            for key in self.fields:
-                match = ct.match(key)
-                if match:
-                    # Detected a multi-dimensional (per-day) key
-                    # Rewrite it into the settings array and delete it
-                    # from the input
+                # Detect schedule keys. Rather than saving them in a flat
+                # structure, we'll store them multi-dimensionally
+                fieldsout = self.fields.copy()
+                ct = re.compile(
+                    r"(?P<trigger>enabled|end|flex|start)(?P<day>.*?)ChargeTime"
+                )
+                for key in self.fields:
+                    match = ct.match(key)
+                    if match:
+                        # Detected a multi-dimensional (per-day) key
+                        # Rewrite it into the settings array and delete it
+                        # from the input
 
-                    if master.settings["Schedule"].get(match.group(2), None) == None:
-                        # Create dictionary key for this day
-                        master.settings["Schedule"][match.group(2)] = {}
+                        if (
+                            master.settings["Schedule"].get(match.group(2), None)
+                            == None
+                        ):
+                            # Create dictionary key for this day
+                            master.settings["Schedule"][match.group(2)] = {}
 
-                    # Set per-day settings
-                    master.settings["Schedule"][match.group(2)][match.group(1)] = (
-                        self.getFieldValue(key)
-                    )
+                        # Set per-day settings
+                        master.settings["Schedule"][match.group(2)][match.group(1)] = (
+                            self.getFieldValue(key)
+                        )
 
-                else:
-                    if master.settings["Schedule"].get("Settings", None) == None:
-                        master.settings["Schedule"]["Settings"] = {}
-                    master.settings["Schedule"]["Settings"][key] = self.getFieldValue(
-                        key
-                    )
+                    else:
+                        if master.settings["Schedule"].get("Settings", None) == None:
+                            master.settings["Schedule"]["Settings"] = {}
+                        master.settings["Schedule"]["Settings"][key] = (
+                            self.getFieldValue(key)
+                        )
 
-            # During Phase 1 (backwards compatibility) for the new scheduling
-            # UI, after writing the settings in the inteded new format, we then
-            # write back to the existing settings nodes so that it is backwards
-            # compatible.
+                # During Phase 1 (backwards compatibility) for the new scheduling
+                # UI, after writing the settings in the inteded new format, we then
+                # write back to the existing settings nodes so that it is backwards
+                # compatible.
 
-            # Green Energy Tracking
-            master.settings["hourResumeTrackGreenEnergy"] = int(
-                master.settings["Schedule"]["Settings"]["resumeGreenEnergy"][:2]
-            )
+                # Green Energy Tracking
+                master.settings["hourResumeTrackGreenEnergy"] = int(
+                    master.settings["Schedule"]["Settings"]["resumeGreenEnergy"][:2]
+                )
 
-            # Scheduled amps
-            master.settings["scheduledAmpsStartHour"] = int(
-                master.settings["Schedule"]["Common"]["start"][:2]
-            )
-            master.settings["scheduledAmpsEndHour"] = int(
-                master.settings["Schedule"]["Common"]["end"][:2]
-            )
-            master.settings["scheduledAmpsMax"] = float(
-                master.settings["Schedule"]["Settings"]["scheduledAmpsMax"]
-            )
+                # Scheduled amps
+                master.settings["scheduledAmpsStartHour"] = int(
+                    master.settings["Schedule"]["Common"]["start"][:2]
+                )
+                master.settings["scheduledAmpsEndHour"] = int(
+                    master.settings["Schedule"]["Common"]["end"][:2]
+                )
+                master.settings["scheduledAmpsMax"] = float(
+                    master.settings["Schedule"]["Settings"]["scheduledAmpsMax"]
+                )
 
-            # Scheduled Days bitmap backward compatibility
-            master.settings["scheduledAmpsDaysBitmap"] = (
-                (1 if master.settings["Schedule"]["Monday"]["enabled"] else 0)
-                + (2 if master.settings["Schedule"]["Tuesday"]["enabled"] else 0)
-                + (4 if master.settings["Schedule"]["Wednesday"]["enabled"] else 0)
-                + (8 if master.settings["Schedule"]["Thursday"]["enabled"] else 0)
-                + (16 if master.settings["Schedule"]["Friday"]["enabled"] else 0)
-                + (32 if master.settings["Schedule"]["Saturday"]["enabled"] else 0)
-                + (64 if master.settings["Schedule"]["Sunday"]["enabled"] else 0)
-            )
+                # Scheduled Days bitmap backward compatibility
+                master.settings["scheduledAmpsDaysBitmap"] = (
+                    (1 if master.settings["Schedule"]["Monday"]["enabled"] else 0)
+                    + (2 if master.settings["Schedule"]["Tuesday"]["enabled"] else 0)
+                    + (4 if master.settings["Schedule"]["Wednesday"]["enabled"] else 0)
+                    + (8 if master.settings["Schedule"]["Thursday"]["enabled"] else 0)
+                    + (16 if master.settings["Schedule"]["Friday"]["enabled"] else 0)
+                    + (32 if master.settings["Schedule"]["Saturday"]["enabled"] else 0)
+                    + (64 if master.settings["Schedule"]["Sunday"]["enabled"] else 0)
+                )
 
             # Save Settings
             master.queue_background_task({"cmd": "saveSettings"})
@@ -1760,12 +1943,14 @@ def CreateHTTPHandlerClass(master):
 
                 else:
                     # Write setting to dictionary
-                    master.settings[key] = self.getFieldValue(key)
+                    with master.settingsLock:
+                        master.settings[key] = self.getFieldValue(key)
 
             # If Non-Scheduled power action is either Do not Charge or
             # Track Green Energy, set Non-Scheduled power rate to 0
-            if int(master.settings.get("nonScheduledAction", 1)) > 1:
-                master.settings["nonScheduledAmpsMax"] = 0
+            with master.settingsLock:
+                if int(master.settings.get("nonScheduledAction", 1)) > 1:
+                    master.settings["nonScheduledAmpsMax"] = 0
 
             # If triggered from the Debug page (not settings page), we need to
             # set certain settings to false if they were not seen in the
@@ -1773,7 +1958,8 @@ def CreateHTTPHandlerClass(master):
             # if they aren't set
             if page == "debug_toggle":
                 if "enableDebugCommands" not in self.fields:
-                    master.settings["enableDebugCommands"] = 0
+                    with master.settingsLock:
+                        master.settings["enableDebugCommands"] = 0
 
             if page == "debug":
                 checkboxes = [
@@ -1782,7 +1968,8 @@ def CreateHTTPHandlerClass(master):
                 ]
                 for checkbox in checkboxes:
                     if checkbox not in self.fields:
-                        master.settings[checkbox] = 0
+                        with master.settingsLock:
+                            master.settings[checkbox] = 0
 
             # Save Settings
             master.queue_background_task({"cmd": "saveSettings"})
@@ -1798,10 +1985,11 @@ def CreateHTTPHandlerClass(master):
             # Check that Graphs dict exists within settings.
             # If not, this would indicate that this is the first time
             # we have saved it
-            if master.settings.get("Graphs", None) == None:
-                master.settings["Graphs"] = {}
-            master.settings["Graphs"]["Initial"] = initial
-            master.settings["Graphs"]["End"] = end
+            with master.settingsLock:
+                if master.settings.get("Graphs", None) == None:
+                    master.settings["Graphs"] = {}
+                master.settings["Graphs"]["Initial"] = initial
+                master.settings["Graphs"]["End"] = end
 
             return
 

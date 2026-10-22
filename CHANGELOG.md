@@ -5,6 +5,8 @@ This document logs the changes per release of TWCManager.
 ## v1.4.0 - Upcoming
 
 * Features
+    * (@MikeBishop) - The vehicle page shows BLE status (not in range, in range, pairing, paired, pairing failed, key refused) with a Bluetooth scan for the car
+    * (@MikeBishop) - The Vehicles page lists the vehicle registry (tier, providers, last seen, held limit) and can add a vehicle by VIN so a VIN-less TWC with BLE only can be set up; a vehicle added by VIN that nothing else has seen can be forgotten from its page
     * (@MikeBishop) - Apply charge limit over BLE
     * (@MikeBishop) - Fetch charge and location state over BLE, falling back to Fleet API when BLE is unavailable
     * (@ngardiner) - FleetAPI Authorization Code web login (PKCE by default, optional client-secret flow), with auto-capture callback and paste-back, ported from v1.3.4 (closes #639)
@@ -21,7 +23,10 @@ This document logs the changes per release of TWCManager.
     * (@ngardiner) - Gen3 TWC support via Neurio Modbus emulation
     * (@MikeBishop) - Run vehicle commands on a dedicated worker thread and serialize tesla-control calls, so BLE retries no longer stall the RS485 loop (#668)
     * (@MikeBishop) - Shut down gracefully on SIGTERM, saving settings and sending pending stop-charging commands before exit (#668)
+    * (@MikeBishop) - Serialise settings.json saves under a settings lock so a save no longer races writers on other threads
     * (@MikeBishop) - Evaluate charging policy on its own thread instead of the RS485 loop, only when acting as master (#670)
+    * (@MikeBishop) - One vehicle registry keyed by VIN holds every per-vehicle field with its source and age; reads cascade BLE then cloud and never wake a car unless asked; a TWC-reported VIN is confirmed by a second query before a vehicle is created; vehicles unseen for 30 days (config vehicle.forgetAfterDays) are forgotten
+    * (@MikeBishop) - The debug API `/api/sendTeslaAPICommand` now takes the vehicle's VIN (`vehicleVIN`) instead of the numeric vehicle ID (`vehicleID`); the web UI and debug dump read vehicles from the registry
 * Bugfixes
     * Fix: Add missing module-level time import in HASS, EmonCMS, Growatt, IotaWatt, SmartMe and TCP modules, which crashed EMS polling and caused charge current oscillation (closes #644)
     * Fix: Restore minInterval parameter on update_location, fixing TypeError that broke API start/stop charging and home location correction
