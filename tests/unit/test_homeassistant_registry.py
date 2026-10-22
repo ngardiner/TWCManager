@@ -2,6 +2,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from unittest.mock import Mock, patch
 from TWCManager.Vehicle.HomeAssistant import HomeAssistant, HaVehicle
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from tests.unit.vehicle_helpers import commands
 
 VIN = "5YJ3E1EA1KF000001"
 
@@ -49,7 +50,7 @@ def test_discovered_vehicle_is_attached_and_claimed():
     v = reg.get(VIN)
     assert (
         isinstance(v.attachment("HomeAssistant"), HaVehicle)
-        and v.tier == "managed"
+        and commands(v)
         and v.name == "Car"
     )
 
@@ -210,7 +211,7 @@ def test_failed_registration_does_not_append_vehicle():
         return_value={"charge_switch": "s.c", "battery_level_sensor": "s.b"},
     ), patch.object(reg, "getOrCreate", side_effect=ValueError("bad")):
         ha._build_vehicles_from_registry(devices, [])
-    assert ha.carApiVehicles == []
+    assert ha.registry.attached("HomeAssistant") == []
 
 
 def test_fetch_without_an_attachment_reads_nothing():  # 13b M3

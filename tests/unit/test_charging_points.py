@@ -122,7 +122,7 @@ def real(mode=1, gen3=False):
     if gen3: config["controller.Gen3TWCs"] = {"enabled": True, "devices": [{"ip": "10.0.0.1", "fuseAmps": 48, "phases": 1}]}
     m = TWCMaster("AB", config); m.settings["chargeRateControl"] = mode
     m.queue_background_task = Mock()
-    carapi = Mock(); carapi.enabled.return_value = True; policy = Mock(); policy.policyIsGreen.return_value = False
+    carapi = Mock(); carapi.enabled.return_value = True; carapi.locate.return_value = None; policy = Mock(); policy.policyIsGreen.return_value = False
     modules = {"TeslaAPI": carapi, "Policy": policy}; m.getModuleByName = lambda n: modules.get(n)
     m.registerModule({"name": "VehicleEndpoints", "ref": VehicleEndpoints(m), "type": "EVSEController"})
     m.providerOrder.register(fleet())
@@ -134,9 +134,9 @@ def real(mode=1, gen3=False):
 
 def budget(m, amps): m.getMaxAmpsToDivideAmongSlaves = lambda: amps
 
-def car(m, vin, state, pluggedIn=None):
-    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=True, syncSource="TeslaAPI", pluggedIn=pluggedIn, locate=lambda: None))
-    if state: v.observe("chargingState", state, "TeslaAPI")
+def car(m, vin, state):
+    v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=True))
+    if state: v.observe("chargingState", state, "OwnerAPI")
     return v
 
 def stoppedTwc(m, vin=VIN, twcid=b"\x82\x44"):
@@ -186,7 +186,7 @@ def test_twc_point_sets_the_twc_target_and_never_the_endpoint():                
     s.reportedAmpsMax = 20                                                       # the TWC echoes its offer: it wants power
     m.distributeEVSEPower(); assert s._evseTargetAmps == 20                     # water-fill
     s.reportedAmpsMax = 0
-    m.vehicleRegistry.get(VIN).observe("chargingState", "Complete", "TeslaAPI")
+    m.vehicleRegistry.get(VIN).observe("chargingState", "Complete", "OwnerAPI")
     m.distributeEVSEPower(); assert s._evseTargetAmps == 0                      # nobody wants power: the idle offer
     car(m, VIN2, "Charging"); budget(m, 32)
     m.distributeEVSEPower(); assert s._evseTargetAmps == 0                      # zero-out: VIN2 takes all 32 A

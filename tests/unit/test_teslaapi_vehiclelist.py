@@ -16,7 +16,6 @@ def new_api():
     master = Mock()
     master.config = {"config": {}, "vehicle": {"teslaAPI": {"enabled": True}}}
     api = TeslaAPI(master)
-    api.carApiVehicles = []  # class-level default is shared
     api.fleetSlot.setTokens(fleet_token())
     api.carApiLastErrorTime = 0
     return api
@@ -31,14 +30,16 @@ def test_loads_once(no_threads, requests_mock):
     assert api.loadVehicleList() is True
     assert api.loadVehicleList() is True
     assert get.call_count == 1
-    assert [v.VIN for v in api.carApiVehicles] == ["5YJ3E1EA1KF000001"]
+    assert [v.vin for v, _ in api.registry.attached("TeslaAPI")] == [
+        "5YJ3E1EA1KF000001"
+    ]
 
 
 def test_failure_returns_false_and_records_error(requests_mock):
     api = new_api()
     requests_mock.get(FLEET_NA_URL, text='{"error": "boom"}')
     assert api.loadVehicleList() is False
-    assert len(api.carApiVehicles) == 0
+    assert len(api.registry.attached("TeslaAPI")) == 0
     assert api.carApiLastErrorTime > 0
 
 

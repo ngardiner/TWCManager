@@ -50,7 +50,7 @@ def _serialized(method):
 
 class TeslaBLE:
     binaryPath = None
-    commandTimeout = 5
+    commandTimeout = 15
     config = None
     configConfig = None
     isDockerCached = None
@@ -127,7 +127,7 @@ class TeslaBLE:
 
         # Retry policy is the reconciler's; maxRetries, retryDelay and
         # circuitBreaker* are no longer read.
-        self.commandTimeout = ble_config.get("commandTimeout", 5)
+        self.commandTimeout = ble_config.get("commandTimeout", 15)
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
@@ -395,9 +395,6 @@ class TeslaBLE:
         A transient failure (timeout, or a connection error) is retried once
         after QUICK_RETRY_DELAY, outside the BLE lock; anything else is
         reported at once. All other retry policy is the reconciler's."""
-        # Accept either a VIN string or a vehicle object with a .VIN attribute
-        if hasattr(vin, "VIN"):
-            vin = vin.VIN
         output = self._sendCommand_internal(vin, command, args)
         if output is None and getattr(self._failure, "transient", False):
             logger.info(f"BLE command '{command}' to {vin} failed; retrying once")

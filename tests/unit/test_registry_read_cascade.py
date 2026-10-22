@@ -147,7 +147,7 @@ def test_true_with_nothing_recorded_continues():
 
 def test_true_after_recording_itself_ends_the_walk():
     def self_(vehicle, field, allowWake=False):
-        vehicle.observe(field, 3, "TeslaAPI")
+        vehicle.observe(field, 3, "OwnerAPI")
         return True
 
     first = Reader("OwnerAPI", C.CLOUD_FREE, None)
@@ -155,7 +155,7 @@ def test_true_after_recording_itself_ends_the_walk():
     later = Reader("HomeAssistant", C.HA_BILLED, {"chargeLimit": 9})
     reg, v = setup(first, later)
     obs = v.read("chargeLimit", maxAge=0)
-    assert (obs.value, obs.source) == (3, "TeslaAPI") and later.calls == []
+    assert (obs.value, obs.source) == (3, "OwnerAPI") and later.calls == []
 
 
 def test_no_registry_or_no_order_returns_latest():

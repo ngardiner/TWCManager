@@ -29,6 +29,7 @@ from tests.unit.test_limit_reconciler import VIN, setup
 
 VIN2 = "5YJ3E1EA1KF000002"
 FLEET = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/"
+OWNER = "https://owner-api.teslamotors.com/api/1/vehicles/"
 # Fleet API prices; vehicles/{vin} and the vehicle list are free
 PRICE = {"vehicle_data": 0.002, "wake_up": 0.02, "command": 0.001}
 
@@ -93,6 +94,7 @@ class FleetCar:
         at=HOME,
         wakes=True,
         script=None,
+        api=FLEET,
     ):
         self.vin, self.state, self.wakes = vin, state, wakes
         self.charge = {
@@ -104,7 +106,7 @@ class FleetCar:
             "scheduled_charging_pending": False,
         }
         self.at, self.script = at, list(script or [(200, True, "")])
-        base = FLEET + vin
+        base = api + vin
         requests_mock.get(
             base, json=lambda req, ctx: {"response": {"state": self.state, "vin": vin}}
         )
@@ -170,7 +172,15 @@ def quiet(monkeypatch, requests_mock):
     requests_mock.register_uri(ANY, ANY, status_code=599, json={})
 
 
-def install(fleet=False, owner=False, policy=None, held=None, at=HOME, located=True):
+def install(
+    fleet=False,
+    owner=False,
+    policy=None,
+    held=None,
+    at=HOME,
+    located=True,
+    signing=None,
+):
     # A real master, store and reconciler on a test clock; a real TeslaAPI
     # with the given token slots, the car listed and placed by TeslaMate's
     # free position
@@ -180,7 +190,6 @@ def install(fleet=False, owner=False, policy=None, held=None, at=HOME, located=T
     api = None
     if fleet or owner:
         api = new_api(master=m)
-        del m.modules["TeslaAPI"]
         api.now = c
         api.wakeDelayMins = 0
         if owner:
@@ -189,8 +198,10 @@ def install(fleet=False, owner=False, policy=None, held=None, at=HOME, located=T
             api.storeToken(fleet_token())
         for p in api.providers():
             m.providerOrder.register(p)
-        m.providerOrder.provider("FleetAPI").clock = c
-        api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
+            p.clock = c
+        api.addVehicle(
+            {"id": 1, "vin": VIN, "display_name": "Car", "command_signing": signing}
+        )
     if located:
         placeAt(m, v, at)
     if held:
@@ -271,7 +282,7 @@ def passes(r, c, seconds, step=10, each=None):
 def test_fleet_only_raise_costs_the_same(requests_mock):
     m, r, v, c, api = install(fleet=True, held=(90, 50))
     car = FleetCar(requests_mock, limit=50)
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     passes(r, c, 3600)
     assert paid(requests_mock) == (1, 1, 1) and commands(requests_mock) == [
@@ -295,14 +306,12 @@ def wakeUps(requests_mock):
     return sum(q.url.endswith("/wake_up") for q in requests_mock.request_history)
 
 
-def offlineWake(requests_mock, m, r, c, want, seconds=1800, online=59):
+def offlineWake(requests_mock, m, r, c, want, seconds=1800, online=59, api=FLEET):
     # Runs want() every pass for seconds; wake_up answers offline and the car
     # comes online online s after it. Returns {"wake": t, "online": t, "sent":
     # t}: the wake, the car online, the first command
-    car = FleetCar(requests_mock, limit=50)
-    requests_mock.post(
-        FLEET + VIN + "/wake_up", json={"response": {"state": "offline"}}
-    )
+    car = FleetCar(requests_mock, limit=50, api=api)
+    requests_mock.post(api + VIN + "/wake_up", json={"response": {"state": "offline"}})
     seen = {}
 
     def each():
@@ -320,7 +329,7 @@ def offlineWake(requests_mock, m, r, c, want, seconds=1800, online=59):
 
 def test_fleet_only_car_online_after_an_offline_wake_gets_the_limit(requests_mock):
     m, r, v, c, api = install(fleet=True, held=(90, 50))
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     car, seen = offlineWake(requests_mock, m, r, c, lambda: None, seconds=3600)
     assert seen["sent"] - seen["online"] <= 150  # the free check noticed it
@@ -349,7 +358,7 @@ def test_fleet_only_car_online_after_a_later_wake_gets_the_limit(
     # (+4000 s): the arm ended on a failed wake, so the desire's one re-arm
     # keeps the free checks and the held wakes going
     m, r, v, c, api = install(fleet=True, held=(90, 50))
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     times, want = wakeTimes(requests_mock, c)
     car, seen = offlineWake(
@@ -367,7 +376,7 @@ def test_fleet_only_wake_http_errors_then_online_gets_the_limit(requests_mock):
     # nothing, so the arm re-arms as for an offline wake and the limit goes
     # out; at most 4 paid
     m, r, v, c, api = install(fleet=True, held=(90, 50))
-    v.observe("chargeLimit", 50, "TeslaAPI", at=c() - 600)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     car = FleetCar(requests_mock, limit=50)
     requests_mock.post(FLEET + VIN + "/wake_up", status_code=500, json={})
@@ -401,7 +410,7 @@ def test_fleet_only_car_never_online_after_an_offline_wake(requests_mock, start,
         ("chargingState", "Stopped"),
         ("batteryLevel", 40),
     ):
-        v.observe(field, value, "TeslaAPI", at=c() - 600)
+        v.observe(field, value, "OwnerAPI", at=c() - 600)
     m.setPolicyLimit(80, transition=True)
     also = (lambda: m.startCarsCharging(VIN)) if start else (lambda: None)
     times, want = wakeTimes(requests_mock, c, also)
@@ -419,7 +428,7 @@ def test_every_billed_wake_holds_the_next(requests_mock):
     # makes the next one, inside WAKE_CHECK, a free "wake held", no wake_up
     from TWCManager.Vehicle.Reconcile.Reconciler import WAKE_CHECK
 
-    m, r, v, c, api = install(fleet=True, owner=True)
+    m, r, v, c, api = install(fleet=True, owner=True, signing="off")
     wakers = [
         p
         for p in m.providerOrder.providers()
@@ -427,9 +436,9 @@ def test_every_billed_wake_holds_the_next(requests_mock):
         and p.cost(C.WAKE).tier >= C.TIER_BILLED
         and p.ready(v, C.WAKE)
     ]
-    assert wakers
+    assert sorted(p.name for p in wakers) == ["FleetAPI", "OwnerAPI"]
     for p in wakers:
-        m, r, v, c, api = install(fleet=True, owner=True)
+        m, r, v, c, api = install(fleet=True, owner=True, signing="off")
         p = m.providerOrder.provider(p.name)
         requests_mock.reset_mock()
         requests_mock.get(
@@ -466,6 +475,21 @@ def test_fleet_only_car_online_after_an_offline_wake_gets_the_start(requests_moc
     assert car.charge["charging_state"] == "Charging"
 
 
+def test_owner_off_car_online_after_an_offline_wake_gets_the_limit(requests_mock):
+    # Row 4b for a car listed command_signing "off" on an Owner token: its
+    # wake takes the same hold, so the same single wake, all of it free
+    m, r, v, c, api = install(owner=True, signing="off", held=(90, 50))
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    car, seen = offlineWake(
+        requests_mock, m, r, c, lambda: None, seconds=3600, api=OWNER
+    )
+    assert seen["sent"] - seen["online"] <= 150 and wakeUps(requests_mock) == 1
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert car.charge["charge_limit_soc"] == 80 and paid(requests_mock) == (0, 0, 0)
+    assert counts(requests_mock)["other"] == 0
+
+
 # Row 1: pure Gen2, no vehicle module; the heartbeat stops and starts
 
 
@@ -497,6 +521,126 @@ def test_ble_only_limits_never_wake_to_lower(requests_mock):
         60,
     ] and requests_mock.call_count == 0
     assert m.heldLimits.get(VIN) == HeldLimit(90, 60)
+
+
+# Row 3b (#659): an Owner token and a car listed command_signing "off" take
+# the Fleet-only paths of rows 4, 9 and 28 (and a car that never wakes),
+# request for request and with the same per-desire paid records, on the
+# free Owner API
+
+
+def path_shape(requests_mock):
+    # Each request's method and path below .../api/1/, the host dropped
+    return [
+        (q.method, q.url.split("?")[0].split("/api/1/")[-1])
+        for q in requests_mock.request_history
+    ]
+
+
+def paid_records(m):
+    # The per-desire paid accounting the reconciler keeps, per aspect
+    out = []
+    for aspect in (CHARGE_LIMIT, CHARGING):
+        rec = m.desired.record(VIN, aspect)
+        out.append(
+            rec
+            and (
+                rec.paidSends,
+                rec.paidReached,
+                rec.paidRetryDue,
+                rec.paidAt,
+                rec.lastOutcome,
+                rec.lastOutcomeAt,
+            )
+        )
+    return out
+
+
+def off_car_run(requests_mock, scenario, base, **tokens):
+    # One scenario on one token; returns (commands, request shape, the paid
+    # records after each pass)
+    requests_mock.reset_mock()
+    m, r, v, c, api = install(
+        signing="off", held=(90, 50) if scenario == "raise" else None, **tokens
+    )
+    each, seconds, step = (lambda: m.setPolicyLimit(50, transition=False)), 3600, 30
+    if scenario == "raise":
+        FleetCar(requests_mock, limit=50, api=base)
+        v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
+        m.setPolicyLimit(80, transition=True)
+        each, step = None, 10
+    elif scenario == "stop":
+        FleetCar(requests_mock, state="online", charging="Charging", api=base)
+        v.observe("chargingState", "Charging", "TeslaMateVehicle")
+        m.stopCarsCharging(VIN)
+        each, seconds, step = (lambda: m.stopCarsCharging(VIN)), 600, 10
+    else:
+        # "retry": Fleet answers 500; "asleep": the car never wakes (408)
+        script = [(500, None, None)] if scenario == "retry" else None
+        state = "online" if scenario == "retry" else "asleep"
+        FleetCar(
+            requests_mock, state=state, wakes=False, limit=90, script=script, api=base
+        )
+        v.observe("chargeLimit", 90, "TeslaMateVehicle")
+        m.setPolicyLimit(50, transition=True)
+    records = []
+    for _ in range(int(seconds / step)):
+        c.t += step
+        if each:
+            each()
+        r.pass_()
+        records.append(paid_records(m))
+    if "owner" in tokens:
+        # Nothing billed, nothing else asked
+        assert paid(requests_mock) == (0, 0, 0)
+        assert counts(requests_mock)["other"] == 0
+    return commands(requests_mock), path_shape(requests_mock), records
+
+
+@pytest.mark.parametrize("scenario", ["raise", "retry", "asleep", "stop"])
+def test_owner_only_off_car_matches_fleet_only(requests_mock, scenario):
+    fleet = off_car_run(requests_mock, scenario, FLEET, fleet=True)
+    owner = off_car_run(requests_mock, scenario, OWNER, owner=True)
+    # A lower limit is sent without a wake; the 500 and the 408 are retried once
+    limit = ["set_charge_limit"] * (1 if scenario == "raise" else 2)
+    assert fleet[0] == (["charge_stop"] if scenario == "stop" else limit)
+    # Same requests, and the same paid records after every pass
+    assert any(rec and rec[0] for rec in fleet[2][-1])
+    assert owner == fleet
+
+
+# Row 3c (Phase 3.5 Task 6): both tokens and a car listed command_signing
+# "off". The provider order decides, and OwnerAPI ranks before FleetAPI: a
+# policy raise on an asleep car and a start go to the free Owner API only
+
+
+def test_both_tokens_off_car_commands_free(requests_mock):
+    m, r, v, c, api = install(owner=True, fleet=True, signing="off", held=(90, 50))
+    car = FleetCar(requests_mock, limit=50, api=OWNER)
+    for field, value in (
+        ("chargeLimit", 50),
+        ("chargingState", "Stopped"),
+        ("batteryLevel", 40),
+    ):
+        v.observe(field, value, "OwnerAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    m.startCarsCharging(VIN)
+    passes(r, c, 3600, each=lambda: m.startCarsCharging(VIN))
+    assert sorted(commands(requests_mock)) == ["charge_start", "set_charge_limit"]
+    assert car.charge["charge_limit_soc"] == 80
+    assert car.charge["charging_state"] == "Charging"
+    assert all("fleet-api" not in q.url for q in requests_mock.request_history)
+    assert paid(requests_mock) == (0, 0, 0) and dollars(requests_mock) == 0
+    assert counts(requests_mock)["other"] == 0
+
+
+@pytest.mark.parametrize("scenario", ["raise", "retry", "asleep", "stop"])
+def test_both_tokens_off_car_matches_owner_only(requests_mock, scenario):
+    # Row 3b's scenarios with a Fleet token added: the same Owner requests
+    # and paid records, and no Fleet request, even when the car never answers
+    owner = off_car_run(requests_mock, scenario, OWNER, owner=True)
+    both = off_car_run(requests_mock, scenario, OWNER, owner=True, fleet=True)
+    assert both == owner
 
 
 # Row 3: Owner token only (read-only); a policy limit and a stop

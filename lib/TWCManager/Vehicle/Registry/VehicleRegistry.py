@@ -5,7 +5,7 @@ import logging
 import math
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .Fields import NOT_TRACKED
 from .Vehicle import Vehicle
@@ -75,25 +75,28 @@ class VehicleRegistry:
 
     # Membership
 
-    def _getOrCreate(self, vin: str, source: str):
+    def _getOrCreate(self, vin: str, source: str, attach=None):
         # The one gate for every provider: only a well-formed VIN becomes a
-        # vehicle (anonymous vehicles come from beginPlugSession).
+        # vehicle (anonymous vehicles come from beginPlugSession). attach
+        # (name, obj) lands under the lock, so a forget sees it or no vehicle
         if not isinstance(vin, str) or not isWellFormedVIN(vin):
             raise ValueError("a VIN is required")
         vin = vin.upper()
         with self._lock:
             v = self._vehicles.get(vin)
-            if v is not None:
-                return v, False
-            v = Vehicle(vin, vin, self, clock=self._clock)
-            self._vehicles[vin] = v
-        # A load restores known cars: not news.
-        level = logging.DEBUG if source == "persisted" else logging.INFO
-        logger.log(level, "Vehicle %s added (%s)", vin, source)
-        return v, True
+            created = v is None
+            if created:
+                v = self._vehicles[vin] = Vehicle(vin, vin, self, clock=self._clock)
+            if attach is not None:
+                v.attach(*attach)
+        if created:
+            # A load restores known cars: not news.
+            level = logging.DEBUG if source == "persisted" else logging.INFO
+            logger.log(level, "Vehicle %s added (%s)", vin, source)
+        return v, created
 
-    def getOrCreate(self, vin: str, source: str) -> Vehicle:
-        return self._getOrCreate(vin, source)[0]
+    def getOrCreate(self, vin: str, source: str, attach=None) -> Vehicle:
+        return self._getOrCreate(vin, source, attach)[0]
 
     def get(self, key: str) -> Optional[Vehicle]:
         with self._lock:
@@ -109,13 +112,10 @@ class VehicleRegistry:
                 return v
         return None
 
-    def attached(self, name: str) -> List[Any]:
-        found = []
-        for v in self.vehicles():
-            a = v.attachment(name)
-            if a is not None:
-                found.append(a)
-        return found
+    def attached(self, name: str) -> List[Tuple[Vehicle, Any]]:
+        # (vehicle, attachment) for each vehicle with one, in registry order
+        pairs = [(v, v.attachment(name)) for v in self.vehicles()]
+        return [(v, a) for v, a in pairs if a is not None]
 
     def addUserAsserted(self, vin: str) -> Vehicle:
         if not isinstance(vin, str) or not isWellFormedVIN(vin):
@@ -133,9 +133,16 @@ class VehicleRegistry:
             except Exception as e:
                 logger.debug("Vehicle removal callback raised %s", type(e).__name__)
 
-    def forget(self, key: str) -> bool:
+    def forget(self, key: str, ifUnattached: bool = False) -> bool:
+        # ifUnattached: only a user-asserted vehicle no provider holds, checked
+        # under the lock a listing attaches under
+        key = canonicalKey(key)
         with self._lock:
-            removed = self._vehicles.pop(canonicalKey(key), None)
+            v = self._vehicles.get(key)
+            if ifUnattached and v is not None:
+                if not v.userAsserted or v.attachmentNames():
+                    return False
+            removed = self._vehicles.pop(key, None)
         if removed is not None:
             logger.info("Vehicle %s forgotten", removed.key)
             self._removed([removed.key])
@@ -148,7 +155,8 @@ class VehicleRegistry:
         with self._lock:
             for key in sorted(self._vehicles):
                 v = self._vehicles[key]
-                if v.isAnonymous or v.userAsserted:
+                # An attachment is a provider's listing: kept, as its claims
+                if v.isAnonymous or v.userAsserted or v.attachmentNames():
                     continue
                 if any(c.keepsAlive for c in v.claims.values()):
                     continue

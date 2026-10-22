@@ -35,12 +35,17 @@ EXCLUDING = frozenset({UNSUPPORTED, REFUSED})
 QUEUE_DETAILS = frozenset({"cancelled", "dropped", "replaced"})
 
 # An outcome with one of these details, or one starting RULES, made no
-# request: it is neither a paid call nor a sent command
+# request, or a free one refused that changed nothing: it is neither a paid
+# call nor a sent command
 NOT_SENT = QUEUE_DETAILS | {
     "backoff",
     "wake held",
     "wake refused",
     "no command token",
+    # The Owner API (unbilled) refused a car's command or every command: the
+    # next paid provider need not wait for this one's spent send
+    "signing required",
+    "owner commands retired",
     "not listed",
     "online check failed",
     # A stop to a car the free online check found asleep: not charging

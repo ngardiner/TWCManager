@@ -81,11 +81,8 @@ class VehicleEndpoints(EVSEController):
     def _telemetryPluggedIn(vehicle):
         # A live telemetry feed (TeslaMate) says the cable is plugged in.
         # Live is the telemetryChargeLimit criterion: syncSource is the
-        # telemetry module, which reverts to "TeslaAPI" after syncTimeout.
-        return (
-            getattr(vehicle, "syncSource", "TeslaAPI") != "TeslaAPI"
-            and getattr(vehicle, "pluggedIn", None) is True
-        )
+        # telemetry module, which reverts to "TeslaAPI" after SYNC_TIMEOUT.
+        return vehicle.syncSource != "TeslaAPI" and vehicle.value("pluggedIn") is True
 
     # ------------------------------------------------------------------
     # EVSEController interface
@@ -113,13 +110,10 @@ class VehicleEndpoints(EVSEController):
             return self._keep({})
 
         listed = {}
-        for vehicle in self.master.vehicleRegistry.vehicles():
-            if vehicle.isAnonymous:
+        for vehicle, car in self.master.vehicleRegistry.attached("TeslaAPI"):
+            if not car.atHome:
                 continue
-            car = vehicle.attachment("TeslaAPI")
-            if car is None or not getattr(car, "atHome", False):
-                continue
-            if unknown and self._telemetryPluggedIn(car):
+            if unknown and self._telemetryPluggedIn(vehicle):
                 continue
             listed[vehicle.vin] = vehicle
         return self._keep(listed)

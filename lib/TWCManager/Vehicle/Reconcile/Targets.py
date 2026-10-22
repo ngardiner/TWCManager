@@ -17,13 +17,15 @@ from ..Providers.Capability import (
 from .Desired import CHARGE_LIMIT
 
 
-def located(vehicle) -> Optional[bool]:
+def located(master, vehicle) -> Optional[bool]:
     # On a point: home (atHome stays as vehicleIsDefinitelyHome set it).
-    # Else the Tesla API's home check on the latest position; None if unknown
+    # Else the Tesla API's home check on the latest position (free); None if
+    # unknown
     if vehicle.value("twcVin"):
         return True
-    api = vehicle.attachment("TeslaAPI")
-    return api.locate() if api is not None else None
+    if vehicle.attachment("TeslaAPI") is None:
+        return None
+    return master.getModuleByName("TeslaAPI").locate(vehicle)
 
 
 def _present(master, vehicle) -> bool:
@@ -34,7 +36,7 @@ def _present(master, vehicle) -> bool:
         return True
     api = vehicle.attachment("TeslaAPI")
     if api is not None:
-        home = located(vehicle)
+        home = located(master, vehicle)
         if home is not None:
             return home
         if api.atHome or vehicle.vin in master.heldLimits.holding():
@@ -63,7 +65,7 @@ def broadcastVehicles(master, capability) -> List:
     def reached(v):
         api = v.attachment("TeslaAPI")
         home = api is not None and (
-            located(v) or api.atHome or getattr(api, "lat", 0) == 10000
+            located(master, v) or api.atHome or v.value("lat", 10000) == 10000
         )
         ha = v.attachment("HomeAssistant")
         haHome = ha is not None and ha.at_home and master.getTWCbyVIN(v.vin)
@@ -133,8 +135,8 @@ def _restoreDeparted(master, read) -> None:
             continue
         api = vehicle.attachment("TeslaAPI")
         if read and api is not None and not vehicle.value("twcVin"):
-            if api.syncSource == "TeslaAPI":
-                api.update_location(0)
+            if vehicle.syncSource == "TeslaAPI":
+                master.getModuleByName("TeslaAPI").update_location(vehicle, 0)
         fix, write = vehicle.latest("lat"), vehicle.lastWrite("chargeLimit")
         # <= on purpose: a retained MQTT position redelivered after our write
         # is stamped with that write's time, and is not a new fix

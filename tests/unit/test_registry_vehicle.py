@@ -1,6 +1,7 @@
 from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 from TWCManager.Vehicle.Registry.Vehicle import Vehicle
 from TWCManager.Vehicle.Registry.Fields import NOT_TRACKED
+from tests.unit.vehicle_helpers import commands
 
 VIN = "5YJ3E1EA1KF000001"
 
@@ -21,28 +22,22 @@ def test_vin_format():
     assert not isWellFormedVIN("0" * 17)  # legacy placeholder (M9)
 
 
-def test_identity_and_tier_default_observed():
+def test_identity_default_has_no_claims():
     v = Vehicle(VIN, VIN, registry=None)
-    assert (v.key, v.vin, v.isAnonymous, v.tier) == (VIN, VIN, False, "observed")
+    assert (v.key, v.vin, v.isAnonymous, v.claims) == (VIN, VIN, False, {})
     a = Vehicle("anon:1234", None, registry=None)
-    assert a.isAnonymous and a.tier == "observed"
+    assert a.isAnonymous and a.claims == {}
 
 
 def test_commanding_claim_makes_managed_and_callable_is_live():
     flag = {"ro": True}
     v = Vehicle(VIN, VIN, registry=None)
     v.claim("TeslaAPI", lambda: not flag["ro"], "listed")
-    assert v.tier == "observed"
+    assert not commands(v)
     flag["ro"] = False
-    assert v.tier == "managed"
-    assert v.dropClaim("TeslaAPI") is True and v.tier == "observed"
+    assert commands(v)
+    assert v.dropClaim("TeslaAPI") is True and not commands(v)
     assert v.dropClaim("TeslaAPI") is False
-
-
-def test_anonymous_never_managed():
-    a = Vehicle("anon:1234", None, registry=None)
-    a.claim("TeslaBLE", True)
-    assert a.tier == "observed"
 
 
 def test_observe_bumps_last_seen_unless_told_not_to():
@@ -53,7 +48,7 @@ def test_observe_bumps_last_seen_unless_told_not_to():
     v.observe("chargeLimit", 80, "TeslaMateVehicle")
     assert (v.lastSeen, v.lastSeenSource) == (2000.0, "TeslaMateVehicle")
     c.t = 3000.0
-    v.observe("name", "Car", "TeslaAPI", seen=False)
+    v.observe("name", "Car", "OwnerAPI", seen=False)
     assert v.lastSeen == 2000.0 and v.name == "Car"
 
 
@@ -67,7 +62,7 @@ def test_attachments_and_summary():
     v.observe("batteryLevel", 42, "TeslaBLE")
     c.t = 1010.0
     s = v.summary()
-    assert s["tier"] == "managed" and s["claims"] == [
+    assert "tier" not in s and commands(v) and s["claims"] == [
         {"provider": "TeslaBLE", "status": "paired", "commands": True}
     ]
     assert s["fields"]["batteryLevel"] == {
@@ -91,7 +86,7 @@ def test_registry_liveness_feeds_age_and_trusted():
     v.observe("chargeLimit", 80, "TeslaMateVehicle", at=1000.0)
     c.t = 1600.0
     assert v.age("chargeLimit") == 100.0
-    v.noteWrite("chargeLimit", 90, "TeslaAPI")
+    v.noteWrite("chargeLimit", 90, "OwnerAPI")
     c.t = 1700.0
     assert v.trusted("chargeLimit").value == 80
     assert v.age("name") is None
@@ -108,7 +103,7 @@ def test_rejected_older_stamp_keeps_last_seen_pair_consistent():
     v = Vehicle(VIN, VIN, registry=None, clock=c)
     c.t = 3000.0
     v.observe("chargeLimit", 80, "TeslaMateVehicle", at=2000.0)
-    v.observe("chargeLimit", 70, "TeslaAPI", at=1500.0)
+    v.observe("chargeLimit", 70, "OwnerAPI", at=1500.0)
     assert (v.lastSeen, v.lastSeenSource) == (2000.0, "TeslaMateVehicle")
 
 
@@ -130,11 +125,11 @@ def test_raising_claim_counts_as_false():
 
     v = Vehicle(VIN, VIN, registry=None)
     v.claim("TeslaAPI", boom)
-    assert v.tier == "observed"
+    assert not commands(v)
     assert v.summary()["claims"][0]["commands"] is False
 
 
-def test_summary_tier_from_single_claim_evaluation():
+def test_summary_evaluates_a_claim_once():
     calls = []
 
     def once():
@@ -145,7 +140,7 @@ def test_summary_tier_from_single_claim_evaluation():
     v.claim("TeslaAPI", once)
     s = v.summary()
     assert len(calls) == 1
-    assert s["tier"] == "managed" and s["claims"][0]["commands"] is True
+    assert "tier" not in s and s["claims"][0]["commands"] is True
 
 
 def test_summary_field_age_is_liveness_aware():
@@ -181,9 +176,9 @@ def test_live_feed_vouches_for_an_equal_value_another_source_observed():  # P8/3
     reg = FeedReg(c)
     v = Vehicle(VIN, VIN, registry=reg, clock=c)
     v.observe("chargeLimit", 80, "Feed", at=100.0)
-    v.observe("chargeLimit", 80, "TeslaAPI", at=900.0)
+    v.observe("chargeLimit", 80, "OwnerAPI", at=900.0)
     c.t = 5000.0
-    assert v.latest("chargeLimit").source == "TeslaAPI"
+    assert v.latest("chargeLimit").source == "OwnerAPI"
     assert v.age("chargeLimit") == 0.0
     assert v.summary()["fields"]["chargeLimit"]["age"] == 0.0
     reg.live = False  # feed down: the API reading ages normally
@@ -236,13 +231,13 @@ def test_feed_outage_costs_one_cloud_read_not_one_per_window():  # C1 probe
 
             def fetch(self, vehicle, field, allowWake=False):
                 calls.append(c.t)
-                vehicle.observe("lat", cloudLat, "TeslaAPI")
+                vehicle.observe("lat", cloudLat, "OwnerAPI")
                 return True
 
         wire_reads(reg, Cloud())
         v = reg.getOrCreate(VIN, "test")
         v.observe("lat", 51.5, "TeslaMateVehicle", at=100.0)
-        assert v.read("lat", maxAge=0).source == "TeslaAPI"  # feed down
+        assert v.read("lat", maxAge=0).source == "OwnerAPI"  # feed down
         assert len(calls) == 1
         live["up"] = True  # feed back, car parked: no new latitude
         for step in range(1, 7):
@@ -257,9 +252,39 @@ def test_feed_vouch_resolves_own_write_after_feed_lag():
     c = Clock()
     v = Vehicle(VIN, VIN, registry=FeedReg(c), clock=c)
     v.observe("chargeLimit", 50, "Feed", at=100.0)
-    v.observe("chargeLimit", 50, "TeslaAPI", at=900.0)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=900.0)
     v.noteWrite("chargeLimit", 100, "TeslaBLE")  # at 1000
     c.t = 1003.0
     assert v.trusted("chargeLimit") is None
     c.t = 1000.0 + FEED_LAG + 1
     assert v.trusted("chargeLimit").value == 50
+
+
+class _Untracked:
+    def sourceLiveAt(self, source, vehicle):
+        return NOT_TRACKED
+
+
+def test_sync_source_is_a_fresh_telemetry_state_else_teslaapi():
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=_Untracked(), clock=c)
+    assert v.syncSource == "TeslaAPI"  # no state
+    v.observe("state", "online", "TeslaMateVehicle")
+    assert v.syncSource == "TeslaMateVehicle"
+    c.t += Vehicle.SYNC_TIMEOUT
+    assert v.syncSource == "TeslaMateVehicle"  # <= SYNC_TIMEOUT is fresh
+    c.t += 1  # 3,601 s on an untracked feed
+    assert v.syncSource == "TeslaAPI"
+    v.observe("state", "online", "OwnerAPI")
+    assert v.syncSource == "TeslaAPI"
+    assert Vehicle.SYNC_TIMEOUT == 3600
+
+
+def test_telemetry_state_ages_only_telemetry():
+    c = Clock()
+    v = Vehicle(VIN, VIN, registry=_Untracked(), clock=c)
+    assert v.telemetryState() == (None, None)
+    api = v.observe("state", "online", "OwnerAPI", at=900.0)
+    assert v.telemetryState() == (api, None)
+    tm = v.observe("state", "asleep", "FleetTelemetryMQTT", at=950.0)
+    assert v.telemetryState() == (tm, 50.0)

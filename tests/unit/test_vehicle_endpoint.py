@@ -7,7 +7,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.test_provider_order import ble, fleet, twc
-from tests.unit.test_carapivehicle_registry import api_with_registry
+from tests.unit.test_teslaapi_registry import api_with_registry
 from tests.unit.teslatokens import fleet_token, owner_token
 VIN1 = "5YJ3E1EA1KF000001"; VIN2 = "5YJ3E1EA1KF000002"
 
@@ -15,11 +15,11 @@ def master(settings=None, *providers, slaves=()):
     m = Mock(); m.settings = settings or {}; m.config = {"config": {"wiringMaxAmpsPerTWC": 32, "defaultVoltage": 240}}
     m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     for p in providers: m.providerOrder.register(p)
-    carapi = Mock(); carapi.enabled.return_value = True
+    carapi = Mock(); carapi.enabled.return_value = True; carapi.locate.return_value = None
     m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves); return m
 
-def car(m, vin, atHome=True, syncSource="TeslaAPI", pluggedIn=None):
-    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome, syncSource=syncSource, pluggedIn=pluggedIn, locate=lambda: None)); return v
+def car(m, vin, atHome=True):
+    v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome)); return v
 
 def slave(key=None, amps=0.0, state=0x00): return SimpleNamespace(vehicleKey=key, reportedAmpsActual=amps, reportedState=state)
 
@@ -45,9 +45,9 @@ def test_read_only_follows_fleet_slot():
 def test_state_from_registry_values_without_reads():
     m = master({}, fleet()); v = car(m, VIN1); e = VehicleEndpoint(v, m.providerOrder, m); v.read = Mock(side_effect=AssertionError("no reads"))
     assert not e.wantsToCharge and e.occupied is None and e.maxPower == 32 * 240 and e.minPower == 5 * 240
-    v.observe("chargingState", "Stopped", "TeslaAPI"); v.observe("availableCurrent", 16, "TeslaAPI"); v.observe("actualCurrent", 0, "TeslaAPI")
+    v.observe("chargingState", "Stopped", "OwnerAPI"); v.observe("availableCurrent", 16, "OwnerAPI"); v.observe("actualCurrent", 0, "OwnerAPI")
     assert e.wantsToCharge and not e.isCharging and e.occupied is True and e.maxPower == 32 * 240   # the pilot is not the car's limit
-    v.observe("chargeCurrentRequestMax", 16, "TeslaAPI"); assert e.maxPower == 16 * 240
+    v.observe("chargeCurrentRequestMax", 16, "OwnerAPI"); assert e.maxPower == 16 * 240
 
 def test_set_target_power_sets_desired_amps():                            # slim Task 12b
     from TWCManager.Vehicle.Reconcile.Desired import AMPS, DesiredStore
@@ -62,7 +62,7 @@ def test_controller_lists_at_home_api_cars_and_keeps_blind_rules():
     ctl = VehicleEndpoints(m)
     assert [e.currentVIN for e in ctl.allEVSEs] == [VIN1] and ctl.allEVSEs[0] is ctl.allEVSEs[0]
     m.getSlaveTWCs = lambda: [slave(amps=5.0)]; assert ctl.allEVSEs == []                                 # blind VIN-less TWC
-    m.getSlaveTWCs = lambda: [slave()]; car(m, VIN2, pluggedIn=True, syncSource="TeslaMateVehicle"); m.vehicleRegistry.get(VIN2).attachment("TeslaAPI").atHome = True
+    m.getSlaveTWCs = lambda: [slave()]; v2 = car(m, VIN2); v2.observe("state", "online", "TeslaMateVehicle"); v2.observe("pluggedIn", True, "TeslaMateVehicle"); m.vehicleRegistry.get(VIN2).attachment("TeslaAPI").atHome = True
     assert [e.currentVIN for e in ctl.allEVSEs] == [VIN1]                                                  # unknown TWC + telemetry plug
     m.getSlaveTWCs = lambda: [slave(key=VIN1)]
     assert sorted(e.currentVIN for e in ctl.allEVSEs) == [VIN1, VIN2]                                      # named TWC: grouping merges, not exclusion
