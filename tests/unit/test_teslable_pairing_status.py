@@ -567,6 +567,24 @@ def test_scan_parses_bluetoothctl_output_under_ble_lock():
         assert ble.bleStatus(VIN)["label"] == "Not in range"
 
 
+def test_one_scan_answers_for_several_cars():
+    ble, reg, master = scanner()
+    TWO = "5YJ3E1EA1KF000002"
+    name = ble.bleLocalName(TWO).encode()
+    ble._run_command_with_timeout = Mock(
+        return_value=(b"[NEW] Device AA:BB:CC:DD:EE:FF " + name + b"\n", b"", 0)
+    )
+    ble._bluezAddresses = Mock(return_value=set())
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.shutil.which",
+        return_value="/usr/bin/bluetoothctl",
+    ):
+        assert ble.scanForVehicleInRange([VIN, TWO]) is True
+    assert ble._run_command_with_timeout.call_count == 1
+    assert ble.rangeStatus(TWO)["inRange"] is True
+    assert ble.rangeStatus(VIN)["inRange"] is False
+
+
 def test_scan_unavailable_without_bluetoothctl():
     ble, reg, master = scanner()
     ble._run_command_with_timeout = Mock()

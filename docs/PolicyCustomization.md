@@ -88,6 +88,16 @@ nothing can check is never treated as unplugged by the TWC alone.  The log
 shows each checked change and the answer (`TWC <id>: 03 → 00, max ... A:
 checking <VIN>`, `TWC <id>: plugged in: ...`, `unplugged, <VIN> departs`).
 
+A Gen2 TWC that reads no VIN names the car another way: the one car that
+reported plugging in just now, else the one whose BLE charge read matches the
+TWC's pilot and draw, else the one car in BLE range or parked inside the
+radius.  When no car can be home (it left BLE range while away and has not
+been heard since), the plug-in itself is the evidence that a car arrived:
+one BLE range scan listens for every car, never waking any, and a car it
+hears is home and can be named.  While the plug stays unnamed and draws
+current, news of a car (BLE contact, or a plug report) tries again.  The log
+says `<id>: no single car plugged in; left anonymous` once per plug-in.
+
 Home is set or moved only from a fresh position read of a car: a position under 10 minutes old, by the fix's own GPS time, that the car actually reported (a feed's retained copy, redelivered at a restart or reconnect, never counts). That happens when a TWC reads the car's VIN, or when the car's position arrives over BLE. When no home is set yet, a fresh position that arrives while a TWC is naming the car sets it too. A position not read over BLE must also have been read after the car reached its TWC (its plug-in or the VIN read), so a read from before the drive home never moves home, and once home is set, only a BLE position (or the Settings page) moves it. Home is never set from a car's first position otherwise. A car-only install with no TWC and no BLE must set home on the Settings page (use the vehicle location button), or with `homeLat` and `homeLon` through the [setSetting API](modules/control_HTTP_API/setSetting.md). Until then TWCManager logs a warning once, and a car known only through vehicle APIs is never treated as home and gets no limit. `atHomeRadius` defaults to 1,000 feet.
 
 A car's start and charge rate commands also need the car to be plugged in

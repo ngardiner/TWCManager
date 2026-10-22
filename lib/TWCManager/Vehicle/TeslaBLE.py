@@ -1023,14 +1023,14 @@ class TeslaBLE:
         return not self.isDocker() and shutil.which("bluetoothctl") is not None
 
     @_serialized
-    def scanForVehicleInRange(self, vin):
-        """Scan for the car's BLE advertisement. True/False, or None when no
-        scan is possible (Docker or no bluetoothctl) or the scan gave no
-        answer (timed out, failed, or BlueZ reported an error)."""
-        if not isinstance(vin, str) or not isWellFormedVIN(vin):
-            return None
-        vin = vin.upper()
-        if not self.canScan():
+    def scanForVehicleInRange(self, vins):
+        """Scan for the advertisements of vins, one VIN or several. True if
+        one is in range, False if none is, or None when no scan is possible
+        (Docker or no bluetoothctl) or the scan gave no answer (timed out,
+        failed, or BlueZ reported an error)."""
+        vins = [vins] if isinstance(vins, str) else vins
+        asked = {v.upper() for v in vins if isinstance(v, str) and isWellFormedVIN(v)}
+        if not asked or not self.canScan():
             return None
         stdout, stderr, code = self._run_command_with_timeout(
             ["bluetoothctl", "--timeout", str(self.SCAN_SECONDS), "scan", "on"],
@@ -1045,12 +1045,12 @@ class TeslaBLE:
             if not line.lstrip().startswith("[DEL]")
         ]
         output = "\n".join(lines)
-        name = self.bleLocalName(vin)
-        inRange = name in output
+        names = {vin: self.bleLocalName(vin) for vin in asked}
+        found = {vin for vin, name in names.items() if name in output}
         failure = None
         if stdout is None:
             failure = "timed out"
-        if not inRange and failure is None:
+        if not found and failure is None:
             errors = (output + "\n" + self._stripAnsi(stderr)).lower()
             if any(text in errors for text in self.SCAN_ERROR_TEXT):
                 failure = "bluetoothctl reported an error"
@@ -1058,28 +1058,31 @@ class TeslaBLE:
                 # A match above wins whatever the exit code; without one, a
                 # failed run says nothing about the car.
                 failure = f"bluetoothctl exited {code}"
-        if not inRange and failure is None:
+        heard = self._heardAddresses(lines) if asked - found else None
+        if heard and failure is None:
             # BlueZ prints a device's name only when it learns it; a car it
             # already holds (an earlier scan, or tesla-control) shows up by
             # address alone, so look the address up.
-            heard = self._heardAddresses(lines)
-            if heard:
-                known = self._bluezAddresses(name)
+            for vin in asked - found:
+                known = self._bluezAddresses(names[vin])
                 if known is None:
                     failure = "device lookup failed"
-                else:
-                    inRange = bool(heard & known)
-        if failure is not None:
-            self._noteScan(vin, None)
-            logger.warning(f"BLE scan for {vin}: range unknown ({failure})")
-            return None
-        self._noteScan(vin, inRange)
-        logger.info(f"BLE scan for {vin}: {'in range' if inRange else 'not in range'}")
-        v = self.registry.get(vin)
-        if v is not None:
-            # A hit heard the car advertising here; a miss says nothing new.
-            self._safeNote(v.observe, "bleReach", inRange, "TeslaBLE", None, inRange)
-        return inRange
+                    break
+                if heard & known:
+                    found.add(vin)
+        for vin in sorted(asked):
+            hit = vin in found
+            if failure is not None and not hit:
+                self._noteScan(vin, None)
+                logger.warning(f"BLE scan for {vin}: range unknown ({failure})")
+                continue
+            self._noteScan(vin, hit)
+            logger.info(f"BLE scan for {vin}: {'in range' if hit else 'not in range'}")
+            v = self.registry.get(vin)
+            if v is not None:
+                # A hit heard the car advertising here; a miss says nothing new.
+                self._safeNote(v.observe, "bleReach", hit, "TeslaBLE", None, hit)
+        return True if found else None if failure else False
 
     @staticmethod
     def _stripAnsi(data):

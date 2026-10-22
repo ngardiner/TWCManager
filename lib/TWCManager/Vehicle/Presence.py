@@ -109,7 +109,11 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
 
     if field == "bleReach":
         if isinstance(obs.value, bool):
+            back = obs.value and not _reached(master, vehicle)
             vehicle.mark("contact" if obs.value else "absent", at)
+            # A car heard again may be the one on an unnamed plug
+            if back and not vehicle.value("twcVin"):
+                master.attributePlugs()
     elif field in ("lat", "lon"):
         # With the same source's other coordinate: one may change alone
         other = vehicle.reported("lon" if field == "lat" else "lat").get(obs.source)
@@ -157,7 +161,7 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
             # A pushed or attributed plug-in; a Gen2's VIN arrives on its own
             if obs.source in TELEMETRY_SOURCES | {"Gen2TWC", "Gen3TWC"}:
                 Targets.onArrival(master, vehicle)
-            if obs.source in TELEMETRY_SOURCES and not vehicle.value("twcVin"):
+            if obs.source not in _CHARGERS and not vehicle.value("twcVin"):
                 master.attributePlugs()
 
 
@@ -444,9 +448,22 @@ def attribute(master, pointId, source, offered=None, actual=0) -> Optional[str]:
     # may read over BLE, so it runs on the BLE worker
     if not getattr(anon := master.vehicleRegistry.vehicleAt(pointId), "isAnonymous", 0):
         return None
-    v = pick(master, offered, actual, offered is not None, anon.markAt("plugIn"))
+    read, plugIn = offered is not None, anon.markAt("plugIn")
+    v = pick(master, offered, actual, read, plugIn)
+    if v is None and read and not candidates(master) and anon.markAt("scan") < plugIn:
+        # A plug-in is arrival evidence for some car: one scan of every car,
+        # once per plug-in, makes one the radio hears a candidate (its
+        # contact says home). Passive: it wakes nothing
+        anon.mark("scan", plugIn)
+        ble = master.getModuleByName("TeslaBLE")
+        cars = [c.vin for c in master.vehicleRegistry.vehicles() if c.vin]
+        if ble and cars and ble.scanForVehicleInRange(cars):
+            v = pick(master, offered, actual, read, plugIn)
     if v is None:
-        logger.info("%s: no single car plugged in; left anonymous", pointId)
+        # Once per plug-in: news of a car attributes it again
+        if anon.markAt("leftAnonymous") < plugIn:
+            anon.mark("leftAnonymous", plugIn)
+            logger.info("%s: no single car plugged in; left anonymous", pointId)
         return None
     master.vehicleRegistry.observeTwcVin(pointId, v.vin)
     v.observe("pluggedIn", True, source)

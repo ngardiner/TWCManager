@@ -1392,6 +1392,78 @@ def test_a_single_candidate_inside_is_attributed_merges_the_session_and_arrives_
     assert u.vehicleKey == VIN and arrivals == [VIN, VIN]
 
 
+def test_a_car_lost_to_ble_is_named_on_its_plug_edge_by_one_scan(monkeypatch):
+    # Last seen away and out of BLE range, the car comes home and plugs into
+    # a Gen2 that reads no VIN: no candidate, so one scan of every car hears
+    # it, and the same plug edge names it
+    from tests.unit.test_command_path_parity import attributeQueued, realBle
+    from tests.unit.test_gen2_unplug import beats
+
+    m, v, c = placed(AWAY)
+    monkeypatch.setattr(time, "time", c)
+    b = realBle(m)
+    b.isDockerCached, scans = False, []
+    m.getModuleByName = lambda name: b if name == "TeslaBLE" else None
+
+    def bluetoothctl(cmd, timeout, use_process_group=True):
+        scans.append(cmd[-2:])
+        return (
+            b"[NEW] Device AA:BB:CC:DD:EE:FF " + b.bleLocalName(VIN).encode(),
+            b"",
+            0,
+        )
+
+    b._run_command_with_timeout = bluetoothctl
+    later(c, 3600)
+    assert P.presence(m, v) == P.NOT_HOME and P.candidates(m) == []
+    s = m.getSlaveTWCs()[0]
+    with patch("TWCManager.Vehicle.TeslaBLE.shutil.which", return_value="/bin/true"):
+        beats(m, s, c, 20, 0x03, 32.0)
+        attributeQueued(m)
+        assert scans == [["scan", "on"]] and s.vehicleKey == VIN
+        assert m.vehicleRegistry.get("anon:8244") is None
+        assert P.presence(m, v) == P.HOME
+        attributeQueued(m)  # the contact's own re-attempt finds it named
+        assert scans == [["scan", "on"]]
+
+
+def heard(m, v):
+    v.observe("bleReach", True, "TeslaBLE")  # any scan or exchange
+
+
+def cloudPlugAtHome(m, v):
+    placeAt(m, v, HOME)
+    v.observe("chargingState", "Charging", "FleetAPI")
+
+
+@pytest.mark.parametrize("news", [heard, cloudPlugAtHome])
+def test_an_unnamed_session_drawing_current_is_named_on_news_of_its_car(
+    monkeypatch, news
+):
+    # The plug-in's scan missed the car; while the session still draws
+    # current, later contact or a plug report names it, scanning no more
+    from tests.unit.test_command_path_parity import attributeQueued, realBle
+    from tests.unit.test_gen2_unplug import beats
+
+    m, v, c = placed(AWAY)
+    monkeypatch.setattr(time, "time", c)
+    b = realBle(m)
+    b.scanForVehicleInRange = Mock(return_value=False)
+    m.getModuleByName = lambda name: b if name == "TeslaBLE" else None
+    later(c, 3600)
+    s = m.getSlaveTWCs()[0]
+    beats(m, s, c, 20, 0x03, 32.0)
+    attributeQueued(m)
+    later(c, 300)
+    s.reportedAmpsActual = 16.0  # charging, still unnamed
+    m.attributePlugs()
+    attributeQueued(m)
+    assert b.scanForVehicleInRange.call_count == 1 and s.vehicleKey == "anon:8244"
+    news(m, v)
+    attributeQueued(m)
+    assert s.vehicleKey == VIN and b.scanForVehicleInRange.call_count == 1
+
+
 def test_two_candidates_attributed_by_ble_pilot():
     m, r, v, c = home()
     two = m.vehicleRegistry.getOrCreate(VIN2, "t")

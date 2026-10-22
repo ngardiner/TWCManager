@@ -1548,12 +1548,14 @@ class TWCMaster:
             logger.warning("Vehicle registry plug session update failed: %s", e)
 
     def attributePlugs(self, slaves=None):
-        # Each plug unnamed since just now, on the BLE worker
+        # Each plug unnamed since just now or drawing current, on the BLE
+        # worker
         reg = self.vehicleRegistry
         recent = reg.now() - Presence.PLUGGED_JUST_NOW
         for s in slaves or self.getSlaveTWCs():
             anon = reg.vehicleAt(s.twcid)
-            if getattr(anon, "isAnonymous", 0) and anon.markAt("plugIn") >= recent:
+            new = getattr(anon, "isAnonymous", 0) and anon.markAt("plugIn") >= recent
+            if new or getattr(anon, "isAnonymous", 0) and s.reportedAmpsActual >= 1:
                 attribute = lambda s=s: Presence.attribute(
                     self,
                     s.twcid,
