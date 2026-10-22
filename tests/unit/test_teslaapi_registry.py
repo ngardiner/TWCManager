@@ -117,7 +117,7 @@ def test_update_vehicle_data_observes_the_cars_own_current_request():  # slim Ta
     assert api.update_vehicle_data(reg.get(VIN)) is True
     obs = reg.get(VIN).latest("chargeCurrentRequest")
     assert (obs.value, obs.source) == (16, "OwnerAPI")
-    assert reg.get(VIN).value("availableCurrent") == 32   # the pilot stays the pilot
+    assert reg.get(VIN).value("availableCurrent") == 32  # the pilot stays the pilot
 
 
 @pytest.mark.parametrize("kind, source", [("owner", "OwnerAPI"), ("fleet", "FleetAPI")])
@@ -388,6 +388,7 @@ def test_update_vehicle_data_has_a_single_caller():
 
 def test_an_incomplete_vehicle_data_answer_logs_what_is_missing(caplog):
     import logging
+    from TWCManager.Vehicle.TeslaAPI import logger
 
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
@@ -404,7 +405,9 @@ def test_an_incomplete_vehicle_data_answer_logs_what_is_missing(caplog):
         api.get_car_api = Mock(return_value=(True, response))
         caplog.clear()
         assert api.update_vehicle_data(v) is False
-        assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
-            (logging.ERROR, "update_vehicle_data: %s for %s" % (missing, VIN))
-        ]
+        # Another test's background thread may still be logging; only this
+        # module's records are under test.
+        assert [
+            (r.levelno, r.getMessage()) for r in caplog.records if r.name == logger.name
+        ] == [(logging.ERROR, "update_vehicle_data: %s for %s" % (missing, VIN))]
     assert v.value("lat") == 1.0 and v.latest("lon") is None  # lat first
