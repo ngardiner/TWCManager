@@ -1,11 +1,31 @@
 # Shared real-heartbeat driver for Gen2 tests (Phase 3). Works on the masters
 # that tests/unit/test_gen2twc_provider.make() and the reconciler setup()
 # build: it stubs the modules the heartbeat touches, completes the config and
-# gives the master a bytes TWCID.
+# gives the master a bytes TWCID. A beat is the serial loop's order around
+# the control tick: the reply is received, the tick's pass runs, then the
+# heartbeat is sent.
 from unittest.mock import Mock
 
 
 def drive(master, slave, amps_actual, state=0x04, amps_max=0.0):
+    return _beat(master, slave, state, amps_max, amps_actual, master.controlPass)
+
+
+def tickThenBeat(m, s, state, maxA, actA):
+    # BASE's observable order where the master has no tick (distribute ->
+    # receive -> send), the tick's (receive -> controlPass -> send) after
+    if hasattr(m, "controlPass"):
+        return _beat(m, s, state, maxA, actA, m.controlPass)
+    m.distributeEVSEPower()
+    return _beat(m, s, state, maxA, actA, lambda: None)
+
+
+def offersThenBeat(m, s, state, maxA, actA):
+    # Offers only: a target the test set by hand is not redistributed
+    return _beat(m, s, state, maxA, actA, lambda: m.controlPass(distribute=False))
+
+
+def _beat(master, slave, state, amps_max, amps_actual, tick):
     config = master.config.setdefault("config", {})
     config.setdefault("fakeMaster", 1)
     config.setdefault("displayMilliseconds", False)
@@ -36,6 +56,7 @@ def drive(master, slave, amps_actual, state=0x04, amps_max=0.0):
     slave.receive_slave_heartbeat(
         bytearray([state, mx >> 8, mx & 0xFF, ac >> 8, ac & 0xFF, 0, 0])
     )
+    tick()
     slave.send_master_heartbeat()
     return stubs["Dummy"]
 

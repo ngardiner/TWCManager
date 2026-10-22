@@ -942,5 +942,5 @@ class TestVehicleEndpointPerCar:
         master.config = {"config": {}}
         off, required = (v for v, _ in api.registry.attached("TeslaAPI"))
         assert VehicleEndpoint(off, order, master).isReadOnly is False
-        assert VehicleEndpoint(off, order, master).provider == "OwnerAPI"
+        assert VehicleEndpoint(off, order, master)._candidates()[0].name == "OwnerAPI"
         assert VehicleEndpoint(required, order, master).isReadOnly is True

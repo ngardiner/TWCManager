@@ -123,7 +123,7 @@ def _wake(provider, vin, capability):
             # A billed command to a car that may still be asleep is never
             # sent: any failed wake ends the attempt
             return _tagged(woke, "wake ")
-        # Today's BLE behaviour: the command still goes out
+        # A local channel (BLE) still sends the command
         logger.debug(
             "%s wake for %s failed (%s); sending anyway",
             provider.name,
@@ -150,7 +150,7 @@ def runAttempt(reconciler, attempt) -> Outcome:
     if provider is None:
         return Outcome(ERROR, "no provider")
     # A cloud provider wakes before its read: an asleep car's value stays
-    # unknown, and a billed write never goes blind (C1)
+    # unknown, and a billed write never goes blind
     wakeFirst = attempt.wake and not provider.local and provider.declares(WAKE)
     try:
         if wakeFirst:

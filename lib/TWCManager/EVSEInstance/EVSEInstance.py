@@ -1,147 +1,27 @@
 """
-Abstract base class for EVSE (Electric Vehicle Supply Equipment) instances.
-
-Architectural design ported from PR #483 (MikeBishop).
+What every charging endpoint (Gen2TWC, Gen3TWC, VehicleEndpoint and the
+ChargingPoint grouping them) shares: amps/watts conversion over the active
+phases, and defaults for an endpoint that cannot name or see its car.
 """
 
-import abc
 
-
-class EVSEInstance(abc.ABC):
-    """Represents a single charging connection point.
-
-    Concrete implementations include:
-    - Gen2TWC: a TWC Gen2 slave device connected over RS485
-    - VehicleEndpoint: a vehicle whose charge rate a vehicle provider sets
-    - ChargingPoint: the endpoints serving one car, grouped by vehicle key
-    """
-
-    # ------------------------------------------------------------------
-    # Identity
-    # ------------------------------------------------------------------
-
-    @property
-    @abc.abstractmethod
-    def ID(self) -> str:
-        """Unique string identifier for this EVSE (e.g. "Gen2TWC-1234")."""
-
-    # ------------------------------------------------------------------
-    # Capabilities
-    # ------------------------------------------------------------------
-
-    @property
-    @abc.abstractmethod
-    def isReadOnly(self) -> bool:
-        """True if the charge rate cannot be controlled (monitoring only)."""
-
-    @property
-    @abc.abstractmethod
-    def isLocal(self) -> bool:
-        """True if controlled via a direct local connection (e.g. RS485) rather
-        than a remote API."""
-
-    # ------------------------------------------------------------------
-    # State
-    # ------------------------------------------------------------------
-
-    @property
-    @abc.abstractmethod
-    def isCharging(self) -> bool:
-        """True if a vehicle is actively drawing current."""
-
-    @property
-    @abc.abstractmethod
-    def wantsToCharge(self) -> bool:
-        """True if a vehicle is plugged in and willing to accept power (e.g.
-        charging or paused due to insufficient power offer)."""
-
-    @property
-    @abc.abstractmethod
-    def currentPower(self) -> float:
-        """Power currently being drawn, in watts."""
-
-    @property
-    @abc.abstractmethod
-    def currentAmps(self) -> float:
-        """Current charge current, in amps."""
-
-    @property
-    @abc.abstractmethod
-    def currentVoltage(self) -> list:
-        """Per-phase voltage list [phaseA, phaseB, phaseC]. Inactive phases
-        are represented as 0."""
-
-    # ------------------------------------------------------------------
-    # Power limits
-    # ------------------------------------------------------------------
-
-    @property
-    @abc.abstractmethod
-    def minPower(self) -> float:
-        """Minimum power in watts that can be offered to this EVSE."""
-
-    @property
-    @abc.abstractmethod
-    def maxPower(self) -> float:
-        """Maximum power in watts this EVSE can accept."""
-
-    # ------------------------------------------------------------------
-    # Optional properties with sensible defaults
-    # ------------------------------------------------------------------
-
-    @property
-    def currentVIN(self) -> str:
-        """VIN of the vehicle currently connected. Empty string if unknown."""
-        return ""
-
-    @property
-    def controllers(self) -> list:
-        """List of EVSEController names that manage this EVSE instance."""
-        return []
-
-    @property
-    def vehicleKey(self):
-        """Registry key of the vehicle this endpoint serves, or None."""
-        return None
-
-    @property
-    def occupied(self):
-        """True when a car is connected, False when none is, None if unknown."""
-        return None
-
-    # ------------------------------------------------------------------
-    # Control
-    # ------------------------------------------------------------------
-
-    @abc.abstractmethod
-    def setTargetPower(self, watts: float) -> None:
-        """Set the target charge power in watts."""
-
-    # ------------------------------------------------------------------
-    # Conversion helpers
-    # ------------------------------------------------------------------
+class EVSEInstance:
+    # The VIN of the connected car ("" if unknown), the registry key of the
+    # car served, and whether a car is connected (None if unknown)
+    currentVIN = ""
+    vehicleKey = None
+    occupied = None
+    # The budgets (TWCMaster._budgets) this endpoint draws from
+    controllers = []
 
     def convertAmpsToWatts(self, amps: float, voltage: list = None) -> float:
-        """Convert amps to watts, summing across active phases.
-
-        Args:
-            amps: Current in amps (applied equally to each active phase).
-            voltage: Per-phase voltage list. Defaults to ``self.currentVoltage``.
-        """
+        # Summed over the active phases; voltage defaults to currentVoltage
         if voltage is None:
             voltage = self.currentVoltage
         return sum(amps * v for v in voltage if v > 0)
 
     def convertWattsToAmps(self, watts: float, voltage: list = None) -> float:
-        """Convert watts to amps using active-phase voltage.
-
-        Args:
-            watts: Power in watts.
-            voltage: Per-phase voltage list. Defaults to ``self.currentVoltage``.
-        """
         if voltage is None:
             voltage = self.currentVoltage
-        active_phases = [v for v in voltage if v > 0]
-        if not active_phases:
-            return 0.0
-        return watts / sum(active_phases)
+        active = sum(v for v in voltage if v > 0)
+        return watts / active if active else 0.0

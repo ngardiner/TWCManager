@@ -1,12 +1,11 @@
 # Which cars a decision applies to, and the charge-limit decisions that
 # write desired state: the policy's limit, a plug-in and a departure.
 #
-# Presence, until Phase 5 replaces it: a car on a charging point; else the
-# Tesla API's home check on the latest known position (free, any source);
-# with none, a car we hold a limit on (main's wasAtHome); else Home
-# Assistant's at_home; else, for a car only BLE knows, its BLE key (today's
-# broadcast reach). A car with no provider able to carry the capability gets
-# no desired state.
+# Presence: a car on a charging point; else the Tesla API's home check on
+# the latest known position (free, any source); with none, a car we hold a
+# limit on; else Home Assistant's at_home; else, for a car only BLE knows,
+# its BLE key. A car with no provider able to carry the capability gets no
+# desired state.
 from typing import List, Optional
 
 from ..Providers.Capability import (
@@ -59,7 +58,7 @@ def presentVehicles(master, capability) -> List:
 
 
 def broadcastVehicles(master, capability) -> List:
-    # Main's unaddressed car_api_charge: every car on the Tesla API's list at
+    # An unaddressed decision reaches every car on the Tesla API's list at
     # home (or not yet located), every VIN BLE knows, and every Home
     # Assistant car at home that a TWC reports by VIN
     def reached(v):
@@ -109,7 +108,7 @@ def applyPolicyLimit(master, limit: Optional[int], decision: bool) -> int:
         else:
             master.desired.set(vehicle.key, CHARGE_LIMIT, limit, "policy", decision)
         touched += 1
-    # Departure with no edge (main located each wasAtHome car on every apply)
+    # Departure with no edge
     _restoreDeparted(master, read=False)
     return touched
 

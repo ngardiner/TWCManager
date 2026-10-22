@@ -16,6 +16,7 @@ class RS485:
     port = None
     ser = None
     timeLastTx = 0
+    timeOpenFailed = 0
 
     def __init__(self, master):
         self.master = master
@@ -50,7 +51,17 @@ class RS485:
         elif porta:
             self.port = porta
 
+        gen3 = master.config.get("controller.Gen3TWCs", {})
+        if gen3.get("enabled") and gen3.get("port", "/dev/ttyUSB1") == self.port:
+            logger.info("%s belongs to the Gen3 Wall Connector link", self.port)
+            self.master.releaseModule("lib.TWCManager.Interface", classname)
+            return None
+
         self.connect()
+
+    @property
+    def connected(self):
+        return self.ser is not None
 
     def connect(self):
         if not self.port:
@@ -60,12 +71,25 @@ class RS485:
             )
             self.master.releaseModule("lib.TWCManager.Interface", "RS485")
             return
+        # A closed port is retried every 30 s, so a late USB adapter is found
+        if not self.connected and time.time() - self.timeOpenFailed < 30:
+            return
         # Reset any Slave TWC last RX heartbeat counters in case serial reconnection has occurred
         for slaveTWC in self.master.getSlaveTWCs():
             slaveTWC.timeLastRx = time.time()
 
-        # Connect to serial port
-        self.ser = self.serial.serial_for_url(self.port, self.baud, timeout=0)
+        try:
+            self.ser = self.serial.serial_for_url(self.port, self.baud, timeout=0)
+        except Exception as e:
+            if not self.timeOpenFailed:
+                logger.error(
+                    "No Gen2 TWCs can be controlled until %s opens: %s", self.port, e
+                )
+            self.ser, self.timeOpenFailed = None, time.time()
+            return
+        if self.timeOpenFailed:
+            logger.info("Opened RS485 port %s", self.port)
+        self.timeOpenFailed = 0
 
     def close(self):
         # Close the serial interface
@@ -74,9 +98,11 @@ class RS485:
     def getBufferLen(self):
         # This function returns the size of the recieve buffer.
         # This is used by read functions to determine if information is waiting
+        if not self.connected:
+            return 0
         try:
             return self.ser.inWaiting()
-        except serial.serialutil.SerialException as e:
+        except OSError as e:  # SerialException, or EIO from an unplugged adapter
             logger.error(
                 "Error checking RS485 buffer: {}. Will attempt re-connect.".format(e)
             )
@@ -87,7 +113,7 @@ class RS485:
         # Read the specified amount of data from the serial interface
         try:
             return self.ser.read(len)
-        except serial.serialutil.SerialException as e:
+        except OSError as e:
             logger.log(
                 logging.ERROR,
                 "Error reading from serial interface: {}. Will attempt re-connect.".format(
@@ -101,6 +127,8 @@ class RS485:
         # Send msg on the RS485 network. We'll escape bytes with a special meaning,
         # add a CRC byte to the message end, and add a C0 byte to the start and end
         # to mark where it begins and ends.
+        if not self.connected:
+            return
 
         msg = bytearray(msg)
         checksum = 0
@@ -134,7 +162,7 @@ class RS485:
 
         try:
             self.ser.write(msg)
-        except serial.serialutil.SerialException as e:
+        except OSError as e:
             logger.error(
                 "Error writing to RS485 interface: {}. Will attempt re-connect.".format(
                     e

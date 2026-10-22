@@ -49,6 +49,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Under Charge Rate Control mode 2 (and mode 3 below 6 A), the TWC offers the car's share until the car's rate is confirmed, then its maximum; a rate command that keeps failing no longer leaves the TWC at its maximum while the car draws more than its share. A car no provider can set the rate for is held to its share by the TWC
     * (@MikeBishop) - A charge limit is only changed when its current value is known (from any source); TeslaBLE no longer sets a limit it could not read
     * (@MikeBishop) - A targeted start, stop or charge limit sent through Home Assistant now affects only the named car; a command for every car still reaches every Home Assistant car
+    * (@MikeBishop) - A Gen2 RS-485 adapter that is missing or can't be opened no longer stops TWCManager from starting: the Gen2 link logs one error and retries every 30 seconds, so a Gen3-only or vehicle-only install needs no interface change, and a late USB adapter is picked up without a restart. The Gen2 link is not opened on the Gen3 controller's port
     * Fix: Add missing module-level time import in HASS, EmonCMS, Growatt, IotaWatt, SmartMe and TCP modules, which crashed EMS polling and caused charge current oscillation (closes #644)
     * Fix: Restore minInterval parameter on update_location, fixing TypeError that broke API start/stop charging and home location correction
     * Fix: Correct invalid logging level in update_vehicle_data error handler which crashed when logging a failed API response

@@ -93,8 +93,8 @@ class TeslaBLEProvider(Provider):
 
     def startCharging(self, vin: str) -> Outcome:
         if self.ble._scheduleBlocksStart(vin):
-            # The car's own schedule holds the start; as today, treated as
-            # done rather than asked again
+            # The car's own schedule holds the start: treated as done
+            # rather than asked again
             return Outcome(SATISFIED, "scheduled")
         return self.ble.commandOutcome(vin, "charging-start")
 

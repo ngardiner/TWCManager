@@ -39,9 +39,11 @@ import traceback
 import datetime
 import yaml
 import threading
+from TWCManager.ControlTick import ControlTick
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
 from TWCManager.Vehicle.Reconcile.Targets import onArrival, onDeparture
+from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
 import requests
 from enum import Enum
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -295,6 +297,23 @@ def shutdownTimeouts(now, shutdownDeadline):
     return min(shutdownDeadline - 20, now + 60)
 
 
+def refreshTokens(master):
+    # Every 5 minutes, refresh the Tesla API tokens even if no vehicle
+    # command has run recently, so read-only features like Storm Watch
+    # don't rely on a charge/wake command to keep them alive. A POST of up
+    # to 10 s, so here, never on the serial loop.
+    try:
+        carapi = master.getModuleByName("TeslaAPI")
+        if carapi:
+            carapi.refreshTokenIfNeeded()
+            if carapi.listPending():
+                # A list load that failed (at boot, say) or held limits
+                # still waiting on it retry here: free calls only
+                carapi.loadList()
+    finally:
+        master.queue_background_task({"cmd": "refreshTokens"}, delay=300)
+
+
 def background_tasks_thread(master):
     while True:
         try:
@@ -304,14 +323,12 @@ def background_tasks_thread(master):
                 if task["cmd"] == "checkArrival":
                     onArrival(master)
                     # A free vehicle list load; refreshes cars at home, as
-                    # an arrival always has
+                    # an arrival does
                     master.updateChargeAtHome()
                 elif task["cmd"] == "checkCharge":
                     master.updateChargeAtHome()
-                elif task["cmd"] == "loadVehicleList":
-                    carapi = master.getModuleByName("TeslaAPI")
-                    if carapi:
-                        carapi.loadList()
+                elif task["cmd"] == "refreshTokens":
+                    refreshTokens(master)
                 elif task["cmd"] == "checkDeparture":
                     onDeparture(master)
                 elif task["cmd"] == "checkGreenEnergy":
@@ -756,25 +773,6 @@ logger.info(
 # install has no vehicle modules and registers nothing new.
 registerProviders(master)
 
-# Auto-register VehicleEndpoints when TeslaAPI is available.
-# This enables the centralized watt-based power distribution across both
-# Gen2 TWC slaves and at-home vehicles (Phase 4, ported from #483). BLE-only
-# and HomeAssistant-only installs keep the per-slave path.
-if master.getModuleByName("TeslaAPI") is not None:
-    try:
-        from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
-
-        master.registerModule(
-            {
-                "name": "VehicleEndpoints",
-                "ref": VehicleEndpoints(master),
-                "type": "EVSEController",
-            }
-        )
-        logger.info("Registered VehicleEndpoints EVSEController")
-    except Exception as _e:
-        logger.warning("Could not register VehicleEndpoints: %s", _e)
-
 # Auto-register Gen3TWCs controller when enabled in config.
 # Starts a Neurio Modbus RTU server on the configured serial port so that
 # Gen3 Tesla Wall Connectors can be controlled via fake house-load registers.
@@ -817,9 +815,14 @@ backgroundTasksThread.start()
 # the reconciler's own workers so slow BLE retries never block this thread
 # or the background thread.
 master.reconciler.start()
+# The control pass and housekeeping run on their own ~1 s tick, so the
+# serial loop only services RS-485
+master.controlTick = ControlTick(master)
+master.controlTick.start()
 # The Tesla API vehicle list loads here (a free call), so the cloud
 # providers can carry commands before any arrival
 master.queue_background_task({"cmd": "checkCharge"})
+master.queue_background_task({"cmd": "refreshTokens"}, delay=300)
 
 # Charging policy is evaluated on its own thread so module I/O done by
 # policy conditions never stalls serial servicing. The first evaluation
@@ -899,6 +902,14 @@ while True:
         if now - timeLastLoopTop > 1.0:
             logger.warning("Main loop stalled for %.1fs", now - timeLastLoopTop)
         timeLastLoopTop = now
+        if not master.busUp():
+            if master.getModulesByType("Interface"):
+                master.getInterfaceModule().connect()
+            master.flushRS485()
+            continue
+
+        # Messages other threads queued, sent while the bus is quiet
+        master.flushRS485()
 
         if config["config"]["fakeMaster"] == 1:
             # A real master sends 5 copies of linkready1 and linkready2 whenever
@@ -924,11 +935,6 @@ while True:
                 if time.time() - master.getTimeLastTx() >= 1.0:
                     # It's been about a second since our last heartbeat.
                     if master.countSlaveTWC() > 0:
-                        # Run centralized EVSE power distribution once per
-                        # full round-robin cycle (when index wraps to 0).
-                        if idxSlaveToSendNextHeartbeat == 0:
-                            master.distributeEVSEPower()
-
                         slaveTWC = master.getSlaveTWC(idxSlaveToSendNextHeartbeat)
                         if time.time() - slaveTWC.timeLastRx > config.get(
                             "interfaces", {}
@@ -980,10 +986,6 @@ while True:
                 )
                 master.send_slave_linkready()
 
-        # See if there's any message from the web interface.
-        if master.getModuleByName("WebIPCControl"):
-            master.getModuleByName("WebIPCControl").processIPC()
-
         # If it has been more than 2 minutes since the last kWh value,
         # queue the command to request it from slaves
         if config["config"]["fakeMaster"] == 1 and (
@@ -996,25 +998,6 @@ while True:
         # response, and if we haven't queried more than 5 times already for this
         # slave TWC, repeat the query
         master.retryVINQuery()
-
-        # Hourly, forget vehicles no one has claimed or seen for the window.
-        # Housekeeping, so not gated on fakeMaster.
-        if (time.time() - master.lastVehicleExpiry) > 3600:
-            master.lastVehicleExpiry = time.time()
-            master.queue_background_task({"cmd": "expireVehicles"})
-
-        # Periodically refresh the Tesla Fleet API token even if no vehicle
-        # command has run recently, so read-only features like Storm Watch
-        # don't rely on a charge/wake command to keep it alive.
-        if (time.time() - master.lastTeslaTokenRefreshCheck) > (60 * 5):
-            master.lastTeslaTokenRefreshCheck = time.time()
-            carapi = master.getModuleByName("TeslaAPI")
-            if carapi:
-                carapi.refreshTokenIfNeeded()
-                if carapi.listPending():
-                    # A list load that failed (at boot, say) or held limits
-                    # still waiting on it retry here: free calls only
-                    master.queue_background_task({"cmd": "loadVehicleList"})
 
         ########################################################################
         # See if there's an incoming message on the input interface.
@@ -1228,18 +1211,6 @@ while True:
                         "%.2f amp slave TWC %02X%02X is ready to link.  Sign: %s"
                         % (maxAmps, senderID[0], senderID[1], hex_str(sign))
                     )
-
-                    if maxAmps >= 80:
-                        # U.S. chargers need a spike to 21A to cancel a 6A
-                        # charging limit imposed in an Oct 2017 Tesla car
-                        # firmware update. See notes where
-                        # spikeAmpsToCancel6ALimit is used.
-                        master.setSpikeAmps(21)
-                    else:
-                        # EU chargers need a spike to only 16A.  This value
-                        # comes from a forum post and has not been directly
-                        # tested.
-                        master.setSpikeAmps(16)
 
                     if senderID == fakeTWCID:
                         logger.info(
@@ -1487,86 +1458,12 @@ while True:
                     else:
                         potentialVIN = "".join(slaveTWC.VINData)
 
-                        # Ensure we have a valid VIN
-                        vinValid = True
-
-                        if len(potentialVIN) != 17 and len(potentialVIN) != 0:
-                            vinValid = False
-
-                        if vinValid and len(potentialVIN) == 17:
-                            potentialVIN = potentialVIN.upper()
-                            check = potentialVIN[8]
-                            if check == "X":
-                                check = 10
-                            elif check.isdigit():
-                                check = int(check)
-                            else:
-                                vinValid = False
-
-                        if vinValid and len(potentialVIN) == 17:
-                            weights = [
-                                8,
-                                7,
-                                6,
-                                5,
-                                4,
-                                3,
-                                2,
-                                10,
-                                0,
-                                9,
-                                8,
-                                7,
-                                6,
-                                5,
-                                4,
-                                3,
-                                2,
-                            ]
-                            replaceValues = {
-                                "A": 1,
-                                "B": 2,
-                                "C": 3,
-                                "D": 4,
-                                "E": 5,
-                                "F": 6,
-                                "G": 7,
-                                "H": 8,
-                                "J": 1,
-                                "K": 2,
-                                "L": 3,
-                                "M": 4,
-                                "N": 5,
-                                "P": 7,
-                                "R": 9,
-                                "S": 2,
-                                "T": 3,
-                                "U": 4,
-                                "V": 5,
-                                "W": 6,
-                                "X": 7,
-                                "Y": 8,
-                                "Z": 9,
-                                "1": 1,
-                                "2": 2,
-                                "3": 3,
-                                "4": 4,
-                                "5": 5,
-                                "6": 6,
-                                "7": 7,
-                                "8": 8,
-                                "9": 9,
-                                "0": 0,
-                            }
-
-                            sum = 0
-                            for digit, weight in zip(potentialVIN, weights):
-                                if digit not in replaceValues:
-                                    vinValid = False
-                                    break
-                                sum += replaceValues[digit] * weight
-                            if sum % 11 != check:
-                                vinValid = False
+                        # Ensure we have a valid VIN: empty (no VIN to
+                        # read) or 17 characters with a good check digit
+                        vinValid = len(potentialVIN) == 0 or vinCheckDigitValid(
+                            potentialVIN
+                        )
+                        potentialVIN = potentialVIN.upper()
 
                         if vinValid and len(potentialVIN) == 0:
                             # All VIN parts are empty - non-Tesla vehicle or CAN
@@ -2021,8 +1918,10 @@ while True:
         # The 5 s sleep was deliberate; don't report it as a main loop stall.
         timeLastLoopTop = time.time()
 
-# Stop policy evaluation first so it doesn't queue new work while we drain.
+# Stop policy evaluation and the control tick first (the tick joins), so
+# neither queues new work while we drain.
 master.getModuleByName("Policy").stop()
+master.controlTick.stop()
 
 # Whole shutdown must finish inside systemd's 90 s stop timeout.
 shutdownDeadline = time.time() + 80
@@ -2052,8 +1951,10 @@ while master.backgroundTasksQueue.unfinished_tasks > 0:
         break
     time.sleep(0.1)
 
-# Close the input module
-master.getInterfaceModule().close()
+# Send what the drains queued (a mode-3 stop), then close the input module
+if master.busUp():
+    master.flushRS485()
+    master.getInterfaceModule().close()
 
 # Backstop: any stray non-daemon thread (paho, future modules) would otherwise
 # keep the interpreter alive until systemd SIGKILLs us. Exit now that shutdown

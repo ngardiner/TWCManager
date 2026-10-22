@@ -20,7 +20,10 @@ For background on the Gen3 and why this approach is necessary, see
   `pip install pymodbus`
 - A **dedicated RS485 serial adapter** wired to the Gen3's Neurio meter
   terminals.  This must be a *separate* adapter from the one used for
-  Gen2 RS485 master/slave communications.
+  Gen2 RS485 master/slave communications.  A Gen3-only install can leave
+  the Gen2 `interface.RS485` settings as shipped: with no adapter on its
+  port the Gen2 link logs one error and waits for an adapter, and if it is
+  pointed at the Gen3 controller's port it stands down.
 - The Gen3 TWC must have its **external Neurio meter** option enabled at
   115200 baud (configured during installation or via the Gen3's own API).
 - The Gen3 TWC must be **reachable by IP address** on the local network
