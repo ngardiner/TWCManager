@@ -592,6 +592,8 @@ class TWCMaster:
                 # amount
                 if 0 < offer < point.minPower:
                     offer = 0
+                if point.maxPower < point.minPower <= fair_share:
+                    self._noteRefusedPoint(point, fair_share)
 
                 point.setTargetPower(offer)
                 offers.append((point.ID, offer))
@@ -625,6 +627,26 @@ class TWCMaster:
                 ", ".join("%s=%d W" % (pid, watts) for pid, watts in offers)
                 or "no points",
             )
+
+    # When each refused point was last logged
+    _refusedPointLogged = {}
+
+    def _noteRefusedPoint(self, point, available: float) -> None:
+        # Power was there for the point's minimum, but its own members' limits
+        # left it nothing. With a plugged, named car that is a missed charge,
+        # so it is said at INFO, at most hourly per point.
+        now = time.time()
+        if not point.currentVIN or point.occupied is not True:
+            return
+        if now - self._refusedPointLogged.get(point.ID, 0) < 3600:
+            return
+        self._refusedPointLogged[point.ID] = now
+        logger.info(
+            "%s: %s is plugged in, but its limits leave it none of %d W",
+            point.ID,
+            point.currentVIN,
+            available,
+        )
 
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]

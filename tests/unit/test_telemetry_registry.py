@@ -211,6 +211,14 @@ def test_healthy_teslamate_car_reads_without_api_calls(teslamate):  # ruling 1
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
 
 
+def test_teslamate_reports_the_cars_own_ac_maximum(teslamate):
+    tm, car, reg = teslamate
+    feed(tm, charge_current_request_max="48")
+    assert reg.get(VIN).value("chargeCurrentRequestMax") == 48
+    feed(tm, charge_current_request_max="")  # an empty payload is no reading
+    assert reg.get(VIN).value("chargeCurrentRequestMax") is None
+
+
 def test_feed_vouches_for_a_value_the_api_reobserved(teslamate):  # ruling 3
     tm, car, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0")

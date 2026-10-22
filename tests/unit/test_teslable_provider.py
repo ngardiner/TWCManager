@@ -29,8 +29,26 @@ def test_amps_range_is_one_to_vehicle_max():
     v = reg.getOrCreate(VIN, "t")
     master.config = {"config": {"wiringMaxAmpsPerTWC": 48}}
     assert p.ampsRange(v) == (1, 48)
-    v.observe("availableCurrent", 16, "TeslaBLE")
+    # A car read under a 6 A pilot can still be lifted to the wiring max
+    v.observe("availableCurrent", 6, "TeslaBLE")
+    assert p.ampsRange(v) == (1, 48) and p.covers(v, 48)
+    v.observe("chargeCurrentRequestMax", 16, "TeslaBLE")
     assert p.ampsRange(v) == (1, 16)
+
+
+def test_a_vehicle_rate_above_the_cars_maximum_still_reaches_it():
+    # The car clamps a lift to its own maximum; the range only steers a
+    # rate the local rule places
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    order = ProviderOrder(master)
+    order.register(p)
+    v = reg.getOrCreate(VIN, "t")
+    ble._claimUnproven(v)
+    master.config = {"config": {"wiringMaxAmpsPerTWC": 48}}
+    v.observe("chargeCurrentRequestMax", 32, "TeslaBLE")
+    assert order.candidates(v, C.SET_AMPS, amps=48, localRule=False) == [p]
+    assert order.candidates(v, C.SET_AMPS, amps=48) == []
 
 
 def test_commands_call_the_module_by_vin():
@@ -62,7 +80,7 @@ def test_amps_range_is_never_none_while_ready():  # Task 2 review constraint
     ble._claimUnproven(v)
     assert p.ready(v, C.SET_AMPS) is True
     assert p.ampsRange(v) == (1, 32)  # no wiring max configured
-    v.observe("availableCurrent", 0, "TeslaBLE")
+    v.observe("chargeCurrentRequestMax", 0, "TeslaBLE")
     assert p.ampsRange(v) == (1, 32)  # 0 falls through to the wiring max
     assert p.covers(v, 1)
     master.config = {}

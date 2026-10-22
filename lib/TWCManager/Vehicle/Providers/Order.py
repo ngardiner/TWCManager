@@ -90,9 +90,10 @@ class ProviderOrder:
         found = [
             p for p in self.ordered(capability) if self._ready(p, vehicle, capability)
         ]
-        if amps is not None:
+        if amps is not None and localRule:
             # Outside the preferred provider's range the next provider
-            # carries the target
+            # carries the target. Not for a vehicle rate: the car clamps it
+            # to its own maximum
             found = [
                 p
                 for p in found

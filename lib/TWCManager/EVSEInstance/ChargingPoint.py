@@ -106,15 +106,26 @@ class ChargingPoint(EVSEInstance):
     # EVSEInstance: power limits
     # ------------------------------------------------------------------
 
+    def _atPointVoltage(self, limit, pick) -> float:
+        # Members are compared in amps and priced at the point's voltage.
+        # Each prices itself at its own: a TWC at what it measures, a car
+        # that is not charging at the configured default. In watts, a volt
+        # of difference would put a car's cap under the TWC's equal minimum
+        # and flip the offer between nothing and that minimum.
+        amps = (
+            self.convertWattsToAmps(limit(e), e.currentVoltage) for e in self.endpoints
+        )
+        return self.convertAmpsToWatts(pick(amps), self.currentVoltage)
+
     @property
     def minPower(self) -> float:
         # Every member must be able to take the offer
-        return max(e.minPower for e in self.endpoints)
+        return self._atPointVoltage(lambda e: e.minPower, max)
 
     @property
     def maxPower(self) -> float:
         # The binding member limits the point
-        return min(e.maxPower for e in self.endpoints)
+        return self._atPointVoltage(lambda e: e.maxPower, min)
 
     # ------------------------------------------------------------------
     # EVSEInstance: optional properties

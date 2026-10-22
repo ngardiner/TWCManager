@@ -77,7 +77,9 @@ class Provider:
 
 
 def vehicleMaxAmps(vehicle, configConfig: dict) -> float:
-    # VehicleEndpoint.maxPower's rule
-    return vehicle.value("availableCurrent") or configConfig.get(
+    # VehicleEndpoint.maxPower's rule: the car's own AC maximum. Never the
+    # charger's pilot: on our own TWC the pilot is our last offer, so a car
+    # read under a low offer would hold its charging point there for good.
+    return vehicle.value("chargeCurrentRequestMax") or configConfig.get(
         "wiringMaxAmpsPerTWC", 32
     )

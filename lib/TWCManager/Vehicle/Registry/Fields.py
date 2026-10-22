@@ -30,6 +30,8 @@ FIELDS = (
     "scheduledChargingPending",
     "twcVin",
     "bleReach",
+    # The car's own AC current maximum (amps)
+    "chargeCurrentRequestMax",
 )
 
 # Source names are module class names. A source is report-on-change exactly

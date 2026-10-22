@@ -1,4 +1,6 @@
 # tests/unit/test_charging_points.py
+import logging
+import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
@@ -247,3 +249,40 @@ def test_twc_offers_never_exceed_the_budget_or_wiring_across_point_shapes():
             assert sum(offers) <= min(amps, CONFIG["config"]["wiringMaxAmpsAllTWCs"]) + 1e-9, (shape, amps, offers)
             claimed = {v.upper() for _, v in shape if v}                                   # a car on no TWC still queues its own amps
             assert not [a for a in setAmps(m) if a["vin"] in claimed] and all(len(pointsHolding(m, v)) <= 1 for v in (VIN, VIN2))
+
+# A car asleep on its TWC, read while the TWC held its 6 A sleep pilot: on our
+# own TWC the pilot is our last offer, so it must not cap the point
+
+def asleepUnderSixAmps(m, twcVolts, carMax=None):
+    m.config["config"].update(wiringMaxAmpsAllTWCs=48, wiringMaxAmpsPerTWC=48)
+    s = stoppedTwc(m); s.reportedAmpsMax = 6; s.voltsPhaseA = twcVolts             # the TWC's 6 A sleep pilot
+    v = car(m, VIN, "Stopped"); v.observe("availableCurrent", 6, "TeslaBLE"); v.observe("voltage", 2, "TeslaBLE")   # not charging: 240 V default
+    if carMax is not None: v.observe("chargeCurrentRequestMax", carMax, "TeslaBLE")
+    budget(m, 48); return s
+
+def test_a_car_read_under_the_sleep_pilot_still_gets_the_share():
+    m = real(); s = asleepUnderSixAmps(m, 243)
+    m.distributeEVSEPower(); assert s._evseTargetAmps == pytest.approx(48 * 240 / 243)
+    m.vehicleRegistry.get(VIN).observe("chargeCurrentRequestMax", 32, "TeslaBLE")    # the car's own maximum binds
+    m.distributeEVSEPower(); assert s._evseTargetAmps == pytest.approx(32)
+
+def test_members_are_compared_at_the_points_voltage():
+    # A car whose own maximum is the TWC's minimum, priced at 240 V against the TWC's measured volts
+    for volts in (240, 241, 243):
+        m = real(); s = asleepUnderSixAmps(m, volts, carMax=6)
+        (pt,) = m.chargingPoints(); assert pt.maxPower == pt.minPower == 6 * volts
+        m.distributeEVSEPower(); assert s._evseTargetAmps == pytest.approx(6), volts
+
+def refusalsLogged(caplog, carMax=None, amps=48, wiring=48):
+    TWCMaster._refusedPointLogged.clear(); caplog.clear()
+    m = real(); s = asleepUnderSixAmps(m, 243, carMax); m.config["config"]["wiringMaxAmpsAllTWCs"] = wiring; budget(m, amps)
+    with caplog.at_level(logging.INFO):
+        for _ in range(3): m.distributeEVSEPower()
+    assert s._evseTargetAmps == 0
+    return [r.getMessage() for r in caplog.records if "its limits leave it none" in r.getMessage()]
+
+def test_a_named_plugged_car_refused_by_its_point_is_logged_once(caplog):
+    lines = refusalsLogged(caplog, carMax=5)                                       # the car's cap is under the TWC's minimum
+    assert len(lines) == 1 and lines[0].startswith("Point-%s: %s is plugged in" % (VIN, VIN))
+    assert refusalsLogged(caplog, wiring=5) == []                                  # the wiring's budget refuses, not the members
+    assert refusalsLogged(caplog, carMax=5, amps=5) == []                          # too little power is not a refusal

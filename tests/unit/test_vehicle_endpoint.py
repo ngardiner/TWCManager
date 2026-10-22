@@ -50,7 +50,8 @@ def test_state_from_registry_values_without_reads():
     m = master({}, fleet()); v = car(m, VIN1); e = VehicleEndpoint(v, m.providerOrder, m); v.read = Mock(side_effect=AssertionError("no reads"))
     assert not e.wantsToCharge and e.occupied is None and e.maxPower == 32 * 240 and e.minPower == 5 * 240
     v.observe("chargingState", "Stopped", "TeslaAPI"); v.observe("availableCurrent", 16, "TeslaAPI"); v.observe("actualCurrent", 0, "TeslaAPI")
-    assert e.wantsToCharge and not e.isCharging and e.occupied is True and e.maxPower == 16 * 240
+    assert e.wantsToCharge and not e.isCharging and e.occupied is True and e.maxPower == 32 * 240   # the pilot is not the car's limit
+    v.observe("chargeCurrentRequestMax", 16, "TeslaAPI"); assert e.maxPower == 16 * 240
 
 def test_set_target_power_queues_on_change_or_after_refresh():
     c = Clock(); m = master({}, fleet()); e = VehicleEndpoint(car(m, VIN1), m.providerOrder, m, clock=c)

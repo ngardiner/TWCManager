@@ -17,6 +17,7 @@ CHARGE_FIELDS = frozenset(
         "phases",
         "scheduledChargingPending",
         "timeToFullCharge",
+        "chargeCurrentRequestMax",
     }
 )
 LOCATION_FIELDS = frozenset({"lat", "lon", "gpsAsOf"})

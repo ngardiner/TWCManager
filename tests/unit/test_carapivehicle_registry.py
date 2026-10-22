@@ -129,6 +129,29 @@ def test_update_vehicle_data_observes_only_present_keys():  # P15
     assert reg.get(VIN).latest("name") == name_before  # not re-observed
 
 
+def test_update_vehicle_data_records_the_cars_own_ac_maximum():
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    car = api.getCarApiVehicles()[0]
+    car.get_car_api = Mock(
+        return_value=(
+            True,
+            {
+                "drive_state": {"latitude": 1.0, "longitude": 2.0},
+                "charge_state": {
+                    "charger_pilot_current": 6,
+                    "charge_current_request_max": 48,
+                },
+                "vehicle_state": {},
+            },
+        )
+    )
+    car.carapi.is_location_home = Mock(return_value=False)
+    car.carapi.is_far_from_home = Mock(return_value=False)
+    assert car.update_vehicle_data() is True
+    assert reg.get(VIN).value("chargeCurrentRequestMax") == 48
+
+
 def test_debug_interface_resolves_by_vin():
     from TWCManager.Vehicle.Providers.Order import ProviderOrder
 

@@ -1107,6 +1107,7 @@ class TeslaBLE:
             "chargeLimit": cs.get("chargeLimitSoc"),
             "chargingState": self._extract_enum_value(cs.get("chargingState")),
             "availableCurrent": cs.get("chargerPilotCurrent"),
+            "chargeCurrentRequestMax": cs.get("chargeCurrentRequestMax"),
             "actualCurrent": cs.get("chargerActualCurrent"),
             "voltage": cs.get("chargerVoltage"),
             "phases": cs.get("chargerPhases"),

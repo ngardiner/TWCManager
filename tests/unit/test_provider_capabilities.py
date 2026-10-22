@@ -59,5 +59,8 @@ def test_summary_lists_each_capability():
 def test_vehicle_max_amps_falls_back_to_wiring():
     v = VehicleRegistry({}).getOrCreate(VIN, "t")
     assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 40}) == 40
-    v.observe("availableCurrent", 16, "TeslaAPI")
+    # The charger's pilot is not the car's limit: on our TWC it is our offer
+    v.observe("availableCurrent", 6, "TeslaBLE")
+    assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 40}) == 40
+    v.observe("chargeCurrentRequestMax", 16, "TeslaAPI")
     assert vehicleMaxAmps(v, {}) == 16
