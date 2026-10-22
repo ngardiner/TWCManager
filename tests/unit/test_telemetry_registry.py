@@ -2,6 +2,7 @@
 import logging
 import time
 from unittest.mock import Mock
+from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
 
 import pytest
 
@@ -219,7 +220,7 @@ def test_healthy_teslamate_car_reads_without_api_calls(teslamate):  # ruling 1
     tm, api, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0", battery_level="61")
     assert reg.get(VIN).read("lat", 0) is not None  # maxAge 0: the feed vouches for now
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel", 10000) == 61
     assert not api.get_car_api.called
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"

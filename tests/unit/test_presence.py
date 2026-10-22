@@ -8,6 +8,7 @@ import time
 import urllib.parse
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
 
 import pytest
 
@@ -392,9 +393,7 @@ def test_counts_include_presumed_cars():
     placeAt(m, reg.get(VIN3), AWAY)
     reg.get(VIN).observe("batteryLevel", 60, TM)
     reg.get(VIN2).observe("batteryLevel", 40, TM)
-    api.lastChargeCheck = c.t
-    with patch("time.time", return_value=c.t):
-        assert api.numCarsAtHome == 2 and api.minBatteryLevelAtHome == 40
+    assert api.numCarsAtHome == 2 and api.minBatteryLevelAtHome == 40
     assert [x.vin for x, _ in P.homeCars(m, "TeslaAPI")] == [VIN, VIN2]
 
 
@@ -508,14 +507,17 @@ def fleetCars(requests_mock, m):
     return api
 
 
-def test_update_charge_at_home_reads_only_home_cars(requests_mock):
+def test_a_power_start_asks_a_read_of_home_cars_only(requests_mock):
     m, r, v, c = setup(clock=False, here=False)
     m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
-    api = fleetCars(requests_mock, m)
-    placeAt(m, v, HOME)  # VIN2: presumed
-    api.updateChargeAtHome()
-    read = [q.url for q in requests_mock.request_history if "/vehicle_data" in q.url]
-    assert [url.split("/")[-2] for url in read] == [VIN]
+    fleetCars(requests_mock, m)
+    m.watch = Mock()
+    placeAt(m, v, AWAY)
+    m.updateChargeAtHome()
+    assert not m.watch.readNow.called
+    placeAt(m, v, HOME)
+    m.updateChargeAtHome()
+    m.watch.readNow.assert_called_once_with(VIN, "power start")  # VIN2: presumed
 
 
 @pytest.mark.parametrize("gpsAge, moved", [(5 * 3600, False), (5, True)])
@@ -536,30 +538,22 @@ def test_a_fleet_fix_with_a_stale_gps_time_never_seeds_home(
     assert m.getHomeLatLon() == (list(AWAY) if moved else [10000, 10000])
 
 
-def test_away_cars_keep_the_status_deferral_ladder():
+def test_every_read_defers_the_next_by_the_read_max_age():
+    # Near home or far, parked or driving: when to read again is the watch's
     m, r, v, c = setup(clock=False, here=False)
     api = new_api(master=m)
     api.addVehicle({"id": 1, "vin": VIN, "display_name": None})
     car = v.attachment("TeslaAPI")
     api.slotFor = Mock(return_value=Mock())
-    near = (HOME[0] + 0.5, HOME[1])  # outside the radius, within an hour's drive
-    far = (HOME[0] + 2, HOME[1])
-    for at, shift, wait in (
-        (AWAY, "P", 300),  # home not set: never deferred as away
-        (HOME, "P", 300),
-        (far, "P", 3600),
-        (near, "P", 1800),
-        (near, "D", 300),
-    ):
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
+    for at, shift in ((HOME, "P"), ((HOME[0] + 2, HOME[1]), "P"), (AWAY, "D")):
         drive = {"latitude": at[0], "longitude": at[1], "shift_state": shift}
         api.get_car_api = Mock(
             return_value=(True, {"drive_state": drive, "charge_state": {}})
         )
         car.statusDeferral = 0
         assert api.update_vehicle_data(v) is True
-        assert round(car.statusDeferral - time.time()) == wait
-        m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
-    assert v.value("shiftState") == "D"
+        assert round(car.statusDeferral - time.time()) == READ_MAX_AGE
 
 
 def test_policy_wide_apply_skips_a_departed_car_on_every_channel(requests_mock):

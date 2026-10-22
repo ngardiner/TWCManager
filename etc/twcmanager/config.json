@@ -199,8 +199,9 @@
         # Only set "teslaProxyCert" when "teslaProxy" is set.
         #"teslaProxyCert": "/path/to/public_key.pem",
 
-        # The cloudUpdateInterval determines how often to poll certain
-        # data retrieved from the Tesla API to evaluate policy.
+        # The cloudUpdateInterval is the Powerwall module's cloud cache
+        # time: how long it keeps what it read from the Tesla cloud.
+        # It does not set how often cars are read.
         "cloudUpdateInterval": 1800,
 
         // wakeDelayMins: how long to wait (minutes) before issuing a Fleet API

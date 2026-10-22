@@ -484,24 +484,11 @@ class TWCMaster:
             logger.warning("Watch load sample raised %s", type(e).__name__)
 
     def updateChargeAtHome(self):
-        # checkCharge: each vehicle module with a provider not suppressed
-        # for reads refreshes its cars at home, once (TeslaAPI's also loads
-        # its vehicle list)
-        order, seen = self.providerOrder, set()
-        for p in order.providers():
-            module = p.module
-            if (
-                module is None
-                or id(module) in seen
-                or order.suppressions.suppressed(p, C.READ_CHARGE)
-                or not p.available(C.READ_CHARGE)
-            ):
-                continue
-            seen.add(id(module))
-            try:
-                getattr(module, "updateChargeAtHome", lambda: None)()
-            except Exception as e:
-                logger.warning("%s charge refresh raised %s", p.name, type(e).__name__)
+        # checkCharge, on a power start: every car at home may be the one
+        # drawing, the car its TWC names included
+        for v in self.vehicleRegistry.vehicles() if self.watch else ():
+            if Presence.presence(self, v) == Presence.HOME:
+                self.watch.readNow(v.vin, "power start")
 
     def getModulesByType(self, type):
         matched = []

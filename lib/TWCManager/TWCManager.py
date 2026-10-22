@@ -792,10 +792,9 @@ master.reconciler.start()
 master.watch = Watch(master)
 master.controlTick = ControlTick(master)
 master.controlTick.start()
-# The Tesla API vehicle list loads here (a free call), so the cloud
-# providers can carry commands before any arrival
-master.queue_background_task({"cmd": "checkCharge"})
-master.queue_background_task({"cmd": "refreshTokens"}, delay=300)
+# The token refresh's first run loads the Tesla API vehicle list (a free
+# call), so the cloud providers can carry commands before any arrival
+master.queue_background_task({"cmd": "refreshTokens"})
 
 # Charging policy is evaluated on its own thread so module I/O done by
 # policy conditions never stalls serial servicing. The first evaluation

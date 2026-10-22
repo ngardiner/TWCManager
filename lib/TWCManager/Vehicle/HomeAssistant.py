@@ -60,10 +60,6 @@ class HaVehicle:
         self.slug = _slugify_name(name)
         self.entity_ids = entity_ids  # only the entities we need
 
-        # Cached for the policy's minBatteryLevelAtHome; everything else goes
-        # only to the registry
-        self.battery_level: Optional[float] = None
-
     # ---- Helpers for entity availability ----
 
     @property
@@ -129,7 +125,6 @@ class HaVehicle:
                     seen[field] = float(st.get("state"))
                 except (TypeError, ValueError):
                     pass
-        self.battery_level = seen.get("batteryLevel", self.battery_level)
 
         # Charging boolean
         st = get_state("charging_sensor")
@@ -541,19 +536,11 @@ class HomeAssistant:
     # Aggregate helpers
     # ------------------------------------------------------------------
 
-    def updateChargeAtHome(self):
-        for _, v in self.registry.attached("HomeAssistant"):
-            v.refresh_from_home_assistant(self)
-        return True
-
     @property
     def numCarsAtHome(self):
-        self.updateChargeAtHome()
         return len(homeCars(self.master, "HomeAssistant"))
 
     @property
     def minBatteryLevelAtHome(self):
-        self.updateChargeAtHome()
         cars = homeCars(self.master, "HomeAssistant")
-        levels = [v.battery_level for _, v in cars if v.battery_level is not None]
-        return min(levels) if levels else 10000.0
+        return min([v.value("batteryLevel", 10000) for v, _ in cars] or [10000])

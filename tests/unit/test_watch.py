@@ -515,6 +515,11 @@ def test_an_anonymous_car_is_not_visited():
     w = Watch(m, clock=c); w.pass_()
     assert set(w._seen) == {VIN} and {vin for vin, _ in w._last} <= {VIN}
 
+def test_a_power_start_asks_the_watch_to_read_every_home_car():
+    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
+    w = m.watch = Watch(m, clock=c); w.pass_(); runPending(r.ble); reads = bleReads(m)
+    m.updateChargeAtHome(); w.pass_(); runPending(r.ble); assert reads.count == 1
+
 def test_the_pre_command_ping_trusts_a_watch_ping_inside_its_cadence():
     # Every awake cadence fits inside the ping's own window, so a car the
     # watch heard from is never asked again before a no-wake command

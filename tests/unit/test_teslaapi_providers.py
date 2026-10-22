@@ -2,6 +2,8 @@
 import re
 from unittest.mock import Mock
 
+from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
+
 import pytest
 from requests_mock import ANY
 
@@ -165,13 +167,12 @@ def test_owner_reads_cost_nothing_with_a_fleet_token_held(requests_mock, case):
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
     car.lastAPIAccessTime = 0
-    api.is_far_from_home = Mock(return_value=False)
     fleet = requests_mock.register_uri(ANY, FLEET_ANY, json=VEHICLE_DATA)
     online = requests_mock.get(
         OWNER_VEHICLE, json={"response": {"state": state, "vin": VIN}}
     )
     data = requests_mock.get(OWNER_VEHICLE + "/vehicle_data", json=payload)
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert fleet.call_count == 0
     assert online.call_count == 1
     if case == "lands":
@@ -190,11 +191,10 @@ def test_fleet_reads_when_owner_holds_no_token(requests_mock):
     api.storeToken(fleet_token())
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
-    api.is_far_from_home = Mock(return_value=False)
     base = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
     online = requests_mock.get(base, json={"response": {"state": "online"}})
     data = requests_mock.get(base + "/vehicle_data", json=VEHICLE_DATA)
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel") == 61
     assert (online.call_count, data.call_count) == (1, 1)
 
@@ -214,7 +214,6 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
     car.lastAPIAccessTime = 0
-    api.is_far_from_home = Mock(return_value=False)
     api.master.queue_background_task = Mock()
     base = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
     fleetOnline = requests_mock.get(base, json={"response": {"state": "online"}})
@@ -225,7 +224,7 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     ownerData = requests_mock.get(
         OWNER_VEHICLE + "/vehicle_data", status_code=403, text="refused"
     )
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel") == 61
     assert (ownerOnline.call_count, ownerData.call_count) == (1, 1)
     assert (fleetOnline.call_count, fleetData.call_count) == (0, 1)
@@ -235,3 +234,17 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     assert reg.get(VIN).read("lat", 0) is not None
     assert (ownerOnline.call_count, ownerData.call_count) == (1, 1)
     assert fleetData.call_count == 2
+
+
+def test_two_callers_inside_read_max_age_pay_once(requests_mock):
+    from tests.unit.reconcile_helpers import HOME, attachFleet
+    from tests.unit.test_command_path_parity import FleetCar, paid
+    from tests.unit.test_limit_reconciler import setup
+    from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
+
+    m, r, v, c = setup(here=False); car = FleetCar(requests_mock, state="online", at=HOME); attachFleet(m, v, car)
+    v.read("batteryLevel", maxAge=READ_MAX_AGE); c.t += 100; v.read("chargingState", 0, force=True)
+    assert paid(requests_mock)[0] == 1                      # the deferral dedupes the forced read inside 300 s
+    # The deferral runs on real time: age it with the test clock
+    c.t += 300; v.attachment("TeslaAPI").statusDeferral -= 400
+    v.read("chargingState", 0, force=True); assert paid(requests_mock)[0] == 2

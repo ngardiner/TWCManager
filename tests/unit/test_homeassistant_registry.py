@@ -105,7 +105,18 @@ def test_refresh_does_not_resurrect_forgotten_vehicle():
     ha._get_state = Mock(return_value={"state": "50"})
     hv.refresh_from_home_assistant(ha)
     assert reg.get(VIN) is None
-    assert hv.battery_level == 50.0
+
+
+def test_min_battery_level_at_home_is_the_registrys_not_the_last_ha_parse():
+    ha, reg = make_ha()
+    v = reg.getOrCreate(VIN, "t")
+    hv = HaVehicle("Car", VIN, "d1", {"battery_level_sensor": "sensor.b"})
+    v.attach("HomeAssistant", hv)
+    ha._get_state = Mock(return_value={"state": "50"})
+    hv.refresh_from_home_assistant(ha)
+    v.observe("batteryLevel", 33, "TeslaBLE")  # a newer reading from elsewhere
+    with patch("TWCManager.Vehicle.HomeAssistant.homeCars", return_value=[(v, hv)]):
+        assert ha.minBatteryLevelAtHome == 33
 
 
 def test_provider_reads_once_enabled():
