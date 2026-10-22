@@ -239,7 +239,7 @@ def realBle(m, answers="ok", vins=(VIN,), ping=True):
     b._fetch_state_json = lambda vin, kind: None
     b.pings = []
 
-    def _ping(vin):
+    def _ping(vin, scan=True):
         b.pings.append(vin)
         if ping is True:
             m.vehicleRegistry.get(vin).observe("state", "online", "TeslaBLE")
@@ -2558,7 +2558,7 @@ def test_a_car_just_unplugged_is_not_the_next_plug_s(requests_mock, monkeypatch)
     push(v, c, pluggedIn=True, chargingState="Stopped")
     push(v, c, gap=60, pluggedIn=False, chargingState="Disconnected")
     v.observe("bleReach", True, "TeslaBLE")
-    b._runPing = lambda vin: vin == VIN
+    b._runPing = lambda vin, scan=True: vin == VIN
     c.t += 30
     s = gen2(monkeypatch, m, c, vin=None)
     attributeQueued(m)

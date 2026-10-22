@@ -39,6 +39,8 @@ FIELDS = (
     # Charging power (kW) and the car's own AC current maximum (amps)
     "chargerPower",
     "chargeCurrentRequestMax",
+    # The charge-port door, which VCSEC reports only while the car is awake
+    "chargePortOpen",
 )
 
 # Source names are module class names. A source is report-on-change exactly

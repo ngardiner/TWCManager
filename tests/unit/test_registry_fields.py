@@ -58,7 +58,7 @@ def test_constants():
     assert (
         "chargeLimit" in FIELDS
         and "chargeCurrentRequest" in FIELDS
-        and len(FIELDS) == 24
+        and len(FIELDS) == 25
     )
     assert TELEMETRY_SOURCES == {"TeslaMateVehicle", "FleetTelemetryMQTT"}
     assert FEED_LAG == 30.0

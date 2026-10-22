@@ -951,7 +951,7 @@ class TWCMaster:
             twcid = "%02X%02X" % (deleteSlaveID[0], deleteSlaveID[1])
             self.vehicleRegistry.endPlugSession(twcid)
         except Exception as e:
-            logger.warning("Vehicle registry plug session update failed: %s", e)
+            logger.warning("Plug session update failed: %s", e, exc_info=True)
 
     def getChargerLoad(self):
         # Calculate in watts the load that the charger is generating so
@@ -1548,7 +1548,7 @@ class TWCMaster:
                 v.observe("pluggedIn", False, "Gen2TWC", at=Presence.unpluggedAt(v))
             self.vehicleRegistry.endPlugSession(twcid)
         except Exception as e:
-            logger.warning("Vehicle registry plug session update failed: %s", e)
+            logger.warning("Plug session update failed: %s", e, exc_info=True)
 
     def attributePlugs(self, slaves=None):
         # Each plug unnamed since just now or drawing current, on the BLE

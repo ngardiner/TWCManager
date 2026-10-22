@@ -1753,3 +1753,59 @@ def test_a_ble_fix_read_before_the_vin_read_still_moves_home_at_it(monkeypatch):
     later(c, 60)
     plugAndName(m, v, c, monkeypatch)
     assert m.getHomeLatLon() == list(HOME) and P.presence(m, v) == P.HOME
+
+    v.observe("pluggedIn", True, TM)
+    later(c, 86400)
+    cloudFix(v, AWAY)
+    assert v.markAt("outside") == c.t
+    assert P.decide(m, v)[:2] == (P.NOT_HOME, "a fix outside the radius")
+
+
+def test_a_closed_charge_port_while_awake_marks_an_unplug():
+    m, v, c = placed()
+    v.observe("pluggedIn", True, "TeslaBLE")  # plugged, strong
+    later(c)
+    v.observe("chargePortOpen", False, "TeslaBLE")
+    assert v.markAt("unplug") == c.t and P.pluggedNow(m, v) is False
+
+
+def test_an_open_charge_port_is_not_plug_evidence():
+    m, v, c = placed()
+    v.observe("chargePortOpen", True, "TeslaBLE")
+    assert v.markAt("plugIn") == P.NEVER and P.pluggedNow(m, v, None) is None
+
+
+def test_check_plug_answers_from_an_awake_closed_door_without_a_read():
+    m, r, v, c = home(ble())
+    v.observe("pluggedIn", True, "TeslaBLE")
+    later(c)
+
+    def ping(vin, scan=True):
+        v.observe("state", "online", "TeslaBLE")
+        v.observe("chargePortOpen", False, "TeslaBLE")
+        return True
+
+    m.providerOrder.provider("TeslaBLE").module = SimpleNamespace(ping=ping)
+    reads = []
+    v.read = lambda *a, **k: reads.append(a)
+    assert P.checkPlug(m, v, c.t - 1) is False and reads == []
+
+
+def test_only_a_keyed_cars_unanswered_ping_falls_back_to_a_range_scan():
+    m, r, v, c = home(ble())
+    placeAt(m, v)
+    scans = []
+
+    def ping(vin, scan=True):
+        scans.append(scan)
+        return False if scan else None
+
+    m.providerOrder.provider("TeslaBLE").module = SimpleNamespace(ping=ping)
+    v.read = lambda *a, **k: None
+    P.checkPlug(m, v, c.t)
+    P.pick(m, 32, 0, True, c.t)
+    assert scans == [False, False]
+    v.claim("TeslaBLE", True, "paired")
+    P.checkPlug(m, v, c.t)
+    P.pick(m, 32, 0, True, c.t)
+    assert scans == [False, False, True, True]

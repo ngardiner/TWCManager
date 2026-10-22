@@ -1168,3 +1168,42 @@ def test_the_quick_retry_is_logged_at_info_once(caplog):
         if r.levelno == logging.INFO and "retrying" in r.getMessage()
     ]
     assert len(retries) == 1 and "wake" in retries[0].getMessage()
+
+
+AWAKE_OPEN = b'{"closureStatuses":{"chargePort":"CLOSURESTATE_OPEN"},"vehicleSleepStatus":"VEHICLE_SLEEP_STATUS_AWAKE","userPresence":"VEHICLE_USER_PRESENCE_NOT_PRESENT"}'
+ASLEEP = b'{"vehicleSleepStatus":"VEHICLE_SLEEP_STATUS_ASLEEP","userPresence":"VEHICLE_USER_PRESENCE_NOT_PRESENT"}'
+
+
+def test_ping_records_the_door_while_awake_and_nothing_asleep():
+    ble, reg, master = scanner()
+    v = reg.getOrCreate(VIN, "t")
+    ble._tool = lambda vin, *args: (AWAKE_OPEN, b"", 0)
+    assert ble.ping(VIN) is True
+    assert v.value("state") == "online" and v.value("chargePortOpen") is True
+    ble._tool = lambda vin, *args: (ASLEEP, b"", 0)
+    assert ble.ping(VIN) is True
+    assert v.value("state") == "asleep" and v.latest("chargePortOpen").value is True
+
+
+def test_ping_runs_for_a_vin_with_no_key_and_no_settings_record():
+    ble, reg, master = scanner()
+    master.settings["Vehicles"] = {}
+    v = reg.getOrCreate(VIN, "t")  # no TeslaBLE claim, no settings record
+    assert not master.settings.get("Vehicles", {}).get(VIN)
+    runs = []
+    ble._run_command_with_timeout = lambda cmd, timeout, **k: runs.append(cmd) or (
+        ASLEEP,
+        b"",
+        0,
+    )
+    assert ble.ping(VIN) is True and v.value("state") == "asleep"
+    assert len(runs) == 1 and runs[0][-1] == "body-controller-state"
+    assert "-key-file" not in runs[0]
+
+
+def test_ping_with_scan_false_returns_none_and_observes_nothing_when_unanswered():
+    ble, reg, master = scanner()
+    v = reg.getOrCreate(VIN, "t")
+    ble._tool = lambda vin, *args: (b"", b"timeout", 1)
+    ble.scanForVehicleInRange = lambda vin: pytest.fail("no scan asked")
+    assert ble.ping(VIN, scan=False) is None and v.latest("bleReach") is None

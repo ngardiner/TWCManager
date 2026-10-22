@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Optional
 import re
 import signal
 import shutil
@@ -583,14 +584,20 @@ class TeslaBLE:
 
     @_serialized
     def _tool(self, vin, *args):
-        """(stdout, stderr, rc) of one tesla-control run; None without a key."""
+        """(stdout, stderr, rc) of one tesla-control run; None if it cannot run."""
         if not self.binaryPath or not os.path.isfile(self.binaryPath):
             return None
         vin = self._settingsKey(vin)
-        if not self.master.settings.get("Vehicles", {}).get(vin):
+        command = [self.binaryPath, "-ble", "-vin", vin]
+        # VCSEC answers body-controller-state unauthenticated, so any car
+        # in range can be checked without a key
+        if args != ("body-controller-state",):
+            if not self.master.settings.get("Vehicles", {}).get(vin):
+                return None
+            self.sendPrivateKey(vin)
+            command += ["-key-file", self.pipeName]
+        elif not isinstance(vin, str) or not isWellFormedVIN(vin):
             return None
-        self.sendPrivateKey(vin)
-        command = [self.binaryPath, "-ble", "-vin", vin, "-key-file", self.pipeName]
         try:
             return self._run_command_with_timeout(
                 command + list(args), timeout=self.commandTimeout
@@ -619,28 +626,37 @@ class TeslaBLE:
         self._safeNote(self._noteBleProof, vin)
         return state
 
-    def _runPing(self, vin):
+    def _runPing(self, vin, scan):
         """True: VCSEC answered (it does asleep). Without an answer the range
-        scan decides, so only a scan that ran and missed the car is False."""
+        scan, if asked for, decides, so only a scan that ran and missed the
+        car is False."""
         ran = self._tool(vin, "body-controller-state")
         if ran is not None and ran[2] == 0:
             self._safeNote(self._noteSleep, vin, ran[0])
-        return ran and (ran[2] == 0 or self.scanForVehicleInRange(vin))
+            return True
+        return self.scanForVehicleInRange(vin) if ran and scan else None
 
     def _noteSleep(self, vin, out):
-        # VEHICLE_SLEEP_STATUS_ASLEEP or _AWAKE is the car's state
-        status = str(json.loads(out).get("vehicleSleepStatus")).rpartition("_")[2]
+        # VEHICLE_SLEEP_STATUS_ASLEEP or _AWAKE is the car's state; the door
+        # is reported only while awake, so its absence says nothing
+        out, v = json.loads(out), self.registry.get(vin)
+        status = str(out.get("vehicleSleepStatus")).rpartition("_")[2]
         state = {"ASLEEP": "asleep", "AWAKE": "online"}.get(status)
         if state is not None:
-            self.registry.get(vin).observe("state", state, "TeslaBLE")
+            v.observe("state", state, "TeslaBLE")
+        door = (out.get("closureStatuses") or {}).get("chargePort")
+        door = {"CLOSURESTATE_OPEN": True, "CLOSURESTATE_CLOSED": False}.get(door)
+        if door is not None:
+            v.observe("chargePortOpen", door, "TeslaBLE")
 
-    def ping(self, vin) -> bool:
-        """The sleep-safe range check: only an unanswered run is absence."""
-        answer = self._runPing(vin)
+    def ping(self, vin, scan=True) -> Optional[bool]:
+        """The sleep-safe range check. True answered; False a range scan ran
+        and missed the car; None (False with scan) no answer, no scan."""
+        answer = self._runPing(vin, scan)
         v = self.registry.get(vin)
         if v is not None and answer is not None:
             self._safeNote(v.observe, "bleReach", answer, "TeslaBLE", None, answer)
-        return answer is True
+        return answer is True if scan else answer
 
     def get_charge_state(self, vin):
         """Fetch charge state via BLE. Returns normalized dict or None on failure."""

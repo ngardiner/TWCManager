@@ -46,7 +46,7 @@ def placeAt(master, vehicle, at=HOME):
 def bleAnswers(master, ok=True):
     # A scripted TeslaBLE's ping: an answer is contact and no answer is
     # absence, as TeslaBLE.ping observes them
-    def ping(vin):
+    def ping(vin, scan=True):
         master.vehicleRegistry.get(vin).observe("bleReach", ok, "TeslaBLE", seen=ok)
         return ok
 
@@ -75,7 +75,7 @@ class ScriptedProvider(Provider):
         amps=(1, 32),
         tier=None,
         # A radio whose sleep-safe ping answers, with no sleep status
-        module=SimpleNamespace(ping=lambda vin: True),
+        module=SimpleNamespace(ping=lambda vin, scan=True: True),
         readyFor=None,
         worker=None,
     ):

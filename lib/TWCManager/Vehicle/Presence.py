@@ -23,6 +23,8 @@ _BLE_CHARGE = ("chargingState", "availableCurrent", "actualCurrent")
 # A fast charger type other than these is not a home charger
 HOME_CHARGER_TYPES = frozenset({"ACSingleWireCAN", "MCSingleWireCAN", "<invalid>", ""})
 _PLUGGED = frozenset({"Charging", "Starting", "Stopped", "Complete", "NoPower"})
+# The fields whose readings may say plugged or unplugged
+_PLUGS = ("pluggedIn", "chargingState", "chargePortOpen")
 # A plug report from these needs no position: the charger or the radio is here
 _STRONG = frozenset({"TWC", "Gen2TWC", "Gen3TWC", "TeslaBLE"})
 _CHARGERS = frozenset({"Gen2TWC", "Gen3TWC"})
@@ -66,6 +68,9 @@ def _plug(field, obs) -> Optional[bool]:
     # True plugged, False unplugged, None says nothing
     if field == "pluggedIn":
         return obs.value if isinstance(obs.value, bool) else None
+    if field == "chargePortOpen":
+        # The cable holds the door open; an open door may hold no cable
+        return False if obs.value is False else None
     if obs.source == "HomeAssistant":
         # Home Assistant reports "Stopped" for an unplugged car too
         return True if obs.value == "Charging" else None
@@ -136,15 +141,17 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
             wasMoving and not moving and here and (field == "state" or obs.value == "P")
         ):
             vehicle.mark("driveEnd", at)
-    elif field in ("pluggedIn", "chargingState"):
+    elif field in _PLUGS:
         plugged = _plugEvidence(vehicle, field, obs, inside(master, vehicle))
         # A feed's retained copy, redelivered on a reconnect, is no plug event
         plugged = None if obs.source in TELEMETRY_SOURCES and not obs.seen else plugged
         was = None if previous is None else _plug(field, previous)
         # No previous reading counts as seen. A retained copy since the feed's
-        # last report: the plug events say what that report was, if any is
-        # known (none after a restart: then the copy is the best word)
-        if obs.source in TELEMETRY_SOURCES and not getattr(previous, "seen", True):
+        # last report, or the door (which never says plugged): the plug
+        # events say what came before, if any is known (none after a
+        # restart: then the reading is the best word)
+        seen = getattr(previous, "seen", True)
+        if obs.source in TELEMETRY_SOURCES and not seen or field == "chargePortOpen":
             plugIn, unplug = vehicle.markAt("plugIn"), vehicle.markAt("unplug")
             was = was if plugIn == unplug else plugIn > unplug
         if plugged is False and (was is True or obs.source == "Gen2TWC"):
@@ -168,7 +175,7 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
 def pluggedNow(master, v, unknown=False, since=NEVER) -> Optional[bool]:
     # The newest plug reading after since; unknown when nothing says
     here, best = inside(master, v), None
-    for field in ("pluggedIn", "chargingState"):
+    for field in _PLUGS:
         for obs in v.reported(field).values():
             value = _plugEvidence(v, field, obs, here)
             # A Gen2's plug counts only while it names the car, below
@@ -195,24 +202,38 @@ def telemetryPlug(v, since=NEVER, seen=False) -> Optional[bool]:
 
 def unpluggedAt(v) -> float:
     # When the newest reading saying unplugged was made
-    fields = ("pluggedIn", "chargingState")
-    obs = [o for f in fields for o in v.reported(f).values() if _plug(f, o) is False]
+    obs = [o for f in _PLUGS for o in v.reported(f).values() if _plug(f, o) is False]
     return max((o.at for o in obs), default=NEVER)
+
+
+def _ble(master):
+    provider = master.providerOrder.provider("TeslaBLE")
+    return None if provider is None else provider.module
+
+
+def _doorClosed(v, since) -> bool:
+    # The door, read keyless while the car is awake: closed since the plug at
+    # since is no cable
+    door = v.reported("chargePortOpen").get("TeslaBLE")
+    return door is not None and door.at >= since > NEVER and door.value is False
 
 
 def checkPlug(master, v, since) -> Optional[bool]:
     # Plugged in, after a charging point's status edge at since? Never wakes:
     # a live feed reports a change in seconds (a retained copy is no report);
-    # an unplug wakes a sleeping car; else the read cascade, where a cloud API
-    # reads only a car its free online check finds awake, past the stored
-    # reading and online answer that an unplug just made stale
+    # an unplug wakes a sleeping car, and an awake car's door closes with it
+    # (a car with no key gets no range scan); else the read cascade, where a
+    # cloud API reads only a car its free online check finds awake, past the
+    # stored reading and online answer that an unplug just made stale
     if (feed := telemetryPlug(v, since, seen=True)) is not None:
         return feed
-    ble, now = master.providerOrder.provider("TeslaBLE"), master.vehicleRegistry.now()
-    # Asleep, or not seen awake lately (the range scan alone answered)
-    if "TeslaBLE" in v.claims and ble.module.ping(v.vin):
+    ble, now = _ble(master), master.vehicleRegistry.now()
+    if ble is not None and ble.ping(v.vin, scan="TeslaBLE" in v.claims):
+        # Asleep, or not seen awake lately (the range scan alone answered)
         if asleep(v, now - REACH_WINDOW) is not False:
             return True
+        if _doorClosed(v, since):
+            return False
     car = v.attachment("TeslaAPI")
     if car is not None:
         car.statusDeferral, car.staleBefore = 0, since
@@ -419,11 +440,14 @@ def pick(master, offered=None, actual=0, read=False, since=NEVER):
             return False
         if v.markAt("unplug") > since - REACH_WINDOW > NEVER:
             return False
-        ble = read and "TeslaBLE" in v.claims and not fresh(v, "chargingState")
-        if ble and asleep(v, now - REACH_WINDOW) is None:
+        stale = read and not fresh(v, "chargingState")
+        ble = _ble(master) if stale else None
+        if ble is not None and asleep(v, now - REACH_WINDOW) is None:
             # A charge read may wake the car: the sleep-safe check first
-            master.providerOrder.provider("TeslaBLE").module.ping(v.vin)
-        if ble and asleep(v, now - REACH_WINDOW) is False:
+            ble.ping(v.vin, scan="TeslaBLE" in v.claims)
+        if _doorClosed(v, since):
+            return False
+        if stale and "TeslaBLE" in v.claims and asleep(v, now - REACH_WINDOW) is False:
             v.read("chargingState", 0, providers=("TeslaBLE",), force=True)
         state, pilot, amps = (fresh(v, f) for f in _BLE_CHARGE)
         plugged = state and _plug("chargingState", state)
