@@ -265,14 +265,19 @@ def covered(master, v) -> bool:
     return isinstance(master.vehicleRegistry.sourceLiveAt(v.syncSource, v), float)
 
 
-def asleep(v, lately=NEVER) -> Optional[bool]:
-    # True: the newest asleep reading outranks every sign of life (a seen state
-    # other than asleep or offline, a seen drive or plug change, current drawn).
-    # False: a sign of life newer than it and than lately. Else unknown
+def lastLife(v) -> float:
+    # The newest sign of life: a seen state other than asleep or offline, a
+    # seen drive or plug change, current drawn
     states, amps = v.reported("state").values(), v.latest("actualCurrent")
     life = [o.at for o in states if o.seen and o.value not in ("asleep", "offline")]
     life += [v.markAt("lifeAt")]
-    life = max(life + ([amps.at] if amps and (amps.value or 0) >= 1 else []))
+    return max(life + ([amps.at] if amps and (amps.value or 0) >= 1 else []))
+
+
+def asleep(v, lately=NEVER) -> Optional[bool]:
+    # True: the newest asleep reading outranks every sign of life. False: a
+    # sign of life newer than it and than lately. Else unknown
+    life, states = lastLife(v), v.reported("state").values()
     slept = max([o.at for o in states if o.value == "asleep"], default=NEVER)
     if slept >= life and slept > NEVER:
         return True

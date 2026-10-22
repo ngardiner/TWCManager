@@ -2,14 +2,16 @@
 # asking the free sleep-state question on a clock set by each car's
 # situation. An asleep car is neither charging nor moving, so that answer
 # alone carries most of the time; the costlier charge read runs when
-# something changes, or on a clock while the car charges. The control
-# tick only decides what is due; the asking runs on the reconciler's workers
+# something changes, or on a clock while the car charges or only the cloud
+# sees it. The control tick only decides what is due; the asking runs on
+# the reconciler's workers
 import logging
+import math
 import threading
 import time
 from typing import Optional
 
-from .Presence import HOME, NEVER, _ble, asleep, decide
+from .Presence import HOME, NEVER, _ble, _fix, _FT_PER_DEGREE, asleep, decide, lastLife
 from .Presence import AWAY_ASLEEP_SECS, HOME_ASLEEP_SECS, covered, presence
 from .Presence import twcVinAt
 from .Providers.Capability import READ_CHARGE, SET_AMPS
@@ -25,7 +27,7 @@ HOME_ASLEEP, HOME_AWAKE, HOME_CHARGING, AWAY_ASLEEP, AWAY_AWAKE, UNKNOWN = (
 DEFAULTS = dict(homeAsleepSecs=HOME_ASLEEP_SECS, awayAsleepSecs=AWAY_ASLEEP_SECS)
 DEFAULTS.update(homeAwakeSecs=240)
 DEFAULTS.update(awayAwakeSecs=300, chargingReadSecs=300, cloudChargingReadSecs=900)
-DEFAULTS.update(sleepCourtesySecs=1200)
+DEFAULTS.update(scanAwaySecs=150, sleepCourtesySecs=1200, returnKph=120)
 DEFAULTS.update(monthlyBudgetUSD=3.0, enabled=True)
 # A charging car is awake; a car of unknown state is asked as an awake one
 # away: until it answers, nothing says it cannot move
@@ -33,8 +35,8 @@ _CADENCE_OF = {HOME_CHARGING: HOME_AWAKE, UNKNOWN: AWAY_AWAKE}
 NO_SOURCE, NAMED = "no status source", "named by TWC "
 MISS, AWAKE = "no answer", (HOME_AWAKE, HOME_CHARGING, AWAY_AWAKE)
 # A failed read asked for, retried as its ask was: courtesy-bounded or not
-RETRY = ("failed, asking again later", "failed, asking again")
-KINDS = ("status", "read")
+RETRY, TWICE = ("failed, asking again later", "failed, asking again"), "no answer twice"
+KINDS = ("status", "read", "scan")
 
 
 def settingsOf(config) -> dict:
@@ -81,6 +83,15 @@ def situation(master, v, where=None) -> str:
     return HOME_AWAKE if home else AWAY_AWAKE
 
 
+def scans(ble) -> bool:
+    return getattr(ble, "canScan", bool)()
+
+
+def lost(v, where) -> bool:
+    # Away, and the radio's two misses said so
+    return where != HOME and v.value("bleReach") is False
+
+
 class Watch:
     def __init__(self, master, clock=time.time):
         self.master, self._clock = master, clock
@@ -92,18 +103,44 @@ class Watch:
         # last pass saw; a read asked for: (budget class, whether the
         # courtesy window yields to it)
         self._inflight, self._last, self._seen, self._want = set(), {}, {}, {}
+        # Cars at home the radio stopped hearing, already read for it
+        self._unheard = set()
         self._started = None
 
     def _cadence(self, state) -> float:
         return float(self._settings[_CADENCE_OF.get(state, state) + "Secs"])
 
-    def _source(self, v, ble):
-        # (worker, the check): the radio first; with a radio the cloud is
-        # never asked
-        getModule = self.master.getModuleByName
-        if ble is not None:
-            return "ble", lambda: ble.ping(v.vin, scan=False)
-        api = v.attachment("TeslaAPI") is not None and getModule("TeslaAPI")
+    def _source(self, v, where, ble, last=""):
+        # (worker, the check), given the last check's answer. The radio first,
+        # unless it lost the car; with a radio the cloud is never asked, as a
+        # lost car is listened for. A car in range answers asleep or awake, so
+        # a second miss is settled by the ping's scan whatever the car last
+        # said; where none can run, away by the miss itself, at home by a read
+        getModule, again = self.master.getModuleByName, last in (MISS, TWICE)
+        api = v.attachment("TeslaAPI") is not None and ble is None
+        api, deaf = api and getModule("TeslaAPI"), again and not scans(ble)
+        if ble is not None and not lost(v, where):
+
+            def ping():
+                answered = ble.ping(v.vin, scan=again)
+                if deaf and not answered and where != HOME:
+                    v.observe("bleReach", False, "TeslaBLE", None, False)
+                elif deaf and not answered:
+                    # Asleep, its wake asks; charging, its own reads run. Once
+                    # until it answers: a car gone or out of reach stays so
+                    awake = situation(self.master, v, where) == HOME_AWAKE
+                    with self._lock:
+                        ask = awake and v.vin not in self._unheard
+                        self._unheard |= {v.vin} if ask else set()
+                    if ask:
+                        self.readNow(v.vin, "two unanswered pings", exempt=False)
+                    return TWICE
+                elif answered:
+                    with self._lock:
+                        self._unheard.discard(v.vin)
+                return answered
+
+            return "ble", ping
         if api:
             return "cloud", lambda: api.onlineState(v) is not None
         ha, hv = getModule("HomeAssistant"), v.attachment("HomeAssistant")
@@ -111,10 +148,10 @@ class Watch:
             return "cloud", lambda: hv.refresh_from_home_assistant(ha)
         return None
 
-    def readNow(self, vin: str, reason: str, cls=EVENT) -> None:
+    def readNow(self, vin: str, reason: str, cls=EVENT, exempt=True) -> None:
         logger.debug("Read of %s asked: %s", vin, reason)
         with self._lock:
-            self._ask(vin, cls, True)
+            self._ask(vin, cls, exempt)
 
     def _ask(self, vin, cls, exempt) -> None:
         # Under the lock; an event outranks a routine ask
@@ -143,7 +180,7 @@ class Watch:
             fresh = seen if not self._started else (None, None, NEVER, None)
             was, self._seen[vin] = self._seen.get(vin, fresh), seen
             busy = {kind for key, kind in self._inflight if key == vin}
-            (_, at), (tried, lastRead) = (
+            (last, at), (tried, lastRead), (_, scanAt) = (
                 self._last.get((vin, kind), ("", NEVER)) for kind in KINDS
             )
             # An arrival by any route, a wake, a plug-in (one a read made by
@@ -158,20 +195,39 @@ class Watch:
                 # Covered or not watched: an old ask must not fire later
                 self._want.pop(vin, None)
             want = self._want.get(vin)
+        if where != HOME and now < self._backAt(v, now):
+            # Nothing an away car does needs asking before it could be back
+            return
+        # Only the cloud sees an awake car free to leave go, or come back once
+        # it could: it is read once its fix is a courtesy window old
+        fixAt, wait = _fix(self.master, v)[1], self._settings["sleepCourtesySecs"]
+        late = now >= max(fixAt, lastRead) + wait and cloudOnly(self.master, v)
+        if late and seen[0] in (HOME_AWAKE, AWAY_AWAKE):
+            want = want or (EVENT, False)
         if "read" not in busy and (why is None or named):
-            self._read(v, seen[0], named, want, tried, lastRead, now)
+            self._read(v, seen[0], named, want, tried, lastRead, now, last == TWICE)
         if "status" not in busy and now >= at + self._cadence(seen[0]):
             # Coverage counts for the check only when it is due: a feed
             # blip between checks changes nothing
-            source = None if why else self._source(v, ble)
+            source = None if why else self._source(v, where, ble, last)
             if source is None:
                 self._settle(vin, "status", now)
             else:
                 self._submit(v, "status", source[1], source[0])
+        if why is not None:
+            return
+        listen = "scan" not in busy and self._listen(v, where, ble, now)
+        if listen and now >= scanAt + listen[1]:
+            if listen[0] == "scan":
+                ble.requestRangeScan(vin)
+                self._settle(vin, "scan", now)
+            else:
+                self._submit(v, "scan", lambda: ble.ping(vin, scan=False), "ble")
 
-    def _read(self, v, state, named, want, tried, lastRead, now) -> None:
-        # The charge read due now, if any. A TWC-named car is touched only for
-        # its plug-in, on request, and while its TWC reports current
+    def _read(self, v, state, named, want, tried, lastRead, now, deaf) -> None:
+        # The charge read due now, if any; deaf: the radio missed it twice.
+        # A TWC-named car is touched only for its plug-in, on request, and
+        # while its TWC reports current
         if state in (HOME_ASLEEP, AWAY_ASLEEP):
             # Never woken for a read: an arrival waits for the wake
             return
@@ -186,7 +242,7 @@ class Watch:
         if not want and not (flowing if named else state == HOME_CHARGING):
             return
         order = self.master.providerOrder
-        found = order.candidates(v, READ_CHARGE)
+        found = [p for p in order.candidates(v, READ_CHARGE) if not deaf or not p.local]
         local = [p for p in found if p.local]
         if not found or state == UNKNOWN and local and not named:
             # Over the radio only once the ping says it is awake; a cloud
@@ -214,6 +270,27 @@ class Watch:
         # The cascade itself: None when the read failed, not the old value
         read = lambda: order.read(v, "chargingState", False, found) is not None
         self._submit(v, "read", read, worker, miss)
+
+    def _backAt(self, v, now) -> float:
+        # The soonest an away car could be home: its last fix (with none, the
+        # run's start) plus the straight line home at a fast road speed, which
+        # real roads only lengthen
+        fixAt, home, km = _fix(self.master, v)[1], self.master.getHomeLatLon(), 0.0
+        if fixAt > NEVER and home[0] != 10000:
+            east = (v.value("lon") - home[1]) * math.cos(math.radians(home[0]))
+            km = math.hypot(v.value("lat") - home[0], east) * _FT_PER_DEGREE / 3280.84
+        fixAt = fixAt if fixAt > NEVER else self._started or now
+        return fixAt + max(300.0, km / self._settings["returnKph"] * 3600)
+
+    def _listen(self, v, where, ble, now):
+        # How and how often a lost car's return is heard: a scan, or where none
+        # can run a ping; often while it was lately awake, else as an asleep
+        # car is asked, as nothing refreshes its asleep reading
+        if not lost(v, where) or ble is None:
+            return None
+        slow, often = self._settings["awayAsleepSecs"], self._settings["scanAwaySecs"]
+        secs = often if now < lastLife(v) + slow else slow
+        return ("scan" if scans(ble) else "ble"), secs
 
     def _take(self, vin, want) -> None:
         # Drops the ask acted on, not one made since
@@ -244,16 +321,23 @@ class Watch:
             self._last[(vin, kind)] = (answer, at)
 
     def status(self, v) -> dict:
-        ble = radio(self.master)
+        now, where, ble = self._clock(), presence(self.master, v), radio(self.master)
         with self._lock:
-            last, at = self._last.get((v.vin, "status"), ("", None))
+            checked, scanned = (
+                self._last.get((v.vin, k), ("", None)) for k in ("status", "scan")
+            )
             seen = self._seen.get(v.vin)
-        source = self._source(v, ble)
-        via = (source or (None,))[0]
+        source = self._source(v, where, ble, checked[0])
+        # A lost car nothing else asks is listened for on the radio's back-off
+        scan = not source and self._listen(v, where, ble, now)
+        via = (scan or source or (None,))[0]
         why = notWatched(self.master, v) or ("" if via else NO_SOURCE)
+        last, at = scanned if scan else checked
         nextAt = None
         if at is not None and seen is not None:
-            nextAt = at + self._cadence(seen[0])
+            secs = scan[1] if scan else self._cadence(seen[0])
+            back = self._backAt(v, now) if where != HOME else NEVER
+            nextAt = max(at + secs, back)
         watched = why in ("", NO_SOURCE)
         return dict(
             watched=watched, why=why, via=via, last=last, lastAt=at, nextAt=nextAt

@@ -75,6 +75,11 @@ def bleAnswers(master, asleep=None, answer=True, charging=None, ok=None):
             v.observe("state", "asleep" if asleep else "online", "TeslaBLE")
             if charging is not None and not asleep:
                 v.observe("chargePortOpen", bool(charging), "TeslaBLE")
+        # As the real ping, no answer runs the range scan asked for: only a
+        # scripted one (bleScans), never bluetoothctl
+        scanned = vars(_ble(master)).get("scanForVehicleInRange")
+        if answer is None and scan and scanned:
+            return scanned(vin) is True
         return answer
 
     _stub(master, "ping", ping)
@@ -102,6 +107,24 @@ def bleReads(master, soc=50, charging="Stopped", amps=0, limit=80):
 
     _stub(master, "get_charge_state", get_charge_state)
     return reads
+
+
+def bleScans(master, inRange=False):
+    # A scripted range scan, counted; it observes reach as the real one does
+    scans = SimpleNamespace(count=0, asked=[])
+
+    def scanForVehicleInRange(vins):
+        scans.count += 1
+        scans.asked.append(vins)
+        for vin in [vins] if isinstance(vins, str) else vins:
+            v = master.vehicleRegistry.get(vin)
+            if v is not None:
+                v.observe("bleReach", inRange, "TeslaBLE", seen=inRange)
+        return inRange
+
+    _stub(master, "canScan", lambda: True)
+    _stub(master, "scanForVehicleInRange", scanForVehicleInRange)
+    return scans
 
 
 def liveFeed(master, source):

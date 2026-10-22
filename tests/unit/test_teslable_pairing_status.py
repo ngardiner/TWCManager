@@ -574,7 +574,7 @@ def test_one_scan_answers_for_several_cars():
     ble._run_command_with_timeout = Mock(
         return_value=(b"[NEW] Device AA:BB:CC:DD:EE:FF " + name + b"\n", b"", 0)
     )
-    ble._bluezAddresses = Mock(return_value=set())
+    ble._bluezAddresses = Mock(return_value={})
     with patch(
         "TWCManager.Vehicle.TeslaBLE.shutil.which",
         return_value="/usr/bin/bluetoothctl",
@@ -624,17 +624,16 @@ def jobs(master):
     return [entryKey(j) for j in entries(master.reconciler.ble)]
 
 
-def test_request_scan_queues_one_job_per_vin_and_runs_every_pending_vin():  # P17
+def test_requests_share_one_scan_of_every_pending_vin():  # P17
     ble, reg, master = scanner()
     ble.requestRangeScan(VIN)
     ble.requestRangeScan("5YJ3E1EA1KF000002")
-    assert jobs(master) == [(VIN, "scan"), ("5YJ3E1EA1KF000002", "scan")]
+    assert jobs(master) == [("radio", "scan")]
     assert ble.bleStatus(VIN)["scanPending"] is True
     ble.scanForVehicleInRange = Mock(return_value=False)
     runPending(master.reconciler.ble)
-    assert sorted(c.args[0] for c in ble.scanForVehicleInRange.call_args_list) == [
-        VIN,
-        "5YJ3E1EA1KF000002",
+    assert [c.args[0] for c in ble.scanForVehicleInRange.call_args_list] == [
+        {VIN, "5YJ3E1EA1KF000002"}
     ]
     assert ble.bleStatus(VIN)["scanPending"] is False
 
@@ -652,7 +651,7 @@ def test_request_during_a_scan_queues_behind_it():
 
     ble.scanForVehicleInRange = scan
     runPending(master.reconciler.ble)
-    assert seen == [VIN, "5YJ3E1EA1KF000002"]
+    assert seen == [{VIN}, {"5YJ3E1EA1KF000002"}]
 
 
 def test_request_rejects_malformed_vin():
@@ -749,6 +748,31 @@ def test_scan_finds_a_car_bluez_already_knows_by_address():
         assert ble.scanForVehicleInRange(VIN) is False
 
 
+def test_a_scan_looks_addresses_up_only_for_an_asked_car_it_missed():
+    # Another registry car out of range is the usual case, not a reason for
+    # a second bluetoothctl run.
+    ble, reg, master = scanner()
+    reg.getOrCreate("5YJ3E1EA1KF000002", "t")
+    calls = []
+
+    def run(cmd, timeout, use_process_group=True):
+        calls.append(cmd[1:])
+        return (
+            b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n"
+            b"[CHG] Device 11:22:33:44:55:66 RSSI: -60\n",
+            b"",
+            0,
+        )
+
+    ble._run_command_with_timeout = run
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.shutil.which",
+        return_value="/usr/bin/bluetoothctl",
+    ):
+        assert ble.scanForVehicleInRange(VIN) is True
+    assert ["devices"] not in calls
+
+
 def test_scan_ignores_bluez_forgetting_the_car():
     ble, reg, master = scanner()
 
@@ -796,6 +820,22 @@ def scan_with(ble, scan_out, devices_out=b""):
 
 WHICH = "TWCManager.Vehicle.TeslaBLE.shutil.which"
 CAR = b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n"
+
+
+def test_a_car_not_asked_for_is_recorded_only_when_heard():
+    ble, reg, master = scanner()
+    other = "5YJ3E1EA1KF000002"
+    reg.getOrCreate(VIN, "t")
+    reg.getOrCreate(other, "t")
+    heard = "[NEW] Device AA:BB:CC:DD:EE:01 %s\n" % TeslaBLE.bleLocalName(other)
+    scan_with(ble, (heard.encode(), b"", 0))
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is False
+        assert reg.get(other).latest("bleReach").value is True  # a sighting
+        assert reg.get(VIN).latest("bleReach").value is False
+        scan_with(ble, (CAR, b"", 0))  # hears VIN only
+        assert ble.scanForVehicleInRange(VIN) is True
+    assert reg.get(other).latest("bleReach").value is True  # never a miss
 
 
 def test_timed_out_scan_is_range_unknown(caplog):
@@ -895,7 +935,7 @@ def test_request_within_ten_seconds_of_a_scan_is_ignored():
     assert ble.rangeStatus(VIN)["pending"] is False
     ble._rangeScan[VIN]["at"] -= 11
     ble.requestRangeScan(VIN)
-    assert jobs(master) == [(VIN, "scan")]
+    assert jobs(master) == [("radio", "scan")]
     assert ble.rangeStatus(VIN)["pending"] is True
 
 
@@ -931,7 +971,7 @@ def test_mid_scan_request_is_served_by_the_worker_once():
     ble.scanForVehicleInRange = scan
     ble.requestRangeScan(VIN)
     runPending(master.reconciler.ble)
-    assert seen == [VIN, "5YJ3E1EA1KF000002"]
+    assert seen == [{VIN}, {"5YJ3E1EA1KF000002"}]
     assert jobs(master) == []
 
 

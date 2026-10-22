@@ -1040,10 +1040,11 @@ class TeslaBLE:
 
     @_serialized
     def scanForVehicleInRange(self, vins):
-        """Scan for the advertisements of vins, one VIN or several. True if
-        one is in range, False if none is, or None when no scan is possible
-        (Docker or no bluetoothctl) or the scan gave no answer (timed out,
-        failed, or BlueZ reported an error)."""
+        """Scan for the advertisements of vins, one VIN or several; the radio
+        hears every car, so a registry car not asked for is recorded when
+        heard, never as missed. True if an asked car is in range, False if
+        none is, or None when no scan is possible (Docker or no bluetoothctl)
+        or it gave no answer (timed out, failed, or BlueZ reported an error)."""
         vins = [vins] if isinstance(vins, str) else vins
         asked = {v.upper() for v in vins if isinstance(v, str) and isWellFormedVIN(v)}
         if not asked or not self.canScan():
@@ -1061,12 +1062,13 @@ class TeslaBLE:
             if not line.lstrip().startswith("[DEL]")
         ]
         output = "\n".join(lines)
-        names = {vin: self.bleLocalName(vin) for vin in asked}
+        cars = {v.vin for v in self.registry.vehicles() if isWellFormedVIN(v.vin)}
+        names = {vin: self.bleLocalName(vin) for vin in asked | cars}
         found = {vin for vin, name in names.items() if name in output}
         failure = None
         if stdout is None:
             failure = "timed out"
-        if not found and failure is None:
+        if not asked <= found and failure is None:
             errors = (output + "\n" + self._stripAnsi(stderr)).lower()
             if any(text in errors for text in self.SCAN_ERROR_TEXT):
                 failure = "bluetoothctl reported an error"
@@ -1077,28 +1079,26 @@ class TeslaBLE:
         heard = self._heardAddresses(lines) if asked - found else None
         if heard and failure is None:
             # BlueZ prints a device's name only when it learns it; a car it
-            # already holds (an earlier scan, or tesla-control) shows up by
-            # address alone, so look the address up.
-            for vin in asked - found:
-                known = self._bluezAddresses(names[vin])
-                if known is None:
-                    failure = "device lookup failed"
-                    break
-                if heard & known:
-                    found.add(vin)
-        for vin in sorted(asked):
+            # already holds shows up by address alone, so look up an asked
+            # car's address (another car out of range is the usual case).
+            known = self._bluezAddresses()
+            if known is None:
+                failure = "device lookup failed"
+            else:
+                found |= {c for c, n in names.items() if heard & known.get(n, set())}
+        for vin in sorted(names):
             hit = vin in found
-            if failure is not None and not hit:
+            if failure is not None and vin in asked and not hit:
                 self._noteScan(vin, None)
                 logger.warning(f"BLE scan for {vin}: range unknown ({failure})")
-                continue
-            self._noteScan(vin, hit)
-            logger.info(f"BLE scan for {vin}: {'in range' if hit else 'not in range'}")
-            v = self.registry.get(vin)
-            if v is not None:
-                # A hit heard the car advertising here; a miss says nothing new.
-                self._safeNote(v.observe, "bleReach", hit, "TeslaBLE", None, hit)
-        return True if found else None if failure else False
+            elif vin in asked or hit:
+                self._noteScan(vin, hit)
+                logger.info(f"BLE scan for {vin}: {'in' if hit else 'not in'} range")
+                v = self.registry.get(vin)
+                # A hit heard the car advertising here; a miss says nothing new
+                if v is not None:
+                    self._safeNote(v.observe, "bleReach", hit, "TeslaBLE", None, hit)
+        return True if asked & found else None if failure else False
 
     @staticmethod
     def _stripAnsi(data):
@@ -1121,19 +1121,19 @@ class TeslaBLE:
                 macs.add((m.group(1) or m.group(2)).upper())
         return macs
 
-    def _bluezAddresses(self, name):
-        """Addresses BlueZ holds under the car's local name, or None when
+    def _bluezAddresses(self):
+        """The addresses BlueZ holds under each local name, or None when
         bluetoothctl did not answer or failed (its output is then no list)."""
         stdout, stderr, code = self._run_command_with_timeout(
             ["bluetoothctl", "devices"], timeout=5, use_process_group=True
         )
         if stdout is None or code != 0:
             return None
-        macs = set()
+        macs = {}
         for line in self._stripAnsi(stdout).splitlines():
             parts = line.strip().split(" ", 2)
-            if len(parts) == 3 and parts[0] == "Device" and parts[2].strip() == name:
-                macs.add(parts[1].upper())
+            if len(parts) == 3 and parts[0] == "Device":
+                macs.setdefault(parts[2].strip(), set()).add(parts[1].upper())
         return macs
 
     def _noteScan(self, vin, inRange):
@@ -1184,8 +1184,8 @@ class TeslaBLE:
             if last is not None and time.time() - last < self.SCAN_DEBOUNCE:
                 return
             self._scanRequests[vin] = time.time()
-        job = lambda: self._scanRequested(vin)
-        if not self.master.reconciler.submitJob(vin, "scan", job):
+        # One job for the radio: its scan answers every car asked for by then
+        if not self.master.reconciler.submitJob("radio", "scan", self._scanRequested):
             # The worker has stopped: nothing will scan, so show none pending
             with self._scanLock:
                 self._scanRequests.pop(vin, None)
@@ -1193,17 +1193,18 @@ class TeslaBLE:
                 "BLE scan for %s not queued: the BLE worker has stopped", vin
             )
 
-    def _scanRequested(self, vin):
+    def _scanRequested(self):
         # The BLE worker's job: one scan, then the page stops showing it
         with self._scanLock:
-            self._scanRequests.pop(vin, None)
+            vins = set(self._scanRequests)
+            self._scanRequests.clear()
             # Same critical section: a VIN is never in neither map.
-            self._scanInProgress.add(vin)
+            self._scanInProgress |= vins
         try:
-            return self.scanForVehicleInRange(vin)
+            return self.scanForVehicleInRange(vins)
         finally:
             with self._scanLock:
-                self._scanInProgress.discard(vin)
+                self._scanInProgress -= vins
 
     def blePairingAttempt(self, vin):
         """The last pairing attempt this run: {"ok", "at", "message"}, or None.
