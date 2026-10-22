@@ -129,13 +129,46 @@ def test_update_vehicle_data_observes_only_present_keys():  # P15
     assert reg.get(VIN).latest("name") == name_before  # not re-observed
 
 
-def test_debug_interface_resolves_by_vin():
+def test_update_vehicle_data_records_the_cars_own_ac_maximum():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    api.wakeVehicle = Mock()
-    assert api.apiDebugInterface("wakeVehicle", VIN, "{}") is True
+    car = api.getCarApiVehicles()[0]
+    car.get_car_api = Mock(
+        return_value=(
+            True,
+            {
+                "drive_state": {"latitude": 1.0, "longitude": 2.0},
+                "charge_state": {
+                    "charger_pilot_current": 6,
+                    "charge_current_request_max": 48,
+                },
+                "vehicle_state": {},
+            },
+        )
+    )
+    car.carapi.is_location_home = Mock(return_value=False)
+    car.carapi.is_far_from_home = Mock(return_value=False)
+    assert car.update_vehicle_data() is True
+    assert reg.get(VIN).value("chargeCurrentRequestMax") == 48
+
+
+def test_debug_interface_resolves_by_vin():
+    from TWCManager.Vehicle.Providers.Order import ProviderOrder
+
+    api, reg = api_with_registry()
+    api.storeToken(fleet_token())
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    api.wakeVehicle = Mock(return_value=True)
+    master = api.master
+    master.providerOrder = ProviderOrder(master)
+    for p in api.providers():
+        master.providerOrder.register(p)
+    assert master.providerOrder.debugCommand("wakeVehicle", VIN, "{}") is True
     api.wakeVehicle.assert_called_once_with(api.getCarApiVehicles()[0])
-    assert api.apiDebugInterface("wakeVehicle", "5YJ3E1EA1KF000009", "{}") is False
+    assert (
+        master.providerOrder.debugCommand("wakeVehicle", "5YJ3E1EA1KF000009", "{}")
+        is False
+    )
 
 
 def test_stale_telemetry_falls_back_to_api_check():
@@ -158,7 +191,7 @@ def test_writes_after_forget_land_on_the_live_vehicle():
     car.chargeLimit = 80  # the account still lists it: next sighting rejoins
     v = reg.get(VIN)
     assert v is not None and v.latest("chargeLimit").value == 80
-    assert v.attachment("TeslaAPI") is car and "TeslaAPI" in v.claims
+    assert v.attachment("TeslaAPI") is car and "FleetAPI" in v.claims
 
 
 def test_writes_after_forget_and_relist_by_another_provider():
@@ -169,7 +202,7 @@ def test_writes_after_forget_and_relist_by_another_provider():
     fresh = reg.getOrCreate(VIN, "TWC")
     car.chargeLimit = 80
     assert reg.get(VIN) is fresh and fresh.latest("chargeLimit").value == 80
-    assert fresh.attachment("TeslaAPI") is car and "TeslaAPI" in fresh.claims
+    assert fresh.attachment("TeslaAPI") is car and "FleetAPI" in fresh.claims
 
 
 def test_relisting_the_api_attaches_the_new_car():

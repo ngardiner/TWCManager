@@ -1,23 +1,48 @@
-# This module acts as a superclass which determines the priority of Vehicle modules
-# and sends commands to the higher priority modules first, before falling-back to lower
-# priority modules on failure.
-#
-# Retry Logic: For every 10 priority points, we get 1 retry before falling back.
-# Example: Priority 20 (TeslaBLE) = 2 retries, Priority 10 (TeslaAPI) = 1 retry
+# A facade over the provider order. Callers keep calling the legacy module
+# methods (car_api_charge, setChargeRate, applyChargeLimit, ...) with their
+# module-specific arguments; the walk is the order: each provider's legacy
+# module in order position, suppressed providers skipped and, when the call
+# names a vehicle, providers not ready for it skipped. Attempts come from the
+# provider (local 3, cloud 2, as BLE and TeslaAPI had by priority).
+# Phase 3 removes the facade.
 import logging
+import threading
+import time
+from typing import Any, List, Optional, Tuple
+
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Providers.Capability import (
+    TIER_BILLED,
+    READ_CHARGE,
+    SET_AMPS,
+    SET_CHARGE_LIMIT,
+    START_CHARGING,
+    STOP_CHARGING,
+    WAKE,
+)
+from TWCManager.Vehicle.Providers.Suppressions import Suppressions
 
 logger = LoggerFactory.get_logger("VehiclePriority", "Vehicle")
 
 
+def _vinOf(value) -> Optional[str]:
+    for candidate in (
+        getattr(value, "VIN", None),
+        getattr(value, "vin", None),
+        value,
+    ):
+        if isinstance(candidate, str) and candidate:
+            return candidate.upper()
+    return None
+
+
 class VehiclePriority:
     master = None
-    VALID_COMMAND_POLICIES = ("prefer_ble", "ble_only", "api_only")
-    configPolicy = None
+    VALID_COMMAND_POLICIES = Suppressions.VALID_COMMAND_POLICIES
 
-    # State-changing (command) methods. The commandPolicy setting restricts
-    # which modules may execute these; read-only methods are unaffected and
-    # always use the full priority fallback.
+    # State-changing (command) methods. They walk the order for their
+    # capability, so commandPolicy and providerSuppressions apply; any other
+    # method walks every provider not suppressed for reads.
     COMMAND_METHODS = frozenset(
         [
             "car_api_charge",
@@ -29,194 +54,280 @@ class VehiclePriority:
         ]
     )
 
+    # car_api_charge resolves per task: see capabilityFor
+    COMMAND_CAPABILITIES = {
+        "car_api_charge": None,
+        "setChargeRate": SET_AMPS,
+        "startCharging": START_CHARGING,
+        "stopCharging": STOP_CHARGING,
+        "applyChargeLimit": SET_CHARGE_LIMIT,
+        "wakeVehicle": WAKE,
+    }
+
+    # A provider reached only because a billed one failed is called at most
+    # this often per car and command: Fleet's own once-a-minute cadence
+    FALLBACK_INTERVAL = 60
+
     def __init__(self, master):
         self.master = master
-        # commandPolicy in config.json is a hard override. When it is not set
-        # there, the policy is runtime-configurable from the Settings page and
-        # persisted in settings.json.
-        policy = master.config.get("vehicle", {}).get("commandPolicy", None)
-        if policy:
-            policy = str(policy).lower()
-            if policy not in self.VALID_COMMAND_POLICIES:
-                logger.error(
-                    f"Invalid vehicle commandPolicy '{policy}' in config.json; ignoring override"
-                )
-                policy = None
-        self.configPolicy = policy
+        self.order = master.providerOrder
+        self._clock = time.monotonic
+        # (provider, capability, VIN or None) -> when the fallback last ran
+        self._fallbackAt = {}
+        self._fallbackLock = threading.Lock()
 
     @property
     def commandPolicy(self):
-        if self.configPolicy:
-            return self.configPolicy
-        policy = str(self.master.settings.get("commandPolicy", "prefer_ble")).lower()
-        if policy not in self.VALID_COMMAND_POLICIES:
-            return "prefer_ble"
-        return policy
+        return self.order.suppressions.commandPolicy
 
     @property
     def commandPolicyOverridden(self):
         # True when config.json pins the policy, disabling the UI control.
-        return bool(self.configPolicy)
+        return self.order.suppressions.commandPolicyOverridden
 
     def updateSettings(self):
         # Need to catch this one to avoid an exception
         return True
 
-    def _skip_module_for_command(self, module_name, method_name):
-        """Return True if commandPolicy excludes this module from executing a
-        state-changing method. Fleet API commands are billed per call, so
-        ble_only prevents any API spend on commands; api_only is the inverse
-        for setups without working Bluetooth."""
-        if method_name not in self.COMMAND_METHODS:
+    def providers(self):
+        # registerProviders asks every Vehicle module; the facade has none of
+        # its own, and must not walk the order for this
+        return []
+
+    @staticmethod
+    def capabilityFor(name, args, kwargs) -> Optional[str]:
+        if name == "car_api_charge":
+            task = args[0] if args else kwargs.get("task")
+            if isinstance(task, dict) and task.get("charge") is False:
+                return STOP_CHARGING
+            return START_CHARGING
+        return VehiclePriority.COMMAND_CAPABILITIES.get(name)
+
+    @staticmethod
+    def targetVIN(name, args, kwargs) -> Optional[str]:
+        # None when the call names no vehicle: a broadcast
+        if name == "car_api_charge":
+            task = args[0] if args else kwargs.get("task")
+            return _vinOf(task.get("vin")) if isinstance(task, dict) else None
+        if name == "applyChargeLimit":
+            return _vinOf(kwargs.get("vin"))
+        if name == "setChargeRate":
+            vehicle = args[1] if len(args) > 1 else kwargs.get("vehicle")
+            return _vinOf(vehicle)
+        if name in ("startCharging", "stopCharging", "wakeVehicle"):
+            if args:
+                return _vinOf(args[0])
+            return _vinOf(kwargs.get("vin", kwargs.get("vehicle")))
+        return None
+
+    @staticmethod
+    def targetAmps(name, args, kwargs) -> Optional[float]:
+        # The rate a setChargeRate asks for. Provider selection does not use
+        # it: setChargeRate walks every ready provider (see modulesFor).
+        # Remove with the facade in Phase 3.
+        if name != "setChargeRate":
+            return None
+        value = args[0] if args else kwargs.get("charge_rate")
+        if isinstance(value, bool):
+            return None
+        try:
+            amps = float(value)
+        except (TypeError, ValueError):
+            return None
+        if amps != amps:
+            return None
+        # Vehicle amps are never 0 and every module clamps 0 to 1; 0 would
+        # drop every candidate. The module still gets the caller's value.
+        return max(1.0, amps)
+
+    def modulesFor(self, name, args, kwargs) -> List[Tuple[Any, Any]]:
+        if name in self.COMMAND_METHODS:
+            capability = self.capabilityFor(name, args, kwargs)
+            vin = self.targetVIN(name, args, kwargs)
+            vehicle = self.master.vehicleRegistry.get(vin) if vin else None
+            if vehicle is not None:
+                # setChargeRate: readiness only. The TWC cannot lift the
+                # car's own current limit (#660), so the local-amps rule
+                # that keeps Fleet off a rate the TWC covers applies to
+                # setAmps, not here
+                ready = self.order.candidates(
+                    vehicle, capability, localRule=name != "setChargeRate"
+                )
+                providers = [
+                    p
+                    for p in self.order.ordered(capability)
+                    if p in ready or self._listUnloaded(p)
+                ]
+            else:
+                providers = self.order.ordered(capability)
+        else:
+            # api_only keeps BLE out of reads too, as orderReadSources does;
+            # a disabled module (HomeAssistant) is not available
+            providers = [
+                p
+                for p in self.order.providers()
+                if not self.order.suppressions.suppressed(p, READ_CHARGE)
+                and self._available(p, READ_CHARGE)
+            ]
+        walk, seen = [], set()
+        for p in providers:
+            module = p.module
+            if module is None or id(module) in seen:
+                # Owner and Fleet share TeslaAPI: walked once, first position
+                continue
+            seen.add(id(module))
+            walk.append((p, module))
+        return walk
+
+    @staticmethod
+    def _listUnloaded(provider) -> bool:
+        # TeslaAPI's providers are ready only for a car on its vehicle list,
+        # but only TeslaAPI's own command methods load that list. Until it
+        # is loaded, a targeted command keeps them (ordered() has already
+        # checked the slot can command), and TeslaAPI loads the list and
+        # finds the car itself, as before the provider order.
+        if provider.name not in ("OwnerAPI", "FleetAPI"):
             return False
-        if self.commandPolicy == "ble_only" and module_name == "TeslaAPI":
+        try:
+            return provider.module.getVehicleCount() == 0
+        except Exception as e:
+            logger.debug(f"{provider.name} getVehicleCount() raised {type(e).__name__}")
+            return False
+
+    @staticmethod
+    def _available(provider, capability) -> bool:
+        try:
+            return bool(provider.available(capability))
+        except Exception as e:
+            logger.debug(f"{provider.name} available() raised {type(e).__name__}")
+            return False
+
+    def _argsFor(self, provider, name, args, kwargs):
+        # The call's arguments for this provider's module, or None to skip
+        # it. A module that takes its own vehicle type (HomeAssistant) gets
+        # its own vehicle, looked up by VIN, never the TeslaAPI one.
+        if name != "setChargeRate" or not provider.vehicleAttachment:
+            return args, kwargs
+        positional = len(args) > 1
+        vehicle = args[1] if positional else kwargs.get("vehicle")
+        if vehicle is None:
+            return args, kwargs
+        vin = self.targetVIN(name, args, kwargs)
+        registered = self.master.vehicleRegistry.get(vin) if vin else None
+        own = registered.attachment(provider.vehicleAttachment) if registered else None
+        if own is None:
+            return None
+        if positional:
+            return (args[0], own) + tuple(args[2:]), kwargs
+        return args, dict(kwargs, vehicle=own)
+
+    @staticmethod
+    def _billed(provider, capability) -> bool:
+        cost = provider.cost(capability) if capability else None
+        return cost is not None and cost.tier >= TIER_BILLED
+
+    def _fallbackDue(self, provider, capability, vin) -> bool:
+        # Records the call when it is due; no I/O under the lock
+        key = (provider.name, capability, vin)
+        now = self._clock()
+        with self._fallbackLock:
+            last = self._fallbackAt.get(key)
+            if last is not None and now - last < self.FALLBACK_INTERVAL:
+                return False
+            self._fallbackAt[key] = now
             return True
-        if self.commandPolicy == "api_only" and module_name == "TeslaBLE":
-            return True
-        return False
 
-    def _skip_read_only_for_command(self, module_ref, method_name):
-        """Return True if module_ref is read-only (TeslaAPI with no token
-        that can command any listed car, e.g. an Owner API token whose cars
-        all need signed commands) and method_name is a state-changing
-        command. The next module is tried instead; the skip is not counted
-        as a failure. When only some cars are read-only, the module refuses
-        those itself and returns failure, so the next module is tried too.
-        Compared with `is True` so a module without the attribute, or a
-        Mock in tests, is never skipped.
+    def _count(self, kind, name):
+        counts = self.master.stats.setdefault(kind, {})
+        counts[name] = counts.get(name, 0) + 1
 
-        On a skip, the module's own refuseCommandIfReadOnly logs why (per
-        car, once per state change); otherwise the only line would be this
-        class's INFO2 skip. Looked up on the class, so a Mock or a module
-        without the method is not called."""
-        if method_name not in self.COMMAND_METHODS:
+    def setAmps(self, vin, amps) -> bool:
+        vehicle = self.master.vehicleRegistry.get(vin)
+        if vehicle is None:
             return False
-        if getattr(module_ref, "readOnly", False) is not True:
-            return False
-        if callable(getattr(type(module_ref), "refuseCommandIfReadOnly", None)):
-            module_ref.refuseCommandIfReadOnly(method_name)
-        return True
-
-    def _calculate_retries(self, priority):
-        """Calculate number of retries based on priority level.
-        For every 10 priority points, we get 1 retry.
-        Example: priority 20 = 2 retries, priority 10 = 1 retry, priority 5 = 0 retries
-        """
-        return max(0, priority // 10)
+        return self.order.dispatch(
+            vehicle, SET_AMPS, lambda p: p.setAmps(vin, amps), amps=amps
+        )
 
     def __getattr__(self, name):
+        if name.startswith("_"):
+            # Probes such as copy's __deepcopy__ never walk the order
+            raise AttributeError(name)
+
         def method(*args, **kwargs):
-            ret = False
-            priority = 100
-            module_name = None
-            module_ref = None
+            walk = self.modulesFor(name, args, kwargs)
+            if not walk:
+                logger.debug(f"VehiclePriority: No modules available for {name}")
+                return False
 
-            logger.debug(
-                f"VehiclePriority: Attempting to call {name} with priority fallback"
+            capability = (
+                self.capabilityFor(name, args, kwargs)
+                if name in self.COMMAND_METHODS
+                else None
             )
-
-            # Try each module in priority order
-            while priority > 0:
-                module_name, module_ref, priority = self.master.getModuleByPriority(
-                    "Vehicle", priority
-                )
-
-                # If no module found at this priority level, we've exhausted all options
-                if not module_ref or not module_name:
+            vin = self.targetVIN(name, args, kwargs) if capability else None
+            billedFailed = False
+            for provider, module_ref in walk:
+                module_name = provider.name
+                if not hasattr(module_ref, name):
                     logger.debug(
-                        f"VehiclePriority: No more modules available for {name}"
+                        f"VehiclePriority: {module_name} does not have method {name}"
                     )
-                    break
+                    continue
+                call = self._argsFor(provider, name, args, kwargs)
+                if call is None:
+                    logger.debug(
+                        f"VehiclePriority: {module_name} has no vehicle of its own for {name}"
+                    )
+                    continue
+                callArgs, callKwargs = call
 
-                if self._skip_module_for_command(module_name, name):
-                    logger.log(
-                        logging.INFO2,
-                        f"VehiclePriority: commandPolicy {self.commandPolicy} excludes {module_name} for {name}",
+                if billedFailed and not self._fallbackDue(provider, capability, vin):
+                    # A billed provider (Fleet) failed: during its backoff the
+                    # next one (Home Assistant) would otherwise run at its
+                    # own, faster cadence
+                    logger.debug(
+                        f"VehiclePriority: {module_name}.{name}() held to the fallback interval"
                     )
                     continue
 
-                if self._skip_read_only_for_command(module_ref, name):
-                    logger.log(
-                        logging.INFO2,
-                        f"VehiclePriority: {module_name} is read-only; skipping it for {name}",
-                    )
-                    continue
-
-                # Calculate retries for this priority level
-                retries = self._calculate_retries(priority)
-                max_attempts = retries + 1  # +1 for the initial attempt
-
+                max_attempts = provider.attempts()
+                self._count("moduleDispatch", module_name)
                 logger.debug(
-                    f"VehiclePriority: Trying {module_name} for {name} (priority {priority}, {max_attempts} attempts)"
+                    f"VehiclePriority: Trying {module_name} for {name} ({max_attempts} attempts)"
                 )
 
-                # Try this module up to max_attempts times
                 for attempt in range(max_attempts):
                     try:
-                        # Check if module has the requested method
-                        if hasattr(module_ref, name):
-                            if attempt > 0:
-                                logger.debug(
-                                    f"VehiclePriority: Retry {attempt}/{retries} for {module_name}.{name}()"
-                                )
-
-                            module_method = getattr(module_ref, name)
-                            ret = module_method(*args, **kwargs)
-
-                            # Track success/failure
-                            # TeslaAPI returns "success"/"error" strings; treat
-                            # "error" as failure so the priority fallback works.
-                            if ret and ret != "error":
-                                logger.debug(
-                                    f"VehiclePriority: {module_name}.{name}() succeeded on attempt {attempt + 1}"
-                                )
-                                self.master.stats["moduleSuccess"][module_name] = (
-                                    self.master.stats["moduleSuccess"].get(
-                                        module_name, 0
-                                    )
-                                    + 1
-                                )
-                                return ret  # Success, return immediately
-                            else:
-                                # Failed, but we might retry
-                                if attempt < retries:
-                                    logger.debug(
-                                        f"VehiclePriority: {module_name}.{name}() failed, retrying ({attempt + 1}/{retries})"
-                                    )
-                                else:
-                                    logger.debug(
-                                        f"VehiclePriority: {module_name}.{name}() failed after {max_attempts} attempts, trying next module"
-                                    )
-                                    self.master.stats["moduleFailures"][module_name] = (
-                                        self.master.stats["moduleFailures"].get(
-                                            module_name, 0
-                                        )
-                                        + 1
-                                    )
-                        else:
-                            logger.debug(
-                                f"VehiclePriority: {module_name} does not have method {name}"
-                            )
-                            break  # Method doesn't exist, don't retry
+                        ret = getattr(module_ref, name)(*callArgs, **callKwargs)
                     except Exception as e:
-                        # Log failure and continue to next attempt or module
-                        if attempt < retries:
-                            logger.debug(
-                                f"VehiclePriority: Exception in {module_name}.{name}() on attempt {attempt + 1}: {str(e)}, retrying"
-                            )
-                        else:
-                            logger.debug(
-                                f"VehiclePriority: Exception in {module_name}.{name}() after {max_attempts} attempts: {str(e)}, trying next module"
-                            )
-                            self.master.stats["moduleFailures"][module_name] = (
-                                self.master.stats["moduleFailures"].get(module_name, 0)
-                                + 1
-                            )
+                        ret = False
+                        logger.debug(
+                            f"VehiclePriority: {module_name}.{name}() raised {type(e).__name__} on attempt {attempt + 1}"
+                        )
                         continue
+                    # Any truthy return but "error" ends the walk (TeslaAPI
+                    # returns "success", "skipped" or "error"); None, False
+                    # and "error" try the next provider
+                    if ret and ret != "error":
+                        logger.debug(
+                            f"VehiclePriority: {module_name}.{name}() succeeded on attempt {attempt + 1}"
+                        )
+                        self._count("moduleSuccess", module_name)
+                        return ret
+                    logger.debug(
+                        f"VehiclePriority: {module_name}.{name}() failed on attempt {attempt + 1}/{max_attempts}"
+                    )
 
-            logger.debug(
-                f"VehiclePriority: All modules exhausted for {name}, returning {ret}"
-            )
-            return ret
+                logger.log(
+                    logging.INFO2,
+                    f"VehiclePriority: {module_name}.{name}() failed after {max_attempts} attempts, trying next provider",
+                )
+                self._count("moduleFailures", module_name)
+                if self._billed(provider, capability):
+                    billedFailed = True
+
+            logger.debug(f"VehiclePriority: All providers exhausted for {name}")
+            return False
 
         return method

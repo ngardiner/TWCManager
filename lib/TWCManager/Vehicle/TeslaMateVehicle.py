@@ -52,6 +52,11 @@ def parse_bool(payload):
     return None
 
 
+def _optNum(a):
+    # An empty or null payload is no reading
+    return float(a) if a else None
+
+
 class TeslaMateVehicle(TelmetryBase):
     __db_host = None
     __db_name = None
@@ -74,6 +79,7 @@ class TeslaMateVehicle(TelmetryBase):
         "charger_voltage": ["voltage", lambda a: int(a)],
         "charging_state": ["chargingState", lambda a: str(a)],
         "plugged_in": ["pluggedIn", parse_bool],
+        "charge_current_request_max": ["chargeCurrentRequestMax", _optNum],
     }
 
     def __init__(self, master):

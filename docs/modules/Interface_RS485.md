@@ -32,3 +32,17 @@ Examples of the configuration of these protocols:
 ```"device": "rfc2217://192.168.1.2:4000/"```
 
 ```"device": "socket://192.168.1.2:4000/"```
+
+## Per-TWC amps range
+
+By default every slave TWC is offered between minAmpsPerTWC (never less than the TWC itself supports) and its wiring maximum. The distributor gives an idle TWC a target of 0 and counts nothing against the budget. On the wire the TWC is offered 0 when no car is charging (a Gen2 treats 0 as its hardware minimum); when another car is charging and there is at least minAmpsPerTWC of power per car, it is offered its hardware minimum (usually 6 A), so it can see a car plug in. Brief overshoot is fine: the configured limit is already the 80% continuous rating and the next cycle rebalances. A charging TWC whose share would fall below its minimum is stopped (offered 0). To set a different range for one TWC, add `controller.Gen2TWCs` to config.json:
+
+```json
+"controller.Gen2TWCs": {
+    "ranges": {
+        "8244": { "minAmps": 8, "maxAmps": 16 }
+    }
+}
+```
+
+The key is the TWC's ID as four hex digits, as the log and web page show it. `minAmps` replaces minAmpsPerTWC for that TWC, but never goes below what the TWC supports. `maxAmps` caps what the power distributor offers it; wiringMaxAmpsPerTWC and wiringMaxAmpsAllTWCs still apply. Both are optional; a value that is not a positive number is ignored.

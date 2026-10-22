@@ -2,7 +2,7 @@ import time
 from unittest.mock import Mock
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource, TeslaAPIReadSource
-from tests.unit.teslatokens import FakeMaster, new_api
+from tests.unit.teslatokens import FakeMaster, new_api, owner_token
 
 VIN = "5YJ3E1EA1KF000001"
 
@@ -18,13 +18,16 @@ def setup(ble_result, clock=time.time):
     )
     api = new_api(master=master)
     api.carApiVehicles = []
+    # The cloud read source reads through the Owner slot
+    api.storeToken(owner_token())
     reg.registerReadSource(TeslaBLEReadSource(ble, master))
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     car = api.getCarApiVehicles()[0]
     car.is_awake = Mock(return_value=True)
     # The API source writes through descriptors; the stand-in must too.
     car.update_vehicle_data = Mock(
-        side_effect=lambda: car.vehicle.observe("batteryLevel", 50, "TeslaAPI") and True
+        side_effect=lambda slot=None: car.vehicle.observe("batteryLevel", 50, "TeslaAPI")
+        and True
     )
     reg.get(VIN).claim("TeslaBLE", True, "paired")
     return car, ble, reg

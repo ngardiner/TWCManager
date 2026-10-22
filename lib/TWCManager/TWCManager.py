@@ -40,6 +40,7 @@ import datetime
 import yaml
 import threading
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.Vehicle.Providers.Order import registerProviders
 import requests
 from enum import Enum
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -395,6 +396,11 @@ def background_tasks_thread(master):
                     master.vehicleIsDefinitelyHome(task["vin"])
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
+                elif task["cmd"] == "gen3Vitals":
+                    # Gen3 vitals are HTTP: here, never on the serial loop.
+                    g = master.getModuleByName("Gen3TWCs")
+                    if g:
+                        g.refreshVitals()
 
         except Exception as e:
             logger.error(
@@ -772,23 +778,28 @@ logger.info(
     modules_failed,
 )
 
-# Auto-register TeslaAPIController when TeslaAPI is available.
+# Every loaded vehicle module's providers join the order. A pure-Gen2
+# install has no vehicle modules and registers nothing new.
+registerProviders(master)
+
+# Auto-register VehicleEndpoints when TeslaAPI is available.
 # This enables the centralized watt-based power distribution across both
-# Gen2 TWC slaves and Tesla API vehicles (Phase 4, ported from #483).
+# Gen2 TWC slaves and at-home vehicles (Phase 4, ported from #483). BLE-only
+# and HomeAssistant-only installs keep the per-slave path.
 if master.getModuleByName("TeslaAPI") is not None:
     try:
-        from TWCManager.EVSEController.TeslaAPIController import TeslaAPIController
+        from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 
         master.registerModule(
             {
-                "name": "TeslaAPIController",
-                "ref": TeslaAPIController(master),
+                "name": "VehicleEndpoints",
+                "ref": VehicleEndpoints(master),
                 "type": "EVSEController",
             }
         )
-        logger.info("Registered TeslaAPIController EVSEController")
+        logger.info("Registered VehicleEndpoints EVSEController")
     except Exception as _e:
-        logger.warning("Could not register TeslaAPIController: %s", _e)
+        logger.warning("Could not register VehicleEndpoints: %s", _e)
 
 # Auto-register Gen3TWCs controller when enabled in config.
 # Starts a Neurio Modbus RTU server on the configured serial port so that
@@ -797,21 +808,29 @@ _gen3_cfg = master.config.get("controller.Gen3TWCs", {})
 if _gen3_cfg.get("enabled", False):
     try:
         from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
+        from TWCManager.Vehicle.Providers.Gen3TWCProvider import Gen3TWCProvider
 
+        gen3 = Gen3TWCs(master)
         master.registerModule(
             {
                 "name": "Gen3TWCs",
-                "ref": Gen3TWCs(master),
+                "ref": gen3,
                 "type": "EVSEController",
             }
         )
         logger.info("Registered Gen3TWCs EVSEController")
+        try:
+            master.providerOrder.register(Gen3TWCProvider(gen3, master))
+        except Exception as _e:
+            logger.warning("Could not register the Gen3TWC provider: %s", _e)
     except Exception as _e:
         logger.warning("Could not register Gen3TWCs: %s", _e)
 
 
 # Load settings from file
 master.loadSettings()
+# A settings-based commandPolicy is known only now
+master.providerOrder.suppressions.noticeOnce()
 
 # Create a background thread to handle tasks that take too long on the main
 # thread.  For a primer on threads in Python, see:

@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
 from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource
 from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
@@ -130,6 +131,8 @@ class TeslaBLE:
 
     def __init__(self, master):
         self.registry = VehicleRegistry.forMaster(master)
+        # Set once the binary is found; the provider reads through it
+        self.readSource = None
         self._bleLock = threading.Lock()
         # Last pairing attempt per VIN: transient, for the vehicle page.
         self._pairingAttempts = {}
@@ -230,7 +233,11 @@ class TeslaBLE:
             logger.info(f"tesla-control binary found at: {self.binaryPath}")
 
         # Reads cascade BLE first (local and free), then the cloud.
-        self.registry.registerReadSource(TeslaBLEReadSource(self, master))
+        self.readSource = TeslaBLEReadSource(self, master)
+        self.registry.registerReadSource(self.readSource)
+
+    def providers(self):
+        return [TeslaBLEProvider(self, self.master)]
 
     def _scheduleBlocksStart(self, vin):
         # Don't override the car's own Scheduled Charging / Departure timer
@@ -754,15 +761,27 @@ class TeslaBLE:
             logger.error(f"setChargeRate exception: {e}")
             return False
 
-    def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
+    def applyChargeLimit(
+        self,
+        limit,
+        checkArrival=False,
+        checkDeparture=False,
+        vin=None,
+        remoteOnly=False,
+    ):
         """
         Apply charge limit to vehicle(s) via BLE.
         Args:
             limit: Charge limit percentage (50-100), or -1 to restore to pre-TWCManager default
             checkArrival: Ignored (BLE doesn't poll state)
             checkDeparture: Ignored (BLE doesn't poll state)
+            vin: Apply to that vehicle only
+            remoteOnly: The caller wants a cloud path; BLE declines
         Returns True on success, False on failure.
         """
+        if remoteOnly:
+            logger.debug("BLE: charge limit asked for a remote path only")
+            return False
         try:
             if limit != -1 and (limit < 50 or limit > 100):
                 logger.error(
@@ -779,6 +798,8 @@ class TeslaBLE:
             )
 
             targets = self._allVehicleTargets()
+            if vin:
+                targets = [t for t in targets if t.upper() == str(vin).upper()]
             if not targets:
                 logger.warning("No vehicle has a usable BLE key")
                 return False
@@ -1086,6 +1107,7 @@ class TeslaBLE:
             "chargeLimit": cs.get("chargeLimitSoc"),
             "chargingState": self._extract_enum_value(cs.get("chargingState")),
             "availableCurrent": cs.get("chargerPilotCurrent"),
+            "chargeCurrentRequestMax": cs.get("chargeCurrentRequestMax"),
             "actualCurrent": cs.get("chargerActualCurrent"),
             "voltage": cs.get("chargerVoltage"),
             "phases": cs.get("chargerPhases"),
