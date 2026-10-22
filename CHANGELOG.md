@@ -13,6 +13,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Hold an Owner API token and a Fleet API token side by side: reads use the free Owner API, commands use Fleet, and TeslaMate sync can stay on beside a Fleet login (#693)
     * (@MikeBishop) - Show each Tesla token slot's status on the Settings page, with a Remove token button (#693)
 * Architecture
+    * Remove the legacy PHP web interface (PHP2Shell, CVE-2026-109618/CVE-2026-109619); use the built-in web interface
     * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used for reads, and for commands only to vehicles Tesla reports with `command_signing: off`
     * (@MikeBishop) - Saved Tesla tokens migrate to separate Owner and Fleet settings on first start; downgrading afterwards loses the Owner API token (#693)
 * Bugfixes

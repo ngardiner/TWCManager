@@ -6,12 +6,23 @@ The Web IPC Control module allows control of the TWCManager Tesla Wall Charger c
 
 This offers decoupling of the Web Server component from TWCManager.
 
+### PHP web interface removed
+
+TWCManager no longer ships the PHP web interface (`html/index.php`). The PHP versions it installed are end of life and affected by PHP2Shell (CVE-2026-109618, CVE-2026-109619), unauthenticated remote code execution via php-cgi.
+
+If you installed the legacy web interface, remove it:
+
+```
+sudo systemctl disable --now lighttpd
+sudo apt-get purge 'php*' lighttpd
+sudo rm /var/www/html/index.php
+```
+
+Use the built-in web interface (HTTPControl) instead. Its Debug page can send RS-485 commands. This module remains for external integrations that use the IPC queue.
+
 ### Note
 
-In v1.2.1, we disable the use of the WebIPC interface by default. We recommend using the new HTTP Control interface. You may need to use the legacy Web Interface if:
-
-   * You are using any feature that is not available in the new interface (should only be the debug interface at this point)
-   * You are interfacing with openWB, which uses the old web interface to control charge rate.
+In v1.2.1, we disable the use of the WebIPC interface by default. We recommend using the new HTTP Control interface.
 
 To enable the Web IPC module, configure the following in your ```config.json``` file:
 
@@ -29,13 +40,7 @@ There are two separate interfaces for managing TWCManager via web browser. These
    * WebIPC - The original web interface bundled with TWCManager
    * HTTPControl - The new in-built web interface
    
-**Benefits of WebIPCControl**
-
-   * Supports HTTPS (when used with a HTTPS-capable Web Server)
-
-**Drawbacks of WebIPCControl**
-
-   * More complex - requires additional administration of a web server to operate.
+TWCManager no longer ships a web page for WebIPC; use HTTPControl.
 
 ### Status
 
