@@ -8,7 +8,7 @@ car, so a rate is desired state that the reconciler delivers.
 from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
-from TWCManager.Vehicle.Presence import pluggedHere, telemetryPlug
+from TWCManager.Vehicle.Presence import asleep, pluggedHere, telemetryPlug
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
@@ -44,8 +44,12 @@ class VehicleEndpoint(EVSEInstance):
 
     @property
     def wantsToCharge(self) -> bool:
-        # "Stopped" is a paused session: the car takes power if offered
-        return self.vehicle.value("chargingState") in ("Charging", "Stopped")
+        # "Stopped" is a paused session: the car takes power if offered, and a
+        # start is allowed to wake it. Asleep after "Charging" it has finished
+        state = self.vehicle.value("chargingState")
+        return state in ("Charging", "Stopped") and not (
+            state == "Charging" and asleep(self.vehicle) is True
+        )
 
     @property
     def currentVoltage(self) -> list:

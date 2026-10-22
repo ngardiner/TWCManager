@@ -296,3 +296,11 @@ def test_a_named_plugged_car_refused_by_its_point_is_logged_once(caplog):
     assert len(lines) == 1 and lines[0].startswith("Point-%s: %s is plugged in" % (VIN, VIN))
     assert refusalsLogged(caplog, wiring=5) == []                                  # the wiring's budget refuses, not the members
     assert refusalsLogged(caplog, carMax=5, amps=5) == []                          # too little power is not a refusal
+
+def test_a_car_asleep_after_charging_is_given_no_rate():
+    m = real(mode=2); v = car(m, VIN, "Charging"); v.observe("pluggedIn", True, "OwnerAPI"); budget(m, 20)
+    m.distributeEVSEPower()
+    assert setAmps(m) == [{"vin": VIN, "amps": 20}]
+    v.observe("state", "asleep", "OwnerAPI")
+    m.distributeEVSEPower()
+    assert setAmps(m) == []
