@@ -1,4 +1,5 @@
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -19,6 +20,7 @@ from TWCManager.Control.HTTPControl import (
     pendingCommands,
     providerLines,
     sourceName,
+    watchLine,
 )
 
 VIN = "5YJ3E1EA1KF000001"
@@ -34,6 +36,7 @@ def env(master):
         heldLimitText=lambda v: heldLimitText(master, v),
         sourceName=sourceName,
         providerLines=lambda v: providerLines(master, v),
+        watchLine=lambda v: watchLine(master, v),
         presence=lambda v: PRESENCE_TEXT[presence(master, v)],
         pendingCommands=lambda v: pendingCommands(master, v),
         registry=master.vehicleRegistry,
@@ -51,6 +54,8 @@ def master():
     reg.beginPlugSession("8244")
     m = SimpleNamespace(
         vehicleRegistry=reg,
+        watch=None,
+        watchBudget=Mock(tokens=lambda: 2.5),
         version="1.4.0",
         modules={},
         settingsLock=threading.RLock(),
@@ -232,3 +237,27 @@ def test_presence_column_shows_each_state():
     # an unknown car on a TWC is here by definition
     anon = m.vehicleRegistry.get("anon:8244")
     assert PRESENCE_TEXT[presence(m, anon)] == "Home"
+
+
+def watchCell(html):
+    row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
+    return row.split("<td>")[6].split("</td>")[0].strip()
+
+
+def test_the_vehicles_page_shows_the_watch_line_after_presence():
+    m = master()
+    assert "<th>Watch</th>" in render(m)
+    assert watchCell(render(m)) == "Not watched: off"
+    status = dict(watched=False, why="named by TWC 8244")
+    m.watch = Mock(status=lambda v: status)
+    assert watchCell(render(m)) == "Not watched: named by TWC 8244"
+    status["why"] = "covered by TeslaMateVehicle"
+    assert watchCell(render(m)) == "Not watched: covered by TeslaMate"
+    status = dict(watched=True, why="", via="ble", last="asleep", nextAt=None)
+    status["lastAt"] = time.time() - 120
+    assert watchCell(render(m)) == "Watched: asleep 2 min ago via ble; budget $2.50"
+    status.update(via=None, why="no status source")
+    assert watchCell(render(m)) == "Not watched: no status source"
+    status.update(via="ble")
+    status["nextAt"] = time.time() + 150
+    assert ", next in 3 min;" in watchCell(render(m))

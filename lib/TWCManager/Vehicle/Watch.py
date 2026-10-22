@@ -32,7 +32,7 @@ DEFAULTS.update(monthlyBudgetUSD=3.0, enabled=True, emsTrigger=True, emsNoiseWat
 # A charging car is awake; a car of unknown state is asked as an awake one
 # away: until it answers, nothing says it cannot move
 _CADENCE_OF = {HOME_CHARGING: HOME_AWAKE, UNKNOWN: AWAY_AWAKE}
-NO_SOURCE, NAMED = "no status source", "named by TWC "
+NO_SOURCE, NAMED, COVERED = "no status source", "named by TWC ", "covered by "
 MISS, AWAKE = "no answer", (HOME_AWAKE, HOME_CHARGING, AWAY_AWAKE)
 # A failed read asked for, retried as its ask was: courtesy-bounded or not
 RETRY, TWICE = ("failed, asking again later", "failed, asking again"), "no answer twice"
@@ -53,7 +53,7 @@ def notWatched(master, v) -> Optional[str]:
     if twcVinAt(master, v) > NEVER:
         return NAMED + str(v.value("twcVin"))
     if covered(master, v):
-        return "covered by " + v.syncSource
+        return COVERED + v.syncSource
     return None
 
 
@@ -217,6 +217,8 @@ class Watch:
                 self.readNow(v.vin, "load step " + step)
 
     def pass_(self, now: Optional[float] = None) -> None:
+        if not self._settings["enabled"]:
+            return
         now = self._clock() if now is None else now
         for v in self.master.vehicleRegistry.vehicles():
             try:

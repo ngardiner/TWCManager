@@ -40,6 +40,7 @@ import datetime
 import yaml
 import threading
 from TWCManager.ControlTick import ControlTick
+from TWCManager.Vehicle.Watch import Watch
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
 from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
@@ -788,6 +789,7 @@ backgroundTasksThread.start()
 master.reconciler.start()
 # The control pass and housekeeping run on their own ~1 s tick, so the
 # serial loop only services RS-485
+master.watch = Watch(master)
 master.controlTick = ControlTick(master)
 master.controlTick.start()
 # The Tesla API vehicle list loads here (a free call), so the cloud

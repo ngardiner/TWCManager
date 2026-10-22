@@ -28,6 +28,7 @@ from TWCManager.Vehicle.Presence import HOME, NOT_HOME, PRESUMED, presence
 from TWCManager.Vehicle.Reconcile.Belief import known, newerReading
 from TWCManager.Vehicle.Reconcile.Outcome import RULES
 from TWCManager.Vehicle.Reconcile.Rules import satisfied
+from TWCManager.Vehicle.Watch import COVERED
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
 
@@ -92,6 +93,26 @@ def heldLimitText(master, vehicle):
         return "\u2014"
     # The held limit, then the car's own one a release puts back
     return "%s%% (%s%%)" % (limit.held, limit.outside)
+
+
+def watchLine(master, vehicle):
+    s = master.watch.status(vehicle) if master.watch else dict(watched=False, why="off")
+    if not s["watched"] or s["via"] is None:
+        why = s["why"]
+        if why.startswith(COVERED):
+            why = COVERED + sourceName(why[len(COVERED) :])
+        return "Not watched: " + why
+    now, at = time.time(), s["nextAt"]
+    last = ageText(None if s["lastAt"] is None else now - s["lastAt"])
+    # Nothing is due for a lost car known asleep
+    due = "" if at is None else ", next in %d min" % max(0, math.ceil((at - now) / 60))
+    return "Watched: %s %s via %s%s; budget $%.2f" % (
+        s["last"] or "no answer",
+        last,
+        s["via"],
+        due,
+        master.watchBudget.tokens(),
+    )
 
 
 PRESENCE_TEXT = {HOME: "Home", PRESUMED: "Probably home", NOT_HOME: "Away"}
@@ -415,7 +436,8 @@ def CreateHTTPHandlerClass(master):
                 pendingCommands=lambda v: pendingCommands(master, v),
             )
             self.templateEnv.globals.update(
-                providerLines=lambda v: providerLines(master, v)
+                watchLine=lambda v: watchLine(master, v),
+                providerLines=lambda v: providerLines(master, v),
             )
             self.templateEnv.globals.update(registry=master.vehicleRegistry)
             self.templateEnv.globals.update(
