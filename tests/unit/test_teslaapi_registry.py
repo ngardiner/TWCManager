@@ -58,6 +58,7 @@ def test_is_awake_trusts_fresh_telemetry_and_asleep_without_api_call():
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     v = reg.get(VIN)
     api.get_car_api = Mock(side_effect=AssertionError("no API call"))
+    reg.registerLiveness("TeslaMateVehicle", lambda v: reg.now())  # the feed is up
     v.observe("state", "asleep", "TeslaMateVehicle")
     assert api.is_awake(v) is False and v.syncSource == "TeslaMateVehicle"
     v.observe("state", "online", "TeslaMateVehicle")
@@ -357,11 +358,14 @@ def test_online_state_is_true_false_or_none_and_is_awake_stays_a_bool(
     assert api.onlineState(v, now=1121.0) is None and check.call_count == 2
     online = requests_mock.get(FLEET_CAR, json={"response": {"state": "online"}})
     assert api.onlineState(v, now=1300.0) is True and online.call_count == 1
+    reg.registerLiveness("TeslaMateVehicle", lambda v: reg.now())  # the feed is up
     v.observe("state", "asleep", "TeslaMateVehicle")
     assert (api.onlineState(v), api.is_awake(v)) == (False, False)
     v.observe("state", "online", "TeslaMateVehicle")
     assert (api.onlineState(v), api.is_awake(v)) == (True, True)
     assert online.call_count == 1  # telemetry answered, no GET
+    reg.registerLiveness("TeslaMateVehicle", lambda v: None)  # the feed drops
+    assert api.onlineState(v, now=1500.0) is True and online.call_count == 2
 
 
 def test_update_vehicle_data_has_a_single_caller():

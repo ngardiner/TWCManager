@@ -138,6 +138,7 @@ class Policy:
                     self.policyCheckInterval = self._parseInterval(
                         policy_engine.get("policyCheckInterval")
                     )
+        self._battery = "minBatteryLevelAtHome" in repr(self.charge_policy)
 
     @staticmethod
     def _parseInterval(value):
@@ -486,6 +487,11 @@ class Policy:
             if self.doesConditionMatch(match, condition, value, exitOn) == exitOn:
                 return exitOn
         return not exitOn
+
+    def readsBattery(self) -> bool:
+        # A policy names a module's minBatteryLevelAtHome, or the limit
+        # override stands, which reads the Tesla API cars'
+        return self._battery or self.limitOverride
 
     def overrideLimit(self):
         self.limitOverride = True

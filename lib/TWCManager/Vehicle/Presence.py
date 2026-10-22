@@ -16,7 +16,8 @@ HOME_RADIUS_FT = 1000
 HOME_FIX_MAX_AGE = 600.0
 REACH_WINDOW = 300.0
 # The least time between status checks of a car known asleep that no live
-# feed reports on: at home, and anywhere else
+# feed reports on, at home and anywhere else: the watch's defaults, and a
+# held cloud command's own check of a car the watch leaves alone
 HOME_ASLEEP_SECS, AWAY_ASLEEP_SECS = 900.0, 1800.0
 PILOT_MATCH_TOLERANCE, PLUGGED_JUST_NOW = 1, 120.0
 _BLE_CHARGE = ("chargingState", "availableCurrent", "actualCurrent")

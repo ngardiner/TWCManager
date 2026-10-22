@@ -29,7 +29,7 @@ def _newer(vehicle, field, since, twc=False):
     ]
 
 
-def _standIn(vehicle):
+def standIn(vehicle):
     # The newest TWC current, as the car's charging state
     reads = _newer(vehicle, "actualCurrent", float("-inf"), twc=True)
     if not reads:
@@ -54,7 +54,7 @@ def known(vehicle, aspect, desired=None):
     obs = vehicle.believed(FIELD_FOR[aspect], exclude=VEHICLE_SOURCES_EXCLUDED)
     if aspect != CHARGING:
         return obs
-    obs, twc = uncompleted(vehicle, obs), _standIn(vehicle)
+    obs, twc = uncompleted(vehicle, obs), standIn(vehicle)
     if obs is None:
         # A car no vehicle source describes (anonymous, non-Tesla): the TWC
         # current stands in. It never adopts
@@ -73,7 +73,7 @@ def newerReading(vehicle, aspect, since) -> bool:
     if aspect == CHARGING and vehicle.believed(field, VEHICLE_SOURCES_EXCLUDED) is None:
         # Only while known uses the stand-in: for a car a vehicle source
         # describes, the heartbeat's readings are never evidence
-        obs = _standIn(vehicle)
+        obs = standIn(vehicle)
         return obs is not None and obs.at > since
     return bool(_newer(vehicle, field, since))
 

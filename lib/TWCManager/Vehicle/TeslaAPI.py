@@ -1732,8 +1732,9 @@ class TeslaAPI:
         # True or False when an answer (a sync source or the free
         # vehicles/{vin}) says so; None when nothing answered. Free sources
         # only, never vehicle_data. The newest observation wins: telemetry
-        # (any state) is trusted only while fresh and newer than our own last
-        # state GET; otherwise use that GET's cached result or GET again.
+        # (any state) is trusted only while its feed is live, fresh and newer
+        # than our own last state GET; otherwise use that GET's cached result
+        # or GET again. A feed that is down only repeats its last report.
         # Fresh is the registry's age, so a live feed keeps an old reading
         # fresh; it still loses to a state GET made after it. now (default:
         # the module's clock) measures the maxAge-second cache, so a caller
@@ -1745,6 +1746,7 @@ class TeslaAPI:
             age is not None
             and age <= vehicle.SYNC_TIMEOUT / 4
             and obs.at >= max(car.onlineCheckedAt, car.staleBefore)
+            and isinstance(self.registry.sourceLiveAt(obs.source, vehicle), float)
         ):
             return obs.value in ("online", "charging", "updating", "driving")
 

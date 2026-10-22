@@ -30,6 +30,7 @@ from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, targetsFor
 from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED
 from TWCManager.Vehicle import Presence
+from TWCManager.Vehicle.Watch import settingsOf
 from TWCManager.Vehicle.WatchBudget import WatchBudget
 
 logger = LoggerFactory.get_logger("Master", "Master")
@@ -126,8 +127,10 @@ class TWCMaster:
         # vehicleListLock while holding settingsLock.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
-        budget = (config.get("watch") or {}).get("monthlyBudgetUSD", 3.0)
+        budget = settingsOf(config)["monthlyBudgetUSD"]
         self.watchBudget = WatchBudget(float(budget))
+        # The launcher builds it after settings and modules load
+        self.watch = None
         self.heldLimits = HeldLimits(self)
         self.providerOrder = ProviderOrder(self)
         self.providerOrder.register(Gen2TWCProvider(self))

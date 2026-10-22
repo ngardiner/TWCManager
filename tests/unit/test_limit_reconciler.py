@@ -1,13 +1,16 @@
 import time
+from unittest.mock import patch
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import RELEASE, AMPS, CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
+from TWCManager.Vehicle.TeslaBLE import TeslaBLE
 from TWCManager.Vehicle.Reconcile.Reconciler import MIN_SEND_GAP, PAID_AFTER, PROBE_AFTER, RETRY, VehicleReconciler
 from tests.unit.reconcile_helpers import Clock, placeAt, ScriptedProvider, inline, settled
 from tests.unit.test_gen2twc_provider import VIN, make as make_master
 
-def setup(*providers, clock=True, here=True, battery=60):
+def setup(*providers, clock=True, here=True, battery=60, ble=False):
+    # ble: the real TeslaBLE module and its provider; tests stub what it runs
     # here: the car is plugged in at home, so every message applies to it
     m, s = make_master(); c = Clock(1000.0) if clock else time.time
     m.config = dict(m.config, config=dict(m.config["config"]))          # never the shared CONFIG
@@ -15,6 +18,11 @@ def setup(*providers, clock=True, here=True, battery=60):
     for p in providers: m.providerOrder.register(p)
     m.desired = DesiredStore(clock=c); m.vehicleRegistry.removed = m.desired.forget; m.heldLimits.load()
     m.reconciler = r = inline(VehicleReconciler(m, clock=c)); v = m.vehicleRegistry.getOrCreate(VIN, "t")
+    if ble:
+        m.config["config"]["teslaControlPath"] = "/bin/true"
+        with patch.object(TeslaBLE, "_start_dbus_session"), patch.object(TeslaBLE, "_cleanup_stale_pipe"): b = TeslaBLE(m)
+        b.isDockerCached = False
+        for p in b.providers(): m.providerOrder.register(p)
     if here:
         v.observe("pluggedIn", True, "Gen3TWC")
         if battery:

@@ -24,8 +24,7 @@ from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
 from TWCManager.Vehicle.Reconcile.Reconciler import PAID_AFTER, RESTORE_RETRY, RETRY
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
 from tests.unit.gen2_helpers import drive as heartbeat, offersThenBeat
-from tests.unit.reconcile_helpers import AWAY, HOME, placeAt, runPending
-from tests.unit.teslatokens import fleet_token, new_api, owner_token
+from tests.unit.reconcile_helpers import AWAY, HOME, listApi, placeAt, runPending
 from tests.unit.test_limit_reconciler import VIN, setup
 
 VIN2 = "5YJ3E1EA1KF000002"
@@ -189,21 +188,7 @@ def install(
     m, r, v, c = setup(here=False)
     if policy:
         m.settings["commandPolicy"] = policy
-    api = None
-    if fleet or owner:
-        api = new_api(master=m)
-        api.now = c
-        api.wakeDelayMins = 0
-        if owner:
-            api.storeToken(owner_token())
-        if fleet:
-            api.storeToken(fleet_token())
-        for p in api.providers():
-            m.providerOrder.register(p)
-            p.clock = c
-        api.addVehicle(
-            {"id": 1, "vin": VIN, "display_name": "Car", "command_signing": signing}
-        )
+    api = listApi(m, VIN, fleet, owner, signing) if fleet or owner else None
     if located:
         placeAt(m, v, at)
     if held:
