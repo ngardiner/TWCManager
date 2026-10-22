@@ -51,11 +51,14 @@ policy changes, and to cars which arrive while the policy is in effect.  The
 car's original charge limit is remembered and restored when the car leaves or
 when a new policy does not apply a limit.
 
-TWCManager decides where each car is from events as they arrive, so no Tesla
-API read is made just to place a car (a "probably home" car with a limit or
-charge command waiting may be woken and read over the paid Fleet API to deliver
-it).  The newest evidence wins, and a
-car is home, away, or "probably home" (nothing says either way):
+TWCManager decides where each car is from events as they arrive.  Status
+checks (is the car asleep or awake?) are free and never wake a car.  A charge
+read happens when something changes, not on a clock, apart from a car charging
+at home.  A car that a live telemetry feed or a TWC covers is not watched.  See
+Vehicle watch in [Settings](Settings.md).  (A "probably home" car with a limit
+or charge command waiting may be woken and read over the paid Fleet API to
+deliver it.)  The newest evidence wins, and a car is home, away, or "probably
+home" (nothing says either way):
 
 - **Home:** a TWC reports the car by VIN while it is plugged in; the car
   plugs in at a TWC, or over BLE, or plugs in with its position inside
@@ -112,10 +115,7 @@ it.
 Known limits: a guest car that later plugs in to the same TWC can keep a car
 that left idle counted as home until that car reports a position outside the
 radius or starts driving, and a VIN a TWC rejected during a charge session
-stays rejected until the car is unplugged.  A car charging away from a TWC
-(on a mobile connector, say) with no telemetry feed is not watched for its
-departure, so its original limit waits until something else shows it left; a
-separate feature for that is planned.
+stays rejected until the car is unplugged.
 
 Acceptable values are 50-100; -1 means not to apply a limit: the car is released
 to its original limit, which is applied like any other limit.
@@ -313,8 +313,9 @@ Most policies will not require a background task.  There are two exceptions:
   configured EMS plugins.  Do not set `charge_amps`; the background task will
   update it each time it runs.
 - If defining a policy that depends on `modules.TeslaAPI.minBatteryLevelAtHome`,
-  the background task `checkCharge` will track the charge state of cars at home
-  more closely while the policy is selected.
+  the vehicle watch reads a charging car's battery level on the paid Fleet API
+  every `cloudChargingReadSecs`; without such a policy it makes no paid reads
+  while a car charges (see Vehicle watch in [Settings](Settings.md)).
 
 ## Policy Extension Points
 

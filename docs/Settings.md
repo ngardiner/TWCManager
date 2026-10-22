@@ -89,6 +89,92 @@ For finer control than the policy, the `providerSuppressions` setting (in settin
 
 Provider names are `Gen2TWC`, `Gen3TWC`, `TeslaBLE`, `OwnerAPI`, `FleetAPI` and `HomeAssistant`. The telemetry feeds (TeslaMate, Fleet Telemetry) only report, so they are not providers and cannot be suppressed. Capability names are the reads `readCharge` (charge state and location) and `wallConnectorVins`, and the commands `setChargeLimit`, `startCharging`, `stopCharging`, `setAmps` and `wake`; `"*"` suppresses every operation. Suppressing `readCharge` also takes the provider out of vehicle reads. Unknown names are ignored, including the earlier `readList`, `readOnline`, `readLocation`, `readPlug`, `readVin` and `readAmps`, which nothing ever read. The suppressions apply on top of the Vehicle Command Policy.
 
+### Vehicle watch
+
+A TWC tells TWCManager when a car plugs in, charges and leaves. A car on any other charger (a mobile connector, a third-party EVSE) gets no such report. The vehicle watch notices its arrival, plug-in, charge start, charge end and departure, so the car gets a fair share of power and a car that is done or gone stops being counted.
+
+The watch looks after every car that no TWC names and that no live telemetry feed (TeslaMate, Fleet Telemetry) covers. A TWC reports its own car's changes, and a feed reports changes itself. When a feed goes down, the watch picks the car up at its next due check, which is at most one cadence later. A car with no VIN is never watched.
+
+The watch never wakes a car and never keeps one awake. It works in three rings, cheapest first:
+
+* **Passive listening.** A Bluetooth scan for the car's advertisement, a step in the house's consumption, and what the TWCs and feeds report. All free, and none touches the car. One `bluetoothctl` scan listens for every car at once.
+* **Status checks.** Is the car asleep, awake or offline? Over BLE this is the keyless sleep-safe check; through the cloud it is the free online check. Both are free and never wake the car. An asleep car is not charging and not moving, so this answer alone carries the watch most of the time.
+* **Charge reads.** Battery level, charge state, amps and location. Over BLE or the Owner API a read is free. On the Fleet API it costs $0.002, taken from the watch's budget. A car that is awake and not charging is read when something changes: it woke, it arrived, it plugged in, its charge-port door opened (seen by BLE's check), or the consumption step asks for it. A car only the Tesla API can see is also read while it stays awake (below). After a wake-triggered read, an awake car at home is not read again for `sleepCourtesySecs`; a plug-in, a door opening and a consumption-step read skip that wait. A read asked for by a change that fails is tried once more, `chargingReadSecs` later (or once the `sleepCourtesySecs` wait is over, if the read was subject to it). An asleep car is never read. While a car is charging at home, it is read on a clock, but only if a provider can set its amps, and on the Fleet API only if a policy reads its battery level (below). A car that can only be watched is not read for its amps.
+
+The status check runs on a clock set by what the car is doing:
+
+| Where the car is | Status check | Charge read |
+|---|---|---|
+| Home, asleep | every 15 minutes (`homeAsleepSecs`) | none |
+| Home, awake | every 4 minutes (`homeAwakeSecs`) | on a change, then not again for 20 minutes (`sleepCourtesySecs`); a car only the Tesla API sees, again every 20 minutes while it stays awake |
+| Home, charging | every 4 minutes (`homeAwakeSecs`); asleep means the charge ended | every 5 minutes over BLE or the Owner API (`chargingReadSecs`); on the Fleet API every 15 minutes (`cloudChargingReadSecs`), and only when a policy reads the battery level |
+| Away, asleep | every 30 minutes (`awayAsleepSecs`) | none |
+| Away, awake, or sleep state not known yet | every 5 minutes (`awayAwakeSecs`) | on a wake; a car only the Tesla API sees, again every 20 minutes from its last fix |
+
+An away car is not asked about until it could be back. That time is its last position fix plus the straight-line distance to home at 120 km/h (75 mph, `returnKph`), and never less than 300 seconds. Before it, nothing runs for that car.
+
+On the Fleet API a charging car is read every `cloudChargingReadSecs` only while a policy reads its battery level: a policy condition naming `modules.TeslaAPI.minBatteryLevelAtHome`, or the limit override that stops a car through its charge limit. Otherwise it is not read while it charges. Its share is released when it falls asleep, about 15 minutes after its charge ends, and the consumption step works from its last known draw.
+
+#### Cars only the Tesla API can see
+
+Where no TeslaBLE module is loaded, or its radio cannot work (no controller, an adapter powered off or blocked, or `bluetoothd` not answering), a watched car with a Tesla API connection is seen only through the API. A car follows these rules only while the radio is down, and returns to Bluetooth when it is back; its watch line on the Vehicles page says "cloud". Asleep or awake says nothing about where a car is, but a read on its wake learns the rest. For such a car the watch:
+
+* checks its sleep state on the cadences above, for free;
+* reads it (charge state and position) when a check finds it woke, home or away;
+* reads it again while it stays awake and not charging, once its last position fix is `sleepCourtesySecs` old. At home that is one read per 20 minutes awake, and a parked car usually sleeps within about 15 minutes, so in practice it is one read per wake. A car that drives off while awake is seen gone within one window. The window never keeps a car awake.
+
+After a fix away from home, nothing runs for the car until its return time; a fix 3 hours out means 3 hours with no request. On the Owner API all of this is free. On the Fleet API it is about one $0.002 read per wake at home, plus one per wake away once its return time has passed: about $0.01 a day for a car with a few trips, out of the budget. Fleet Telemetry reports these changes itself and costs less (see [Fleet Telemetry](modules/Vehicle_FleetTelemetryMQTT.md)), but it is not required.
+
+#### Cars Bluetooth can hear
+
+With the TeslaBLE module loaded and its radio working, the watch makes no cloud status checks. The only cloud status check is a command held for a sleeping car, which checks the car's sleep state for free every 15 minutes at home and every 30 minutes elsewhere, and only while it is held.
+
+A car in Bluetooth range answers BLE's check even asleep, so two missed checks in a row run a range scan, whatever the car last reported. A scan that also misses marks the car out of range. Where no scan is possible, the second miss does that itself for an away car. A car at home stays on Bluetooth's checks, and an awake car with a Tesla API connection gets one charge read through the cloud, once, until Bluetooth answers again, which can find that it has left.
+
+A car Bluetooth has lost (away, with two misses) is scanned (or pinged, where no scan is possible) every 150 seconds (`scanAwaySecs`) for `awayAsleepSecs` after its last sign of life, then every `awayAsleepSecs`, whatever it last reported.
+
+After a restart, the first pass asks for no arrival, wake or plug-in read, since what a car was before the restart is no news; a car charging at home is still read. A car first seen later still gets its arrival read.
+
+A TWC-named car is read while its TWC reports current, every `chargingReadSecs` over BLE or the Owner API, or every `cloudChargingReadSecs` on the Fleet API while a policy reads its battery level, and when it plugs in. Nothing else about it is watched.
+
+#### Consumption step
+
+With a consumption meter configured, the watch also looks for a step in the house's consumption that nothing known explains. When the load rises or falls by at least a car's minimum draw (or `emsNoiseWatts`, if that is higher) and the next sample holds it, the watch reads every candidate car at once. A rise asks about awake cars, or cars whose state is not yet known, that are not charging; a fall asks about cars known to be charging. A car known to be away is never asked; a "probably home" car is asked once its return time has passed. A rise reads each car at most once every `sleepCourtesySecs`, so a load that cycles (an air conditioner, an oven) never keeps a car awake; a fall reads each car at most once every 5 minutes. A step is only a trigger: a clothes dryer looks the same, and the car's own read decides. With no consumption meter this step is off.
+
+#### Budget
+
+Cloud reads draw from a budget, `monthlyBudgetUSD`, which defaults to $3. Tesla's free credit is $10 a month, and it also covers commands, wakes and Fleet Telemetry, so the default leaves room for the rest. At $0.002 a read, $3 is about 1,500 reads a month. The budget refills steadily and holds at most one day's worth. A read caused by a change may spend all of it; a routine read (amps while charging) leaves half a day's worth in reserve. When the budget runs out, cloud reads stop and the free status checks continue. The log says once when a read caused by a change is refused for lack of budget, and once when it is available again; routine reads stop quietly at the reserve. The budget is saved, so a restart does not refill it. Only the watch's own reads draw from it. Commands and the reads made before them do not.
+
+Free reads (BLE and the Owner API) are never held back by the budget.
+
+#### The `watch` settings
+
+All keys are optional. The `watch` block goes at the top level of `config.json`, beside `vehicle`:
+
+```
+"watch": {
+    "enabled": true,
+    "homeAsleepSecs": 900,
+    "homeAwakeSecs": 240,
+    "awayAsleepSecs": 1800,
+    "awayAwakeSecs": 300,
+    "chargingReadSecs": 300,
+    "cloudChargingReadSecs": 900,
+    "scanAwaySecs": 150,
+    "sleepCourtesySecs": 1200,
+    "returnKph": 120,
+    "monthlyBudgetUSD": 3.0,
+    "emsTrigger": true,
+    "emsNoiseWatts": 300
+}
+```
+
+`enabled` turns the whole watch off. `emsTrigger` turns off the consumption step alone.
+
+The `cloudUpdateInterval` setting is the Powerwall module's cloud cache time. It no longer sets how often cars are read.
+
+The Vehicles page shows, for each car, whether it is watched (and if not, why), the last check and its answer, and when the next one is due.
+
 ### Consumption Offsets
 
 Consumption Offsets are values which are applied to the Consumption value retrieved from EMS modules. Consumption Offsets can be either positive or negative values, and are often used to control the behaviour of TWCManager by making it appear as though the consumption is higher or lower than it is, or allows specifying an average consumption value for installations where it is not possible to query consumption data.
