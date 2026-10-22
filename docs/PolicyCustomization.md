@@ -83,8 +83,10 @@ plugged in, since unplugging wakes it, and so is one the check cannot tell is
 awake (a charge read might wake it); an awake one gets a BLE charge read.
 Otherwise the Tesla API reads the car only if its free online check finds it
 awake.  So a Fleet-API-only install, or one whose BLE is down, pays for a read
-when a check finds the car awake, about one per real plug event.  A car
-nothing can check is never treated as unplugged by the TWC alone.  The log
+when a check finds the car awake, about one per real plug event.  A check that
+can't tell runs once more two minutes after the change, since the cloud can
+take a minute to learn that an unplug woke the car.  A car nothing can check
+is never treated as unplugged by the TWC alone.  The log
 shows each checked change and the answer (`TWC <id>: 03 → 00, max ... A:
 checking <VIN>`, `TWC <id>: plugged in: ...`, `unplugged, <VIN> departs`).
 

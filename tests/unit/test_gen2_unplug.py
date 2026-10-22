@@ -140,6 +140,33 @@ def test_nothing_can_check_the_car_so_it_stays(rig, caplog):
     assert "TWC 8244: plugged in: {'%s': None}" % VIN in caplog.text
 
 
+@pytest.mark.parametrize(
+    "answers, at, unplugged",
+    [
+        ([None, False], [0, 1], True),  # the cloud learns of the wake later
+        ([None, None], [0, 1], False),  # once per edge
+        ([False], [0], True),
+        ([True], [0], False),
+    ],
+)
+def test_an_edge_no_check_answered_is_checked_once_more(
+    rig, monkeypatch, answers, at, unplugged
+):
+    m, v, c, s = rig
+    named(m, v, c, s)
+    asked, left = [], list(answers)
+
+    def check(master, car, since):
+        asked.append(c.t - since)
+        return left.pop(0) if left else None
+
+    monkeypatch.setattr(P, "checkPlug", check)
+    beats(m, s, c, 600, 0x00, 0.0)
+    waits = [s.CHECK_WAIT, s.RECHECK_WAIT]
+    assert asked == [waits[i] for i in at]
+    assert (m.vehicleRegistry.vehicleAt("8244") is None) is unplugged
+
+
 def unnamed(m, c, s):
     # Plugged in and left unnamed: the attribution job is left pending
     beats(m, s, c, 400, 0x03, 32.0)

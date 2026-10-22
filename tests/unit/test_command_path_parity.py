@@ -2048,7 +2048,8 @@ def test_gen2_steady_00_after_link_does_not_block_startup_charging(
     assert limits(b) == [] and b.runs == []
     m.startCarsCharging(VIN)
     beats(m, r, c, s, 60, 0x00, 0.0, policy)
-    assert b.pings == [VIN] and Presence.presence(m, v) == Presence.HOME
+    # The edge's check, and its one follow-up when that check can't tell
+    assert b.pings == [VIN, VIN] and Presence.presence(m, v) == Presence.HOME
     assert "charging-start" in bleCommands(b) and limits(b) == []
     assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
     assert paid(requests_mock) == (0, 0, 0)

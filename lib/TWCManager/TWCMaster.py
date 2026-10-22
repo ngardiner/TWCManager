@@ -1537,6 +1537,9 @@ class TWCMaster:
             cars = Presence.candidates(self) if at.isAnonymous else [at]
             plugged = {v.key: Presence.checkPlug(self, v, since) for v in cars}
             logger.info("TWC %s: plugged in: %s", twcid, plugged)
+            unknown = None in plugged.values() and True not in plugged.values()
+            if unknown and slaveTWC.rechecked != since:
+                slaveTWC.recheck = slaveTWC.rechecked = since
             if any(p is not False for p in plugged.values()):
                 return
             if len(cars) == 1:

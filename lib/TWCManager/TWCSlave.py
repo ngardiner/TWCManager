@@ -100,6 +100,10 @@ class TWCSlave:
     # edge with the max above 0 is checked per event
     CHECK_WAIT = 20
     status, edgeAt, armed = None, None, True
+    # An edge no check could answer is checked once more: an unplug wakes
+    # the car, and the cloud's online answer can lag that wake by a minute
+    RECHECK_WAIT = 120
+    recheck, rechecked = None, None
     # The car keys the charging point last rated (tick)
     _lastKeys = ()
     # The last all-TWC wiring cap logged, so a held cap logs once
@@ -138,6 +142,9 @@ class TWCSlave:
         self.armed = state == 0x03 or empty or self.armed and not v
         if self.edgeAt and now >= self.edgeAt + self.CHECK_WAIT:
             since, self.edgeAt = self.edgeAt, None
+            return since
+        if self.recheck and now >= self.recheck + self.RECHECK_WAIT:
+            since, self.recheck = self.recheck, None
             return since
 
     def minAmpsToOffer(self):
