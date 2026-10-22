@@ -20,17 +20,22 @@ Expected TWCManager config:
 
 import asyncio
 import json
-import logging
 import re
 import threading
-import time
 from typing import Dict, List, Optional
+from urllib.parse import urlsplit
 
 import requests
 import websockets
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
-from TWCManager.Vehicle.Registry.Sources import HomeAssistantReadSource
+from TWCManager.Vehicle.Reconcile.Outcome import (
+    DONE,
+    ERROR,
+    REFUSED,
+    UNREACHABLE,
+    Outcome,
+)
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("V_HASS", "Vehicle")
@@ -60,17 +65,12 @@ class HaVehicle:
         self.slug = _slugify_name(name)
         self.entity_ids = entity_ids  # only the entities we need
 
-        # Cached state used by TWCManager:
+        # Cached for the policy's minBatteryLevelAtHome/numCarsAtHome and the
+        # presence check; everything else goes only to the registry
         self.battery_level: Optional[float] = None
-        self.charge_limit: Optional[float] = None
-        self.available_current: Optional[float] = None
-        self.charging: Optional[bool] = None
-
         self.lat: Optional[float] = None
         self.lon: Optional[float] = None
         self.at_home: bool = False
-
-        self.last_state_update: float = 0.0
 
     # ---- Helpers for entity availability ----
 
@@ -100,7 +100,8 @@ class HaVehicle:
         return True
 
     def parse_from_home_assistant(self, api: "HomeAssistant") -> Optional[dict]:
-        """Read the entities and update the cached state. Returns the registry
+        """Read the entities and update the cached battery level, position
+        and at_home. Returns the registry
         fields this pass observed, or None if Home Assistant could not be
         reached or no entity answered. Does not touch the registry."""
         answered = False
@@ -122,39 +123,26 @@ class HaVehicle:
         # entity leaves the registry's earlier value to age out.
         seen: Dict[str, object] = {}
 
-        # Battery level
-        st = get_state("battery_level_sensor")
-        if st is not None:
-            try:
-                self.battery_level = float(st.get("state"))
-                seen["batteryLevel"] = self.battery_level
-            except (TypeError, ValueError):
-                pass
-
-        # Charge limit
-        st = get_state("charge_limit_number")
-        if st is not None:
-            try:
-                self.charge_limit = float(st.get("state"))
-                seen["chargeLimit"] = self.charge_limit
-            except (TypeError, ValueError):
-                pass
-
-        # Charge current number (available amps setting)
-        st = get_state("charge_current_number")
-        if st is not None:
-            try:
-                self.available_current = float(st.get("state"))
-                seen["availableCurrent"] = self.available_current
-            except (TypeError, ValueError):
-                pass
+        # Battery level, charge limit, charge current number (available amps)
+        for key, field in (
+            ("battery_level_sensor", "batteryLevel"),
+            ("charge_limit_number", "chargeLimit"),
+            ("charge_current_number", "availableCurrent"),
+        ):
+            st = get_state(key)
+            if st is not None:
+                try:
+                    seen[field] = float(st.get("state"))
+                except (TypeError, ValueError):
+                    pass
+        self.battery_level = seen.get("batteryLevel", self.battery_level)
 
         # Charging boolean
         st = get_state("charging_sensor")
         if st is not None:
             state = st.get("state", "").lower()
-            self.charging = state in ("charging", "starting", "on")
-            seen["chargingState"] = "Charging" if self.charging else "Stopped"
+            charging = state in ("charging", "starting", "on")
+            seen["chargingState"] = "Charging" if charging else "Stopped"
 
         # Location
         st = get_state("location_tracker")
@@ -175,21 +163,17 @@ class HaVehicle:
 
         if not answered:
             return None
-        self.last_state_update = time.time()
         return seen
 
 
 class HomeAssistant:
     """Home Assistant-backed vehicle module for TWCManager."""
 
-    carApiLastStartOrStopChargeTime = 0
-    lastChargeLimitApplied = -1
-    minChargeLevel = -1
     lastStateRefreshTime = 0
     connectionFailures = 0  # bumped by _get_state on a connection error
     stateRefreshInterval = 30  # Minimum seconds between state refreshes per vehicle
-    # Set once connectivity is verified; the provider reads through it
-    readSource = None
+    # A refused service call (401/403) was logged; cleared by a success
+    _refusalLogged = False
 
     def __init__(self, master):
         self.master = master
@@ -232,7 +216,9 @@ class HomeAssistant:
         self.carApiVehicles: List[HaVehicle] = []
         self._rest_lock = threading.Lock()
 
-        logger.info("HomeAssistant vehicle module initialising, URL=%s", self.url)
+        # The host only: a URL can carry userinfo or a query token (M8)
+        host = urlsplit(self.url).hostname
+        logger.info("HomeAssistant vehicle module initialising, host=%s", host)
 
         # Test connectivity before attempting discovery
         try:
@@ -242,7 +228,7 @@ class HomeAssistant:
         except requests.exceptions.ConnectionError:
             logger.error(
                 "Cannot connect to Home Assistant at %s. Check URL and network connectivity.",
-                self.url,
+                host,
             )
             self._enabled = False
             return
@@ -260,17 +246,19 @@ class HomeAssistant:
             self._enabled = False
             return
         except Exception as e:
-            logger.error("Failed to verify HomeAssistant connectivity: %s", str(e))
+            logger.error(
+                "Failed to verify HomeAssistant connectivity: %s", type(e).__name__
+            )
             self._enabled = False
             return
 
-        self.readSource = HomeAssistantReadSource(self)
-        self.registry.registerReadSource(self.readSource)
-
         try:
             self._discover_vehicles()
-        except Exception:
-            logger.exception("Failed to discover Tesla vehicles via Home Assistant")
+        except Exception as e:
+            logger.error(
+                "Failed to discover Tesla vehicles via Home Assistant: %s",
+                type(e).__name__,
+            )
 
         if not self.carApiVehicles:
             logger.warning("No Tesla vehicles discovered in Home Assistant.")
@@ -341,11 +329,12 @@ class HomeAssistant:
         except asyncio.TimeoutError:
             logger.error(
                 "Timeout connecting to Home Assistant WebSocket at %s. Check URL and network connectivity.",
-                self.ws_url,
+                urlsplit(self.ws_url).hostname,
             )
         except Exception as e:
             logger.error(
-                "Failed to discover vehicles via Home Assistant WebSocket: %s", str(e)
+                "Failed to discover vehicles via Home Assistant WebSocket: %s",
+                type(e).__name__,
             )
 
     @staticmethod
@@ -517,279 +506,56 @@ class HomeAssistant:
                 return None
             except requests.exceptions.ConnectionError as exc:
                 self.connectionFailures += 1
-                logger.warning("HA: failed reading state %s: %s", entity_id, exc)
+                logger.warning(
+                    "HA: failed reading state %s: %s", entity_id, type(exc).__name__
+                )
                 return None
             except Exception as exc:
-                logger.warning("HA: failed reading state %s: %s", entity_id, exc)
+                logger.warning(
+                    "HA: failed reading state %s: %s", entity_id, type(exc).__name__
+                )
                 return None
 
-    def _call_service(self, domain: str, service: str, data: dict) -> bool:
+    def _post_service(self, domain: str, service: str, data: dict) -> Outcome:
+        # The one place a service call is made. Never logs a response body.
         url = f"{self.rest_base}/services/{domain}/{service}"
         with self._rest_lock:
             try:
                 resp = self._session.post(url, json=data, timeout=10)
                 resp.raise_for_status()
-                logger.debug("HA: service call %s.%s succeeded", domain, service)
-                return True
             except requests.exceptions.Timeout:
                 logger.warning("HA: timeout calling %s.%s (10s)", domain, service)
-                return False
+                return Outcome(UNREACHABLE, "timeout")
             except requests.exceptions.HTTPError as e:
+                status = getattr(e.response, "status_code", None)
+                if status is None:
+                    return Outcome(ERROR, type(e).__name__)
+                if status in (401, 403):
+                    if not self._refusalLogged:
+                        self._refusalLogged = True
+                        logger.error(
+                            "Home Assistant refused a service call (HTTP %d); "
+                            "check the long-lived token",
+                            status,
+                        )
+                    return Outcome(REFUSED, str(status))
+                logger.warning("HA: HTTP %s calling %s.%s", status, domain, service)
+                return Outcome(ERROR, str(status))
+            except Exception as exc:
                 logger.warning(
-                    "HA: HTTP %d calling %s.%s: %s",
-                    e.response.status_code,
+                    "HA: failed calling %s.%s: %s",
                     domain,
                     service,
-                    e.response.text[:200],
+                    type(exc).__name__,
                 )
-                return False
-            except Exception as exc:
-                logger.warning("HA: failed calling %s.%s: %s", domain, service, exc)
-                return False
-
-    def _is_vehicle_connected(self, vehicle: HaVehicle) -> bool:
-        """
-        Returns True if Home Assistant vehicle is currently plugged
-        into any TWC in TWCManager.
-        """
-        try:
-            twc = self.master.getTWCbyVIN(vehicle.vin)
-            return twc is not None
-        except Exception:
-            return False
-
-    # ------------------------------------------------------------------
-    # TeslaAPI-compatible methods
-    # ------------------------------------------------------------------
-
-    def getCarApiVehicles(self):
-        return self.carApiVehicles
-
-    def getVehicleCount(self):
-        return len(self.carApiVehicles)
-
-    def car_api_available(self, *args, **kwargs):
-        if not self._enabled or not self.carApiVehicles:
-            return False
-
-        ent = self.carApiVehicles[0].entity_ids.get("battery_level_sensor")
-        if not ent:
-            return False
-
-        return self._get_state(ent) is not None
-
-    def _vehiclesFor(self, vin) -> Optional[list]:
-        # Every HA car for a broadcast; only the named car when a VIN is
-        # given (looked up as HomeAssistantProvider does), or None when the
-        # VIN is not one of HA's cars
-        if not vin:
-            return list(self.carApiVehicles)
-        registryVehicle = self.registry.get(str(vin).upper())
-        hv = registryVehicle.attachment("HomeAssistant") if registryVehicle else None
-        return None if hv is None else [hv]
-
-    def car_api_charge(self, task) -> str:
-        charge = task.get("charge", None) if isinstance(task, dict) else task
-        vin = task.get("vin") if isinstance(task, dict) else None
-        now = time.time()
-        if now - self.carApiLastStartOrStopChargeTime < 10:
-            logger.debug("Charge command rate limited (10s minimum between commands)")
-            return "error"
-
-        if not self.car_api_available():
-            logger.debug("Home Assistant API not available for charge command")
-            return "error"
-
-        vehicles = self._vehiclesFor(vin)
-        if vehicles is None:
-            logger.debug("Charge command for a vehicle Home Assistant does not hold")
-            return "error"
-
-        desired = charge  # True = start, False = stop
-        svc = "turn_on" if desired else "turn_off"
-        action = "start" if desired else "stop"
-
-        self.carApiLastStartOrStopChargeTime = now
-        result = "success"
-        vehicles_processed = 0
-
-        for v in vehicles:
-            v.refresh_from_home_assistant(self)
-
-            if not v.at_home:
-                logger.debug("%s not at home; skipping charge %s", v.name, action)
-                continue
-
-            if not v.has_charge_switch:
-                logger.warning("%s: charge_switch entity not available", v.name)
-                result = "error"
-                continue
-
-            if not self._is_vehicle_connected(v):
-                logger.debug("%s not connected; skipping charging change.", v.name)
-                continue
-
-            # Only act if state differs
-            if v.charging == desired:
-                logger.info(
-                    "Skipping %s: already %s charging",
-                    v.name,
-                    "enabled" if desired else "disabled",
-                )
-                continue
-
-            ent = v.entity_ids["charge_switch"]
-            logger.info("Calling switch.%s on %s to %s charging", svc, ent, action)
-
-            ok = self._call_service("switch", svc, {"entity_id": ent})
-            if not ok:
-                result = "error"
-            else:
-                vehicles_processed += 1
-
-        if vehicles_processed == 0 and result == "success":
-            logger.info("No vehicles processed for charge %s command", action)
-
-        return result
-
-    def applyChargeLimit(self, limit: int, *args, **kwargs):
-        # Validate limit
-        try:
-            limit = int(limit)
-        except (ValueError, TypeError):
-            logger.warning("Invalid charge limit value: %s", limit)
-            return "error"
-
-        if limit != -1 and not (50 <= limit <= 100):
-            logger.warning("Charge limit %d%% out of valid range [50, 100]", limit)
-            return "error"
-
-        if not self.car_api_available():
-            logger.debug("Home Assistant API not available for charge limit")
-            return "error"
-
-        vehicles = self._vehiclesFor(kwargs.get("vin"))
-        if vehicles is None:
-            logger.debug("Charge limit for a vehicle Home Assistant does not hold")
-            return "error"
-
-        result = "success"
-        vehicles_processed = 0
-
-        for v in vehicles:
-            v.refresh_from_home_assistant(self)
-            if not v.at_home:
-                logger.debug("%s not at home; skipping charge limit", v.name)
-                continue
-
-            ent = v.entity_ids.get("charge_limit_number")
-            if not ent:
-                logger.debug("%s: charge_limit_number entity not available", v.name)
-                continue
-
-            if not self._is_vehicle_connected(v):
-                logger.debug("%s not connected; skipping charge limit.", v.name)
-                continue
-
-            if limit == -1:
-                logger.info("Leaving existing limit unchanged for %s", v.name)
-                continue
-
-            # Compare existing limit
-            if v.charge_limit is not None and int(v.charge_limit) == int(limit):
-                logger.info("Skipping %s: charge limit already %s%%", v.name, limit)
-                continue
-
-            logger.info("Setting charge limit of %s to %s%%", v.name, limit)
-
-            ok = self._call_service(
-                "number", "set_value", {"entity_id": ent, "value": limit}
-            )
-            if not ok:
-                result = "error"
-            else:
-                vehicles_processed += 1
-                registryVehicle = self.registry.get(str(v.vin).upper())
-                if registryVehicle is not None:
-                    registryVehicle.noteWrite("chargeLimit", limit, "HomeAssistant")
-
-        if vehicles_processed == 0 and result == "success":
-            logger.info("No vehicles processed for charge limit %d%% command", limit)
-
-        return result
-
-    def setChargeRate(
-        self, amps: float, vehicle: Optional[HaVehicle] = None, *args, **kwargs
-    ):
-        if not self.carApiVehicles:
-            logger.debug("No vehicles available for charge rate setting")
-            return False
-
-        vehicle = vehicle or self.carApiVehicles[0]
-
-        if not vehicle.has_charge_current_number:
-            logger.debug("%s: charge_current_number entity not available", vehicle.name)
-            return False
-
-        # Validate and clamp amps to reasonable range
-        try:
-            amps = float(amps)
-        except (ValueError, TypeError):
-            logger.warning("Invalid amps value: %s", amps)
-            return False
-
-        # Clamp to 1-32A range (typical Tesla charger limits)
-        if amps < 1:
-            logger.debug("Amps %.1f below minimum (1A), clamping to 1A", amps)
-            amps = 1
-        elif amps > 32:
-            logger.warning(
-                "Amps %.1f exceeds typical maximum (32A), clamping to 32A", amps
-            )
-            amps = 32
-
-        # Pull latest charge_current_number state
-        vehicle.refresh_from_home_assistant(self)
-
-        if not self._is_vehicle_connected(vehicle):
-            logger.debug("%s not connected; skipping charge rate.", vehicle.name)
-            return True
-
-        # Skip if current value already matches (rounded to 1 decimal)
-        if vehicle.available_current is not None and round(
-            float(vehicle.available_current), 1
-        ) == round(float(amps), 1):
-            logger.info(
-                "Skipping %s: charge current already %.1f A", vehicle.name, amps
-            )
-            return True
-
-        ent = vehicle.entity_ids["charge_current_number"]
-        logger.info("Setting %s charge current to %.1f A", vehicle.name, amps)
-
-        ok = self._call_service(
-            "number",
-            "set_value",
-            {"entity_id": ent, "value": float(amps)},
-        )
-
-        if not ok:
-            logger.warning("Failed to set charge rate for %s", vehicle.name)
-        else:
-            # As TeslaAPI and TeslaBLE: our own write, stamped (never creates).
-            registryVehicle = self.registry.get(str(vehicle.vin).upper())
-            if registryVehicle is not None:
-                registryVehicle.noteWrite("availableCurrent", amps, "HomeAssistant")
-
-        return ok
+                return Outcome(ERROR, type(exc).__name__)
+        self._refusalLogged = False
+        logger.debug("HA: service call %s.%s succeeded", domain, service)
+        return Outcome(DONE)
 
     # ------------------------------------------------------------------
     # Home/Location helpers
     # ------------------------------------------------------------------
-
-    def is_location_within_radius(self, lat, lon, r):
-        home_lat, home_lon = self.master.getHomeLatLon()
-        return abs(home_lat - lat) <= r and abs(home_lon - lon) <= r
 
     def is_location_home(self, lat, lon):
         home_lat, home_lon = self.master.getHomeLatLon()
@@ -803,7 +569,7 @@ class HomeAssistant:
 
         feet = float(self.config.get("config", {}).get("atHomeRadius", 10560))
         deg = feet / 364488.888
-        return self.is_location_within_radius(lat, lon, deg)
+        return abs(home_lat - lat) <= deg and abs(home_lon - lon) <= deg
 
     # ------------------------------------------------------------------
     # Aggregate helpers
@@ -828,6 +594,3 @@ class HomeAssistant:
             if v.at_home and v.battery_level is not None
         ]
         return min(levels) if levels else 10000.0
-
-    def updateSettings(self):
-        return True

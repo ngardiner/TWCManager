@@ -14,7 +14,7 @@ def live(vin=VIN, din=DIN): return {"response": {"wall_connectors": [{"din": din
 
 def setup(requests_mock, status=200, vin=VIN, din=DIN):
     m, ctl, p = make_gen3(); m.config["vehicle"] = {"teslaAPI": {"enabled": True}}; m.tokenSyncEnabled.return_value = False
-    m.modules = {}; m.settings = {}; m.settingsLock = threading.RLock(); m.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
+    m.modules = {}; m.settings = {}; m.settingsLock = threading.RLock()
     api = new_api(master=m); api.carApiVehicles = []; api.storeToken(owner_token()); reg = m.vehicleRegistry
     requests_mock.get(re.compile(r".*/api/1/products$"), json=PRODUCTS)
     requests_mock.get(re.compile(r".*/energy_sites/7/live_status$"), status_code=status, json=live(vin, din) if status == 200 else {})
@@ -130,7 +130,7 @@ def test_polling_slows_after_ten_unanswered_polls(requests_mock):               
     for _ in range(12): ctl.vinReader.clock.t += 60; vitals(u, True)
     n = len(liveCalls(requests_mock)); assert n == 10
     ctl.vinReader.clock.t += 540; vitals(u, True); assert len(liveCalls(requests_mock)) == n + 1
-    vitals(u, False); vitals(u, True); assert len(liveCalls(requests_mock)) == n + 2   # a new edge resets it
+    ctl.vinReader.clock.t += 30; vitals(u, False); vitals(u, True); assert len(liveCalls(requests_mock)) == n + 2   # a new edge resets it
 
 def test_single_local_single_cloud_matches_without_din(requests_mock):
     api, reg, ctl, u = setup(requests_mock, din="whatever"); u.device_cfg.pop("din", None); u._version = {}
@@ -164,11 +164,13 @@ def onlyFreeCalls(requests_mock):
     return all(re.search(r"/api/1/products$|/energy_sites/\d+/live_status$", r.url) and r.method == "GET"
                for r in requests_mock.request_history)
 
-def test_the_declared_rate_limit_bites_without_time_passing(requests_mock):
-    api, reg, ctl, u = setup(requests_mock); vitals(u, True); n = len(liveCalls(requests_mock))
-    for _ in range(5): ctl.vinReader.query(ctl.devices())
-    assert n == 1 and len(liveCalls(requests_mock)) == 2
-    ctl.vinReader.clock.t += 60; assert ctl.vinReader.query(ctl.devices()) == {DIN: VIN}
+def test_wall_connector_edges_are_spaced_thirty_seconds(requests_mock):     # I7, live_status requests counted
+    api, reg, ctl, u = setup(requests_mock, din="other--din"); u.device_cfg["din"] = DIN   # never named: it keeps waiting
+    vitals(u, True); assert len(liveCalls(requests_mock)) == 1
+    for _ in range(5): vitals(u, False); vitals(u, True)                     # a flapping occupied flag
+    ctl.vinReader.clock.t += 29; vitals(u, True); assert len(liveCalls(requests_mock)) == 1
+    ctl.vinReader.clock.t += 1; vitals(u, True); assert len(liveCalls(requests_mock)) == 2   # the held edge, at 30 s
+    ctl.vinReader.clock.t += 59; vitals(u, True); assert len(liveCalls(requests_mock)) == 2   # then the minute's poll
     assert onlyFreeCalls(requests_mock)
 
 def test_a_vin_arriving_after_the_edge_attaches_the_session(requests_mock):          # carry 4
@@ -194,7 +196,7 @@ def test_disconnect_clears_the_cloud_vin_and_the_next_car_queries_again(requests
     api, reg, ctl, u = setup(requests_mock); reg.getOrCreate(VIN, "TeslaMateVehicle")
     vitals(u, True); assert u.cloudVin == VIN
     vitals(u, False); assert u.cloudVin is None and u.vehicleKey is None
-    vitals(u, True); assert len(liveCalls(requests_mock)) == 2 and u.vehicleKey == "anon:" + u.ID   # I2: the departed VIN waits a poll
+    ctl.vinReader.clock.t += 30; vitals(u, True); assert len(liveCalls(requests_mock)) == 2 and u.vehicleKey == "anon:" + u.ID   # I2: the departed VIN waits a poll
     ctl.vinReader.clock.t += 60; vitals(u, True); assert u.vehicleKey == VIN
 
 def test_owner_refusal_falls_to_fleet_on_the_next_poll(requests_mock):
@@ -213,8 +215,7 @@ def test_fleet_waits_while_the_owner_slot_can_read_energy(requests_mock):
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token())
     owner, fleet = api.providers()
     assert owner.ready(None, C.READ_WALL_CONNECTOR_VINS) and not fleet.ready(None, C.READ_WALL_CONNECTOR_VINS)
-    assert owner.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.Declaration(C.CLOUD_FREE, C.RateLimit(2, 60))
-    assert fleet.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.Declaration(C.CLOUD_FREE, C.RateLimit(2, 60))
+    assert owner.declarations()[C.READ_WALL_CONNECTOR_VINS] == fleet.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.Declaration(C.CLOUD_FREE)
 
 def test_ready_without_a_vehicle_is_only_relaxed_for_wall_connector_vins(requests_mock):   # carry 1
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token())
@@ -222,7 +223,7 @@ def test_ready_without_a_vehicle_is_only_relaxed_for_wall_connector_vins(request
     owner, fleet = api.providers()
     assert fleet.ready(None, C.READ_WALL_CONNECTOR_VINS)
     for p in (owner, fleet):
-        for cap in (C.READ_CHARGE, C.READ_LIST, C.SET_AMPS, C.WAKE, C.READ_VIN):
+        for cap in (C.READ_CHARGE, C.SET_AMPS, C.WAKE):
             assert p.ready(None, cap) is False
     assert not owner.ready(None, C.READ_WALL_CONNECTOR_VINS)                 # no Owner token
 
@@ -251,7 +252,7 @@ def test_no_energy_sites_makes_the_capability_not_ready(requests_mock):
 def test_a_failed_products_fetch_is_not_cached_as_empty(requests_mock):
     api, reg, ctl, u = setup(requests_mock)
     requests_mock.get(re.compile(r".*/api/1/products$"), status_code=500, json={})
-    assert api.wallConnectorVins(api.ownerSlot) is None and api.energySites(api.ownerSlot) == []
+    assert api.wallConnectorVins(api.ownerSlot) is None and api._fetchEnergySites(api.ownerSlot) is None
     assert api.wallConnectorVinsReady(api.ownerSlot)
 
 def test_a_site_without_wall_connectors_is_dropped_from_later_polls(requests_mock):
@@ -319,7 +320,7 @@ def test_a_configured_din_skips_the_version_fetch(requests_mock):
     api, reg, ctl, u = setup(requests_mock)
     vitals(u, True); assert u._version is None and u.din == DIN
 
-def test_a_provider_without_a_rate_limit_is_asked():
+def test_query_asks_the_first_candidate_directly():
     p = Mock(); p.name = "X"; p.declarations.return_value = {C.READ_WALL_CONNECTOR_VINS: C.Declaration(C.CLOUD_FREE)}
     p.wallConnectorVins.return_value = {DIN: VIN}
     order = Mock(); order.candidates.return_value = [p]
@@ -346,3 +347,18 @@ def test_a_404_version_is_final():                                              
     with patch("urllib.request.urlopen", side_effect=err):
         assert u.refreshVersion() is True
     assert u._version == {} and u.din is None
+
+
+def test_a_failed_query_never_logs_its_text(caplog):
+    # 12b parked: exc_info could carry a token
+    from tests.unit.test_gen3twc_provider import Clock
+
+    token = fleet_token(jti="leak")
+    order = Mock()
+    order.candidates.side_effect = RuntimeError("Bearer " + token)
+    reader = WallConnectorVinReader(Mock(), order, clock=Clock())
+    unit = Mock(occupied=True, vehicleKey="anon:u1", cloudVin=None, ID="u1")
+    with caplog.at_level(1):
+        reader.apply([unit])
+    assert order.candidates.called and "RuntimeError" in caplog.text
+    assert token not in caplog.text

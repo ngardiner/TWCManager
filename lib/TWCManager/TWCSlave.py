@@ -3,17 +3,25 @@ import logging
 import re
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Providers.Capability import SET_AMPS
+from TWCManager.Vehicle.Reconcile.Desired import AMPS
+from TWCManager.Vehicle.Reconcile.Belief import known
+from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED, satisfied
+from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles, located
+from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
+
+
+# Charging states only a plugged-in car reports ("Unknown", TeslaMate's "None"
+# and "Disconnected" are not)
+_PLUGGED = frozenset({"Charging", "Starting", "Stopped", "Complete", "NoPower"})
 
 
 class TWCSlave:
     config = None
     configConfig = None
     TWCID = None
-    __lastAPIAmpsValue = 0
-    __lastAPIAmpsRequest = time.time() + 30
-    __lastAPIAmpsRepeat = 0
     lastVINQuery = 0
     maxAmps = None
     master = None
@@ -25,6 +33,9 @@ class TWCSlave:
     minAmpsTWCSupports = 6
     masterHeartbeatData = bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
     timeLastRx = time.time()
+    # A mode-3 stop published off the serial thread (Gen2TWCProvider);
+    # send_master_heartbeat consumes and sends it
+    stopRequested = False
 
     # reported* vars below are reported to us in heartbeat messages from a Slave
     # TWC.
@@ -69,6 +80,10 @@ class TWCSlave:
     VINData = ["", "", ""]
     currentVIN = ""
     lastVIN = ""
+    # The registry key of the car on this TWC (Gen2TWC); None decides nothing
+    vehicleKey = None
+    # The keys the heartbeat last wrote a car rate for
+    _ampsKeys = ()
 
     def __init__(self, TWCID, maxAmps, config, master):
         self.config = config
@@ -77,12 +92,8 @@ class TWCSlave:
         self.TWCID = TWCID
         self.maxAmps = maxAmps
         self.APIcontrol = False
+        # The car was raised to wiringMaxAmps this plug session (mode 1)
         self.vehicleRateRaised = False
-        # Bumped whenever vehicleRateRaised is reset, so a raise request that
-        # completes on the vehicle worker after control moved elsewhere
-        # can't set the flag back.
-        self._vehicleRateRaiseGen = 0
-        self.__vehicleRateRaiseAttemptTime = 0
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
         self.useFlexAmpsToStartCharge = self.configConfig.get(
@@ -90,26 +101,80 @@ class TWCSlave:
         )
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
-    def _queueChargeRate(self, amps, callback=None):
-        # Vehicle commands can take minutes over BLE; hand them to the
-        # vehicle worker so this (main, serial) thread keeps running.
-        self.master.queue_vehicle_command(
-            {
-                "cmd": "setChargeRate",
-                "amps": int(amps),
-                "vehicle": self.getLastVehicle(),
-            },
-            callback,
-        )
+    def pluggedCars(self):
+        # The unnamed cars a vehicle source shows plugged in or charging,
+        # and not placed away; with every unnamed car the fan-out reaches
+        named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
+        cars = [
+            v for v in broadcastVehicles(self.master, SET_AMPS) if v.key not in named
+        ]
+        plugged = []
+        for v in cars:
+            if located(v) is False:
+                continue
+            obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
+            if obs is None:
+                continue
+            if obs.source == "HomeAssistant":
+                # HA reports "Stopped" for an unplugged car too
+                if obs.value == "Charging":
+                    plugged.append(v)
+            elif obs.value in _PLUGGED:
+                plugged.append(v)
+        return plugged, cars
+
+    def _anonCars(self):
+        # As main's vehicle-less rate, paid once: the plugged-in cars, else
+        # vehicles[0]
+        plugged, cars = self.pluggedCars()
+        if plugged:
+            return plugged
+        # The first car the Tesla API listed (registry order is list order)
+        listed = [
+            v
+            for v in self.master.vehicleRegistry.vehicles()
+            if v.attachment("TeslaAPI")
+        ]
+        return listed[:1] if listed and listed[0] in cars else []
+
+    def _setCarAmps(self, amps, by, lift=False):
+        # Desired state: the reconciler talks to the car, off this (serial)
+        # thread. Never for a point whose car member owns the car's amps
+        key = self.vehicleKey
+        keys = []
+        if key is not None and not getattr(self, "pointOwnsAmps", False):
+            keys = [v.key for v in self._anonCars()] if isAnonKey(key) else [key]
+        # A car that left the set keeps no rate of ours
+        self._clearCarAmps([k for k in self._ampsKeys if k not in keys])
+        self._ampsKeys = keys
+        for k in keys:
+            self.master.desired.set(k, AMPS, int(amps), by, lift=lift)
+        return bool(keys)
+
+    def _clearCarAmps(self, keys=None):
+        # Withdraws the heartbeat's own rate (never a lift or a distributor's)
+        for k in self._ampsKeys if keys is None else keys:
+            d = self.master.desired.get(k, AMPS)
+            if d is not None and d.by == "heartbeat":
+                self.master.desired.clearIf(k, AMPS, d.value)
+
+    def _carRateConfirmed(self):
+        # Every car carrying our rate believes it: a read, or a delivered write
+        keys = [self.vehicleKey] if getattr(self, "pointOwnsAmps", False) else []
+        reg, desired = self.master.vehicleRegistry, self.master.desired
+        for k in keys or self._ampsKeys:
+            d, v = desired.get(k, AMPS), reg.get(k)
+            if d is None or v is None or not satisfied(AMPS, d.value, known(v, AMPS)):
+                return False
+        return bool(keys or self._ampsKeys)
+
+    def _queueChargeRate(self, amps):
+        self._setCarAmps(amps, "heartbeat")
 
     def _requestVehicleRateRaise(self):
-        gen = self._vehicleRateRaiseGen
-
-        def done(result):
-            if result is not False and gen == self._vehicleRateRaiseGen:
-                self.vehicleRateRaised = True
-
-        self._queueChargeRate(self.wiringMaxAmps, done)
+        # A one-shot desire, once per plug session
+        if self._setCarAmps(self.wiringMaxAmps, "lift", lift=True):
+            self.vehicleRateRaised = True
 
     def minAmpsToOffer(self):
         # The lowest offer this TWC makes: the configured minAmpsPerTWC, or
@@ -119,7 +184,6 @@ class TWCSlave:
 
     def _resetVehicleRateRaised(self):
         self.vehicleRateRaised = False
-        self._vehicleRateRaiseGen += 1
 
     def print_status(self, heartbeatData):
         try:
@@ -371,6 +435,11 @@ class TWCSlave:
         # Heartbeat includes 7 bytes (Protocol 1) or 9 bytes (Protocol 2) of data
         # that we store in masterHeartbeatData.
 
+        if self.stopRequested:
+            # The only place a stop reaches RS-485: on the serial thread
+            self.stopRequested = False
+            self.master.sendStopCommand(self.TWCID)
+
         if self.master.settings.get("respondToSlaves", 1) == 0:
             if (
                 self.master.settings.get("respondToSlavesExpiry", time.time())
@@ -477,7 +546,10 @@ class TWCSlave:
         if len(self.master.getMasterHeartbeatOverride()) >= 7:
             self.masterHeartbeatData = self.master.getMasterHeartbeatOverride()
 
-        if self.protocolVersion == 2:
+        # Start and stop are decided for the car on this TWC only: with no
+        # vehicle key, nothing (never every car)
+        key = self.vehicleKey
+        if self.protocolVersion == 2 and key is not None:
             # TODO: Start and stop charging using protocol 2 commands to TWC
             # instead of car api if I ever figure out how.
             if self.lastAmpsOffered == 0 and self.reportedAmpsActual > 4.0:
@@ -564,14 +636,13 @@ class TWCSlave:
                         + str(self.reportedAmpsActual)
                         + " < 4"
                     )
-                    self.master.cancelStopCarsCharging(self.currentVIN)
+                    self.master.cancelStopCarsCharging(key)
                 else:
-                    # Car is trying to charge, so stop it via car API.
-                    # car_api_charge() will prevent telling the car to start or stop
-                    # more than once per minute. Once the car gets the message to
-                    # stop, reportedAmpsActualSignificantChangeMonitor should drop
-                    # to near zero within a few seconds.
-                    self.master.stopCarsCharging(self.currentVIN)
+                    # Car is trying to charge, so stop it. The reconciler
+                    # sends it once per our own write. Once the car gets the
+                    # message to stop, reportedAmpsActualSignificantChangeMonitor
+                    # should drop to near zero within a few seconds.
+                    self.master.stopCarsCharging(key)
             elif (
                 # minAmpsToOffer: this TWC's floor, which a per-TWC range
                 # override can set below minAmpsPerTWC
@@ -580,20 +651,15 @@ class TWCSlave:
                 and self.reportedState != 0x02
             ):
                 # Car is not charging and is not reporting an error state, so
-                # try starting charge via car api.
-                self.master.startCarsCharging(self.currentVIN)
-            elif self.reportedAmpsActual >= 1.0:
-                # At least one plugged in car is successfully charging. We don't
-                # know which car it is, so we must set
-                # vehicle.stopAskingToStartCharging = False on all vehicles such
-                # that if any vehicle is not charging without us calling
-                # car_api_charge(False), we'll try to start it charging again at
-                # least once. This probably isn't necessary but might prevent
-                # some unexpected case from never starting a charge. It also
-                # seems less confusing to see in the output that we always try
-                # to start API charging after the car stops taking a charge.
-                for vehicle in self.master.vehicleRegistry.attached("TeslaAPI"):
-                    vehicle.stopAskingToStartCharging = False
+                # try starting it
+                self.master.startCarsCharging(key)
+            elif (
+                self.lastAmpsOffered < self.minAmpsToOffer()
+                and self.reportedAmpsActual < 1.0
+            ):
+                # Too little on offer and the car is not drawing: a start not
+                # yet sent is moot, and never wakes the car
+                self.master.withdrawStartCharging(key)
 
         self.master.getModulesByType("Interface")[0]["ref"].send(
             bytearray(b"\xfb\xe0")
@@ -614,6 +680,13 @@ class TWCSlave:
         self.reportedAmpsActual = ((heartbeatData[3] << 8) + heartbeatData[4]) / 100
         self.reportedState = heartbeatData[0]
         self.refreshingChargerLoadStatus()
+        key = self.vehicleKey
+        vehicle = self.master.vehicleRegistry.get(key) if key else None
+        if vehicle is not None:
+            # A VIN heard but not yet confirmed names no registry car: skipped
+            vehicle.observe(
+                "actualCurrent", self.reportedAmpsActual, "Gen2TWC", seen=False
+            )
 
         if self.reportedState == 0x02:
             logger.info(
@@ -669,15 +742,6 @@ class TWCSlave:
             self.master.queue_background_task({"cmd": "checkDeparture"}, 5 * 60)
             self.master.queue_background_task({"cmd": "checkDeparture"}, 20 * 60)
             self.master.queue_background_task({"cmd": "checkDeparture"}, 45 * 60)
-
-            # If the drop-off was an expected completion, don't restart
-            lastVehicle = self.getLastVehicle()
-            if (
-                lastVehicle is not None
-                and lastVehicle.chargingState == "Charging"
-                and lastVehicle.timeToFullCharge * 60 <= 5
-            ):
-                lastVehicle.stopAskingToStartCharging = True
 
         # Keep track of the amps the slave is actually using and the last time it
         # changed by more than 0.8A.
@@ -772,6 +836,9 @@ class TWCSlave:
             self.timeLastAmpsDesiredFlipped = 0
 
         if desiredAmpsOffered < minAmpsToOffer:
+            if chargeRateControl in (2, 3):
+                # Nothing is handed to the car: it keeps no rate of ours
+                self._clearCarAmps()
             logger.debug(
                 "desiredAmpsOffered: "
                 + str(desiredAmpsOffered)
@@ -866,33 +933,20 @@ class TWCSlave:
         elif chargeRateControl == 2 or (
             chargeRateControl == 3 and desiredAmpsOffered < 6
         ):
-            # Control is given to the Tesla API to control Charge Rate
-            # We offer the maximum wiring amps from the TWC, and ask the API to control charge rate
+            # The car controls the charge rate
             self.APIcontrol = True
             self._resetVehicleRateRaised()
-            self.__vehicleRateRaiseAttemptTime = 0
 
-            # Call the Tesla API to set the charge rate for vehicle connected to this TWC
-            # TODO: Identify vehicle
-            if (
-                int(desiredAmpsOffered) == self.__lastAPIAmpsValue
-                and (
-                    self.__lastAPIAmpsRepeat > 50 or self.__lastAPIAmpsRepeat % 10 != 0
-                )
-            ) or self.__lastAPIAmpsRequest > time.time() - 15:
-                # Unfortunately some API requests just don't result in the desired amperage being set, so we allow one in 10
-                # to be repeated up to 50, as long as none had been sent in the last 15 seconds
-                # This results in a small number of repeat requests sent to the API each time
-                # we change the target charge rate, but adds stability to the process
-                self.__lastAPIAmpsRepeat += 1
+            # The car's rate is desired state: the reconciler sends a new
+            # value at most every 15 s and an unchanged one never again
+            self._queueChargeRate(desiredAmpsOffered)
+
+            # Its maximum only once the car's rate is confirmed: a rate that
+            # never lands leaves the TWC at the target (final review I1)
+            if self._carRateConfirmed():
+                desiredAmpsOffered = self.wiringMaxAmps
             else:
-                self.__lastAPIAmpsRequest = time.time()
-                self.__lastAPIAmpsRepeat = 0
-                self.__lastAPIAmpsValue = int(desiredAmpsOffered)
-
-                self._queueChargeRate(desiredAmpsOffered)
-
-            desiredAmpsOffered = self.wiringMaxAmps
+                desiredAmpsOffered = int(desiredAmpsOffered)
 
         else:
             # TWC is controlling the charge rate here. The car only ever
@@ -900,11 +954,7 @@ class TWCSlave:
             # sure the car isn't left capped below what TWC is about to offer
             # (e.g. leftover from API control, the Tesla app, or never raised
             # since startup) before relying on the TWC-side value alone.
-            if not self.vehicleRateRaised and (
-                now - self.__vehicleRateRaiseAttemptTime >= 60
-            ):
-                # The 60s window also stops re-requesting while one is queued.
-                self.__vehicleRateRaiseAttemptTime = now
+            if not self.vehicleRateRaised:
                 self._requestVehicleRateRaise()
             self.APIcontrol = False
 
@@ -1065,8 +1115,9 @@ class TWCSlave:
         # final value for desiredAmpsOffered.
         desiredAmpsOffered = self.set_last_amps_offered(desiredAmpsOffered)
 
-        if desiredAmpsOffered > 0:
-            self.master.cancelStopCarsCharging(self.currentVIN)
+        key = self.vehicleKey
+        if key is not None and desiredAmpsOffered > 0:
+            self.master.cancelStopCarsCharging(key)
 
         # See notes in send_slave_heartbeat() for details on how we transmit
         # desiredAmpsOffered and the meaning of the code in

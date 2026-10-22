@@ -1,3 +1,4 @@
+from TWCManager.Vehicle.Providers import Capability as C
 from unittest.mock import Mock, patch
 from TWCManager.Vehicle.HomeAssistant import HomeAssistant, HaVehicle
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
@@ -107,59 +108,71 @@ def test_refresh_does_not_resurrect_forgotten_vehicle():
     assert hv.battery_level == 50.0
 
 
-def test_read_source_registered():
+def test_provider_reads_once_enabled():
     ha, reg = make_ha()
-    assert [s.name for s in reg.readSources()] == ["HomeAssistant"]
+    (p,) = ha.providers()
+    assert p.available(C.READ_CHARGE) and p.declares(C.READ_CHARGE)
 
 
-def test_disabled_registers_nothing():
+def test_disabled_reads_nothing():
     ha, reg = make_ha(enabled=False)
-    assert ha.registry is reg and reg.readSources() == []
-
-
-def test_read_source_fetch_returns_observed_fields():
-    ha, reg = make_ha()
-    src = reg.readSources()[0]
+    (p,) = ha.providers()
     v = reg.getOrCreate(VIN, "HomeAssistant")
-    assert not src.canRead(v)
+    v.attach("HomeAssistant", HaVehicle("Car", VIN, "d1", {}))
+    assert ha.registry is reg and not p.available(C.READ_CHARGE)
+    assert not p.ready(v, C.READ_CHARGE)
+
+
+def test_provider_fetch_observes_its_fields():
+    ha, reg = make_ha()
+    (p,) = ha.providers()
+    v = reg.getOrCreate(VIN, "HomeAssistant")
+    assert not p.ready(v, C.READ_CHARGE)
     hv = HaVehicle("Car", VIN, "d1", {"battery_level_sensor": "sensor.b"})
     v.attach("HomeAssistant", hv)
-    assert src.canRead(v)
+    assert p.ready(v, C.READ_CHARGE)
     ha._get_state = Mock(return_value={"state": "61"})
-    assert src.fetch(v, "batteryLevel", False) == {"batteryLevel": 61.0}
+    assert p.fetch(v, "batteryLevel") is True
+    assert (v.latest("batteryLevel").value, v.latest("batteryLevel").source) == (61.0, "HomeAssistant")
+    assert p.fetch(v, "chargeLimit") is False  # observed, but not the field asked
 
 
 def test_ha_down_is_a_failed_read_and_cascade_continues():
-    from TWCManager.Vehicle.Registry.ReadSource import cascade
+    from TWCManager.Vehicle.Providers.Order import ProviderOrder
+    from TWCManager.Vehicle.Providers.Provider import Provider
 
     ha, reg = make_ha()
+    (p,) = ha.providers()
     v = reg.getOrCreate(VIN, "HomeAssistant")
     v.observe("batteryLevel", 40.0, "TeslaBLE")
     hv = HaVehicle("Car", VIN, "d1", {"battery_level_sensor": "sensor.b"})
     v.attach("HomeAssistant", hv)
     ha._get_state = Mock(return_value=None)
-    src = reg.readSources()[0]
-    assert src.fetch(v, "batteryLevel", False) is None
+    assert p.fetch(v, "batteryLevel") is False
     assert hv.refresh_from_home_assistant(ha) is False
 
-    class Next:
-        name = "Next"
-        order = 3
-        fields = frozenset({"batteryLevel"})
-        canRead = lambda self, v: True
-        fetch = lambda self, v, f, w: {"batteryLevel": 55.0}
+    class Next(Provider):
+        name, rank, FIELDS = "Next", 7, frozenset({"batteryLevel"})
+        DECLARATIONS = {C.READ_CHARGE: C.Declaration(C.HA_BILLED)}
+        ready = lambda self, v, c: True
 
-    obs = cascade(v, [src, Next()], "batteryLevel", False)
+        def fetch(self, v, f, allowWake=False):
+            v.observe("batteryLevel", 55.0, self.name)
+            return True
+
+    m = Mock()
+    m.settings, m.config = {}, {}
+    reg.providerOrder = ProviderOrder(m)
+    reg.providerOrder.register(Next())
+    reg.providerOrder.register(p)
+    obs = v.read("batteryLevel", maxAge=0)
     assert (obs.value, obs.source) == (55.0, "Next")
 
 
-def test_unobserved_field_not_advertised_and_order_after_api():
-    from TWCManager.Vehicle.Registry.Sources import TeslaAPIReadSource
-
+def test_unobserved_field_not_advertised():
     ha, reg = make_ha()
-    src = reg.readSources()[0]
-    assert "voltage" not in src.fields and "gpsAsOf" not in src.fields
-    assert src.order > TeslaAPIReadSource.order
+    (p,) = ha.providers()
+    assert "voltage" not in p.FIELDS and "gpsAsOf" not in p.FIELDS
 
 
 def test_refresh_fails_fast_after_connection_error():
@@ -198,3 +211,44 @@ def test_failed_registration_does_not_append_vehicle():
     ), patch.object(reg, "getOrCreate", side_effect=ValueError("bad")):
         ha._build_vehicles_from_registry(devices, [])
     assert ha.carApiVehicles == []
+
+
+def test_fetch_without_an_attachment_reads_nothing():  # 13b M3
+    ha, reg = make_ha()
+    (p,) = ha.providers()
+    assert p.fetch(reg.getOrCreate(VIN, "t"), "batteryLevel") is False
+
+
+def test_ha_logs_name_the_host_never_the_url_or_exception_text(caplog):
+    # Final review M8: a URL can carry userinfo or a query token
+    import logging
+
+    import requests
+
+    secret = "http://user:s3cret@ha.local:8123/?token=t0ken"
+    master = Mock(vehicleRegistry=VehicleRegistry({}))
+    master.config = {
+        "config": {},
+        "vehicle": {
+            "HomeAssistant": {"enabled": True, "url": secret, "longLivedToken": "x" * 40}
+        },
+    }
+    caplog.set_level(logging.DEBUG)
+    for error in (requests.exceptions.ConnectionError(secret), ValueError(secret)):
+        with patch("TWCManager.Vehicle.HomeAssistant.requests.Session") as S:
+            S.return_value.get.side_effect = error
+            HomeAssistant(master)
+    with patch("TWCManager.Vehicle.HomeAssistant.requests.Session") as S, patch.object(
+        HomeAssistant,
+        "_discover_vehicles",
+        side_effect=requests.exceptions.ConnectionError(secret),
+    ):
+        S.return_value.get.return_value = Mock(raise_for_status=Mock())
+        HomeAssistant(master)  # discovery fails after connectivity is verified
+    ha, reg = make_ha()
+    ha._session = Mock()
+    ha._session.get.side_effect = requests.exceptions.ConnectionError(secret)
+    ha.entity_ids = {}
+    ha._get_state("sensor.x")
+    assert "ha.local" in caplog.text
+    assert "s3cret" not in caplog.text and "t0ken" not in caplog.text

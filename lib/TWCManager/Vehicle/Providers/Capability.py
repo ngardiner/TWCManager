@@ -1,18 +1,29 @@
 # The vocabulary a provider declares itself in: what it can do, what each
-# operation costs, and how often it may be asked. Nothing here imports the
-# Registry package, so ReadSource can stay import-free of providers.
+# operation costs, and how often it may be asked. It imports nothing.
 from typing import NamedTuple, Optional
 
-# Reads
-READ_LIST = "readList"
-READ_ONLINE = "readOnline"
+# Reads: a vehicle's charge state and location (one fetch fills both)
 READ_CHARGE = "readCharge"
-READ_LOCATION = "readLocation"
-READ_PLUG = "readPlug"
-READ_VIN = "readVin"
-READ_AMPS = "readAmps"
 # An energy-site read: which VIN each Wall Connector on the account reports
 READ_WALL_CONNECTOR_VINS = "wallConnectorVins"
+
+# The registry fields a READ_CHARGE fetch can fill
+CHARGE_FIELDS = frozenset(
+    {
+        "batteryLevel",
+        "chargeLimit",
+        "chargingState",
+        "availableCurrent",
+        "chargeCurrentRequest",
+        "actualCurrent",
+        "voltage",
+        "phases",
+        "scheduledChargingPending",
+        "timeToFullCharge",
+        "chargeCurrentRequestMax",
+    }
+)
+LOCATION_FIELDS = frozenset({"lat", "lon", "gpsAsOf"})
 
 # Commands
 SET_CHARGE_LIMIT = "setChargeLimit"
@@ -21,18 +32,7 @@ STOP_CHARGING = "stopCharging"
 SET_AMPS = "setAmps"
 WAKE = "wake"
 
-READS = frozenset(
-    {
-        READ_LIST,
-        READ_ONLINE,
-        READ_CHARGE,
-        READ_LOCATION,
-        READ_PLUG,
-        READ_VIN,
-        READ_AMPS,
-        READ_WALL_CONNECTOR_VINS,
-    }
-)
+READS = frozenset({READ_CHARGE, READ_WALL_CONNECTOR_VINS})
 COMMANDS = frozenset({SET_CHARGE_LIMIT, START_CHARGING, STOP_CHARGING, SET_AMPS, WAKE})
 ALL = READS | COMMANDS
 
@@ -60,11 +60,6 @@ HA_BILLED = Cost(TIER_BILLED, None)
 DISRUPTIVE = Cost(TIER_DISRUPTIVE, 0.0)
 
 
-class RateLimit(NamedTuple):
-    calls: int
-    perSeconds: float
-
-
 # A limitation a provider may declare per vehicle: a stop through this
 # provider also affects other endpoints (Gen3 units on one bus).
 NO_INDIVIDUAL_STOP = "noIndividualStop"
@@ -72,6 +67,3 @@ NO_INDIVIDUAL_STOP = "noIndividualStop"
 
 class Declaration(NamedTuple):
     cost: Cost
-    rateLimit: Optional[RateLimit] = None
-    # The provider reports this on its own and cannot be asked (telemetry)
-    passive: bool = False

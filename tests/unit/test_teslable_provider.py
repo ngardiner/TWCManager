@@ -2,6 +2,7 @@
 from unittest.mock import Mock
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.test_teslable_pairing_status import make, VIN
 
 
@@ -54,22 +55,23 @@ def test_a_vehicle_rate_above_the_cars_maximum_still_reaches_it():
 def test_commands_call_the_module_by_vin():
     ble, reg, master = make()
     (p,) = ble.providers()
-    ble.setChargeRate = Mock(return_value=True)
-    ble.wakeVehicle = Mock(return_value=False)
-    assert p.setAmps(VIN, 12.6) is True
-    ble.setChargeRate.assert_called_once_with(12, VIN)
-    assert p.wake(VIN) is False
-    ble.wakeVehicle.assert_called_once_with(VIN)
+    ble.sendCommand = Mock(return_value="Command executed successfully")
+    assert p.setAmps(VIN.lower(), 12.6).kind == O.DONE
+    ble.sendCommand.assert_called_once_with(VIN, "charging-set-amps", 12)
+    ble.sendCommand = Mock(return_value=None)
+    assert p.wake(VIN) == O.Outcome(O.UNREACHABLE, "no reply")
+    ble.sendCommand.assert_called_once_with(VIN, "wake")
 
 
-def test_read_source_no_longer_consults_command_policy():
+def test_read_readiness_does_not_consult_command_policy():
     ble, reg, master = make()
     v = reg.getOrCreate(VIN, "t")
     ble._claimUnproven(v)
     master.getModuleByName = Mock(
-        side_effect=AssertionError("must not look up VehiclePriority")
+        side_effect=AssertionError("must not look up a module")
     )
-    assert ble.readSource.canRead(v) is True and ble.readSource.provider == "TeslaBLE"
+    (p,) = ble.providers()
+    assert p.ready(v, C.READ_CHARGE) is True
 
 
 def test_amps_range_is_never_none_while_ready():  # Task 2 review constraint
@@ -87,11 +89,11 @@ def test_amps_range_is_never_none_while_ready():  # Task 2 review constraint
     assert p.ampsRange(v) == (1, 32)
 
 
-def test_read_source_orders_at_the_local_tier():
+def test_reads_order_at_the_local_tier():
     ble, reg, master = make()
     master.settings = {}
     o = ProviderOrder(master)
     for p in ble.providers():
         o.register(p)
-    other = Mock(provider="", order=0)
-    assert o.orderReadSources([other, ble.readSource]) == [ble.readSource, other]
+    (p,) = o.ordered(C.READ_CHARGE)
+    assert p.name == "TeslaBLE" and p.cost(C.READ_CHARGE) == C.LOCAL

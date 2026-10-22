@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.unit.teslatokens import FakeMaster, new_api, owner_token
+from tests.unit.teslatokens import FakeMaster, new_api, owner_token, wire_reads
 from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Telemetry import TelmetryBase
@@ -162,6 +162,14 @@ def test_fleet_telemetry_topic_id_is_the_vin():
     assert t.vinFor(VIN) == VIN and FleetTelemetryMQTT.events["syncState"][0] == "state"
 
 
+def test_fleet_telemetry_charge_current_request_is_the_cars_request():   # slim Task 12b
+    t, reg = make(FleetTelemetryMQTT)
+    t.applyDataToVehicle(VIN, "ChargeCurrentRequest", "16")
+    obs = reg.get(VIN).latest("chargeCurrentRequest")
+    assert (obs.value, obs.source) == (16, "FleetTelemetryMQTT")
+    assert reg.get(VIN).latest("availableCurrent") is None   # never the pilot
+
+
 def test_fleet_telemetry_topic_id_that_is_not_a_vin_maps_to_none():  # I3
     t, reg = make(FleetTelemetryMQTT)
     assert t.vinFor("status") is None and t.vinFor("0" * 17) is None
@@ -184,10 +192,11 @@ def teslamate(monkeypatch):
     api = new_api(master=master)
     api.carApiVehicles = []
     master.modules["TeslaAPI"] = api
+    wire_reads(master.vehicleRegistry, *api.providers())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    # The Owner API token TeslaMate syncs: the cloud read source can read.
+    # The Owner API token TeslaMate syncs: the Owner provider can read.
     api.storeToken(owner_token(), "", "synced")
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     # A cloud call returns nothing usable; tests assert it is never made.
     car.get_car_api = Mock(return_value=(False, None))
     master.config["vehicle"]["TeslaMate"] = {"enabled": True}

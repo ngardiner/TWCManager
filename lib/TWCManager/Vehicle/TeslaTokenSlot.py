@@ -13,18 +13,24 @@ logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 SCOPES = {
     "read": ("vehicle_device_data",),
     "command": ("vehicle_charging_cmds", "vehicle_cmds"),
+    "wake": ("vehicle_charging_cmds", "vehicle_cmds"),
     "energy": ("energy_device_data",),
 }
 SCOPE_LABELS = {
     "read": "vehicle data",
     "command": "charge commands",
+    "wake": "waking the car",
     "energy": "Powerwall Storm Watch and Gen3 Wall Connector VINs",
 }
 SOURCES = ("synced", "pasted", "login")
 PAUSE_SECONDS = 3600
+# Purposes a refusal (HTTP 403) retires until the token changes. Energy
+# refusals are per site and handled by their callers (Storm Watch keeps
+# asking; the Wall Connector read latches per slot change), so they stay out.
+RETIRED_ON_REFUSAL = frozenset({"command", "wake"})
 DEFAULT_LIFETIME = 8 * 60 * 60
 REFRESH_MARGIN = 60 * 60
-REFRESH_TIMEOUT = 30  # seconds, same as the vehicle list request
+REFRESH_TIMEOUT = 10  # seconds, as every Tesla API request
 
 
 def decodeToken(token):
@@ -55,6 +61,9 @@ class TeslaTokenSlot:
         self.post = post
         self.scopes = None
         self.scopeErrorsLogged = set()
+        # Purposes Tesla itself refused this token (HTTP 403), until the
+        # token changes
+        self.refusedPurposes = set()
         self.accessToken = ""
         self.refreshToken = ""
         self.expireTime = 0
@@ -78,6 +87,7 @@ class TeslaTokenSlot:
         else:
             self.scopes = None
         self.scopeErrorsLogged = set()
+        self.refusedPurposes = set()
         self.accessToken = accessToken
         if accessToken:
             self.tokenType, self.baseURL, self.verifyCert = self.classify(accessToken)
@@ -106,6 +116,7 @@ class TeslaTokenSlot:
         self.source = ""
         self.scopes = None
         self.scopeErrorsLogged = set()
+        self.refusedPurposes = set()
         self.pausedUntil = 0
         self.changes += 1
 
@@ -118,6 +129,8 @@ class TeslaTokenSlot:
     def usable(self, purpose, now=None):
         now = time.time() if now is None else now
         if self.empty(now) or self.tokenType != self.kind:
+            return False
+        if purpose in self.refusedPurposes:
             return False
         if not self.grants(purpose):
             self.reportScopeRefused(purpose)
@@ -147,9 +160,12 @@ class TeslaTokenSlot:
         # Logs once per token and purpose that a Fleet token lacks the scope
         # the purpose needs. refused=True means Tesla itself refused the
         # request (HTTP 403), which counts as the scope missing even when
-        # the token's own scp claim lists it or has none.
+        # the token's own scp claim lists it or has none, and the token is
+        # not used for the purpose again until it changes.
         if self.kind != "fleet":
             return
+        if refused and purpose in RETIRED_ON_REFUSAL:
+            self.refuse(purpose)
         scope = self.missingScope(purpose)
         if scope is None and refused:
             scope = SCOPES[purpose][0]
@@ -164,7 +180,18 @@ class TeslaTokenSlot:
             + "; log in to the Fleet API again and grant it."
         )
 
-    def pause(self, now=None):
+    def refuse(self, purpose):
+        # This token is not used for the purpose again until it changes
+        # (setTokens, clear or restore)
+        self.refusedPurposes.add(purpose)
+
+    def pause(self, now=None, latch=False):
+        # Not used for reads for PAUSE_SECONDS; latch=True holds the pause
+        # until the token changes (setTokens or clear), for a token Tesla
+        # will keep refusing
+        if latch:
+            self.pausedUntil = float("inf")
+            return
         now = time.time() if now is None else now
         self.pausedUntil = now + PAUSE_SECONDS
 
@@ -215,7 +242,10 @@ class TeslaTokenSlot:
             logger.log(logging.INFO2, "Error parsing API Token Refresh Response")
             return "rejected"
         except Exception as e:
-            logger.warning(f"Unexpected error during token refresh: {e}")
+            # The type alone: the message is not controlled and may hold a token
+            logger.warning(
+                "Unexpected error during token refresh: %s", type(e).__name__
+            )
             return "rejected"
 
         try:
@@ -228,7 +258,9 @@ class TeslaTokenSlot:
             )
             return "success"
         except Exception as e:
-            logger.warning(f"Error processing token refresh response: {e}")
+            logger.warning(
+                "Error processing token refresh response: %s", type(e).__name__
+            )
         return "rejected"
 
     def snapshot(self):
@@ -257,6 +289,7 @@ class TeslaTokenSlot:
             self.pausedUntil,
         ) = snap
         self.scopeErrorsLogged = set()
+        self.refusedPurposes = set()
         self.changes += 1
 
     def status(self, now=None):

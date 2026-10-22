@@ -10,12 +10,12 @@ from typing import Dict, Tuple
 
 from TWCManager.EVSEController.EVSEController import EVSEController
 from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint
-from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
+from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
 
 
 def _unknownKey(key) -> bool:
     # A point that cannot name its car: no key, or an anonymous plug session
-    return key is None or (isinstance(key, str) and key.startswith(ANON_PREFIX))
+    return key is None or isAnonKey(key)
 
 
 class VehicleEndpoints(EVSEController):

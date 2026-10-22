@@ -1,6 +1,6 @@
 """TeslaAPI.loadVehicleList: idempotent, thread-safe vehicle list loading."""
 
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from tests.unit.teslatokens import (
     FLEET_NA_URL,
@@ -22,42 +22,35 @@ def new_api():
     return api
 
 
-def resp(text):
-    r = Mock()
-    r.text = text
-    return r
-
-
 VEHICLES = '{"count": 1, "response": [{"id": 1, "vin": "5YJ3E1EA1KF000001", "display_name": "Car"}]}'
 
 
-def test_loads_once(no_threads):
+def test_loads_once(no_threads, requests_mock):
     api = new_api()
-    with patch("requests.get", return_value=resp(VEHICLES)) as get:
-        assert api.loadVehicleList() is True
-        assert api.loadVehicleList() is True
+    get = requests_mock.get(FLEET_NA_URL, text=VEHICLES)
+    assert api.loadVehicleList() is True
+    assert api.loadVehicleList() is True
     assert get.call_count == 1
-    assert [v.VIN for v in api.getCarApiVehicles()] == ["5YJ3E1EA1KF000001"]
+    assert [v.VIN for v in api.carApiVehicles] == ["5YJ3E1EA1KF000001"]
 
 
-def test_failure_returns_false_and_records_error():
+def test_failure_returns_false_and_records_error(requests_mock):
     api = new_api()
-    with patch("requests.get", return_value=resp('{"error": "boom"}')):
-        assert api.loadVehicleList() is False
-    assert api.getVehicleCount() == 0
+    requests_mock.get(FLEET_NA_URL, text='{"error": "boom"}')
+    assert api.loadVehicleList() is False
+    assert len(api.carApiVehicles) == 0
     assert api.carApiLastErrorTime > 0
 
 
-def test_no_token_makes_no_call():
+def test_no_token_makes_no_call(requests_mock):
     api = new_api()
     api.fleetSlot.clear()
-    with patch("requests.get") as get:
-        assert api.loadVehicleList() is False
-    get.assert_not_called()
+    assert api.loadVehicleList() is False
+    assert requests_mock.request_history == []
 
 
 def test_lists_from_owner_products_when_both_slots_present(no_threads, requests_mock):
-    # Telemetry calls loadVehicleList() directly, not via car_api_available.
+    # Telemetry calls loadVehicleList() directly.
     api = new_api()
     api.ownerSlot.setTokens(owner_token())
     products = requests_mock.get(OWNER_API_URL[:-8] + "products", text=VEHICLES)

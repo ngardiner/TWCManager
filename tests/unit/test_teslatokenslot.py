@@ -322,7 +322,7 @@ def test_refresh_post_has_timeout(requests_mock):
     s = owner_slot()
     s.setTokens(owner_token(), "r1", source="login")
     assert s.refresh() == "success"
-    assert hit.last_request.timeout == slotmod.REFRESH_TIMEOUT == 30
+    assert hit.last_request.timeout == slotmod.REFRESH_TIMEOUT == 10
 
 
 def test_refresh_timeout_is_unreachable_and_keeps_tokens(requests_mock):
@@ -332,3 +332,26 @@ def test_refresh_timeout_is_unreachable_and_keeps_tokens(requests_mock):
     s.setTokens(access, "r1", source="login")
     assert s.refresh() == "unreachable"
     assert s.accessToken == access and s.refreshToken == "r1"
+
+
+@pytest.mark.parametrize("stage", ["parse", "store"])
+def test_refresh_never_logs_an_exceptions_text(stage, requests_mock, caplog, monkeypatch):
+    # A catch-all's message is not controlled: it may carry a token
+    new = owner_token(jti="n")
+    requests_mock.post(
+        AUTH_TOKEN_URL,
+        json={"access_token": new, "refresh_token": "r2", "expires_in": 1},
+    )
+    s = owner_slot()
+    s.setTokens(owner_token(), "r1", source="login")
+    if stage == "parse":
+        monkeypatch.setattr(
+            slotmod.json, "loads", lambda text: (_ for _ in ()).throw(RuntimeError(new))
+        )
+    else:
+        monkeypatch.setattr(
+            s, "setTokens", lambda *a: (_ for _ in ()).throw(RuntimeError(new))
+        )
+    caplog.set_level(1)
+    assert s.refresh() == "rejected"
+    assert "RuntimeError" in caplog.text and new not in caplog.text

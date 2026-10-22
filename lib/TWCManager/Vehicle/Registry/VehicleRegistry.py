@@ -1,6 +1,6 @@
 # The registry of vehicles: membership, forgetting, persistence and the
-# read-source and liveness tables. Registry and vehicle locks are leaves:
-# nothing here calls a source, a claim callable or does I/O while holding one.
+# liveness table. Registry and vehicle locks are leaves: nothing here calls a
+# provider, a claim callable or does I/O while holding one.
 import logging
 import math
 import threading
@@ -8,13 +8,21 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .Fields import NOT_TRACKED
-from .ReadSource import ReadSource
 from .Vehicle import Vehicle
 from .VIN import isWellFormedVIN
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 
 ANON_PREFIX = "anon:"
+
+
+def isAnonKey(key) -> bool:
+    return isinstance(key, str) and key.startswith(ANON_PREFIX)
+
+
+def canonicalKey(key):
+    # VINs compare upper-case; an anonymous key is kept as issued
+    return key.upper() if isinstance(key, str) and not isAnonKey(key) else key
 
 
 def _number(value: Any) -> Optional[float]:
@@ -44,11 +52,14 @@ class VehicleRegistry:
         self._clock = clock
         self._lock = threading.RLock()
         self._vehicles: Dict[str, Vehicle] = {}
-        self._sources: List[ReadSource] = []
-        self._readOrder: Optional[Callable[[List[ReadSource]], List[ReadSource]]] = None
+        # The ProviderOrder a stale read cascades through; None never fetches
+        self.providerOrder = None
         self._liveness: Dict[str, Callable[[Optional[Vehicle]], Optional[float]]] = {}
         # Per point: {"candidate": vin, "attempts": int, "rejected": bool}.
         self._pending: Dict[str, dict] = {}
+        # Called with a key, outside the lock, whenever a vehicle leaves:
+        # state kept elsewhere per key (desired state) follows the removals
+        self.removed: Optional[Callable[[str], None]] = None
 
     @classmethod
     def forMaster(cls, master) -> "VehicleRegistry":
@@ -63,12 +74,6 @@ class VehicleRegistry:
         return self._clock()
 
     # Membership
-
-    @staticmethod
-    def _normalise(key: Any) -> Any:
-        if isinstance(key, str) and not key.startswith(ANON_PREFIX):
-            return key.upper()
-        return key
 
     def _getOrCreate(self, vin: str, source: str):
         # The one gate for every provider: only a well-formed VIN becomes a
@@ -92,7 +97,7 @@ class VehicleRegistry:
 
     def get(self, key: str) -> Optional[Vehicle]:
         with self._lock:
-            return self._vehicles.get(self._normalise(key))
+            return self._vehicles.get(canonicalKey(key))
 
     def vehicles(self) -> List[Vehicle]:
         with self._lock:
@@ -119,11 +124,21 @@ class VehicleRegistry:
         v.userAsserted = True
         return v
 
+    def _removed(self, keys: List[str]) -> None:
+        # Outside the lock
+        for key in keys:
+            try:
+                if self.removed is not None:
+                    self.removed(key)
+            except Exception as e:
+                logger.debug("Vehicle removal callback raised %s", type(e).__name__)
+
     def forget(self, key: str) -> bool:
         with self._lock:
-            removed = self._vehicles.pop(self._normalise(key), None)
+            removed = self._vehicles.pop(canonicalKey(key), None)
         if removed is not None:
             logger.info("Vehicle %s forgotten", removed.key)
+            self._removed([removed.key])
         return removed is not None
 
     def expire(self, now: Optional[float] = None) -> List[str]:
@@ -146,6 +161,7 @@ class VehicleRegistry:
                 key,
                 int(self.forgetAfter // 86400),
             )
+        self._removed(gone)
         return gone
 
     # Plug sessions and TWC VIN confirmation. Called from the serial thread:
@@ -162,11 +178,15 @@ class VehicleRegistry:
 
     def endPlugSession(self, pointId: str) -> None:
         key = ANON_PREFIX + pointId
+        removed = False
         with self._lock:
             v = self._vehicles.get(key)
             if v is not None and v.isAnonymous:
                 del self._vehicles[key]
+                removed = True
             self._pending.pop(pointId, None)
+        if removed:
+            self._removed([key])
         for v in self._attributedTo(pointId):
             v.observe("twcVin", None, "TWC", seen=False)
 
@@ -204,6 +224,7 @@ class VehicleRegistry:
         with self._lock:
             anon = self._vehicles.pop(key, None)
         if anon is not None:
+            self._removed([key])
             # Older stamps never displace newer ones, so the car's own
             # newer values survive the merge.
             for field, obs in anon._fields.snapshot().items():
@@ -232,42 +253,13 @@ class VehicleRegistry:
         found.sort(key=lambda p: p[0], reverse=True)
         return [v for _, v in found]
 
-    def pointFor(self, vin: str) -> Optional[str]:
-        v = self.get(vin)
-        return None if v is None else v.value("twcVin")
-
     def vehicleAt(self, pointId: str) -> Optional[Vehicle]:
         attributed = self._attributedTo(pointId)
         if attributed:
             return attributed[0]
         return self.get(ANON_PREFIX + pointId)
 
-    # Read sources and liveness
-
-    def registerReadSource(self, source: ReadSource) -> None:
-        with self._lock:
-            if source not in self._sources:
-                self._sources.append(source)
-
-    def useReadOrder(
-        self, fn: Optional[Callable[[List[ReadSource]], List[ReadSource]]]
-    ) -> None:
-        # fn orders the registration-ordered sources; None restores the
-        # (order, index) sort
-        with self._lock:
-            self._readOrder = fn
-
-    def readSources(self) -> List[ReadSource]:
-        with self._lock:
-            registered = list(self._sources)
-            fn = self._readOrder
-        if fn is not None:
-            return fn(registered)
-        indexed = list(enumerate(registered))
-        return [
-            s
-            for _, s in sorted(indexed, key=lambda p: (getattr(p[1], "order", 0), p[0]))
-        ]
+    # Liveness
 
     def registerLiveness(
         self, source: str, liveAt: Callable[[Optional[Vehicle]], Optional[float]]

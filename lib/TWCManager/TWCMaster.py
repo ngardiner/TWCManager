@@ -16,17 +16,26 @@ import requests
 import bisect
 import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 from TWCManager.Vehicle.Registry import VehicleRegistry
+from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
 from TWCManager.Vehicle.Providers import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
+from TWCManager.Vehicle.Providers.Capability import (
+    READ_CHARGE,
+    START_CHARGING,
+    STOP_CHARGING,
+)
+from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
+from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
+from TWCManager.Vehicle.Reconcile.Belief import newerReading
+from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
+from TWCManager.Vehicle.Reconcile.Targets import (
+    applyPolicyLimit,
+    broadcastVehicles,
+    targetsFor,
+)
 
 logger = LoggerFactory.get_logger("Master", "Master")
-
-# Background task commands that are vehicle commands. They run on the
-# VehicleCommandQueue worker so slow BLE retries don't stall other
-# background work.
-VEHICLE_COMMANDS = frozenset(["charge", "applyChargeLimit"])
 
 
 class TWCMaster:
@@ -43,7 +52,6 @@ class TWCMaster:
     consumptionAmpsValues = {}
     debugOutputToFile = False
     generationValues = {}
-    lastChargeLimitApplied = 0
     lastkWhMessage = time.time()
     lastkWhPoll = 0
     lastTeslaTokenRefreshCheck = 0
@@ -79,7 +87,6 @@ class TWCMaster:
     )
     slaveTWCs = {}
     slaveTWCRoundRobin = []
-    stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
     stopTimeout = datetime.max
     spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
@@ -109,20 +116,26 @@ class TWCMaster:
         self.modules = {}
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
-        self.stats = {"moduleDispatch": {}, "moduleFailures": {}, "moduleSuccess": {}}
-        self.vehicleCommandQueue = VehicleCommandQueue(
-            self._resolveVehicleCommandModule
-        )
         # Guards mutation of self.settings from non-serial threads; saves
         # serialise under it and write the file outside it. Lock order:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
         # The serial thread takes it too (recordVehicleVIN), so nothing
-        # under it may do I/O, on any thread.
+        # under it may do I/O, on any thread. TeslaAPI.vehicleListLock ->
+        # settingsLock too (a listing resolves legacy held limits): never take
+        # vehicleListLock while holding settingsLock.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
+        self.heldLimits = HeldLimits(self)
         self.providerOrder = ProviderOrder(self)
         self.providerOrder.register(Gen2TWCProvider(self))
-        self.vehicleRegistry.useReadOrder(self.providerOrder.orderReadSources)
+        self.vehicleRegistry.providerOrder = self.providerOrder
+        # Desired vehicle state, and the reconciler that converges cars on
+        # it; all on the registry's time.time clock
+        self.desired = DesiredStore()
+        self.vehicleRegistry.removed = self._vehicleRemoved
+        self.reconciler = VehicleReconciler(self)
+        # The policy's charge limit; None while it sets none
+        self.policyLimit = None
         # Start of the forgetting interval: the first expiry pass runs an
         # hour after startup, once providers have reclaimed their cars, so a
         # persisted car Fleet still lists is not expired and re-created.
@@ -174,27 +187,44 @@ class TWCMaster:
         except ValueError as e:
             logger.debug("Exception in advanceHistorySnap: " + str(e))
 
-    def calculateModulePriority(self, type, name):
-        # Currently implements a static priority for Vehicle modules, can be dynamic in future
-        if type == "Vehicle":
-            if name == "TeslaBLE":
-                return 20
-            if name == "TeslaAPI":
-                return 10
-        else:
-            return 0
-
     def cancelStopCarsCharging(self, vin=None):
-        # Drop pending stop-charging commands for this VIN (or every VIN when
-        # vin is None). A vehicle-less stop applies to every car, so it is
-        # cancelled too. Returns how many were removed. Closes #667 for the
-        # vehicle queue path.
-        vin = vin or None
-        return self.vehicleCommandQueue.cancel(
-            "charge",
-            lambda task: not task.get("charge")
-            and (vin is None or task.get("vin") in (vin, None)),
-        )
+        # Drops a stop not yet delivered: the desire and any queued attempt.
+        # A start is never cancelled. Returns how many desires were cleared
+        cleared = 0
+        for v in self._chargeTargets(vin, STOP_CHARGING):
+            cleared += self.desired.clearIf(v.key, CHARGING, False)
+            self.reconciler.cancel(v.key)
+        return cleared
+
+    def withdrawStartCharging(self, vin):
+        # A start not wanted any more (too little on offer): its desire goes;
+        # its record stays for the next start (I4)
+        for v in self._chargeTargets(vin, START_CHARGING):
+            self.desired.clearIf(v.key, CHARGING, True)
+
+    def _chargeTargets(self, vin, capability):
+        # As main: a named car; for an anonymous point, a mode-1 start or
+        # stop and a mode-3 start went unaddressed (broadcastVehicles)
+        targets = targetsFor(self, vin or None, capability)
+        mode = int(self.settings.get("chargeStopMode", 1))
+        if (
+            len(targets) == 1
+            and targets[0].isAnonymous
+            and (mode == 1 or mode == 3 and capability == START_CHARGING)
+        ):
+            # The anonymous car itself has no candidate in these modes
+            targets = broadcastVehicles(self, capability)
+        return targets
+
+    def _wantCharging(self, vin, value):
+        capability = START_CHARGING if value else STOP_CHARGING
+        for v in self._chargeTargets(vin, capability):
+            # The same value withdrawn earlier keeps its record inside main's
+            # 60 s gate, unless the car has reported since its last send
+            rec = self.desired.record(v.key, CHARGING)
+            keep = rec.lastSentAt > 0 and not newerReading(v, CHARGING, rec.lastSentAt)
+            keep = keep and self.desired._clock() - rec.lastSentAt < 60
+            self.desired.set(v.key, CHARGING, value, "distributor", keep=keep)
 
     def checkForUpdates(self):
         # This function is used by the Web UI and later on will be used by the console to detect TWCManager Updates
@@ -350,12 +380,6 @@ class TWCMaster:
             return ("vehicleIsDefinitelyHome", task.get("vin"))
         return task["cmd"]
 
-    def delete_background_task(self, task):
-        key = self._taskKey(task)
-        if key in self.backgroundTasksCmds and self.backgroundTasksCmds[key] == task:
-            del self.backgroundTasksCmds[key]["cmd"]
-            del self.backgroundTasksCmds[key]
-
     def doneBackgroundTask(self, task):
         # Delete task['cmd'] from backgroundTasksCmds such that
         # queue_background_task() can queue another task['cmd'] in the future.
@@ -461,42 +485,32 @@ class TWCMaster:
         # If no enabled() method, assume module is usable
         return ref
 
-    def getModuleByPriority(self, type, priority):
-        # Takes a priority, finds the next lowest priority module
-        # Returns this module and associated priority
-
-        modules_matched = self.getModulesByType(type)
-        high_pri = 0
-        high_ref = None
-        high_name = ""
-
-        for module in modules_matched:
+    def updateChargeAtHome(self):
+        # checkCharge: each vehicle module with a provider not suppressed
+        # for reads refreshes its cars at home, once (TeslaAPI's also loads
+        # its vehicle list)
+        order, seen = self.providerOrder, set()
+        for p in order.providers():
+            module = p.module
             if (
-                module["priority"]
-                and module["priority"] < priority
-                and module["priority"] > high_pri
+                module is None
+                or id(module) in seen
+                or order.suppressions.suppressed(p, READ_CHARGE)
+                or not p.available(READ_CHARGE)
             ):
-                high_pri = module["priority"]
-                high_ref = module["ref"]
-                high_name = module["name"]
-
-        self.stats["moduleDispatch"][high_name] = (
-            self.stats["moduleDispatch"].get(high_name, 0) + 1
-        )
-        return high_name, high_ref, high_pri
+                continue
+            seen.add(id(module))
+            try:
+                getattr(module, "updateChargeAtHome", lambda: None)()
+            except Exception as e:
+                logger.warning("%s charge refresh raised %s", p.name, type(e).__name__)
 
     def getModulesByType(self, type):
         matched = []
         for module in self.modules:
             modinfo = self.modules[module]
             if modinfo["type"] == type:
-                matched.append(
-                    {
-                        "name": module,
-                        "ref": modinfo["ref"],
-                        "priority": modinfo["priority"],
-                    }
-                )
+                matched.append({"name": module, "ref": modinfo["ref"]})
         return matched
 
     def getAllEVSEs(self) -> list:
@@ -519,11 +533,11 @@ class TWCMaster:
         receive_slave_heartbeat with a controller-agnostic algorithm that
         allocates per charging point: a TWC and the car it serves are one
         point, budgeted once.  After this method runs:
-        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it
-          (and applies chargeRateControl for the car on it).
+        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it.
+          With a car member, ChargingPoint splits the rate by
+          chargeRateControl and owns the car's amps.
         - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
-        - A car on no TWC has had VehicleEndpoint.setTargetPower() called
-          (→ a queued setAmps).
+        - A car on no TWC has desired amps (VehicleEndpoint.setTargetPower).
 
         A point not wanting power (an idle TWC) gets a target of 0 and counts
         nothing against the budget.  On the wire, TWCSlave offers it 0 when no
@@ -664,13 +678,6 @@ class TWCMaster:
         else:
             return 0
 
-    def getSendServerTime(self):
-        sendservertime = int(self.settings.get("sendServerTime", 0))
-        if sendservertime > 0:
-            return 1
-        else:
-            return 0
-
     def getScheduledAmpsMax(self):
         schedamps = int(self.settings.get("scheduledAmpsMax", 0))
         if schedamps > 0:
@@ -739,9 +746,6 @@ class TWCMaster:
 
     def getSlaveSign(self):
         return self.slaveSign
-
-    def getMasterSign(self):
-        return self.masterSign
 
     def getStatus(self):
         chargerLoad = float(self.getChargerLoad())
@@ -994,18 +998,6 @@ class TWCMaster:
         amps = max(min(newOffer, availableA / self.getRealPowerFactor(availableA)), 0)
         return round(amps, 2)
 
-    def getNormalChargeLimit(self, ID):
-        if "chargeLimits" in self.settings and str(ID) in self.settings["chargeLimits"]:
-            result = self.settings["chargeLimits"][str(ID)]
-            if type(result) is int:
-                result = (result, 0)
-            if result[0] is None:
-                result[0] = 0
-            if result[1] is None:
-                result[1] = 0
-            return (True, result[0], result[1])
-        return (False, None, None)
-
     def getSlaveByID(self, twcid):
         return self.slaveTWCs[twcid]
 
@@ -1183,6 +1175,8 @@ class TWCMaster:
                 if key not in self.settings:
                     self.settings[key] = value
             registryBlob = self.settings.get("vehicleRegistry")
+        # Normalises chargeLimits; dict work under the lock only
+        self.heldLimits.load()
         # load() tolerates a missing or corrupt blob
         self.vehicleRegistry.load(registryBlob)
 
@@ -1220,7 +1214,9 @@ class TWCMaster:
         # and to push settings logic out to the individual modules
         mods = self.getModulesByType("Vehicle")
         for mod in mods:
-            mod["ref"].updateSettings()
+            # Optional: only TeslaBLE has settings to re-read
+            if hasattr(mod["ref"], "updateSettings"):
+                mod["ref"].updateSettings()
 
         # If particular details are missing from the Settings dict, create them
         with self.settingsLock:
@@ -1336,8 +1332,22 @@ class TWCMaster:
                         # Close off the current charging session
                         self.recordVehicleSessionEnd(slaveTWC)
                         self._plugSession(slaveTWC, False)
+                        # The next session lifts the car's own rate again
+                        slaveTWC._resetVehicleRateRaised()
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
+                elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES or (
+                    slaveTWC.reportedState == 0 and slaveTWC.pluggedCars()[0]
+                ):
+                    # A car drawing nothing (asleep after a restart) is still
+                    # plugged in: unidentified, it is an anonymous session.
+                    # At 00 (an empty TWC says it too) only if a free source
+                    # shows an at-home car plugged in
+                    if slaveTWC.vehicleKey is None:
+                        self._plugSession(slaveTWC, True)
+                elif slaveTWC.reportedState == 0 and isAnonKey(slaveTWC.vehicleKey):
+                    # 00 and no car known plugged in
+                    self._plugSession(slaveTWC, False)
             carsCharging += slaveTWC.isCharging
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
@@ -1370,18 +1380,12 @@ class TWCMaster:
                 self.releaseBackgroundTasksLock()
             return
 
-        if task["cmd"] in VEHICLE_COMMANDS:
-            self.queue_vehicle_command(task)
-            return
-
         self.getBackgroundTasksLock()
         try:
             key = self._taskKey(task)
             if key in self.backgroundTasksCmds:
-                # Some tasks, like cmd='charge', will be called once per second until
-                # a charge starts or we determine the car is done charging.  To avoid
-                # wasting memory queing up a bunch of these tasks when we're handling
-                # a charge cmd already, don't queue two of the same task.
+                # Some tasks are queued every heartbeat. To avoid wasting
+                # memory, don't queue two of the same task.
                 self.backgroundTasksCmds[key].update(task)
                 return
 
@@ -1393,20 +1397,6 @@ class TWCMaster:
 
         # Queue the task to be handled by background_tasks_thread.
         self.backgroundTasksQueue.put(task)
-
-    def queue_vehicle_command(self, task, callback=None):
-        # Hand a vehicle command to the vehicle command worker. Returns
-        # immediately; callback(result) runs on the worker when done.
-        self.vehicleCommandQueue.put(task, callback)
-
-    def _resolveVehicleCommandModule(self):
-        # Preference order: VehiclePriority (priority/fallback proxy), then
-        # HomeAssistant, TeslaBLE, TeslaAPI.
-        for name in ("VehiclePriority", "HomeAssistant", "TeslaBLE", "TeslaAPI"):
-            module = self.getModuleByName(name)
-            if module:
-                return module
-        return None
 
     def registerModule(self, module):
         # This function is used during module instantiation to either reference a
@@ -1435,12 +1425,6 @@ class TWCMaster:
                         "ref": module["ref"],
                         "type": module["type"],
                     }
-                    # Assign a module priority where a module meets certain criteria
-                    # The intention of this is to allow us to prioritise local vehicle control
-                    # over API control going forward, with a uniform interface to do os
-                    self.modules[module["name"]]["priority"] = (
-                        self.calculateModulePriority(module["type"], module["name"])
-                    )
             else:
                 logger.log(
                     logging.INFO7,
@@ -1609,19 +1593,6 @@ class TWCMaster:
         else:
             logger.warning("Tried to released module %s that was not loaded", module)
 
-    def removeNormalChargeLimit(self, ID):
-        with self.settingsLock:
-            if (
-                "chargeLimits" in self.settings
-                and str(ID) in self.settings["chargeLimits"]
-            ):
-                del self.settings["chargeLimits"][str(ID)]
-                changed = True
-            else:
-                changed = False
-        if changed:
-            self.queue_background_task({"cmd": "saveSettings"})
-
     def resetChargeNowAmps(self):
         # Sets chargeNowAmps back to zero, so we follow the green energy
         # tracking again
@@ -1661,13 +1632,10 @@ class TWCMaster:
             logger.warning("Vehicle registry pending check failed: %s", e)
             return False
 
-    def saveNormalChargeLimit(self, ID, outsideLimit, lastApplied):
-        with self.settingsLock:
-            if not "chargeLimits" in self.settings:
-                self.settings["chargeLimits"] = dict()
-
-            self.settings["chargeLimits"][str(ID)] = (outsideLimit, lastApplied)
-        self.queue_background_task({"cmd": "saveSettings"})
+    def _vehicleRemoved(self, key):
+        # Forgotten means forgotten: its desired state and held limit go
+        self.desired.forget(key)
+        self.heldLimits.remove(key)
 
     def expireVehicles(self):
         # Forget unclaimed, unasserted vehicles unseen past the forget window
@@ -1748,28 +1716,6 @@ class TWCMaster:
                     os.remove(tempFileName)
                 except:
                     pass
-
-    def getSetting(self, key, default=None):
-        """Get a setting value by key.
-
-        Args:
-            key: The setting key to retrieve
-            default: Default value if key doesn't exist
-
-        Returns:
-            The setting value or default if not found
-        """
-        return self.settings.get(key, default)
-
-    def setSetting(self, key, value):
-        """Set a setting value by key.
-
-        Args:
-            key: The setting key to set
-            value: The value to set
-        """
-        with self.settingsLock:
-            self.settings[key] = value
 
     def send_master_linkready1(self):
         logger.log(logging.INFO8, "Send master linkready1")
@@ -1895,6 +1841,11 @@ class TWCMaster:
                     + bytearray(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00")
                 )
 
+    def setPolicyLimit(self, limit, transition):
+        # transition: a policy change, a decision that ends an adopted value
+        self.policyLimit = limit
+        applyPolicyLimit(self, limit, decision=transition)
+
     def setAllowedFlex(self, amps):
         self.allowed_flex = amps if amps >= 0 else 0
 
@@ -1943,11 +1894,6 @@ class TWCMaster:
     def setHourResumeTrackGreenEnergy(self, hour):
         with self.settingsLock:
             self.settings["hourResumeTrackGreenEnergy"] = hour
-
-    def setkWhDelivered(self, kWh):
-        with self.settingsLock:
-            self.settings["kWhDelivered"] = kWh
-            return True
 
     def setMasterTWCID(self, twcid):
         # This is called when TWCManager is in Slave mode, to track the
@@ -1998,10 +1944,6 @@ class TWCMaster:
     def setNonScheduledAmpsMax(self, amps):
         with self.settingsLock:
             self.settings["nonScheduledAmpsMax"] = amps
-
-    def setSendServerTime(self, val):
-        with self.settingsLock:
-            self.settings["sendServerTime"] = val
 
     def setScheduledAmpsDaysBitmap(self, bitmap):
         with self.settingsLock:
@@ -2073,51 +2015,36 @@ class TWCMaster:
             self.queue_background_task({"cmd": "saveSettings"})
 
     def startCarsCharging(self, vin=None):
-        # This function is the opposite functionality to the stopCarsCharging function
-        # below
-        vin = vin or None
-        stopMode = int(self.settings.get("chargeStopMode", 1))
-        if stopMode == 1:
-            self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
-            self.getModuleByName("Policy").clearOverride()
-        elif stopMode == 2:
-            self.settings["respondToSlaves"] = 1
-        elif stopMode == 3:
-            self.queue_background_task({"cmd": "charge", "charge": True, "vin": vin})
+        # Desired state, decided again each cycle: the reconciler sends it
+        # once per our own write, a limit first. vin is a registry key (a VIN
+        # or an anon: key); None is every present car
+        self._wantCharging(vin, True)
+        if int(self.settings.get("chargeStopMode", 1)) == 1:
+            policy = self.getModuleByName("Policy")
+            if policy:
+                policy.clearOverride()
 
     def stopCarsCharging(self, vin=None):
-        # This is called by components (mainly TWCSlave) who want to signal to us to
-        # call our configured routine for stopping vehicles from charging.
-        # The default setting is to use the Tesla API. Some people may not want to do
-        # this, as it only works for Tesla vehicles and requires logging in with your
-        # Tesla credentials. The alternate option is to stop responding to slaves
-
-        # 1 = Stop the car(s) charging via the Tesla API
-        # 2 = Stop the car(s) charging by refusing to respond to slave TWCs
-        # 3 = Send TWC Stop command to each slave
-        vin = vin or None
-        stopMode = int(self.settings.get("chargeStopMode", 1))
-        if stopMode == 1:
-            self.queue_background_task({"cmd": "charge", "charge": False, "vin": vin})
+        # The opposite of startCarsCharging. chargeStopMode picks how: 1 the
+        # car (BLE, the Tesla API), 2 refusing to answer the slaves, 3 the
+        # TWC stop command; 2 and 3 are the Gen2 provider's, which the
+        # reconciler reaches once a free stop is not to be had
+        self._wantCharging(vin, False)
+        if int(self.settings.get("chargeStopMode", 1)) == 1:
             if self.stopTimeout == datetime.max:
                 self.stopTimeout = datetime.now() + timedelta(seconds=10)
             elif datetime.now() > self.stopTimeout:
-                self.getModuleByName("Policy").overrideLimit()
-        if stopMode == 2:
-            self.stopRespondingToSlaves()
-        if stopMode == 3:
-            self.sendStopCommand()
+                policy = self.getModuleByName("Policy")
+                if policy:
+                    policy.overrideLimit()
 
     def stopRespondingToSlaves(self):
-        # Every slave stops charging once we go quiet; resumes after a minute
+        # Every slave stops charging once we go quiet; resumes after a minute.
+        # The expiry first: the serial thread reads both without the lock, and
+        # a 0 seen with the old expiry would be reset at once (M1)
         with self.settingsLock:
-            self.settings["respondToSlaves"] = 0
             self.settings["respondToSlavesExpiry"] = time.time() + 60
-
-    def time_now(self):
-        return datetime.now().strftime(
-            "%H:%M:%S" + (".%f" if self.config["config"]["displayMilliseconds"] else "")
-        )
+            self.settings["respondToSlaves"] = 0
 
     def tokenSyncEnabled(self):
         # TODO: Should not be hardcoded

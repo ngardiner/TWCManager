@@ -90,7 +90,6 @@ class FakeMaster:
         self.settings = {}
         self.modules = {}
         self.tasks = []
-        self.stats = {"moduleSuccess": {}, "moduleFailures": {}}
 
     def getModuleByName(self, name):
         return self.modules.get(name)
@@ -134,7 +133,22 @@ def add_home_vehicle(
     if command_signing is not None:
         entry["command_signing"] = command_signing
     api.addVehicle(entry)
-    vehicle = api.getCarApiVehicles()[-1]
+    vehicle = api.carApiVehicles[-1]
     vehicle.atHome = True
     vehicle.lastAPIAccessTime = time.time()
     return vehicle
+
+
+def wire_reads(registry, *providers):
+    """Points registry's reads at a ProviderOrder holding providers, as
+    TWCMaster and registerProviders do."""
+    from unittest.mock import Mock
+
+    from TWCManager.Vehicle.Providers.Order import ProviderOrder
+
+    m = Mock()
+    m.settings, m.config = {}, {}
+    order = registry.providerOrder = ProviderOrder(m)
+    for p in providers:
+        order.register(p)
+    return order

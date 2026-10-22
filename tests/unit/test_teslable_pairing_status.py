@@ -77,12 +77,10 @@ def test_charge_read_reports_the_cars_own_ac_maximum():
     )
     state = ble.get_charge_state(VIN)
     assert state["availableCurrent"] == 6 and state["chargeCurrentRequestMax"] == 48
-    assert (
-        ble.readSource.fetch(reg.getOrCreate(VIN, "t"), "chargingState", False)[
-            "chargeCurrentRequestMax"
-        ]
-        == 48
-    )
+    (p,) = ble.providers()
+    v = reg.getOrCreate(VIN, "t")
+    p.fetch(v, "chargingState")
+    assert v.value("chargeCurrentRequestMax") == 48
 
 
 def test_update_settings_reclaims_paired_vins():
@@ -138,29 +136,110 @@ def test_pairing_failure_status():
 REFUSED = b"Error: vehicle rejected request: your public key has not been paired with the vehicle"
 
 
-def fast_retries(ble):
-    ble.maxRetries = 2
-    ble._calculate_backoff = Mock(return_value=0)
-
-
 def test_key_refusal_stops_retrying_and_records_once():
     ble, reg, master = make()
     ble._setBleStatus(VIN, "paired")
     master.queue_background_task.reset_mock()
-    fast_retries(ble)
     ble._run_command_with_timeout = Mock(return_value=(b"", REFUSED, 1))
-    assert ble.sendCommand(VIN, "ping") is None
-    assert ble._run_command_with_timeout.call_count == 1
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert ble.sendCommand(VIN, "ping") is None
+    assert ble._run_command_with_timeout.call_count == 1 and sleep.call_count == 0
     assert master.queue_background_task.call_count == 1
     assert ble.bleStatus(VIN)["status"] == "refused"
 
 
-def test_other_failures_are_still_retried():
+@pytest.mark.parametrize(
+    "failure",
+    [
+        (None, None, None),
+        (b"", b"", -9),
+        (b"", b"ble: Connection failed", 1),
+        (b"", b"ble: timeout", 1),
+    ],
+    ids=["timeout", "killed", "connection", "timeout-output"],
+)
+def test_a_transient_failure_is_retried_once_then_reported(failure):
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
     ble, reg, master = make()
-    fast_retries(ble)
-    ble._run_command_with_timeout = Mock(return_value=(b"", b"ble: timeout", 1))
-    assert ble.sendCommand(VIN, "ping") is None
-    assert ble._run_command_with_timeout.call_count == 3
+    (p,) = ble.providers()
+    ble._run_command_with_timeout = Mock(return_value=failure)
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply")
+    assert ble._run_command_with_timeout.call_count == 2
+    sleep.assert_called_once_with(2.0)
+    assert TeslaBLE.QUICK_RETRY_DELAY == 2.0
+
+
+def test_a_transient_failure_then_success_is_done():
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    ble._run_command_with_timeout = Mock(
+        side_effect=[(None, None, None), (b"", b"Command executed successfully", 0)]
+    )
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep"):
+        assert p.setAmps(VIN, 10).kind == O.DONE
+    assert ble._run_command_with_timeout.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [b"Error: car could not execute command: not_allowed", b""],
+)
+def test_a_non_transient_failure_is_not_retried(stderr):
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    ble._run_command_with_timeout = Mock(return_value=(b"", stderr, 1))
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply")
+    assert ble._run_command_with_timeout.call_count == 1 and sleep.call_count == 0
+
+
+def test_a_command_rejected_before_running_is_not_retried():
+    ble, reg, master = make()
+    ble._run_command_with_timeout = Mock()
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert ble.sendCommand("5YJ3E1EA1KF000009", "ping") is None  # not in settings
+    assert ble._run_command_with_timeout.call_count == 0 and sleep.call_count == 0
+
+
+def test_removed_retry_config_keys_are_ignored():
+    master_config = {
+        "maxRetries": 9,
+        "retryDelay": 30,
+        "circuitBreakerThreshold": 1,
+        "circuitBreakerTimeout": 3600,
+    }
+    reg = VehicleRegistry({})
+    master = Mock()
+    master.vehicleRegistry = reg
+    master.settings = {"Vehicles": {VIN: {"privKey": "x"}}}
+    master.settingsLock = threading.RLock()
+    master.config = {
+        "config": {
+            "teslaControlPath": "/bin/true",
+            "moduleConfiguration": {"TeslaBLE": master_config},
+        },
+        "vehicle": {"teslaBLE": {"enabled": True}},
+    }
+    with patch.object(TeslaBLE, "_start_dbus_session"), patch.object(
+        TeslaBLE, "_cleanup_stale_pipe"
+    ):
+        ble = TeslaBLE(master)
+    ble.sendPrivateKey = Mock(return_value=True)
+    ble._ensure_pipe_closed = Mock()
+    for name in ("maxRetries", "retryDelay", "circuit_breaker", "retry_stats"):
+        assert not hasattr(ble, name)
+    ble._run_command_with_timeout = Mock(return_value=(None, None, None))
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        for _ in range(3):  # a breaker at threshold 1 would stop the later sends
+            assert ble.sendCommand(VIN, "ping") is None
+    assert ble._run_command_with_timeout.call_count == 6
+    assert [c.args for c in sleep.call_args_list] == [(2.0,)] * 3
 
 
 def test_other_failures_leave_status_alone():
@@ -239,7 +318,10 @@ def test_new_record_created_for_unknown_vin():
 
 
 def test_claimed_vin_reads_from_ble_first():
+    from tests.unit.teslatokens import wire_reads
+
     ble, reg, master = make()
+    wire_reads(reg, *ble.providers())
     master.getModuleByName = Mock(return_value=None)
     ble.scanForVehicles = Mock()
     ble.updateSettings()
@@ -904,69 +986,6 @@ def test_mac_fallback_lookup_timeout_is_range_unknown():
 
 
 VIN2 = "5YJ3E1EA1KF000002"
-VIN3 = "5YJ3E1EA1KF000003"
-
-
-def all_vehicle_ble(statuses):
-    # One keyed car per entry: status None is a key with no recorded pairing
-    # state (as every pre-1.4.0 key, seeded unproven on the upgrade boot).
-    ble, reg, master = make()
-    master.settings["Vehicles"] = {}
-    for vin, status in statuses.items():
-        rec = {"privKey": "x"}
-        if status:
-            rec["ble"] = {"status": status, "since": 1.0}
-        master.settings["Vehicles"][vin] = rec
-    master.getNormalChargeLimit = Mock(return_value=(False, None, None))
-    ble._scheduleBlocksStart = Mock(return_value=False)
-    ble.wakeVehicle = Mock(return_value=True)
-    ble.sendCommand = Mock(return_value="ok")
-    ble.parseCommandOutput = Mock(return_value=True)
-    ble.startCharging = Mock(return_value=True)
-    ble.stopCharging = Mock(return_value=True)
-    return ble, master
-
-
-def commanded(ble):
-    vins = [c.args[0] for c in ble.sendCommand.call_args_list]
-    vins += [c.args[0] for c in ble.wakeVehicle.call_args_list]
-    vins += [c.args[0] for c in ble.startCharging.call_args_list]
-    vins += [c.args[0] for c in ble.stopCharging.call_args_list]
-    return set(vins)
-
-
-def test_all_vehicle_commands_skip_a_refused_key():  # I2
-    ble, master = all_vehicle_ble({VIN: "refused", VIN2: "paired", VIN3: None})
-    assert ble.car_api_charge({"cmd": "charge", "charge": True}) is True
-    assert commanded(ble) == {VIN2, VIN3}
-    ble, master = all_vehicle_ble({VIN: "refused", VIN2: "paired", VIN3: None})
-    assert ble.setChargeRate(16) is True
-    assert commanded(ble) == {VIN2, VIN3}
-    ble, master = all_vehicle_ble({VIN: "refused", VIN2: "paired", VIN3: None})
-    assert ble.applyChargeLimit(80) is True
-    assert commanded(ble) == {VIN2, VIN3}
-
-
-def test_all_vehicle_commands_skip_a_vin_without_a_key():  # I2
-    ble, master = all_vehicle_ble({VIN2: None})
-    master.settings["Vehicles"][VIN] = {"chargeSessions": 3}  # history only
-    assert ble.setChargeRate(16) is True
-    assert commanded(ble) == {VIN2}
-
-
-def test_unproven_and_pairing_keys_are_still_commanded():  # I2: upgrade users
-    ble, master = all_vehicle_ble({VIN: None, VIN2: "pairing", VIN3: "pairing_failed"})
-    ble.updateSettings = Mock()
-    assert ble.car_api_charge({"cmd": "charge", "charge": False}) is True
-    assert commanded(ble) == {VIN, VIN2, VIN3}
-
-
-def test_no_usable_key_fails_the_all_vehicle_command():  # I2
-    ble, master = all_vehicle_ble({VIN: "refused"})
-    assert ble.car_api_charge({"cmd": "charge", "charge": True}) is False
-    assert ble.setChargeRate(16) is False
-    assert ble.applyChargeLimit(80) is False
-    assert commanded(ble) == set()
 
 
 def test_pairing_that_could_not_start_creates_no_vehicle_record():  # M7
@@ -998,3 +1017,96 @@ def test_failed_device_lookup_is_range_unknown():  # M3
     ):
         assert ble.scanForVehicleInRange(VIN) is None
     assert ble.rangeStatus(VIN)["inRange"] is None
+
+
+def test_charge_state_maps_the_cars_own_current_request():  # slim Task 12b
+    ble, reg, master = make()
+    ble._fetch_state_json = Mock(
+        return_value={
+            "chargeState": {"chargeCurrentRequest": 16, "chargerPilotCurrent": 32}
+        }
+    )
+    state = ble.get_charge_state(VIN)
+    assert state["chargeCurrentRequest"] == 16 and state["availableCurrent"] == 32
+
+
+def test_pairing_and_pairing_failed_keys_are_claimed_and_commandable():  # 12b deleted-test PARTIAL (upgrade users)
+    from TWCManager.Vehicle.Providers import Capability as C
+
+    ble, reg, master = make()
+    vins = {"5YJ3E1EA1KF000002": "pairing", "5YJ3E1EA1KF000003": "pairing_failed"}
+    master.settings["Vehicles"] = {
+        vin: {"privKey": "x", "ble": {"status": status, "since": 1.0}}
+        for vin, status in vins.items()
+    }
+    ble.scanForVehicles = Mock()
+    ble.updateSettings()
+    (p,) = ble.providers()
+    for vin in vins:
+        assert "TeslaBLE" in reg.get(vin).claims and p.ready(reg.get(vin), C.SET_AMPS)
+
+
+# tesla-control -debug logs to stderr before its final error line
+DEBUG_PREAMBLE = (
+    b"2026-10-15T00:00:00Z [debug] Connecting to car...\n"
+    b"2026-10-15T00:00:01Z [info ] Connecting to car...\n"
+    b"2026-10-15T00:00:02Z [info ] Securing connection...\n"
+    b"2026-10-15T00:00:03Z [warn ] timeout waiting for session info, retrying\n"
+)
+
+
+@pytest.mark.parametrize(
+    "last_line, runs",
+    [
+        (b"Failed to execute command: car could not execute command: not_allowed", 1),
+        (b"Error: failed to find BLE beacon: context deadline exceeded", 2),
+        (b"Failed to execute command: ble: connection lost", 2),
+        (b"Failed to execute command: request timeout", 2),
+    ],
+    ids=["not_allowed", "deadline", "connection", "timeout"],
+)
+def test_only_the_final_error_line_decides_a_quick_retry(last_line, runs):
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    ble._run_command_with_timeout = Mock(
+        return_value=(b"", DEBUG_PREAMBLE + last_line + b"\n", 1)
+    )
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep") as sleep:
+        assert p.setAmps(VIN, 10) == O.Outcome(O.UNREACHABLE, "no reply")
+    assert ble._run_command_with_timeout.call_count == runs
+    assert sleep.call_count == runs - 1
+
+
+def test_a_stored_refused_key_is_refused_even_when_the_run_times_out():
+    from TWCManager.Vehicle.Reconcile import Outcome as O
+
+    ble, reg, master = make()
+    (p,) = ble.providers()
+    ble._setBleStatus(VIN, "refused")
+    ble._run_command_with_timeout = Mock(return_value=(None, None, None))
+    with patch("TWCManager.Vehicle.TeslaBLE.time.sleep"):
+        assert p.setAmps(VIN, 10) == O.Outcome(O.REFUSED, "key")
+
+
+def test_the_quick_retry_is_logged_at_info_once(caplog):
+    import logging
+
+    ble, reg, master = make()
+    ble._run_command_with_timeout = Mock(return_value=(None, None, None))
+    from TWCManager.Vehicle import TeslaBLE as bleModule
+
+    level = bleModule.logger.level
+    bleModule.logger.setLevel(logging.DEBUG)
+    try:
+        with caplog.at_level(logging.INFO), patch(
+            "TWCManager.Vehicle.TeslaBLE.time.sleep"
+        ):
+            assert ble.sendCommand(VIN, "wake") is None
+    finally:
+        bleModule.logger.setLevel(level)
+    retries = [
+        r for r in caplog.records if r.levelno == logging.INFO and "retrying" in r.getMessage()
+    ]
+    assert len(retries) == 1 and "wake" in retries[0].getMessage()

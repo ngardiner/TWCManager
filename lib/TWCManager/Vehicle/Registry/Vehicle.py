@@ -3,10 +3,9 @@
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Collection, Dict, List, Optional, Union
 
 from .Fields import NOT_TRACKED, FieldStore, Observation
-from .ReadSource import cascade
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 
@@ -88,14 +87,40 @@ class Vehicle:
     def latest(self, field: str) -> Optional[Observation]:
         return self._fields.latest(field)
 
-    def reportedBy(self, field: str, source: str) -> Optional[Observation]:
-        """source's own latest observation of field."""
-        return self._fields.reported(field).get(source)
+    def reported(self, field: str) -> Dict[str, Observation]:
+        """Each source's own latest observation of field."""
+        return self._fields.reported(field)
 
     def lastWrite(self, field: str) -> Optional[Observation]:
         return self._fields.lastWrite(field)
 
-    def _liveAt(self, field: str, obs: Optional[Observation]) -> Any:
+    def latestFrom(
+        self, field: str, exclude: Collection[str] = ()
+    ) -> Optional[Observation]:
+        """The newest observation of field from a source not in exclude."""
+        latest = self._fields.latest(field)
+        if latest is None or latest.source not in exclude:
+            return latest
+        best = None
+        for source, obs in self._fields.reported(field).items():
+            if source not in exclude and (best is None or obs.at > best.at):
+                best = obs
+        return best
+
+    def believed(
+        self, field: str, exclude: Collection[str] = ()
+    ) -> Optional[Observation]:
+        """The value to act on: a read strictly newer than our last write,
+        else our last write, else the read."""
+        obs = self.latestFrom(field, exclude)
+        write = self._fields.lastWrite(field)
+        if obs is not None and (write is None or obs.at > write.at):
+            return obs
+        return write if write is not None else obs
+
+    def _liveAt(
+        self, field: str, obs: Optional[Observation], exclude: Collection[str] = ()
+    ) -> Any:
         if obs is None or self._registry is None:
             return NOT_TRACKED
         live = self._registry.sourceLiveAt(obs.source, self)
@@ -106,7 +131,7 @@ class Vehicle:
         # parked car whose cloud lat differs from TeslaMate's in the last
         # digit cost a paid read per window after one feed outage.
         for source in self._fields.reported(field):
-            if source == obs.source:
+            if source == obs.source or source in exclude:
                 continue
             other = self._registry.sourceLiveAt(source, self)
             if other is NOT_TRACKED or other is None:
@@ -121,9 +146,16 @@ class Vehicle:
         obs = self._fields.latest(field)
         return self._fields.age(field, now=now, liveAt=self._liveAt(field, obs))
 
-    def trusted(self, field: str) -> Optional[Observation]:
-        obs = self._fields.latest(field)
-        return self._fields.trusted(field, liveAt=self._liveAt(field, obs))
+    def trusted(
+        self, field: str, exclude: Collection[str] = ()
+    ) -> Optional[Observation]:
+        obs = self.latestFrom(field, exclude)
+        if obs is None:
+            # Never fall back to the store's latest: it may be excluded.
+            return None
+        return self._fields.trusted(
+            field, liveAt=self._liveAt(field, obs, exclude), obs=obs
+        )
 
     def value(self, field: str, default: Any = None) -> Any:
         obs = self._fields.latest(field)
@@ -132,23 +164,30 @@ class Vehicle:
     def noteWrite(self, field: str, value: Any, source: str) -> Observation:
         return self._fields.noteWrite(field, value, source)
 
-    def fresherThanWrite(self, field: str) -> bool:
-        return self._fields.fresherThanWrite(field)
-
     def read(
-        self, field: str, maxAge: Optional[float], allowWake: bool = False
+        self,
+        field: str,
+        maxAge: Optional[float],
+        allowWake: bool = False,
+        providers: Optional[Collection[Any]] = None,
+        force: bool = False,
     ) -> Optional[Observation]:
+        # providers (Provider objects or names) limits the provider order's
+        # read cascade to those, in cost order. force skips the freshness
+        # check: a live report-on-change feed keeps age() at 0, which a
+        # restore must not trust. maxAge None still never fetches.
         latest = self.latest(field)
         if maxAge is None or self._registry is None:
             return latest
-        if latest is not None:
+        if latest is not None and not force:
             age = self.age(field)
             # A value not newer than our own write (inside the feed lag) is
             # not fresh: it may predate the write.
             if age is not None and age <= maxAge and self.trusted(field):
                 return latest
-        # No lock is held here: sources may do I/O.
-        got = cascade(self, self._registry.readSources(), field, allowWake)
+        order = getattr(self._registry, "providerOrder", None)
+        # No lock is held here: providers may do I/O.
+        got = order.read(self, field, allowWake, providers) if order else None
         return got if got is not None else self.latest(field)
 
     # Claims and tier

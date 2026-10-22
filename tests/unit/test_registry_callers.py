@@ -14,15 +14,13 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 
 def test_no_caller_outside_teslaapi_reaches_for_its_list():  # Review Focus 2
     out = subprocess.run(
-        ["git", "grep", "-l", "getCarApiVehicles", "--", "lib/TWCManager"],
+        # Only a module's own list (self.carApiVehicles); getCarApiVehicles is gone
+        ["git", "grep", "-lE", r"[^f]\.carApiVehicles|getCarApiVehicles", "--", "lib/TWCManager"],
         capture_output=True,
         text=True,
         cwd=REPO,
     ).stdout.split()
-    assert sorted(out) == [
-        "lib/TWCManager/Vehicle/HomeAssistant.py",
-        "lib/TWCManager/Vehicle/TeslaAPI.py",
-    ]
+    assert out == []
 
 
 def test_get_last_vehicle_uses_registry_attachment():
@@ -164,6 +162,7 @@ def _post(h, body):
 
 def test_send_teslaapi_command_takes_a_vin():
     master = _master(VehicleRegistry({}))
+    # True: a one-shot attempt was submitted to a lane
     master.providerOrder.debugCommand.return_value = True
     h = _handler(master)
     request = _post(
@@ -176,7 +175,7 @@ def test_send_teslaapi_command_takes_a_vin():
 
 def test_send_teslaapi_command_without_teslaapi_is_400():
     # No TeslaAPI is no longer a 400 by itself (BLE can wake); a command
-    # the order cannot carry is
+    # the order cannot carry (no attempt submitted) is
     master = _master(VehicleRegistry({}), teslaapi=None)
     master.providerOrder.debugCommand.return_value = False
     h = _handler(master)

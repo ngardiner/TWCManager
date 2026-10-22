@@ -4,11 +4,11 @@
 from typing import Optional, Tuple
 
 from .Capability import (
+    ALL,
+    CHARGE_FIELDS,
     LOCAL,
+    LOCATION_FIELDS,
     READ_CHARGE,
-    READ_LOCATION,
-    READ_ONLINE,
-    READ_PLUG,
     SET_AMPS,
     SET_CHARGE_LIMIT,
     START_CHARGING,
@@ -16,13 +16,11 @@ from .Capability import (
     WAKE,
     Declaration,
 )
+from ..Reconcile.Outcome import SATISFIED, Outcome
 from .Provider import Provider, vehicleMaxAmps
 
 CAPABILITIES = (
     READ_CHARGE,
-    READ_LOCATION,
-    READ_PLUG,
-    READ_ONLINE,
     SET_CHARGE_LIMIT,
     START_CHARGING,
     STOP_CHARGING,
@@ -35,14 +33,16 @@ class TeslaBLEProvider(Provider):
     name = "TeslaBLE"
     rank = 2
     local = True
+    worker = "ble"
+    DECLARATIONS = {capability: Declaration(LOCAL) for capability in CAPABILITIES}
+    # api_only blocks BLE commands and BLE reads alike
+    SUPPRESSED = {"api_only": ALL}
+    FIELDS = CHARGE_FIELDS | LOCATION_FIELDS
 
     def __init__(self, ble, master):
         self.ble = ble
         self.master = master
         self.module = ble
-
-    def declarations(self):
-        return {capability: Declaration(LOCAL) for capability in CAPABILITIES}
 
     def ready(self, vehicle, capability) -> bool:
         # Called from the distributor: reads the claim only, never settings
@@ -59,8 +59,50 @@ class TeslaBLEProvider(Provider):
         configConfig = (getattr(self.master, "config", None) or {}).get("config")
         return (1, vehicleMaxAmps(vehicle, configConfig or {}))
 
-    def setAmps(self, vin: str, amps: int) -> bool:
-        return bool(self.ble.setChargeRate(int(amps), vin))
+    def _get(self, vin: str, field: str) -> Optional[dict]:
+        if field not in LOCATION_FIELDS:
+            return self.ble.get_charge_state(vin)
+        loc = self.ble.get_location_state(vin)
+        if loc is None:
+            return None
+        # Only registry field names: heading is not a field
+        return {
+            "lat": loc.get("latitude"),
+            "lon": loc.get("longitude"),
+            "gpsAsOf": loc.get("gpsAsOf") or None,
+        }
 
-    def wake(self, vin: str) -> bool:
-        return bool(self.ble.wakeVehicle(vin))
+    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+        # Only for a ready (claimed) VIN: each miss costs the command timeout
+        vin = vehicle.vin
+        result = self._get(vin, field)
+        if result is None and allowWake and self.ble.wakeVehicle(vin):
+            result = self._get(vin, field)
+        # A None is "not reported", not a reading
+        for k, v in (result or {}).items():
+            if v is not None and k in self.FIELDS:
+                vehicle.observe(k, v, self.name)
+        return (result or {}).get(field) is not None
+
+    # Command methods: one tesla-control command each, classified by
+    # TeslaBLE.commandOutcome. No pre-wake: the worker wakes first when the
+    # attempt says so.
+
+    def setChargeLimit(self, vin: str, limit: int) -> Outcome:
+        return self.ble.commandOutcome(vin, "charging-set-limit", int(limit))
+
+    def startCharging(self, vin: str) -> Outcome:
+        if self.ble._scheduleBlocksStart(vin):
+            # The car's own schedule holds the start; as today, treated as
+            # done rather than asked again
+            return Outcome(SATISFIED, "scheduled")
+        return self.ble.commandOutcome(vin, "charging-start")
+
+    def stopCharging(self, vin: str) -> Outcome:
+        return self.ble.commandOutcome(vin, "charging-stop")
+
+    def setAmps(self, vin: str, amps: int) -> Outcome:
+        return self.ble.commandOutcome(vin, "charging-set-amps", int(amps))
+
+    def wake(self, vin: str) -> Outcome:
+        return self.ble.commandOutcome(vin, "wake")
