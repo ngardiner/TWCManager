@@ -96,6 +96,7 @@ class TeslaBLE:
     configConfig = None
     isDockerCached = None
     master = None
+    _dbus_session_pid = None  # __del__ runs even on a module released in __init__
     pipe = None
     enabled = True
     pipeName = "/tmp/ble_data"
@@ -155,6 +156,13 @@ class TeslaBLE:
         self.configConfig = self.config.get("config", {})
         cfg = self.config.get("vehicle", {}).get("teslaBLE", {}) or {}
         self._enabled = cfg.get("enabled", True)
+        if not self._enabled:
+            # The loader's own enabled check looks under "Vehicle", not
+            # "vehicle", so a disabled module must release itself, or its
+            # providers still command and read over BLE
+            logger.info("TeslaBLE disabled in config")
+            self.master.releaseModule("lib.TWCManager.Vehicle", "TeslaBLE")
+            return
 
         # Load BLE-specific configuration with enhanced defaults
         ble_config = self.configConfig.get("moduleConfiguration", {}).get(

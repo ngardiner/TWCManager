@@ -168,3 +168,16 @@ def test_startup_notice_runs_right_after_load_settings():
     i = body.index("master.loadSettings()")
     assert body[i + 1] == "master.providerOrder.suppressions.noticeOnce()"
     assert sum("noticeOnce" in b for b in body) == 1
+
+
+def test_a_disabled_ble_module_registers_no_provider():
+    # vehicle.teslaBLE.enabled=false must keep BLE out of every path, not just
+    # out of getModuleByName
+    config = dict(CONFIG, config=dict(CONFIG["config"], teslaControlPath="/bin/true"), vehicle={"teslaBLE": {"enabled": False}})
+    m = TWCMaster("AB", config)
+    with patch.object(TeslaBLE, "_start_dbus_session") as dbus:
+        ble = TeslaBLE(m)
+    m.registerModule({"name": "TeslaBLE", "ref": ble, "type": "Vehicle"})
+    assert "TeslaBLE" not in registerProviders(m)
+    assert m.getModuleByName("TeslaBLE") is None and not dbus.called
+    ble.__del__()  # garbage collection must not raise on the half-built module
