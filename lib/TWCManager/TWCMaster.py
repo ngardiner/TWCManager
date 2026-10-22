@@ -113,6 +113,8 @@ class TWCMaster:
         )
         # Instance-level mutable state (class-level definitions are defaults only)
         self.modules = {}
+        self.consumptionValues, self.generationValues = {}, {}
+        self.consumptionAmpsValues = {}
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
         # RS-485 messages from any thread, sent by the serial loop between
@@ -464,6 +466,22 @@ class TWCMaster:
 
         # If no enabled() method, assume module is usable
         return ref
+
+    def pollEMS(self):
+        # Poll all loaded EMS modules for consumption and generation values
+        for module in self.getModulesByType("EMS"):
+            self.setConsumption(module["name"], module["ref"].getConsumption())
+            if hasattr(module["ref"], "getConsumptionAmps"):
+                self.setConsumptionAmps(
+                    module["name"], module["ref"].getConsumptionAmps()
+                )
+            self.setGeneration(module["name"], module["ref"].getGeneration())
+        # The watch reads what was just polled; its fault costs nothing else
+        try:
+            if self.watch:
+                self.watch.loadSample()
+        except Exception as e:
+            logger.warning("Watch load sample raised %s", type(e).__name__)
 
     def updateChargeAtHome(self):
         # checkCharge: each vehicle module with a provider not suppressed

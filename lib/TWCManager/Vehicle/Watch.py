@@ -12,7 +12,7 @@ import time
 from typing import Optional
 
 from .Presence import HOME, NEVER, _ble, _fix, _FT_PER_DEGREE, asleep, decide, lastLife
-from .Presence import AWAY_ASLEEP_SECS, HOME_ASLEEP_SECS, covered, presence
+from .Presence import AWAY_ASLEEP_SECS, HOME_ASLEEP_SECS, NOT_HOME, covered, presence
 from .Presence import twcVinAt
 from .Providers.Capability import READ_CHARGE, SET_AMPS
 from .Reconcile.Belief import standIn
@@ -28,7 +28,7 @@ DEFAULTS = dict(homeAsleepSecs=HOME_ASLEEP_SECS, awayAsleepSecs=AWAY_ASLEEP_SECS
 DEFAULTS.update(homeAwakeSecs=240)
 DEFAULTS.update(awayAwakeSecs=300, chargingReadSecs=300, cloudChargingReadSecs=900)
 DEFAULTS.update(scanAwaySecs=150, sleepCourtesySecs=1200, returnKph=120)
-DEFAULTS.update(monthlyBudgetUSD=3.0, enabled=True)
+DEFAULTS.update(monthlyBudgetUSD=3.0, enabled=True, emsTrigger=True, emsNoiseWatts=300)
 # A charging car is awake; a car of unknown state is asked as an awake one
 # away: until it answers, nothing says it cannot move
 _CADENCE_OF = {HOME_CHARGING: HOME_AWAKE, UNKNOWN: AWAY_AWAKE}
@@ -92,10 +92,30 @@ def lost(v, where) -> bool:
     return where != HOME and v.value("bleReach") is False
 
 
+class LoadStep:
+    # A rise or fall of at least the threshold, reported once the next sample
+    # holds it: a spike that falls back says nothing
+    def __init__(self, thresholdWatts: float):
+        self.threshold, self._base, self._held = thresholdWatts, None, None
+
+    def sample(self, watts: float) -> Optional[str]:
+        moved = watts - (watts if self._base is None else self._base)
+        step = None if abs(moved) < self.threshold else "up" if moved > 0 else "down"
+        held, self._held = self._held, None if step == self._held else step
+        if step is None or step == held:
+            self._base = watts
+        return step if step == held else None
+
+
 class Watch:
     def __init__(self, master, clock=time.time):
         self.master, self._clock = master, clock
         self._settings = settingsOf(master.config)
+        # The least a car draws, or the meter's noise; the step's state is the
+        # background-tasks thread's alone, where (vin, step) -> its last read
+        volts, n = master.getVoltageMeasurement()
+        least = max(self._settings["emsNoiseWatts"], (5 if n < 3 else 1) * volts * n)
+        self._step, self._triggered = LoadStep(least), {}
         # A leaf: never held across a registry or provider call, or a submit
         self._lock = threading.Lock()
         # (vin, job kind) queued or running, and its last answer and time,
@@ -157,6 +177,43 @@ class Watch:
         # Under the lock; an event outranks a routine ask
         was = self._want.get(vin, (cls, False))
         self._want[vin] = (EVENT if EVENT in (cls, was[0]) else cls, exempt or was[1])
+
+    def _watched(self):
+        for v in self.master.vehicleRegistry.vehicles():
+            if notWatched(self.master, v) is None:
+                where = presence(self.master, v)
+                yield v, where, situation(self.master, v, where)
+
+    def unexplainedWatts(self) -> float:
+        # Consumption less the charging known of, where the meter sees it
+        m = self.master
+        if not m.subtractChargerLoad:
+            return m.getConsumption()
+        gen3 = m.getModuleByName("Gen3TWCs")
+        amps = sum(u.currentAmps for u in (gen3.allEVSEs if gen3 else []))
+        for v, _, state in self._watched():
+            amps += (v.value("actualCurrent") or 0) if state == HOME_CHARGING else 0
+        return m.getConsumption() - m.getChargerLoad() - m.convertAmpsToWatts(amps)
+
+    def loadSample(self, now: Optional[float] = None) -> None:
+        # A step nothing known explains may be a car starting or ending a
+        # charge; a dryer looks the same, so it only asks for a read. With no
+        # meter, the known draw alone would step with every charge
+        if not (self._settings["emsTrigger"] and self.master.consumptionValues):
+            return
+        now = self._clock() if now is None else now
+        step = self._step.sample(self.unexplainedWatts())
+        maybe = (HOME_AWAKE, AWAY_AWAKE, UNKNOWN) if step == "up" else (HOME_CHARGING,)
+        for v, where, state in self._watched() if step else ():
+            # A car not home is asked only once it could be back. A rise reads
+            # a car once a courtesy window, so a cycling load never keeps it
+            # awake; a fall, once in five minutes
+            key, back = (v.vin, step), where == HOME or now >= self._backAt(v, now)
+            wait = self._settings["sleepCourtesySecs"] if step == "up" else 300
+            calm = now >= self._triggered.get(key, NEVER) + wait
+            if state in maybe and where != NOT_HOME and back and calm:
+                self._triggered[key] = now
+                self.readNow(v.vin, "load step " + step)
 
     def pass_(self, now: Optional[float] = None) -> None:
         now = self._clock() if now is None else now

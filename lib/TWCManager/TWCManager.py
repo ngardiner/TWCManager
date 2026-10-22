@@ -396,14 +396,7 @@ def background_tasks_thread(master):
 def check_green_energy():
     global config, master
 
-    # Poll all loaded EMS modules for consumption and generation values
-    for module in master.getModulesByType("EMS"):
-        master.setConsumption(module["name"], module["ref"].getConsumption())
-        if hasattr(module["ref"], "getConsumptionAmps"):
-            master.setConsumptionAmps(
-                module["name"], module["ref"].getConsumptionAmps()
-            )
-        master.setGeneration(module["name"], module["ref"].getGeneration())
+    master.pollEMS()
 
     # Set max amps iff charge_amps isn't specified on the policy.
     if master.getModuleByName("Policy").policyIsGreen():
