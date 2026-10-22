@@ -4,7 +4,10 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
 
-## v1.3.4 - 2026-04-15
+## v1.3.4 - 2026-10-23
+
+**Fleet API release. Removes the legacy PHP web interface (PHP2Shell)**
+
 * Features
     * Implement missing API endpoints: `setPolicy`, `setLatLon`, `setConsumptionOffset`
     * Add centralized API input validation (`APIValidator`) across all endpoints
@@ -17,6 +20,7 @@ This document logs the changes per release of TWCManager.
     * Remove Tesla Owner API login flow; FleetAPI, TeslaMate token sync, manual token entry and BLE remain the supported paths, with Owner API tokens used for reads, and for commands only to vehicles Tesla reports with `command_signing: off`
     * (@MikeBishop) - Saved Tesla tokens migrate to separate Owner and Fleet settings on first start; downgrading afterwards loses the Owner API token (#693)
 * Bugfixes
+    * Fix: Update check no longer fails on post-release version numbers
     * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
     * (@MikeBishop) - Fix: Import serial at module level in RS485 so SerialException handling and reconnect work (#674)
     * (@MikeBishop) - Fix: TeslaAPI error handlers no longer crash when a request never went out (#683)
