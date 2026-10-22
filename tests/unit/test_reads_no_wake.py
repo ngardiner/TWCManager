@@ -217,6 +217,7 @@ def test_teslable_provider_reads_through_the_module(tmp_path):
 
     master = FakeMaster(teslaControlPath="/fake/tesla-control")
     master.vehicleRegistry = VehicleRegistry({})
+    master.reconciler = Mock()  # takes the startup readiness check
     with patch.object(TeslaBLE, "pipeName", str(tmp_path / "ble_data")), patch(
         "TWCManager.Vehicle.TeslaBLE.os.path.isfile", return_value=True
     ), patch("TWCManager.Vehicle.TeslaBLE.os.access", return_value=True), patch.object(

@@ -1,6 +1,7 @@
 # tests/unit/test_teslable_pairing_status.py
 from unittest.mock import Mock, patch
 import threading
+import time
 import pytest
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
@@ -534,6 +535,8 @@ def scanner(**kw):
     ble.isDockerCached = False
     # A BLE worker that runs only when a test drains or starts it
     master.reconciler = VehicleReconciler(master)
+    # The readiness check found a powered adapter
+    ble._scanBlocked, ble._scanCheckAt = None, time.time()
     return ble, reg, master
 
 
@@ -585,27 +588,172 @@ def test_one_scan_answers_for_several_cars():
     assert ble.rangeStatus(VIN)["inRange"] is False
 
 
-def test_scan_unavailable_without_bluetoothctl():
+BT = "TWCManager.Vehicle.TeslaBLE.shutil.which"
+SHOW_READY = (b"Controller 00:1A:7D:DA:71:13 (public)\n\tPowered: yes\n", b"", 0)
+
+
+def checked(ble, show, which="/usr/bin/bluetoothctl", docker=False):
+    # One readiness check on the BLE worker, as canScan queues it
+    ble._scanCheckAt, ble.isDockerCached = None, docker
+    ble._run_command_with_timeout = Mock(return_value=show)
+    with patch(BT, return_value=which):
+        ble.canScan()  # queues the check; never runs it on the caller
+        ble._run_command_with_timeout.assert_not_called()
+        runPending(ble.master.reconciler.ble)
+        return ble.canScan()
+
+
+def test_docker_scans_through_dbus_without_nsenter():
     ble, reg, master = scanner()
-    ble._run_command_with_timeout = Mock()
-    with patch("TWCManager.Vehicle.TeslaBLE.shutil.which", return_value=None):
+    ble._scanBlocked = ""
+    assert checked(ble, SHOW_READY, docker=True) is True
+    ble._run_command_with_timeout.assert_called_once_with(["bluetoothctl", "show"], 5)
+    run = ble._run_command_with_timeout = Mock(return_value=(b"", b"", 0))
+    with patch(BT, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is False
+    assert run.call_args.args[0][0] == "bluetoothctl"
+
+
+@pytest.mark.parametrize(
+    "which, show, docker, reason",
+    [
+        (None, None, False, "bluetoothctl not installed (install the bluez package)"),
+        (
+            "/usr/bin/bluetoothctl",
+            (b"No default controller available\n", b"", 0),
+            False,
+            "no Bluetooth controller visible to bluetoothd",
+        ),
+        (
+            "/usr/bin/bluetoothctl",
+            (b"Controller 00:1A:7D:DA:71:13\n\tPowered: no\n", b"", 0),
+            True,
+            "Bluetooth adapter is powered off or blocked (rfkill)",
+        ),
+        (
+            "/usr/bin/bluetoothctl",
+            (None, None, None),
+            True,
+            "bluetoothctl cannot reach the host's bluetoothd (mount /run/dbus"
+            " and set DBUS_SYSTEM_BUS_ADDRESS)",
+        ),
+        (
+            "/usr/bin/bluetoothctl",
+            (b"Waiting to connect to bluetoothd...", b"", 1),
+            False,
+            "bluetoothd is not answering",
+        ),
+    ],
+)
+def test_each_reason_no_scan_is_possible(which, show, docker, reason):
+    ble, reg, master = scanner()
+    assert checked(ble, show, which, docker) is False
+    st = ble.bleStatus(VIN)
+    assert st["canScan"] is False and st["scanBlocked"] == reason
+    ble._run_command_with_timeout.reset_mock()
+    with patch(BT, return_value=which):
         assert ble.scanForVehicleInRange(VIN) is None
-        st = ble.bleStatus(VIN)
-        assert st["canScan"] is False and st["label"] == "Range unknown"
     ble._run_command_with_timeout.assert_not_called()
 
 
-def test_scan_unavailable_in_docker():  # ruling 7
+def test_warns_once_per_reason_and_recovers_once(caplog):
+    ble, reg, master = scanner()
+    ble._scanBlocked = ""
+    off = (b"\tPowered: no\n", b"", 0)
+    gone = (b"No default controller available\n", b"", 0)
+    with caplog.at_level("INFO"):
+        for show in (off, off, gone, gone, SHOW_READY, SHOW_READY, off):
+            checked(ble, show)
+    logs = [
+        (r.levelname, r.getMessage().split(";")[0])
+        for r in caplog.records
+        if "range scans" in r.getMessage()
+    ]
+    assert logs == [
+        ("WARNING", "BLE range scans unavailable: " + ble.SCAN_BLOCKERS[2][1]),
+        ("WARNING", "BLE range scans unavailable: " + ble.SCAN_BLOCKERS[0][1]),
+        ("INFO", "BLE range scans available again"),
+        ("WARNING", "BLE range scans unavailable: " + ble.SCAN_BLOCKERS[2][1]),
+    ]
+    assert "cars watched by the Tesla API" in caplog.text
+
+
+def test_a_failed_check_reruns_no_sooner_than_ten_minutes():
+    ble, reg, master = scanner()
+    checked(ble, (b"\tPowered: no\n", b"", 0))
+    submit = master.reconciler.submitJob = Mock(return_value=True)
+    start = ble._scanCheckAt
+    with patch("TWCManager.Vehicle.TeslaBLE.time.time", return_value=start + 599):
+        assert ble.canScan() is False
+    submit.assert_not_called()
+    with patch("TWCManager.Vehicle.TeslaBLE.time.time", return_value=start + 600):
+        assert ble.canScan() is False
+        assert ble.canScan() is False
+    assert submit.call_count == 1  # once per due check, however often asked
+
+
+@pytest.mark.parametrize(
+    "scan",
+    [(b"No default controller available\n", b"", 1), (None, None, None)],
+    ids=["no adapter", "timed out"],
+)
+def test_a_passed_check_is_not_rerun_until_a_scan_fails(scan):
+    ble, reg, master = scanner()
+    submit = master.reconciler.submitJob = Mock(return_value=True)
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.time.time", return_value=time.time() + 9999
+    ):
+        assert ble.canScan() is True
+    submit.assert_not_called()
+    ble._run_command_with_timeout = Mock(return_value=scan)
+    with patch(BT, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is None
+    ble.canScan()
+    submit.assert_called_once()
+
+
+def test_startup_queues_the_check():
+    ble, reg, master = make()
+    master.reconciler.submitJob.assert_called_once_with(
+        "radio", "check", ble._checkScan
+    )
+
+
+def test_a_scan_before_the_check_ran_checks_first():
+    ble, reg, master = scanner()
+    ble._scanBlocked = ""  # queued behind other work, not yet run
+    out = (b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n", b"", 0)
+    run = ble._run_command_with_timeout = Mock(side_effect=[SHOW_READY, out])
+    with patch(BT, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is True
+    assert run.call_args_list[0].args[0] == ["bluetoothctl", "show"]
+
+
+def test_an_unchecked_result_is_retried_after_ten_minutes():
+    # The queued check was dropped (worker stopped, queue overflow, raised)
+    ble, reg, master = scanner()
+    ble._scanBlocked = ""
+    submit = master.reconciler.submitJob = Mock(return_value=True)
+    start = ble._scanCheckAt
+    with patch("TWCManager.Vehicle.TeslaBLE.time.time", return_value=start + 599):
+        assert ble.canScan() is False
+    submit.assert_not_called()
+    with patch("TWCManager.Vehicle.TeslaBLE.time.time", return_value=start + 600):
+        assert ble.canScan() is False
+    submit.assert_called_once()
+
+
+def test_docker_tesla_control_runs_under_nsenter_in_its_own_group():
     ble, reg, master = scanner()
     ble.isDockerCached = True
-    ble._run_command_with_timeout = Mock()
-    with patch(
-        "TWCManager.Vehicle.TeslaBLE.shutil.which",
-        return_value="/usr/bin/bluetoothctl",
-    ):
-        assert ble.scanForVehicleInRange(VIN) is None
-        assert ble.bleStatus(VIN)["canScan"] is False
-    ble._run_command_with_timeout.assert_not_called()
+    with patch("TWCManager.Vehicle.TeslaBLE.subprocess.Popen") as popen:
+        popen.return_value.communicate.return_value = (b"", b"")
+        ble._run_command_with_timeout([ble.binaryPath, "-ble", "x"], 5)
+        ble._run_command_with_timeout(["bluetoothctl", "show"], 5)
+    (tc, _), (bt, _) = [(c.args[0], c) for c in popen.call_args_list]
+    assert tc == ["nsenter", "--net=/rootns/net", ble.binaryPath, "-ble", "x"]
+    assert bt == ["bluetoothctl", "show"]
+    assert all(c.kwargs["preexec_fn"] is not None for c in popen.call_args_list)
 
 
 def test_never_scanned_is_range_unknown():

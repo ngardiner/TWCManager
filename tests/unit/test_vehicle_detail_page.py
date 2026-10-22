@@ -71,6 +71,16 @@ def test_scan_pending_and_no_bluetoothctl():
     assert 'value="scan"' not in html
 
 
+def test_the_reason_no_scan_is_possible_replaces_the_button():
+    m = master()
+    m.modules = {"TeslaBLE": object()}
+    reason = "Bluetooth adapter is powered off or blocked (rfkill)"
+    html = render(m, status(canScan=False, scanBlocked=reason))
+    assert "No range scan: " + reason in html and 'value="scan"' not in html
+    html = render(m, status(scanBlocked=None))
+    assert "No range scan" not in html and "Scan for vehicle" in html
+
+
 def test_repair_button_and_since_and_attempt_message_escaped():
     m = master()
     m.modules = {"TeslaBLE": object()}

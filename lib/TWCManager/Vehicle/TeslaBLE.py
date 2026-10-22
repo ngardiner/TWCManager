@@ -75,6 +75,17 @@ class TeslaBLE:
     SCAN_PENDING_MAX = 120
     # A request for a car scanned (or being scanned) this recently is ignored.
     SCAN_DEBOUNCE = 10
+    # A failed scan readiness check is run again after this long.
+    SCAN_RECHECK = 600
+    # bluetoothctl show output: why no range scan is possible (None: one is)
+    SCAN_BLOCKERS = (
+        ("No default controller", "no Bluetooth controller visible to bluetoothd"),
+        ("Powered: yes", None),
+        ("Powered: no", "Bluetooth adapter is powered off or blocked (rfkill)"),
+    )
+    SILENT = "bluetoothd is not answering"
+    # Blockers in the radio itself, which stop tesla-control's pings too
+    RADIO_DOWN = frozenset({SCAN_BLOCKERS[0][1], SCAN_BLOCKERS[2][1], SILENT})
     # bluetoothctl output meaning the scan never ran (no adapter, bluetoothd
     # down, discovery refused); compared case-insensitively.
     SCAN_ERROR_TEXT = (
@@ -102,6 +113,8 @@ class TeslaBLE:
         # VINs the BLE worker is scanning; same lock.
         self._scanInProgress = set()
         self._scanLock = threading.Lock()
+        # Why no range scan is possible (None: one is); when last checked
+        self._scanBlocked, self._scanCheckAt = "", None
         # How this thread's last _sendCommand_internal failed: .refused on a
         # key refusal, .transient on a timeout or connection error (the only
         # failure sendCommand retries).
@@ -162,6 +175,7 @@ class TeslaBLE:
             return
         else:
             logger.info(f"tesla-control binary found at: {self.binaryPath}")
+        self.canScan()  # the readiness check, first on the BLE worker
 
     def providers(self):
         return [TeslaBLEProvider(self, self.master)]
@@ -770,7 +784,8 @@ class TeslaBLE:
         try:
             if self.isDocker() and command_string[0] == self.binaryPath:
                 # tesla-control opens the adapter in the host's network
-                # namespace; each word is its own argument (no shell)
+                # namespace; each word is its own argument (no shell).
+                # bluetoothctl needs none (it talks D-Bus)
                 command_string = ["nsenter", "--net=/rootns/net"] + command_string
             preexec_fn = None
             if use_process_group:
@@ -1016,6 +1031,7 @@ class TeslaBLE:
                 ),
                 "scanPending": rng["pending"],
                 "canScan": canScan,
+                "scanBlocked": self._scanBlocked,
                 "attempt": attempt,
             }
         )
@@ -1036,23 +1052,67 @@ class TeslaBLE:
         return "S" + digest[:16] + "C"
 
     def canScan(self):
-        return not self.isDocker() and shutil.which("bluetoothctl") is not None
+        # Cached, so cheap on the control tick; a check due runs on the worker
+        with self._scanLock:
+            at, blocked = self._scanCheckAt, self._scanBlocked
+            due = (
+                at is None
+                or blocked is not None
+                and time.time() - at >= self.SCAN_RECHECK
+            )
+            if due:
+                self._scanCheckAt = time.time()
+        if due:
+            self.master.reconciler.submitJob("radio", "check", self._checkScan)
+        return blocked is None
+
+    def radioUp(self):
+        # Whether pings can run: a missing or unreachable bluetoothctl stops
+        # only scans
+        self.canScan()
+        return self._scanBlocked not in self.RADIO_DOWN
+
+    def _checkScan(self):
+        # bluetoothctl reaches bluetoothd over D-Bus (in Docker, the host's
+        # through the mounted /run/dbus), so it needs no nsenter
+        if not shutil.which("bluetoothctl"):
+            reason = "bluetoothctl not installed (install the bluez package)"
+        else:
+            out, err, _ = self._run_command_with_timeout(["bluetoothctl", "show"], 5)
+            text = self._stripAnsi(out) + self._stripAnsi(err)
+            silent = (
+                "bluetoothctl cannot reach the host's bluetoothd (mount /run/dbus"
+                " and set DBUS_SYSTEM_BUS_ADDRESS)"
+                if self.isDocker()
+                else self.SILENT
+            )
+            reason = next((r for t, r in self.SCAN_BLOCKERS if t in text), silent)
+        with self._scanLock:
+            self._scanBlocked, was = reason, self._scanBlocked
+        if reason and reason != was:
+            how = "the Tesla API" if reason in self.RADIO_DOWN else "pings alone"
+            logger.warning(
+                "BLE range scans unavailable: %s; cars watched by %s", reason, how
+            )
+        elif reason is None and was:
+            logger.info("BLE range scans available again")
 
     @_serialized
     def scanForVehicleInRange(self, vins):
         """Scan for the advertisements of vins, one VIN or several; the radio
         hears every car, so a registry car not asked for is recorded when
         heard, never as missed. True if an asked car is in range, False if
-        none is, or None when no scan is possible (Docker or no bluetoothctl)
+        none is, or None when no scan is possible (see canScan)
         or it gave no answer (timed out, failed, or BlueZ reported an error)."""
         vins = [vins] if isinstance(vins, str) else vins
         asked = {v.upper() for v in vins if isinstance(v, str) and isWellFormedVIN(v)}
+        if self._scanBlocked == "" and asked:
+            self._checkScan()  # unchecked yet: this is the worker, check now
         if not asked or not self.canScan():
             return None
         stdout, stderr, code = self._run_command_with_timeout(
             ["bluetoothctl", "--timeout", str(self.SCAN_SECONDS), "scan", "on"],
             timeout=self.SCAN_SECONDS + 4,
-            use_process_group=True,
         )
         # [DEL] lines report BlueZ forgetting a device it no longer hears;
         # they carry the cached name and address, so they say nothing here.
@@ -1076,6 +1136,9 @@ class TeslaBLE:
                 # A match above wins whatever the exit code; without one, a
                 # failed run says nothing about the car.
                 failure = f"bluetoothctl exited {code}"
+        if failure in ("timed out", "bluetoothctl reported an error"):
+            with self._scanLock:
+                self._scanCheckAt = None  # the adapter or bluetoothd may have gone
         heard = self._heardAddresses(lines) if asked - found else None
         if heard and failure is None:
             # BlueZ prints a device's name only when it learns it; a car it

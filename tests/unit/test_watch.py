@@ -625,3 +625,25 @@ def test_a_failed_read_of_an_api_only_car_away_waits_a_window(requests_mock):
     requests_mock.get(FLEET + VIN + "/vehicle_data", status_code=500, json={})
     w = Watch(m, clock=c); w.pass_()
     assert readsAt(requests_mock, m, v, c, w, r, c.t + 3500) == [1200, 1500, 2700, 3000]   # each window, and its retry
+
+def deadRadio(m, reason):
+    # The radio's readiness check found reason
+    b = m.providerOrder.provider("TeslaBLE").module; b.canScan = lambda: False; b._scanBlocked = reason
+    return b
+
+def test_with_the_radio_down_a_ble_install_follows_the_api_rule_until_it_returns(requests_mock):
+    m, r, v, c = setup(here=False, ble=True); car = FleetCar(requests_mock, state="online", at=HOME); attachFleet(m, v, car)
+    placeAt(m, v, HOME); b = deadRadio(m, "no Bluetooth controller visible to bluetoothd"); pings = bleAnswers(m, answer=None)
+    w = Watch(m, clock=c); w.pass_(); runPending(r.cloud)
+    assert readsAt(requests_mock, m, v, c, w, r, c.t + 1300, 240) == [1200]   # the courtesy window's read
+    assert pings.count == 0 and counts(requests_mock)["free"] >= 5 and w.status(v)["via"] == "cloud"
+    b._scanBlocked = None; pings = bleAnswers(m, asleep=False); n = len(requests_mock.request_history)
+    for _ in range(10): later(m, v, c, 240); w.pass_(); runPending(r.ble); runPending(r.cloud)
+    assert pings.count > 0 and len(requests_mock.request_history) == n and w.status(v)["via"] == "ble"
+
+def test_with_no_bluetoothctl_a_lost_car_is_pinged_and_the_cloud_never_asked(requests_mock):
+    m, r, v, c = setup(here=False, ble=True); attachFleet(m, v, FleetCar(requests_mock, state="online", at=AWAY))
+    lostAway(m, v, c); deadRadio(m, "bluetoothctl not installed (install the bluez package)")
+    pings = bleAnswers(m, answer=None); w = Watch(m, clock=c)
+    for _ in range(40): later(m, v, c, 150); w.pass_(); runPending(r.ble); runPending(r.cloud)
+    assert pings.count > 1 and requests_mock.request_history == [] and w.status(v)["via"] == "ble"

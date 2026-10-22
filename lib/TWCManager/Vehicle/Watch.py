@@ -58,8 +58,9 @@ def notWatched(master, v) -> Optional[str]:
 
 
 def radio(master):
-    # The BLE module, whose pings ask first
-    return _ble(master)
+    # The BLE module while its pings can run
+    ble = _ble(master)
+    return ble if getattr(ble, "radioUp", bool)() else None
 
 
 def cloudOnly(master, v) -> bool:

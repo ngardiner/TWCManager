@@ -1406,6 +1406,8 @@ def test_a_car_lost_to_ble_is_named_on_its_plug_edge_by_one_scan(monkeypatch):
     m.getModuleByName = lambda name: b if name == "TeslaBLE" else None
 
     def bluetoothctl(cmd, timeout, use_process_group=True):
+        if cmd[-1] == "show":  # the scan's readiness check: a powered adapter
+            return (b"Controller 00:1A:7D:DA:71:13 (public)\n\tPowered: yes\n", b"", 0)
         scans.append(cmd[-2:])
         return (
             b"[NEW] Device AA:BB:CC:DD:EE:FF " + b.bleLocalName(VIN).encode(),
