@@ -51,6 +51,7 @@ This release maintains support for Tesla Owner API (owner-api.teslamotors.com) w
     * Refactor maxAmpsToDivideFromGrid to global configuration parameter
     * Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
+    * Remove the legacy PHP web interface (PHP2Shell, CVE-2026-109618/CVE-2026-109619); use the built-in web interface
     * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
     * (@MikeBishop) - Fix: Import serial at module level in RS485 so SerialException handling and reconnect work (#685)
     * (@MikeBishop) - Fix: TeslaAPI error handlers no longer crash when a request never went out (#684)
