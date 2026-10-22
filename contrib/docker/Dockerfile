@@ -1,5 +1,7 @@
 FROM debian:bookworm
 RUN apt-get -y update && apt-get -y install build-essential ca-certificates gfortran git libatlas-base-dev libcap2-bin lsb-release make python3 python3-pip util-linux wget
+# The 1.3.x Makefile predates PEP 668 support; let pip install into the system Python
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ARG TWC_REF=main
 RUN cd /usr/src && git clone --branch ${TWC_REF} https://github.com/ngardiner/TWCManager
 
