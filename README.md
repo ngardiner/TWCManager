@@ -46,7 +46,7 @@ To enable TWCManager to gather the solar generation information that it requires
 | [HTTPControl](docs/modules/Control_HTTP.md) | Allows control via embedded HTTP server (with RESTful API interface) |
 | [MQTTControl](docs/modules/Control_MQTT.md) | Allows control via MQTT |
 | [OCPPControl](docs/modules/Control_OCPP.md) | Allows integration with [OCPP](https://pypi.org/project/ocpp/) |
-| [WebIPCControl](docs/modules/Control_WebIPC.md) | Allows control via PHP scripts (sysv IPC) |
+| [WebIPCControl](docs/modules/Control_WebIPC.md) | Allows control via external scripts (sysv IPC) |
 
 ### EMS Interfaces
 

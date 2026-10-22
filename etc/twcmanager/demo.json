@@ -181,8 +181,8 @@
         # experimenting:
         #   Set fakeMaster = 0 to fake being a TWC Slave instead of Master.
         #   Set fakeMaster = 2 to display received RS-485 messages but not send any
-        #                      unless you use the debugging web interface
-        #                      (index.php?debugTWC=1) to send messages.
+        #                      unless you send them from the Debug page of the
+        #                      web interface.
         "fakeMaster": 1
     },
 
