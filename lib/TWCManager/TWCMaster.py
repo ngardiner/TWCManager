@@ -11,6 +11,7 @@ import threading
 import time
 import math
 import random
+import re
 import requests
 import bisect
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -73,7 +74,7 @@ class TWCMaster:
     teslaLoginAskLater = False
     TWCID = None
     updateVersion = False
-    version = "1.3.4"
+    version = "1.3.3.post1"
 
     # TWCs send a seemingly-random byte after their 2-byte TWC id in a number of
     # messages. I call this byte their "Sign" for lack of a better term. The byte
@@ -189,8 +190,8 @@ class TWCMaster:
             if pkgInfo and pkgInfo.get("info", {}).get("version", None):
                 if pkgInfo["info"]["version"] != self.version:
                     # Versions don't match. Let's make sure the new one really is newer
-                    current_arr = [int(v) for v in self.version.split(".")]
-                    avail_arr = [int(v) for v in pkgInfo["info"]["version"].split(".")]
+                    current_arr = self._versionParts(self.version)
+                    avail_arr = self._versionParts(pkgInfo["info"]["version"])
                     for i in range(max(len(current_arr), len(avail_arr))):
                         v1 = current_arr[i] if i < len(current_arr) else 0
                         v2 = avail_arr[i] if i < len(avail_arr) else 0
@@ -206,6 +207,12 @@ class TWCMaster:
                             break
 
         return self.updateVersion
+
+    @staticmethod
+    def _versionParts(version):
+        # "1.3.3.post1" -> [1, 3, 3, 1], so a post-release sorts between its
+        # base release and the next one
+        return [int(p) for p in re.findall(r"\d+", version)]
 
     def checkModuleCapability(self, type, capability):
         # For modules which advertise capabilities, scan all loaded modules of a certain type and

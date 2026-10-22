@@ -26,6 +26,28 @@ This document logs the changes per release of TWCManager.
     * Fix: Protocol module type handling for `CustomCommand`
     * Update Docker documentation for Compose V2 and modern Raspberry Pi OS
 
+## v1.3.3.post1 - 2026-10-23
+
+**Security and bugfix release for the Owner API line**
+
+* Security
+    * Remove the legacy PHP web interface (PHP2Shell, CVE-2026-109618/CVE-2026-109619); use the built-in web interface
+* Bugfixes
+    * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
+    * (@MikeBishop) - Fix: Import serial at module level in RS485 so SerialException handling and reconnect work (#685)
+    * (@MikeBishop) - Fix: TeslaAPI error handlers no longer crash when a request never went out (#684)
+    * (@MikeBishop) - Fix: TeslaMate telemetry now attaches to the API vehicle when BLE handles all commands (#678)
+    * (@MikeBishop) - Evaluate charging policy on its own thread instead of the RS485 loop, only when acting as master (#686)
+    * (@MikeBishop) - Fix: TeslaMate token sync now accepts resyncs and reads tokens from current TeslaMate versions (#681)
+    * Fix: Cancel a pending stop-charging command when charging should continue (closes #667)
+    * Fix: Send at most one charge start/stop command per vehicle per minute, so a refused stop is no longer retried every loop
+    * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
+    * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
+    * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
+    * Fix: Update check no longer fails on post-release version numbers
+* Architecture
+    * Move Docker image to Debian bookworm
+
 ## v1.3.3 - 2026-06-13
 
 **Maintenance release with Tesla Owner API support and TLS 1.3 enforcement**
@@ -51,18 +73,6 @@ This release maintains support for Tesla Owner API (owner-api.teslamotors.com) w
     * Refactor maxAmpsToDivideFromGrid to global configuration parameter
     * Add Charge Now duration display with remaining minutes and current amps in web UI
 * Bugfixes
-    * Remove the legacy PHP web interface (PHP2Shell, CVE-2026-109618/CVE-2026-109619); use the built-in web interface
-    * (@MikeBishop) - Fix: Resend charge amps while a slave is stuck in state 08 at minimum rate (#669)
-    * (@MikeBishop) - Fix: Import serial at module level in RS485 so SerialException handling and reconnect work (#685)
-    * (@MikeBishop) - Fix: TeslaAPI error handlers no longer crash when a request never went out (#684)
-    * (@MikeBishop) - Fix: TeslaMate telemetry now attaches to the API vehicle when BLE handles all commands (#678)
-    * (@MikeBishop) - Evaluate charging policy on its own thread instead of the RS485 loop, only when acting as master (#686)
-    * (@MikeBishop) - Fix: TeslaMate token sync now accepts resyncs and reads tokens from current TeslaMate versions (#681)
-    * Fix: Cancel a pending stop-charging command when charging should continue (closes #667)
-    * Fix: Send at most one charge start/stop command per vehicle per minute, so a refused stop is no longer retried every loop
-    * Fix: Remove post-command ping from TeslaBLE charge control; command success is sufficient proof of BLE connectivity (closes #650)
-    * Fix: Treat Tesla BLE idempotent-success responses as success in parseCommandOutput (closes #649)
-    * Fix: Remove cryptography<3.4 upper bound; modern versions ship binary wheels and the Rust build requirement is no longer a concern (closes #647)
     * Explicitly request drive_state data to fix apparent issue with older models, and remove endpoints that are not used
     * Specify access scope for token refresh
     * Fix typo in log levels

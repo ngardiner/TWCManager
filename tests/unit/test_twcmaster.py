@@ -34,7 +34,7 @@ class TestTWCMasterInitialization:
         
         assert master.TWCID == "AB"
         assert master.config == mock_config
-        assert master.version == "1.3.4"
+        assert master.version == "1.3.3.post1"
     
     def test_master_default_settings(self, mock_config):
         """Test master has default settings."""
