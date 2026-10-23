@@ -3,6 +3,7 @@
 # layer reads known() from here without the reconciler thread.
 from typing import Optional
 
+from ..Registry.Fields import FEED_LAG
 from ..Presence import NOT_HOME, pluggedNow, presence
 from .Desired import AMPS, CHARGE_LIMIT, CHARGING, FIELD_FOR
 from .Rules import releases, VEHICLE_SOURCES_EXCLUDED
@@ -49,14 +50,21 @@ def uncompleted(vehicle, obs):
     return obs._replace(value="Stopped") if raised else obs
 
 
-def known(vehicle, aspect):
+def known(vehicle, aspect, desired=None):
     obs = vehicle.believed(FIELD_FOR[aspect], exclude=VEHICLE_SOURCES_EXCLUDED)
-    if aspect == CHARGING:
-        obs = uncompleted(vehicle, obs)
-    if obs is None and aspect == CHARGING:
+    if aspect != CHARGING:
+        return obs
+    obs, twc = uncompleted(vehicle, obs), _standIn(vehicle)
+    if obs is None:
         # A car no vehicle source describes (anonymous, non-Tesla): the TWC
         # current stands in. It never adopts
-        return _standIn(vehicle)
+        return twc
+    # For a start, current at the car's TWC now (a heartbeat within
+    # FEED_LAG) and since its last reading is the car charging: without a
+    # live feed that reading may be stale
+    fresh = twc and twc.at > max(obs.at, vehicle._clock() - FEED_LAG)
+    if desired is True and fresh and twc.value == "Charging":
+        return twc
     return obs
 
 

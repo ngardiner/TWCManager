@@ -239,7 +239,7 @@ class VehicleReconciler(threading.Thread):
         if waiting and (vehicle.lastObservedAt <= rec.heldAt or driving):
             # Held: only newer evidence (or a new desire) plans it again
             return None
-        k = B.known(vehicle, aspect)
+        k = B.known(vehicle, aspect, d.value)
         if d.lift and (rec.settledAt is not None or R.satisfied(AMPS, d.value, k)):
             # A lift is a one-shot desire: done once it settles
             self.desired.clearIf(key, AMPS, d.value)
@@ -442,7 +442,7 @@ class VehicleReconciler(threading.Thread):
 
     def _startWanted(self, vehicle, config) -> bool:
         start = self.desired.get(vehicle.key, CHARGING)
-        k = B.known(vehicle, CHARGING)
+        k = B.known(vehicle, CHARGING, True)
         return (
             start is not None
             and start.value is True

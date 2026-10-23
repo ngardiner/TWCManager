@@ -111,7 +111,7 @@ def pendingCommands(master, vehicle):
                 sourceName(sent.provider),
                 ageText(now - sent.since),
             )
-        elif satisfied(aspect, d.value, known(vehicle, aspect)) or (
+        elif satisfied(aspect, d.value, known(vehicle, aspect, d.value)) or (
             # Settled, the reconciler waits for a reading saying otherwise
             rec.settledAt is not None
             and not newerReading(vehicle, aspect, rec.settledAt)

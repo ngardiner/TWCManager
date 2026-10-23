@@ -1121,6 +1121,56 @@ def test_telemetry_rearm_on_a_start_is_once_per_desire(requests_mock):  # Task 1
     )  # within the cap of 4
 
 
+def staleStopped(requests_mock, **car):
+    # Fleet-only, no feed: the car's last chargingState is a 10-minute-old
+    # "Stopped"
+    m, r, v, c, api = install(fleet=True)
+    FleetCar(requests_mock, state="online", **car)
+    for field, value in (
+        ("chargingState", "Stopped"),
+        ("chargeLimit", 80),
+        ("batteryLevel", 40),
+    ):
+        v.observe(field, value, "FleetAPI", at=c() - 600)
+    return m, r, v, c
+
+
+@pytest.mark.parametrize("drawing", ["live", "stale", None])
+def test_fleet_only_start_no_retry_while_the_twc_draws(requests_mock, drawing):
+    # The start is not accepted (the car started itself when its limit
+    # rose), and the car's TWC then measures 48 A: that is the car charging,
+    # so no retry goes out. A TWC reading that stops coming goes stale and
+    # the retry goes, as it does with no current at all
+    m, r, v, c = staleStopped(requests_mock, script=[(200, False, "")])
+    seen = []
+
+    def each():
+        m.startCarsCharging(VIN)
+        if drawing and commands(requests_mock) and not (drawing == "stale" and seen):
+            seen.append(v.observe("actualCurrent", 48, "Gen2TWC", seen=False))
+
+    m.startCarsCharging(VIN)
+    passes(r, c, 3600, step=5, each=each)
+    starts = commands(requests_mock).count("charge_start")
+    want = 1 if drawing == "live" else 2
+    assert starts == want and paid(requests_mock) == (1, 0, starts)
+
+
+@pytest.mark.parametrize("drawing", [True, False])
+def test_fleet_only_stop_is_the_same_while_the_twc_draws(requests_mock, drawing):
+    # A stop plans on the car's own reading: current at its TWC changes nothing
+    m, r, v, c = staleStopped(requests_mock, charging="Charging")
+
+    def each():
+        m.stopCarsCharging(VIN)
+        if drawing:
+            v.observe("actualCurrent", 48, "Gen2TWC", seen=False)
+
+    passes(r, c, 600, step=5, each=each)
+    # The stale "Stopped" settles it either way
+    assert commands(requests_mock) == [] and paid(requests_mock) == (0, 0, 0)
+
+
 # Row 21 (slim Task 12b M3): chargeRateControl 2, a rate Fleet cannot deliver
 
 
