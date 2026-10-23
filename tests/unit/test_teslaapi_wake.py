@@ -230,9 +230,10 @@ def test_state_check_with_both_tokens_is_a_state_get(clock, requests_mock):
     clock.advance(120)
     assert p.wake(VIN) == HELD
 
-    # Only the free state GET (on either account), never vehicle_data.
+    # Only the free state GET (on either account), never vehicle_data: two
+    # checks, and the polls after the wake
     gets = [r for r in requests_mock.request_history if r.method == "GET"]
-    assert len(gets) == 3
+    assert len(gets) == 3 + a.WAKE_POLLS
     assert all(r.url in (STATE_URL, OWNER_API_URL + "/" + VIN) for r in gets)
 
 
@@ -310,3 +311,84 @@ def test_stale_telemetry_asleep_falls_through_to_get(
     car_state.value = "online"
     assert _awake(api) is True
     assert _gets(requests_mock) == 1
+
+
+def _poll_sleeps(monkeypatch, clock, car_state, online_after=None):
+    # time.sleep advances the test clock; the car connects during the
+    # online_after-th sleep. Returns the list of sleeps taken
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+
+    sleeps = []
+
+    def sleep(secs):
+        sleeps.append(secs)
+        clock.advance(secs)
+        if online_after is not None and len(sleeps) >= online_after:
+            car_state.value = "online"
+
+    monkeypatch.setattr(teslaapi.time, "sleep", sleep)
+    return sleeps
+
+
+def test_offline_wake_answer_then_online_is_done(
+    api, fleet, clock, car_state, requests_mock, monkeypatch
+):
+    # wake_up answers the state at that moment ('offline'); the car connects
+    # seconds later, and the free check after it finds the car online
+    assert fleet.wake(VIN) == HELD
+    clock.advance(api.wakeDelayMins * 60)
+    gets = _gets(requests_mock)
+    _poll_sleeps(monkeypatch, clock, car_state, online_after=2)
+    assert fleet.wake(VIN) == O.Outcome(O.DONE)
+    assert _wakes(requests_mock) == 1
+    assert _gets(requests_mock) - gets == 1 + 2  # the pre-wake check, two polls
+    car = _car(api)
+    assert car.delayNextWakeAttempt == 0 and car.firstWakeAttemptTime == 0
+    assert car.online is True
+    # Cached from the poll that found it online, before the 5 s settle
+    assert car.onlineCheckedAt == clock.now - 5
+    assert _no_vehicle_data(requests_mock)
+
+
+def test_wake_that_never_comes_online_fails_after_bounded_polls(
+    api, fleet, clock, car_state, requests_mock, monkeypatch
+):
+    assert fleet.wake(VIN) == HELD
+    clock.advance(api.wakeDelayMins * 60)
+    gets = _gets(requests_mock)
+    sleeps = _poll_sleeps(monkeypatch, clock, car_state)
+    assert fleet.wake(VIN) == O.Outcome(O.UNREACHABLE, "offline")
+    assert _wakes(requests_mock) == 1
+    polls = _gets(requests_mock) - gets - 1
+    assert polls == len(sleeps) and 0 < sum(sleeps) <= 60
+    assert _car(api).delayNextWakeAttempt == 30 * 60
+    # The back-off holds the next wake_up
+    clock.advance(60)
+    assert fleet.wake(VIN) == HELD
+    assert _wakes(requests_mock) == 1
+    assert _no_vehicle_data(requests_mock)
+
+
+def test_slow_polls_stop_at_the_deadline(
+    api, fleet, clock, car_state, requests_mock, monkeypatch
+):
+    # Each poll takes 20 s (a slow or retried GET): the polls stop once
+    # about 45 s have passed, not after a fixed count
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+
+    monkeypatch.setattr(teslaapi.time, "monotonic", clock)
+    assert fleet.wake(VIN) == HELD
+    clock.advance(api.wakeDelayMins * 60)
+    gets = _gets(requests_mock)
+    _poll_sleeps(monkeypatch, clock, car_state)
+    requests_mock.get(
+        STATE_URL,
+        json=lambda req, ctx: (
+            clock.advance(15),
+            {"response": {"state": "asleep", "vin": VIN}},
+        )[1],
+    )
+    assert fleet.wake(VIN) == O.Outcome(O.UNREACHABLE, "offline")
+    polls = _gets(requests_mock) - gets - 1
+    assert polls == 3  # at +20, +40 and +60 s; none after the 45 s deadline
+    assert _wakes(requests_mock) == 1

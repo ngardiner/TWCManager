@@ -93,6 +93,11 @@ class TeslaAPI:
     COMMAND_UNREACHABLE_REASONS = ("could_not_wake_buses", "vehicle_unavailable")
     # Seconds between failed wake_up attempts on one car (a wake is $0.02)
     WAKE_RETRY_SECONDS = 30 * 60
+    # After a wake_up that answered asleep/offline/waking, the free online
+    # check every WAKE_POLL_SECONDS, at most WAKE_POLLS times and for at most
+    # their product in seconds (a slow GET retries), before it has failed
+    WAKE_POLL_SECONDS = 5
+    WAKE_POLLS = 9
     regionURL = {
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
@@ -1576,12 +1581,23 @@ class TeslaAPI:
             state = response.get("state", "")
             if not isinstance(state, str):
                 state = "error"
+        if state in ("asleep", "waking", "offline"):
+            # wake_up answers the state at that moment; the car connects
+            # seconds later. Blocking ~45 s is fine: this is the cloud worker
+            deadline = time.monotonic() + self.WAKE_POLLS * self.WAKE_POLL_SECONDS
+            for _ in range(self.WAKE_POLLS):
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(self.WAKE_POLL_SECONDS)
+                if self.onlineState(vehicle, slot=checkSlot, maxAge=0):
+                    state = "online"
+                    break
         if state == "online":
             self.resetCarApiLastErrorTime()
             self._wakeSettled(car)
-            # The wake's answer replaces the cached "asleep": the read that
-            # follows it goes out
-            car.online, car.onlineCheckedAt = True, now
+            # The wake's or a poll's answer replaces the cached "asleep": the
+            # read that follows it goes out
+            car.online, car.onlineCheckedAt = True, max(now, car.onlineCheckedAt)
             # A command sent at once after a wake can fail with
             # could_not_wake_buses; let the car settle
             time.sleep(5)
@@ -1712,7 +1728,7 @@ class TeslaAPI:
         )
         return False
 
-    def onlineState(self, vehicle, slot=None, now=None) -> Optional[bool]:
+    def onlineState(self, vehicle, slot=None, now=None, maxAge=120) -> Optional[bool]:
         # True or False when an answer (a sync source or the free
         # vehicles/{vin}) says so; None when nothing answered. Free sources
         # only, never vehicle_data. The newest observation wins: telemetry
@@ -1720,8 +1736,8 @@ class TeslaAPI:
         # state GET; otherwise use that GET's cached result or GET again.
         # Fresh is the registry's age, so a live feed keeps an old reading
         # fresh; it still loses to a state GET made after it. now (default:
-        # the module's clock) measures the 120 s cache, so a caller on a
-        # test clock drives it
+        # the module's clock) measures the maxAge-second cache, so a caller
+        # on a test clock drives it
         car = vehicle.attachment("TeslaAPI")
         now = self.now() if now is None else now
         obs, age = vehicle.telemetryState()
@@ -1732,8 +1748,9 @@ class TeslaAPI:
         ):
             return obs.value in ("online", "charging", "updating", "driving")
 
-        # Don't check more often than every 2 minutes
-        if now - car.onlineCheckedAt < 120 and car.onlineCheckedAt >= car.staleBefore:
+        # Not more often than maxAge (120 s by default)
+        age = now - car.onlineCheckedAt
+        if age < maxAge and car.onlineCheckedAt >= car.staleBefore:
             return car.online
         result, response = self.get_car_api(
             vehicle, vehicle.vin, checkReady=False, slot=slot

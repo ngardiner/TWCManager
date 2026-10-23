@@ -352,6 +352,36 @@ def test_fleet_only_car_online_after_an_offline_wake_gets_the_limit(requests_moc
     assert m.desired.record(VIN, CHARGE_LIMIT).paidSends == 2  # the wake, the send
 
 
+def test_fleet_only_car_online_seconds_after_an_offline_wake_gets_the_limit(
+    requests_mock, monkeypatch
+):
+    # wake_up answers offline and the car connects seconds later: the polls
+    # after the wake find it, and the limit goes out in the same pass
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    car = FleetCar(requests_mock, limit=50)
+    requests_mock.post(
+        FLEET + VIN + "/wake_up", json={"response": {"state": "offline"}}
+    )
+    sleeps = []
+
+    def sleep(secs):
+        sleeps.append(secs)
+        if len(sleeps) == 2:
+            car.state = "online"
+
+    monkeypatch.setattr(teslaapi.time, "sleep", sleep)
+    r.pass_()
+    assert wakeUps(requests_mock) == 1
+    assert commands(requests_mock) == ["set_charge_limit"]
+    passes(r, c, 3600)
+    assert paid(requests_mock) == (0, 1, 1)  # one wake, no second
+    assert car.charge["charge_limit_soc"] == 80
+
+
 def wakeTimes(requests_mock, c, also=lambda: None):
     # A want() for offlineWake that records when each wake_up went out
     times = []
@@ -431,8 +461,9 @@ def test_fleet_only_car_never_online_after_an_offline_wake(requests_mock, start,
     assert paid(requests_mock) == (0, wakes, 0) and counts(requests_mock)["other"] == 0
     assert all(b - a > 1800 for a, b in zip(times, times[1:]))
     # Only free checks between: one per WAKE_CHECK while a follow-up is due
-    # (47 and 94 measured)
-    assert counts(requests_mock)["free"] <= (50 if not start else 100)
+    # (47 and 94 measured), and the polls after each wake
+    free = counts(requests_mock)["free"]
+    assert free <= (50 if not start else 100) + wakes * api.WAKE_POLLS
 
 
 def test_every_billed_wake_holds_the_next(requests_mock):
