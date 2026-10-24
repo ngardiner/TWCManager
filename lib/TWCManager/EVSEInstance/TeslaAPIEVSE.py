@@ -78,18 +78,21 @@ class TeslaAPIEVSE(EVSEInstance):
 
     @property
     def currentAmps(self) -> float:
-        return self.vehicle.actualCurrent
+        # The Fleet API reports charger_actual_current as null while the
+        # vehicle is unplugged.
+        return self.vehicle.actualCurrent or 0
 
     @property
     def currentVoltage(self) -> list:
         """Per-phase voltage [A, B, C].
 
-        Falls back to the configured default when the API reports an
-        implausibly low value (< 90 V) — this happens when the vehicle is
-        asleep or before the first vehicle_data poll completes.
+        Falls back to the configured default when the API reports no voltage
+        (null while the vehicle is unplugged) or an implausibly low value
+        (< 90 V) — this happens when the vehicle is asleep or before the
+        first vehicle_data poll completes.
         """
         voltage = self.vehicle.voltage
-        if voltage < 90:
+        if not voltage or voltage < 90:
             voltage = self.configConfig.get("defaultVoltage", 240)
         phases = self.vehicle.phases or self.configConfig.get("numberOfPhases", 1)
         return [
