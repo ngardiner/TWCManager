@@ -8,6 +8,7 @@ This document logs the changes per release of TWCManager.
 
 * Bugfixes
     * Fix: Fronius read timeouts are logged and skipped instead of raising a traceback
+    * Fix: An HTTP POST without a Content-Length header no longer crashes the request handler (closes #666)
 
 ## v1.3.4 - 2026-10-23
 
