@@ -19,15 +19,16 @@ logger = LoggerFactory.get_logger("TeslaAPI", "Vehicle")
 
 class TLS13Adapter(HTTPAdapter):
     """HTTPAdapter that enforces TLS 1.3 for Tesla API connections.
-    
+
     Tesla requires TLS 1.3 for authentication endpoints as of June 2026.
     This adapter ensures tokens obtained via auth.tesla.com are valid
     for use with owner-api.teslamotors.com.
     """
+
     def init_poolmanager(self, *args, **kwargs):
         context = create_urllib3_context()
         context.minimum_version = ssl.TLSVersion.TLSv1_3
-        kwargs['ssl_context'] = context
+        kwargs["ssl_context"] = context
         return super().init_poolmanager(*args, **kwargs)
 
 
@@ -114,16 +115,16 @@ class TeslaAPI:
             pass
 
         self.generateChallenge()
-        
+
         # Initialize session with TLS 1.3 enforcement for Tesla API endpoints
         self.session = requests.Session()
         tls13_adapter = TLS13Adapter()
-        self.session.mount('https://auth.tesla.com', tls13_adapter)
-        self.session.mount('https://owner-api.teslamotors.com', tls13_adapter)
-        self.session.mount('https://fleet-api.prd.na.vn.cloud.tesla.com', tls13_adapter)
-        self.session.mount('https://fleet-api.prd.eu.vn.cloud.tesla.com', tls13_adapter)
-        self.session.mount('https://fleet-api.prd.cn.vn.cloud.tesla.cn', tls13_adapter)
-        self.session.mount('https://fleet-auth.prd.vn.cloud.tesla.com', tls13_adapter)
+        self.session.mount("https://auth.tesla.com", tls13_adapter)
+        self.session.mount("https://owner-api.teslamotors.com", tls13_adapter)
+        self.session.mount("https://fleet-api.prd.na.vn.cloud.tesla.com", tls13_adapter)
+        self.session.mount("https://fleet-api.prd.eu.vn.cloud.tesla.com", tls13_adapter)
+        self.session.mount("https://fleet-api.prd.cn.vn.cloud.tesla.cn", tls13_adapter)
+        self.session.mount("https://fleet-auth.prd.vn.cloud.tesla.com", tls13_adapter)
 
     def enabled(self) -> bool:
         return self._enabled
@@ -220,6 +221,31 @@ class TeslaAPI:
         except:
             pass
 
+        return False
+
+    def commandAuthFailed(self, response, token):
+        # Reacts to a 401 on a vehicle command sent with this access token
+        # (#689). Returns True when TWCManager now holds a new token, so the
+        # caller should retry once. An expired token is refreshed; any other
+        # 401 means it is dead, so both tokens are cleared, the way a
+        # rejected refresh clears them, and commands stop using it.
+        if getattr(response, "status_code", None) != 401:
+            return False
+        if self.carApiBearerToken != token:
+            # Another thread already refreshed or replaced it.
+            return self.carApiBearerToken != ""
+        if self.master.tokenSyncEnabled():
+            # TeslaMate owns the tokens; it will sync a fresh one.
+            return False
+        if "expired" in response.text and self.carApiRefreshToken:
+            return self.apiRefresh()
+        logger.error(
+            "Tesla API token was rejected for a vehicle command (HTTP 401); "
+            "removing it. Please supply fresh tokens."
+        )
+        self.carApiBearerToken = ""
+        self.carApiRefreshToken = ""
+        self.master.queue_background_task({"cmd": "saveSettings"})
         return False
 
     def loadVehicleList(self):
@@ -778,9 +804,13 @@ class TeslaAPI:
             }
 
             # Retry up to 3 times on certain errors.
+            refreshed = False
             for _ in range(0, 3):
+                req = None
                 try:
-                    req = self.session.post(url, headers=headers, verify=self.verifyCert)
+                    req = self.session.post(
+                        url, headers=headers, verify=self.verifyCert
+                    )
                     logger.log(
                         logging.INFO8,
                         "Car API cmd charge_" + startOrStop + " " + str(req),
@@ -790,6 +820,17 @@ class TeslaAPI:
                     pass
                 except json.decoder.JSONDecodeError:
                     pass
+
+                if getattr(req, "status_code", None) == 401:
+                    sent = headers["Authorization"].split(" ", 1)[-1]
+                    if not refreshed and self.commandAuthFailed(req, sent):
+                        refreshed = True
+                        headers["Authorization"] = (
+                            "Bearer " + self.getCarApiBearerToken()
+                        )
+                        continue
+                    result = "error"
+                    break
 
                 try:
                     logger.log(
@@ -1343,7 +1384,7 @@ class TeslaAPI:
         self.carApiRefreshToken = refreshToken
         return True
 
-    def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
+    def setChargeRate(self, charge_rate, vehicle=None, set_again=False, retried=False):
         # As a fallback to allow initial implementation of the charge rate functionality for single car installs,
         # If no vehicle is specified, we take the first returned to us.
 
@@ -1366,8 +1407,11 @@ class TeslaAPI:
 
         body = {"charging_amps": charge_rate}
 
+        req = None
         try:
-            req = self.session.post(url, headers=headers, json=body, verify=self.verifyCert)
+            req = self.session.post(
+                url, headers=headers, json=body, verify=self.verifyCert
+            )
             logger.log(
                 logging.INFO8,
                 f"Car API cmd set_charging_amps {charge_rate}A {str(req)}",
@@ -1376,6 +1420,14 @@ class TeslaAPI:
         except requests.exceptions.RequestException:
             return False
         except json.decoder.JSONDecodeError:
+            apiResponseDict = None
+
+        if getattr(req, "status_code", None) == 401:
+            sent = headers["Authorization"].split(" ", 1)[-1]
+            if not retried and self.commandAuthFailed(req, sent):
+                return self.setChargeRate(charge_rate, vehicle, set_again, True)
+            return False
+        if apiResponseDict is None:
             return False
 
         # Set charge rates < 5 twice, see https://github.com/tdorssers/TeslaPy/pull/42
@@ -1439,7 +1491,7 @@ class TeslaAPI:
                         car.atHome = True
                 return
 
-    def wakeVehicle(self, vehicle):
+    def wakeVehicle(self, vehicle, retried=False):
         apiResponseDict = None
         vehicle.lastAPIAccessTime = time.time()
 
@@ -1460,10 +1512,11 @@ class TeslaAPI:
             if req is None:
                 # The request never went out (e.g. no network).
                 pass
-            elif req.status_code == 401 and "expired" in req.text:
-                # If the token is expired, refresh it and try again
-                if self.apiRefresh():
-                    return self.wakeVehicle(vehicle)
+            elif req.status_code == 401:
+                # Refresh an expired token and try again; clear a dead one.
+                sent = headers["Authorization"].split(" ", 1)[-1]
+                if not retried and self.commandAuthFailed(req, sent):
+                    return self.wakeVehicle(vehicle, True)
             elif req.status_code == 429:
                 # We're explicitly being told to back off
                 self.errorCount = max(30, self.errorCount)
@@ -1646,7 +1699,9 @@ class CarApiVehicle:
             }
             req = None
             try:
-                req = self.carapi.session.get(url, headers=headers, verify=self.verifyCert)
+                req = self.carapi.session.get(
+                    url, headers=headers, verify=self.verifyCert
+                )
                 req.raise_for_status()
                 logger.log(logging.INFO8, "Car API cmd " + url + " " + str(req))
                 apiResponseDict = json.loads(req.text)
@@ -1850,7 +1905,9 @@ class CarApiVehicle:
         }
         body = {"percent": limit}
 
+        refreshed = False
         for _ in range(0, 3):
+            req = None
             try:
                 req = self.carapi.session.post(
                     url, headers=headers, json=body, verify=self.verifyCert
@@ -1862,6 +1919,16 @@ class CarApiVehicle:
                 pass
             except json.decoder.JSONDecodeError:
                 pass
+
+            if getattr(req, "status_code", None) == 401:
+                sent = headers["Authorization"].split(" ", 1)[-1]
+                if not refreshed and self.carapi.commandAuthFailed(req, sent):
+                    refreshed = True
+                    headers["Authorization"] = (
+                        "Bearer " + self.carapi.getCarApiBearerToken()
+                    )
+                    continue
+                return False
 
             result = False
             reason = ""
