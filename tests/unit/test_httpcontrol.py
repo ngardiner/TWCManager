@@ -656,3 +656,25 @@ class TestHTTPControlResponseCodes:
             httpcontrol.master.chargeNow(32, 3600)
             mock_master.chargeNow.assert_called_once()
 
+
+
+class TestHTTPControlPostWithoutBody:
+    """A POST without a Content-Length header reads an empty body (#666)."""
+
+    def test_post_without_content_length(self):
+        from TWCManager.Control.HTTPControl import CreateHTTPHandlerClass
+
+        master = Mock()
+        handler = CreateHTTPHandlerClass(master)
+        request = Mock()
+        request.path = "/api/checkArrival"
+        request.fields = {}
+        request.headers = {}
+        request.rfile.read.return_value = b""
+        request.do_API_POST = lambda: handler.do_API_POST(request)
+
+        handler.do_POST(request)
+
+        request.rfile.read.assert_called_with(0)
+        master.queue_background_task.assert_called_with({"cmd": "checkArrival"})
+        request.send_response.assert_called_with(202)

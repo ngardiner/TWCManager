@@ -80,6 +80,7 @@ This document logs the changes per release of TWCManager.
     * (@tmark00) - Fix: A null Fleet API voltage or current while a car is unplugged no longer stops TWC heartbeats (closes #713)
     * Fix: Serialize Tesla token refreshes, so two threads no longer spend the same single-use refresh token and lose both tokens (closes #690)
     * Fix: Fronius read timeouts are logged and skipped instead of raising a traceback
+    * Fix: An HTTP POST without a Content-Length header no longer crashes the request handler (closes #666)
 
 ## v1.3.4 - 2026-04-24
 * Features
