@@ -458,3 +458,47 @@ class TestFroniusStatus:
         fronius.lastFetch = current_time
         
         assert fronius.lastFetch == current_time
+
+
+class TestFroniusFetchErrors:
+    """A slow or unreachable inverter skips the fetch instead of raising."""
+
+    @pytest.fixture
+    def fronius(self):
+        from TWCManager.EMS.Fronius import Fronius
+
+        master = Mock()
+        master.config = {
+            "config": {},
+            "sources": {"Fronius": {"enabled": True, "serverIP": "192.168.1.100"}},
+        }
+        return Fronius(master)
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "ReadTimeout",
+            "ConnectionError",
+        ],
+    )
+    def test_fetch_error_returns_false(self, fronius, error):
+        import requests
+
+        with patch(
+            "TWCManager.EMS.Fronius.requests.get",
+            side_effect=getattr(requests.exceptions, error)("boom"),
+        ):
+            assert fronius.getInverterValue("http://192.168.1.100/") is False
+        assert fronius.fetchFailed is True
+
+    def test_read_timeout_keeps_generation_readable(self, fronius):
+        import requests
+
+        with patch(
+            "TWCManager.EMS.Fronius.requests.get",
+            side_effect=requests.exceptions.ReadTimeout("boom"),
+        ):
+            assert fronius.getGeneration() == 0
+            assert fronius.getConsumption() == 0
+        # Not cached, so the next call fetches again.
+        assert fronius.lastFetch == 0

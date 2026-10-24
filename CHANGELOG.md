@@ -4,6 +4,11 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
 
+## v1.3.5 - Upcoming
+
+* Bugfixes
+    * Fix: Fronius read timeouts are logged and skipped instead of raising a traceback
+
 ## v1.3.4 - 2026-10-23
 
 **Fleet API release. Removes the legacy PHP web interface (PHP2Shell)**
