@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from threading import RLock
 
 import jwt
 import requests
@@ -64,6 +65,10 @@ class TeslaTokenSlot:
         self.source = ""
         self.pausedUntil = 0
         self.changes = 0
+        # Tesla refresh tokens are single-use. Held across a refresh and any
+        # other change to the tokens, so two threads never spend the same
+        # refresh token (#690).
+        self.lock = RLock()
 
     def setTokens(
         self, accessToken, refreshToken=None, expireTime=None, source="pasted"

@@ -224,13 +224,26 @@ class TeslaAPI:
         # slot holds no refresh token, so it never refreshes.
         for slot in (self.ownerSlot, self.fleetSlot):
             if slot.needsRefresh():
-                logger.log(logging.INFO8, "Attempting token refresh")
-                self.refreshSlot(slot)
+                self.refreshSlot(slot, ifNeeded=True)
 
-    def refreshSlot(self, slot, saveOnFailure=True):
+    def refreshSlot(self, slot, saveOnFailure=True, ifNeeded=False):
         # Refreshes one slot's tokens. Returns slot.refresh()'s result:
         # "success", "rejected", "unreachable" or "not_configured".
         # saveOnFailure=False leaves saving a failure's state to the caller.
+        # ifNeeded=True skips the refresh unless the token is due for one.
+        spending = slot.refreshToken
+        with slot.lock:
+            if slot.refreshToken != spending:
+                # Another thread refreshed, pasted or cleared the token while
+                # this one waited; spending the old one again would fail.
+                return "success" if slot.accessToken else "not_configured"
+            if ifNeeded and not slot.needsRefresh():
+                return "success"
+            if ifNeeded:
+                logger.log(logging.INFO8, "Attempting token refresh")
+            return self._refreshSlotLocked(slot, saveOnFailure)
+
+    def _refreshSlotLocked(self, slot, saveOnFailure):
         result = slot.refresh()
         if result == "success":
             self.master.queue_background_task({"cmd": "saveSettings"})
@@ -1580,6 +1593,10 @@ class TeslaAPI:
         if self.syncedSlotLocked(slot):
             self.logSyncedSlotLocked(slot)
             return "token_sync"
+        with slot.lock:
+            return self._pasteRefreshTokenLocked(slot, token)
+
+    def _pasteRefreshTokenLocked(self, slot, token):
         previous = slot.snapshot()
         previousErrors = (self.carApiLastErrorTime, self.errorCount)
         slot.clear()
@@ -1632,7 +1649,8 @@ class TeslaAPI:
         slot = self.slotOfType(kind)
         if slot is None:
             return False
-        slot.clear()
+        with slot.lock:
+            slot.clear()
         self.master.queue_background_task({"cmd": "saveSettings"})
         return True
 
@@ -1705,7 +1723,8 @@ class TeslaAPI:
         if source != "synced" and self.syncedSlotLocked(slot):
             self.logSyncedSlotLocked(slot)
             return "token_sync"
-        slot.setTokens(accessToken, refreshToken, expireTime, source)
+        with slot.lock:
+            slot.setTokens(accessToken, refreshToken, expireTime, source)
         return "success"
 
     def migrateSavedTokens(self, settings, syncConfigured):
