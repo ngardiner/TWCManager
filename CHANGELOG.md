@@ -26,6 +26,11 @@ This document logs the changes per release of TWCManager.
     * Fix: Protocol module type handling for `CustomCommand`
     * Update Docker documentation for Compose V2 and modern Raspberry Pi OS
 
+## v1.3.3.post2 - Upcoming
+
+* Bugfixes
+    * Fix: Fronius read timeouts are logged and skipped instead of raising a traceback
+
 ## v1.3.3.post1 - 2026-10-23
 
 **Security and bugfix release for the Owner API line**
