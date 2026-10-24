@@ -82,6 +82,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Fronius read timeouts are logged and skipped instead of raising a traceback
     * Fix: An HTTP POST without a Content-Length header no longer crashes the request handler (closes #666)
     * Fix: A 401 on a Tesla API vehicle command refreshes an expired token and retries once, and clears a dead token so commands fall back to BLE (closes #689)
+    * (@tmark00) - Fix: The power distributor budgets with the measured TWC voltage instead of defaultVoltage, so a TWC is no longer offered more current than the policy asks for (closes #715)
 
 ## v1.3.4 - 2026-04-24
 * Features
