@@ -23,6 +23,8 @@ VIN = "5YJ3E1EA1KF000001"
 def ble(tmp_path):
     master = Mock()
     master.config = {"config": {"teslaControlPath": "/fake/tesla-control"}}
+    # A real lock, so the pairing-status writes run here too.
+    master.settingsLock = threading.RLock()
     master.settings = {
         "Vehicles": {
             VIN: {
@@ -97,6 +99,8 @@ def test_send_commands_do_not_overlap(ble):
     assert recorder.calls == 2
     assert recorder.max_active == 1
     assert recorder.missing_key == 0
+    # The status write ran under _bleLock without deadlocking.
+    assert ble.bleStatus(VIN)["status"] == "paired"
 
 
 def test_state_read_does_not_overlap_command(ble):
@@ -111,6 +115,7 @@ def test_state_read_does_not_overlap_command(ble):
     assert recorder.calls == 2
     assert recorder.max_active == 1
     assert recorder.missing_key == 0
+    assert ble.bleStatus(VIN)["status"] == "paired"
 
 
 def test_pairing_does_not_overlap_command(ble):
@@ -125,6 +130,9 @@ def test_pairing_does_not_overlap_command(ble):
     assert recorder.calls == 2
     assert recorder.max_active == 1
     assert recorder.missing_key == 0
+    # Either order ends proven: pairing then proof, or proof kept by pairing.
+    assert ble.bleStatus(VIN)["status"] == "paired"
+    assert ble.blePairingAttempt(VIN)["ok"] is True
 
 
 def test_retry_backoff_sleeps_outside_lock(ble):

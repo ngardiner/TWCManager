@@ -71,8 +71,8 @@
         </select></td>
         <td> to vehicle </td>
         <td><select id="TeslaAPIVehicle">
-          {% for vehicle in vehicles() %}
-            <option value="{{ vehicle.ID }}">{{ vehicle.name }}</option>
+          {% for vehicle in vehicles() if vehicle.vin and vehicle.attachment("TeslaAPI") %}
+            <option value="{{ vehicle.vin }}">{{ vehicle.name or vehicle.key }}</option>
           {% endfor %}
         </select></td>
       </tr>

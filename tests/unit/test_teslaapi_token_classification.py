@@ -216,8 +216,8 @@ class TestSwitching:
             assert slot.baseURL == url
 
     def test_vehicle_verify_follows_token(self, proxy_api, no_threads, requests_mock):
-        proxy = requests_mock.get(PROXY_URL + "/VIN1", json={"response": {}})
-        owner = requests_mock.get(OWNER_URL + "/VIN1", json={"response": {}})
+        proxy = requests_mock.get(PROXY_URL + "/5YJ3E1EA1KF000001", json={"response": {}})
+        owner = requests_mock.get(OWNER_URL + "/5YJ3E1EA1KF000001", json={"response": {}})
         proxy_api.storeToken(fleet_token())
         vehicle = add_home_vehicle(proxy_api)
         vehicle.is_awake()

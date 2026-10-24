@@ -270,7 +270,7 @@ class Policy:
 
             # Clear stopAskingToStartCharging so we try charging each car at
             # least once
-            for vehicle in self.master.getModuleByName("TeslaAPI").getCarApiVehicles():
+            for vehicle in self.master.vehicleRegistry.attached("TeslaAPI"):
                 vehicle.stopAskingToStartCharging = False
 
         if updateLatch and "latch_period" in policy:

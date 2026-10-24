@@ -384,6 +384,15 @@ def background_tasks_thread(master):
                         requests.post(task["url"], json=body)
                 elif task["cmd"] == "saveSettings":
                     master.saveSettings()
+                elif task["cmd"] == "bleScan":
+                    # Range scans take seconds: here, never on the serial loop.
+                    ble = master.getModuleByName("TeslaBLE")
+                    if ble:
+                        ble.runPendingScans()
+                elif task["cmd"] == "expireVehicles":
+                    master.expireVehicles()
+                elif task["cmd"] == "vehicleIsDefinitelyHome":
+                    master.vehicleIsDefinitelyHome(task["vin"])
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
 
@@ -397,6 +406,16 @@ def background_tasks_thread(master):
         # backgroundTasksQueue.join() can then be used to block until all tasks
         # in the queue are done.
         master.doneBackgroundTask(task)
+
+        if task.get("cmd") == "bleScan":
+            # A scan request made between the drain's last check and
+            # doneBackgroundTask was coalesced into this task; queue it now.
+            try:
+                ble = master.getModuleByName("TeslaBLE")
+                if ble:
+                    ble.requeueIfRequested()
+            except Exception as e:
+                logger.error(f"bleScan requeue failed: {type(e).__name__}")
 
 
 def check_green_energy():
@@ -587,8 +606,9 @@ def update_sunrise_sunset():
     latlong = master.getHomeLatLon()
     if latlong[0] == 10000:
         # We don't know where home is; keep defaults
-        master.settings["sunrise"] = 6
-        master.settings["sunset"] = 20
+        with master.settingsLock:
+            master.settings["sunrise"] = 6
+            master.settings["sunset"] = 20
     else:
         sunrise = 6
         sunset = 20
@@ -627,8 +647,9 @@ def update_sunrise_sunset():
             except Exception as e:
                 logger.debug(f"Error parsing sunset time: {e}")
 
-        master.settings["sunrise"] = sunrise
-        master.settings["sunset"] = sunset
+        with master.settingsLock:
+            master.settings["sunrise"] = sunrise
+            master.settings["sunset"] = sunset
 
     tomorrow = datetime.datetime.combine(
         datetime.datetime.today(), datetime.time(hour=1)
@@ -979,6 +1000,12 @@ while True:
         # response, and if we haven't queried more than 5 times already for this
         # slave TWC, repeat the query
         master.retryVINQuery()
+
+        # Hourly, forget vehicles no one has claimed or seen for the window.
+        # Housekeeping, so not gated on fakeMaster.
+        if (time.time() - master.lastVehicleExpiry) > 3600:
+            master.lastVehicleExpiry = time.time()
+            master.queue_background_task({"cmd": "expireVehicles"})
 
         # Periodically refresh the Tesla Fleet API token even if no vehicle
         # command has run recently, so read-only features like Storm Watch

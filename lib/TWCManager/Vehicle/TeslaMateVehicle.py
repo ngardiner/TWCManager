@@ -7,6 +7,7 @@ import psycopg2
 import paho.mqtt.client as mqtt
 import threading
 import time
+from typing import Dict, Optional
 
 from TWCManager.Vehicle.Telemetry import TelmetryBase
 from TWCManager.Logging.LoggerFactory import LoggerFactory
@@ -63,9 +64,9 @@ class TeslaMateVehicle(TelmetryBase):
         "battery_level": ["batteryLevel", lambda a: int(a)],
         "charge_limit_soc": ["chargeLimit", lambda a: int(a)],
         "display_name": ["name", lambda a: str(a)],
-        "latitude": ["syncLat", lambda a: float(a)],
-        "longitude": ["syncLon", lambda a: float(a)],
-        "state": ["syncState", lambda a: a],
+        "latitude": ["lat", lambda a: float(a)],
+        "longitude": ["lon", lambda a: float(a)],
+        "state": ["state", lambda a: a],
         "time_to_full_charge": ["timeToFullCharge", lambda a: float(a)],
         "charger_pilot_current": ["availableCurrent", lambda a: int(a)],
         "charger_actual_current": ["actualCurrent", lambda a: int(a)],
@@ -76,6 +77,10 @@ class TeslaMateVehicle(TelmetryBase):
     }
 
     def __init__(self, master):
+        # TeslaMate car id -> VIN (from its database) and -> its "healthy"
+        # topic. Set before the base class registers our liveness.
+        self.carVINs: Dict[str, str] = {}
+        self.healthy: Dict[str, bool] = {}
         super().__init__(master)
 
         if not self.status:
@@ -89,12 +94,87 @@ class TeslaMateVehicle(TelmetryBase):
         self.syncTokens = self.configModule.get("syncTokens", False)
         self.encryption_key = self.configModule.get("encryption_key", None)
 
+        # Identify cars by VIN where the database is configured; otherwise
+        # they are matched by display name.
+        self.carVINs = self.loadCarVINs()
+
         # If we're set to sync the auth tokens from the database, do this at startup
         if self.syncTokens:
             self.doSyncTokens(True)
 
             # After initial sync, keep resyncing the tokens every hour
             self.scheduleTokenResync()
+
+    def loadCarVINs(self) -> Dict[str, str]:
+        # TeslaMate car id -> VIN, from its cars table.
+        if not (
+            self.__db_host and self.__db_name and self.__db_user and self.__db_pass
+        ):
+            return {}
+        try:
+            conn = psycopg2.connect(
+                host=self.__db_host,
+                database=self.__db_name,
+                user=self.__db_user,
+                password=self.__db_pass,
+                connect_timeout=5,
+            )
+        except Exception as e:
+            # The error type only: a driver message can name the host or user.
+            logger.info(
+                "TeslaMate car VINs not loaded (%s); matching cars by name",
+                type(e).__name__,
+            )
+            return {}
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT id, vin FROM cars")
+                rows = cur.fetchall()
+            finally:
+                cur.close()
+        except Exception as e:
+            logger.info(
+                "TeslaMate car VINs not loaded (%s); matching cars by name",
+                type(e).__name__,
+            )
+            return {}
+        finally:
+            conn.close()
+        return {str(car_id): vin for car_id, vin in rows if car_id is not None and vin}
+
+    def refreshIdentities(self):
+        # A database that was down at startup: try again for VINs.
+        if not self.carVINs:
+            self.carVINs = self.loadCarVINs()
+
+    def vinFor(self, vehicle_id) -> Optional[str]:
+        return self.carVINs.get(str(vehicle_id))
+
+    def noteHealthy(self, car_id, payload) -> None:
+        # TeslaMate's per-car health: false when it has stopped polling.
+        healthy = str(payload).strip().lower() == "true"
+        if self.healthy.get(car_id, True) != healthy:
+            logger.info(
+                "TeslaMate reports car %s %s",
+                car_id,
+                "healthy again" if healthy else "unhealthy",
+            )
+        self.healthy[car_id] = healthy
+
+    def carHealthy(self, vehicle) -> bool:
+        if vehicle is None:
+            return True
+        for car_id, mapped in list(self.vehicles.items()):
+            if mapped is vehicle:
+                # Unpublished: assume healthy.
+                return self.healthy.get(car_id, True)
+        # Not attached (yet, or again after a forget): its car id by VIN if
+        # known, else assume healthy, as for an unpublished healthy topic.
+        for car_id, vin in list(self.carVINs.items()):
+            if vin == vehicle.vin:
+                return self.healthy.get(car_id, True)
+        return True
 
     def scheduleTokenResync(self):
         resync = threading.Timer(3600, self.resyncTokens)
@@ -300,12 +380,14 @@ class TeslaMateVehicle(TelmetryBase):
             self.syncTokens = False
 
     def mqttConnect(self, client, userdata, flags, rc, properties=None):
-        logger.log(logging.INFO5, "MQTT Connected.")
+        super().mqttConnect(client, userdata, flags, rc, properties)
+        if not self.connected:
+            return
         subscription = "teslamate/"
         if self.mqtt_prefix:
             subscription += self.mqtt_prefix + "/"
         subscription += "cars/+/"
-        for topic in self.events.keys():
+        for topic in list(self.events.keys()) + ["healthy"]:
             topic = subscription + topic
             logger.log(logging.INFO5, "Subscribe to " + topic)
             res = client.subscribe(topic, qos=1)
@@ -316,10 +398,18 @@ class TeslaMateVehicle(TelmetryBase):
         payload = str(message.payload.decode("utf-8"))
 
         if len(topic) > 4:
-            prefix = topic[1:-3].join("/")
+            prefix = "/".join(topic[1:-3])
             if prefix != self.mqtt_prefix:
                 return
             topic = [topic[0]] + topic[-3:]
 
         if topic[0] == "teslamate" and topic[1] == "cars":
-            self.applyDataToVehicle(topic[2], topic[3], payload)
+            if topic[3] == "healthy":
+                self.noteHealthy(topic[2], payload)
+            else:
+                self.applyDataToVehicle(
+                    topic[2],
+                    topic[3],
+                    payload,
+                    getattr(message, "retain", False) is True,
+                )

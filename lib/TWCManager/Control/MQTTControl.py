@@ -175,7 +175,8 @@ class MQTTControl:
                         f"MQTT nonScheduledAction rejected: {action} must be 1 (fixed rate), 2 (do not charge), or 3 (track green energy)"
                     )
                     return
-                self.master.settings["nonScheduledAction"] = action
+                with self.master.settingsLock:
+                    self.master.settings["nonScheduledAction"] = action
                 self.master.getModuleByName("Policy").applyPolicyImmediately()
                 self.master.queue_background_task({"cmd": "saveSettings"})
             except ValueError as e:
