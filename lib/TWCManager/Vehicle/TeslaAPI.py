@@ -276,6 +276,28 @@ class TeslaAPI:
             slot.pause()
         return False
 
+    def slotCommandFailed(self, slot, response, token):
+        # Reacts to a 401 on a vehicle command sent with this slot's access
+        # token (#689). Returns True when the slot now holds a new token,
+        # so the caller should retry once. An expired token is refreshed;
+        # any other 401 means it is dead, so it is cleared and commands
+        # stop using it, letting VehiclePriority move on. Unlike a read, a
+        # 403/410/412 here does not pause the slot.
+        if getattr(response, "status_code", None) != 401:
+            return False
+        if slot.accessToken != token:
+            # Another thread already refreshed or replaced it.
+            return bool(slot.accessToken)
+        if "expired" in response.text and slot.source != "synced" and slot.refreshToken:
+            return self.refreshSlot(slot) == "success"
+        logger.error(
+            "Tesla %s API token was rejected for a vehicle command "
+            "(HTTP 401); removing it." % slot.kind.capitalize()
+        )
+        slot.clear()
+        self.master.queue_background_task({"cmd": "saveSettings"})
+        return False
+
     def tokenRoute(self, token):
         # (tokenType, baseURL, verifyCert) for an access token: where its
         # requests go. Both slots classify their tokens with this.
@@ -924,6 +946,7 @@ class TeslaAPI:
             }
 
             # Retry up to 3 times on certain errors.
+            refreshed = False
             for _ in range(0, 3):
                 req = None
                 try:
@@ -941,6 +964,14 @@ class TeslaAPI:
                 if slot is self.ownerSlot and self.noteOwnerCommandRefused(
                     vehicle, req
                 ):
+                    result = "error"
+                    break
+                if getattr(req, "status_code", None) == 401:
+                    sent = headers["Authorization"].split(" ", 1)[-1]
+                    if not refreshed and self.slotCommandFailed(slot, req, sent):
+                        refreshed = True
+                        headers["Authorization"] = "Bearer " + slot.accessToken
+                        continue
                     result = "error"
                     break
 
@@ -1920,7 +1951,7 @@ class TeslaAPI:
         # tokenSyncEnabled() is already true. Returns storeToken's result.
         return self.storeToken(accessToken, "", "synced")
 
-    def setChargeRate(self, charge_rate, vehicle=None, set_again=False):
+    def setChargeRate(self, charge_rate, vehicle=None, set_again=False, retried=False):
         # As a fallback to allow initial implementation of the charge rate functionality for single car installs,
         # If no vehicle is specified, we take the first returned to us.
 
@@ -1974,6 +2005,11 @@ class TeslaAPI:
             apiResponseDict = None
 
         if slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
+            return False
+        if getattr(req, "status_code", None) == 401:
+            sent = headers["Authorization"].split(" ", 1)[-1]
+            if not retried and self.slotCommandFailed(slot, req, sent):
+                return self.setChargeRate(charge_rate, vehicle, set_again, True)
             return False
         if apiResponseDict is None:
             return False
@@ -2039,7 +2075,7 @@ class TeslaAPI:
                         car.atHome = True
                 return
 
-    def wakeVehicle(self, vehicle):
+    def wakeVehicle(self, vehicle, retried=False):
         if self.refuseCommandFor(vehicle, "wake_up"):
             return False
         slot = self.commandSlotFor(vehicle)
@@ -2070,10 +2106,11 @@ class TeslaAPI:
                 pass
             elif slot is self.ownerSlot and self.noteOwnerCommandRefused(vehicle, req):
                 pass
-            elif req.status_code == 401 and "expired" in req.text:
-                # If the token is expired, refresh it and try again
-                if self.refreshSlot(slot) == "success":
-                    return self.wakeVehicle(vehicle)
+            elif req.status_code == 401:
+                # Refresh an expired token and try again; clear a dead one.
+                sent = headers["Authorization"].split(" ", 1)[-1]
+                if not retried and self.slotCommandFailed(slot, req, sent):
+                    return self.wakeVehicle(vehicle, True)
             elif req.status_code == 429:
                 # We're explicitly being told to back off
                 self.errorCount = max(30, self.errorCount)
@@ -2519,6 +2556,7 @@ class CarApiVehicle:
         }
         body = {"percent": limit}
 
+        refreshed = False
         for _ in range(0, 3):
             req = None
             try:
@@ -2536,6 +2574,13 @@ class CarApiVehicle:
             if slot is self.carapi.ownerSlot and self.carapi.noteOwnerCommandRefused(
                 self, req
             ):
+                return False
+            if getattr(req, "status_code", None) == 401:
+                sent = headers["Authorization"].split(" ", 1)[-1]
+                if not refreshed and self.carapi.slotCommandFailed(slot, req, sent):
+                    refreshed = True
+                    headers["Authorization"] = "Bearer " + slot.accessToken
+                    continue
                 return False
 
             result = False
