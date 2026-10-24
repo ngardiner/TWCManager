@@ -97,6 +97,14 @@ class Fronius:
             logger.debug(str(e))
             self.fetchFailed = True
             return False
+        except requests.exceptions.ReadTimeout as e:
+            logger.log(
+                logging.INFO4,
+                "Read Timeout occurred fetching Fronius Inverter sensor value",
+            )
+            logger.debug(str(e))
+            self.fetchFailed = True
+            return False
 
         r.raise_for_status()
         jsondata = r.json()
