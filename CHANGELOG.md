@@ -77,6 +77,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Fix: Run tesla-control in the host network namespace under Docker, and a BLE command timeout no longer kills TWCManager (#711)
     * Fix: Cancel a pending stop-charging command when charging should continue (closes #667)
     * Fix: Queue charge start/stop commands per vehicle and send at most one per vehicle per minute, so a refused stop is no longer retried every loop
+    * (@tmark00) - Fix: A null Fleet API voltage or current while a car is unplugged no longer stops TWC heartbeats (closes #713)
 
 ## v1.3.4 - 2026-04-24
 * Features
