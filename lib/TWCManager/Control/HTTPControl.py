@@ -1175,7 +1175,7 @@ def CreateHTTPHandlerClass(master):
 
             # Parse POST parameters
             self.fields.clear()
-            length = int(self.headers.get("content-length"))
+            length = int(self.headers.get("content-length", 0))
             self.post_data = self.rfile.read(length)
 
             if self.url.path.startswith("/api/"):
