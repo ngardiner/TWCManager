@@ -77,6 +77,8 @@
         # Newer TWCs can report actual voltages.  For older TWCs, you can specify
         # what voltage should be assumed and whether the power is single (1) or
         # 3-phase.
+        # defaultVoltage is the voltage of one phase (line to neutral), e.g. 230
+        # on a 3-phase 400V supply, not the line-to-line voltage.
         "defaultVoltage": 240,
         "numberOfPhases": 1,
 
