@@ -525,11 +525,11 @@ class TWCMaster:
                     evse.setTargetPower(0)
             return
 
-        # Total watts available from EMS/policy
-        cfg = self.config["config"]
-        voltage = cfg.get("defaultVoltage", 240)
-        phases = cfg.get("numberOfPhases", 1)
-        available_watts = self.getMaxAmpsToDivideAmongSlaves() * voltage * phases
+        # Total watts available from EMS/policy. Convert with the voltage the
+        # TWCs measure (defaultVoltage only when none report it): the policy
+        # derived these amps from watts with it, and Gen2TWC.setTargetPower()
+        # converts back with it, so the TWC is offered the amps the policy chose.
+        available_watts = self.convertAmpsToWatts(self.getMaxAmpsToDivideAmongSlaves())
 
         # Per-controller remaining power budgets and EVSE counts
         controller_budgets: dict = {}
