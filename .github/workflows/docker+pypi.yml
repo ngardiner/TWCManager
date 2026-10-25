@@ -188,6 +188,23 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+    - name: Work out image tags
+      id: tags
+      working-directory: ./docker-release
+      env:
+        REF: ${{ github.event.inputs.release_version || github.ref_name }}
+      run: |
+        git fetch --tags --quiet
+        # The exact release, plus the tags users pin that should follow it:
+        # v1.3.4 picks up v1.3.4.postN, and v1.3 the newest 1.3.x
+        base="${REF%%.post*}"
+        minor="$(echo "$base" | cut -d. -f1,2)"
+        tags="twcmanager/twcmanager:$REF"
+        [ "$base" != "$REF" ] && tags="$tags,twcmanager/twcmanager:$base"
+        newest="$(git tag -l "$minor.*" | sed 's/\.post.*//' | sort -V | tail -1)"
+        [ "$base" = "$newest" ] && tags="$tags,twcmanager/twcmanager:$minor"
+        echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
     - name: Build and push
       uses: docker/build-push-action@v2
       with:
@@ -195,7 +212,7 @@ jobs:
         platforms: linux/amd64,linux/arm64,linux/arm/v7
         push: true
         build-args: TWC_REF=${{ github.event.inputs.release_version || github.ref_name }}
-        tags: twcmanager/twcmanager:${{ github.event.inputs.release_version || github.ref_name }}
+        tags: ${{ steps.tags.outputs.tags }}
 
   docker-testing-cloud:
     name: Create docker-testing Docker Image (Cloud)
