@@ -2,7 +2,7 @@
 
 This document logs the changes per release of TWCManager.
 
-## v1.4.0 - Upcoming
+## v1.4.0 - 2026-10-25
 
 * Features
     * (@MikeBishop) - Apply charge limit over BLE
