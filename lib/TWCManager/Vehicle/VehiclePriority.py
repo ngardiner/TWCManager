@@ -62,6 +62,19 @@ class VehiclePriority:
         # Need to catch this one to avoid an exception
         return True
 
+    def enabled(self):
+        # getModuleByName() checks this on every lookup. Answer directly
+        # rather than through __getattr__, whose priority dispatch logs
+        # several lines per call and ran many times a second.
+        for module in self.master.getModulesByType("Vehicle"):
+            ref = module["ref"]
+            if ref is self or not module["priority"]:
+                continue
+            enabled_fn = getattr(ref, "enabled", None)
+            if not callable(enabled_fn) or enabled_fn():
+                return True
+        return False
+
     def _skip_module_for_command(self, module_name, method_name):
         """Return True if commandPolicy excludes this module from executing a
         state-changing method. Fleet API commands are billed per call, so

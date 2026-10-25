@@ -627,3 +627,45 @@ class TestCommandPolicy:
         assert priority.startCharging("VIN123") is True
         assert not ble.startCharging.called
         assert api.startCharging.called
+
+
+class TestVehiclePriorityEnabled:
+    """enabled() is answered directly, without the logged priority dispatch."""
+
+    def make(self, *modules):
+        from TWCManager.Vehicle.VehiclePriority import VehiclePriority
+
+        master = Mock()
+        master.stats = {"moduleSuccess": {}, "moduleFailures": {}, "moduleDispatch": {}}
+        priority = VehiclePriority(master)
+        master.getModulesByType.return_value = [
+            {"name": "VehiclePriority", "ref": priority, "priority": 0}
+        ] + [
+            {"name": f"m{i}", "ref": ref, "priority": pri}
+            for i, (ref, pri) in enumerate(modules)
+        ]
+        return priority, master
+
+    def module(self, enabled):
+        ref = Mock()
+        ref.enabled.return_value = enabled
+        return ref
+
+    def test_true_when_any_module_enabled(self):
+        priority, _ = self.make((self.module(False), 20), (self.module(True), 10))
+        assert priority.enabled() is True
+
+    def test_false_when_no_module_enabled(self):
+        priority, _ = self.make((self.module(False), 20), (self.module(False), 10))
+        assert priority.enabled() is False
+
+    def test_module_without_enabled_counts_as_enabled(self):
+        priority, _ = self.make((object(), 10))
+        assert priority.enabled() is True
+
+    def test_does_not_dispatch_or_log(self):
+        priority, master = self.make((self.module(True), 20))
+        with patch("TWCManager.Vehicle.VehiclePriority.logger") as logger:
+            assert priority.enabled() is True
+        master.getModuleByPriority.assert_not_called()
+        logger.debug.assert_not_called()
