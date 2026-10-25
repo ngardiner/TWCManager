@@ -13,7 +13,7 @@ BLUETOOTH = $(shell grep -c bluetooth /etc/group)
 .PHONY: tests upload
 
 build: deps build_pkg
-docker: deps build_pkg config tesla-control
+docker: deps install_pkg config tesla-control
 webbuild: webdeps build_pkg
 
 arch:
