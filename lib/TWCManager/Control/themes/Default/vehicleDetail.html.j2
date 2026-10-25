@@ -89,16 +89,29 @@
     {% endif %}
 
     {% if 'TeslaBLE' in master.modules %}
-      <p>&nbsp;</b>
+      <p>&nbsp;</p>
       <h3>BLE Control</h3>
       <table>
+        {% set ble = master.getModuleByName("TeslaBLE") %}
+        {% set pairing = ble.pairingStatus.get(vin) if ble else None %}
         <tr>
           <th>Status</th>
-          <td>Not Implemented</td>
-{% if master.settings["Vehicles"][vin].get("BLEPeeringStatus","") == "peered" %}
-Vehicle is peered.
-{% endif %}
-
+          <td>
+            {% if pairing and pairing.sent %}
+              Pairing request sent at {{ pairing.time }}. Tap your key card on the
+              centre console, then approve the new key on the car's screen. The
+              status changes to Paired once the car accepts a command signed with
+              this key.
+            {% elif pairing %}
+              Pairing request failed at {{ pairing.time }}{% if pairing.detail %}:
+              {{ pairing.detail }}{% endif %}. Check the car is awake and within
+              Bluetooth range of TWCManager, then try again.
+            {% elif master.settings["Vehicles"][vin].get("BLEPeeringStatus","") == "peered" %}
+              Paired
+            {% else %}
+              Not paired
+            {% endif %}
+          </td>
         </tr>
         <tr>
           <th>Action</th>

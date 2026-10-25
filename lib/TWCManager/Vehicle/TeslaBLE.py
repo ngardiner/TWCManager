@@ -136,6 +136,8 @@ class TeslaBLE:
         self._lastAppliedChargeLimit = {}
         # Per-VIN flag: True once car confirmed already in desired charge state
         self._stopAskingToStartCharging = {}
+        # Per-VIN result of the last pairing request, shown on the vehicle page
+        self.pairingStatus = {}
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.
         # dbus-launch only spawns a new daemon when DBUS_SESSION_BUS_ADDRESS is
@@ -451,22 +453,29 @@ class TeslaBLE:
 
             if stdout is None and stderr is None:
                 logger.error(f"BLE pairing with {vin} timed out or failed")
+                self._setPairingStatus(vin, False, "no response from the car")
                 return False
 
             # Check both stdout and stderr for pairing result
             output = (stderr.decode("utf-8") if stderr else "") + (
                 stdout.decode("utf-8") if stdout else ""
             )
-            success = self.parseCommandOutput(output)
+            # tesla-control exits 0 once the car has taken the add-key request.
+            # The car only holds it until the owner taps a key card, so this
+            # is not yet a pairing.
+            success = return_code == 0 and "Sent add-key request" in output
 
             logger.info(f"BLE pairing with {vin}: {'success' if success else 'failed'}")
             if not success:
                 logger.debug(f"Pairing output: {output[:200]}...")
+            lines = [line for line in output.splitlines() if line.strip()]
+            self._setPairingStatus(vin, success, lines[-1] if lines else "")
 
             return success
 
         except Exception as e:
             logger.error(f"peerWithVehicle exception for {vin}: {e}")
+            self._setPairingStatus(vin, False, str(e))
             return False
         finally:
             # Always ensure pipe is closed after pairing attempt
@@ -556,6 +565,7 @@ class TeslaBLE:
                     logger.debug(
                         f"BLE command '{command}' already satisfied: {output[:200]}"
                     )
+                    self._markPaired(vin)
                     return output
 
                 logger.warning(
@@ -569,6 +579,7 @@ class TeslaBLE:
                 if len(output) > 200
                 else output
             )
+            self._markPaired(vin)
             return output or "ok"
 
         except Exception as e:
@@ -955,7 +966,9 @@ class TeslaBLE:
                     f"BLE state {state_type} failed for {vin} (rc={return_code})"
                 )
                 return None
-            return json.loads(stdout.decode("utf-8"))
+            state = json.loads(stdout.decode("utf-8"))
+            self._markPaired(vin)
+            return state
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
             logger.debug(f"BLE state {state_type} JSON parse error for {vin}: {e}")
             return None
@@ -1466,6 +1479,24 @@ class TeslaBLE:
             logger.error(f"Error sending private key for {vin}: {e}")
             return False
         # NOTE: Do NOT close pipe here - it needs to stay open for tesla-control to read
+
+    def _setPairingStatus(self, vin, sent, detail):
+        self.pairingStatus[vin] = {
+            "sent": sent,
+            "time": time.strftime("%H:%M:%S"),
+            "detail": detail,
+        }
+
+    def _markPaired(self, vin):
+        # The car only answers a signed command once it holds our key, so any
+        # successful command or state read proves the pairing completed.
+        vehicle = self.master.settings.get("Vehicles", {}).get(vin)
+        if vehicle is None:
+            return
+        self.pairingStatus.pop(vin, None)
+        if vehicle.get("BLEPeeringStatus") != "peered":
+            vehicle["BLEPeeringStatus"] = "peered"
+            self.master.queue_background_task({"cmd": "saveSettings"})
 
     def enabled(self) -> bool:
         return self._enabled
