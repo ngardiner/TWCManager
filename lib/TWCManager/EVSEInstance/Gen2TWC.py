@@ -98,7 +98,8 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         phases = [self.voltsPhaseA, self.voltsPhaseB, self.voltsPhaseC]
         if not any(phases):
             default_v = self.configConfig.get("defaultVoltage", 240)
-            phases[0] = default_v
+            count = self.configConfig.get("numberOfPhases", 1)
+            phases = [default_v if i < count else 0 for i in range(3)]
         return phases
 
     @property
