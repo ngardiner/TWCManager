@@ -1,0 +1,27 @@
+version: "3"
+
+services:
+  twcmanager:
+    image: twcmanager/twcmanager:v1.3.4
+    restart: always
+    devices:
+      - "/dev/bus/usb:/dev/bus/usb"
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
+    ports:
+      - 80:80
+      - 8080:8080
+    environment:
+#      - TZ=Australia/Sydney
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket
+    volumes:
+      - /etc/twcmanager:/etc/twcmanager
+      - /etc/localtime:/etc/localtime:ro
+      - /proc/1/ns/:/rootns
+      - /run/dbus:/run/dbus:ro
+    # Note: I recommend removing the following if there's no chance that
+    # you will need bluetooth (BLE) access
+    cap_add:
+      - CAP_NET_ADMIN  # Required for managing network interfaces (Bluetooth uses these)
+      - CAP_NET_RAW    # Required for raw network access (Bluetooth uses this)
+      - CAP_SYS_ADMIN  # Needed for Bluetooth HCI access
+      - CAP_SYS_PTRACE  # nsenter opens the host's network namespace through /proc/1/ns
