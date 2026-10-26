@@ -26,6 +26,7 @@ from TWCManager.Vehicle.Registry.VIN import (
 )
 from TWCManager.Vehicle.Presence import HOME, NOT_HOME, PRESUMED, presence
 from TWCManager.Vehicle.Reconcile.Belief import known, newerReading
+from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Reconcile.Outcome import RULES
 from TWCManager.Vehicle.Reconcile.Rules import satisfied
 from TWCManager.Vehicle.Watch import COVERED
@@ -640,6 +641,16 @@ def CreateHTTPHandlerClass(master):
                         else min(totals["maxAmps"], slaveTWC.maxAmps)
                     )
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
+
+                # A car on a charger no TWC reports is offered its share as
+                # its own charge rate (its desired amps), which no slave
+                # carries; a car on a TWC is already in that TWC's offer
+                for point in master.chargingPoints():
+                    if point.localEndpoints:
+                        continue
+                    for endpoint in point.vehicleEndpoints:
+                        d = master.desired.get(endpoint.vehicle.key, AMPS)
+                        totals["lastAmpsOffered"] += d.value if d else 0
 
                 data["total"] = {
                     "carsCharging": totals["carsCharging"],
