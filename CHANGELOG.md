@@ -2,6 +2,16 @@
 
 This document logs the changes per release of TWCManager.
 
+## v1.4.1 - Upcoming
+
+* Features
+    * (@MikeBishop) - The vehicle page shows BLE status (not in range, in range, pairing, paired, pairing failed, key refused) with a Bluetooth scan for the car
+    * (@MikeBishop) - The Vehicles page lists the vehicle registry (tier, providers, last seen, held limit) and can add a vehicle by VIN so a VIN-less TWC with BLE only can be set up; a vehicle added by VIN that nothing else has seen can be forgotten from its page
+* Architecture
+    * (@MikeBishop) - Serialise settings.json saves under a settings lock so a save no longer races writers on other threads
+    * (@MikeBishop) - One vehicle registry keyed by VIN holds every per-vehicle field with its source and age; reads cascade BLE then cloud and never wake a car unless asked; a TWC-reported VIN is confirmed by a second query before a vehicle is created; vehicles unseen for 30 days (config vehicle.forgetAfterDays) are forgotten
+    * (@MikeBishop) - The debug API `/api/sendTeslaAPICommand` now takes the vehicle's VIN (`vehicleVIN`) instead of the numeric vehicle ID (`vehicleID`); the web UI and debug dump read vehicles from the registry
+
 ## v1.4.0 - 2026-10-26
 
 * Features

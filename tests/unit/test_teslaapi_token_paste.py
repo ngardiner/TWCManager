@@ -295,6 +295,7 @@ def render_settings(api, master=None):
         "checkForUpdates",
         "doChargeSchedule",
         "hoursDurationList",
+        "locatedVehicles",
         "navbarItem",
         "optionList",
         "timeList",
