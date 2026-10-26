@@ -52,3 +52,18 @@ def test_dead_token_still_cleared_when_unchanged(requests_mock):
     assert p.stopCharging(VIN).kind == O.REFUSED
     assert api.fleetSlot.empty()
     assert len(calls(requests_mock, "charge_stop")) == 1
+
+
+def test_token_cleared_while_command_ran_sends_nothing_more(requests_mock):
+    # A 401 for a token another thread cleared while the command was out:
+    # nothing is left to send with, so the command is refused at once.
+    api, reg, p = fleet(requests_mock)
+
+    def first(request, context):
+        api.fleetSlot.clear()
+        context.status_code = 401
+        return "invalid bearer token"
+
+    requests_mock.post(re.compile(r".*/command/.*"), text=first)
+    assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "401")
+    assert len(calls(requests_mock, "charge_stop")) == 1

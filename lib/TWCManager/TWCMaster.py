@@ -509,12 +509,12 @@ class TWCMaster:
 
     def _budgets(self) -> dict:
         # Watts each group of endpoints may draw in all: the wiring for the
-        # Gen2 slaves, the fuses for the Gen3 units; each car limits itself
+        # Gen2 slaves, the fuses for the Gen3 units; each car limits itself.
+        # The wiring's amps convert at the voltage the TWCs measure, as the
+        # policy's amps do, so the two caps never disagree
         cfg = self.config["config"]
         budgets = {
-            "Gen2TWCs": cfg.get("wiringMaxAmpsAllTWCs", 6)
-            * cfg.get("defaultVoltage", 240)
-            * cfg.get("numberOfPhases", 1),
+            "Gen2TWCs": self.convertAmpsToWatts(cfg.get("wiringMaxAmpsAllTWCs", 6)),
             "VehicleEndpoints": float("inf"),
         }
         gen3 = self.getModuleByName("Gen3TWCs")

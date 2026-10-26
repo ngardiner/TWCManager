@@ -16,12 +16,7 @@ from unittest.mock import MagicMock
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC
 from TWCManager.TWCMaster import TWCMaster
 
-# Wiring well above the offers, so the budget is never the limit here
-THREE_PHASE_400 = {
-    "defaultVoltage": 400,
-    "numberOfPhases": 3,
-    "wiringMaxAmpsAllTWCs": 80,
-}
+THREE_PHASE_400 = {"defaultVoltage": 400, "numberOfPhases": 3}
 
 
 def _evse():
@@ -40,8 +35,14 @@ def _twc(volts):
 
 def _master(evses, amps, slaves, config):
     m = TWCMaster.__new__(TWCMaster)
-    m.config = {"config": config}
-    m.getModuleByName = lambda name: None
+    m.config = {"config": dict({"wiringMaxAmpsAllTWCs": 80}, **config)}
+    ctrl = MagicMock()
+    ctrl.maxPower = 100000
+    # A non-Gen2 controller makes the distributor run.
+    m.getModulesByType = lambda t: [
+        {"name": "Gen2TWCs", "ref": ctrl},
+        {"name": "VehicleEndpoints", "ref": ctrl},
+    ]
     m.chargingPoints = lambda: evses
     m.getMaxAmpsToDivideAmongSlaves = lambda: amps
     m.getSlaveTWCs = lambda: slaves
@@ -68,3 +69,22 @@ def test_policy_amps_reach_the_twc_unchanged():
     e.setTargetPower.side_effect = twc.setTargetPower
     _master([e], 16, [twc], THREE_PHASE_400).distributeEVSEPower()
     assert twc.pointAmps == 16
+
+
+def test_the_wiring_cap_converts_at_the_measured_voltage():
+    # defaultVoltage set to the 400 V line-to-line voltage while the TWCs
+    # measure 240 V per phase: at defaultVoltage the 48 A wiring would budget
+    # 80 A of TWC current. Two TWCs together stay within the wiring
+    twcs = []
+    for _ in range(2):
+        twc = Gen2TWC.__new__(Gen2TWC)
+        twc.voltsPhaseA = twc.voltsPhaseB = twc.voltsPhaseC = 240
+        twcs.append(twc)
+    evses = []
+    for twc in twcs:
+        e = _evse()
+        e.setTargetPower.side_effect = twc.setTargetPower
+        evses.append(e)
+    config = dict(THREE_PHASE_400, wiringMaxAmpsAllTWCs=48)
+    _master(evses, 80, twcs, config).distributeEVSEPower()
+    assert sum(t.pointAmps for t in twcs) <= 48

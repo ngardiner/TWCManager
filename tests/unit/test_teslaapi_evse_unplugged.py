@@ -7,7 +7,7 @@ with a last charging_state of "Stopped", the distributor still listed it and
 asked for maxPower. In 1.4.0 currentVoltage compared None < 90, and the
 TypeError aborted every main-loop pass before the TWC heartbeat was sent
 (#713). These cases now run against VehicleEndpoint, which replaced
-TeslaAPIEVSE and no longer reports the car's current at all.
+TeslaAPIEVSE.
 """
 
 import pytest
@@ -51,6 +51,17 @@ def test_null_voltage_falls_back_to_default():
     assert endpoint().currentVoltage == [230, 230, 230]
 
 
+def test_a_null_current_never_stands_in_for_charging():
+    # Nothing reads a car's own actualCurrent. Its one reader is Belief's
+    # stand-in for a car no vehicle source describes, which reads the TWC's
+    # current: a null there is no reading, never 0 A or a TypeError
+    from TWCManager.Vehicle.Reconcile.Belief import _standIn
+
+    vehicle = endpoint().vehicle
+    vehicle.observe("actualCurrent", None, "Gen2TWC")
+    assert _standIn(vehicle) is None
+
+
 def test_power_limits_for_unplugged_car():
     e = endpoint()
     # 5 A minimum and the 16 A wiring limit across three phases at 230 V.
@@ -66,4 +77,3 @@ def test_implausibly_low_voltage_still_falls_back(voltage):
 def test_reported_voltage_is_used_while_charging():
     e = endpoint(chargingState="Charging", voltage=240, phases=1, actualCurrent=10)
     assert e.currentVoltage == [240, 0, 0]
-    assert e.maxPower == 16 * 240

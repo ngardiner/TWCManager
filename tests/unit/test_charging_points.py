@@ -267,7 +267,7 @@ def asleepUnderSixAmps(m, twcVolts, carMax=None):
 
 def test_a_car_read_under_the_sleep_pilot_still_gets_the_share():
     m = real(); s = asleepUnderSixAmps(m, 243)
-    m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(48 * 240 / 243)
+    m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(48)
     m.vehicleRegistry.get(VIN).observe("chargeCurrentRequestMax", 32, "TeslaBLE")    # the car's own maximum binds
     m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(32)
 
