@@ -86,6 +86,7 @@ This document logs the changes per release of TWCManager.
 * Fix: A Gen2 TWC that reports no voltage falls back to defaultVoltage on every configured phase, not just phase A
 * Fix: The vehicle page shows BLE pairing status, and tells you to tap your key card after a pairing request
 * Fix: VehiclePriority answers enabled() directly instead of dispatching and logging it several times a second
+* Fix: MQTTStatus logs one line while the broker is unreachable instead of one per skipped publish
 
 ## v1.3.4 - 2026-04-24
 * Features

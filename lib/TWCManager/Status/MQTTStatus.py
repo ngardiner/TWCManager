@@ -37,6 +37,9 @@ class MQTTStatus:
 
     client = None
     connected = False
+    # Set once a skipped publish is logged, so a broker outage logs one line
+    # rather than one per status update. Cleared on (re)connect.
+    skipLogged = False
     __client_lock = threading.Lock()
 
     def __init__(self, master):
@@ -134,6 +137,7 @@ class MQTTStatus:
         if rc == 0:
             self.connected = True
             self.connectionState = 1
+            self.skipLogged = False
             logger.log(
                 logging.DEBUG2,
                 f"MQTT connection established to {self.brokerIP}:{self.brokerPort}",
@@ -314,7 +318,11 @@ class MQTTStatus:
 
         # Check connection state before attempting to publish
         if not self.connected:
-            logger.debug(f"MQTT not connected; skipping publish to {topic}")
+            if not self.skipLogged:
+                logger.debug(
+                    "MQTT not connected; skipping publishes until it reconnects"
+                )
+                self.skipLogged = True
             return False
 
         # Perform rate limiting first (as there are some very chatty topics).
