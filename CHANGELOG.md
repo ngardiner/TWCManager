@@ -53,6 +53,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Under Charge Rate Control mode 2 (and mode 3 below 6 A), the TWC offers the car's share until the car's rate is confirmed, then its maximum; a rate command that keeps failing no longer leaves the TWC at its maximum while the car draws more than its share. A car no provider can set the rate for is held to its share by the TWC
     * (@MikeBishop) - A charge limit is only changed when its current value is known (from any source); TeslaBLE no longer sets a limit it could not read
     * (@MikeBishop) - Owner API commands for a `command_signing: off` vehicle sit just ahead of the Fleet API in the command order, so with both tokens such a vehicle's commands go to the free Owner API, and to the Fleet API once Tesla refuses them. A 410 or 412 (or "only available on fleetapi") stops Owner API commands and wakes for every car on that token until it is entered or synced again, logged once as an error; reads continue (#659)
+    * (@MikeBishop) - The READMEs open with the setups TWCManager supports (charging stations, command paths to the car, telemetry sources and energy sources, and what each adds), and the docs are brought in line with 1.4.1: Gen3-only and car-only installs, Bluetooth under Docker, the Vehicles page, the Owner and Fleet APIs, and settings and behaviour that have changed or gone
 
 ## v1.4.0 - 2026-10-26
 
