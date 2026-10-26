@@ -66,6 +66,7 @@ class ControlTick(threading.Thread):
             ipc.processIPC()
         if self.master.watch:
             self._guarded("watch", self.master.watch.pass_)
+        self._guarded("history", self.master.sampleHistory)
         # Hourly, forget vehicles no one has claimed or seen for the window
         if time.time() - self.master.lastVehicleExpiry > 3600:
             self.master.lastVehicleExpiry = time.time()

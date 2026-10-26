@@ -349,3 +349,18 @@ def test_the_offered_total_counts_cars_on_chargers_no_twc_reports():
     _handler(master).do_API_GET.__func__(request)
     body = request.wfile.write.call_args[0][0]
     assert json.loads(body.decode("utf-8"))["total"]["lastAmpsOffered"] == 32
+
+
+def test_the_history_api_shows_the_current_bucket_with_no_twc():
+    # The live bucket is the charger load's mean, Gen2 or not
+    master = _master(_registry())
+    master.getSlaveTWCs = Mock(return_value=[])
+    master.settings = {}
+    master.historyWatts = Mock(return_value=3840.0)
+    request = Mock()
+    request.url = urllib.parse.urlparse("/api/getHistory")
+    _handler(master).do_API_GET.__func__(request)
+    rows = json.loads(request.wfile.write.call_args[0][0].decode("utf-8"))
+    assert len(rows) == 48 * 12
+    assert rows[-1]["charger_power"] == 3840.0
+    assert {r["charger_power"] for r in rows[:-1]} == {0}

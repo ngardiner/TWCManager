@@ -337,6 +337,7 @@ class TestTWCMasterHistory:
                 "subtractChargerLoad": False,
                 "treatGenerationAsGridDelivery": False,
                 "wiringMaxAmpsAllTWCs": 80,
+                "minAmpsPerTWC": 6,
                 "maxAmpsAllowedFromGrid": None,
             }
         }
@@ -366,6 +367,46 @@ class TestTWCMasterHistory:
         master.advanceHistorySnap()
         
         assert master.nextHistorySnap > datetime.now().astimezone()
+
+    def test_history_counts_every_charger_without_a_gen2_twc(self, master):
+        # A Gen3 unit and a watched car on another charger, no Gen2 slave
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[Mock(currentAmps=16)]))
+        master.watch = Mock(chargingAmps=Mock(return_value=8))
+        master.queue_background_task = Mock()
+        master.advanceHistorySnap()
+        master.sampleHistory()
+        master.sampleHistory()
+        assert master.historyWatts() == master.convertAmpsToWatts(24)
+
+        snap = datetime.now().astimezone() - timedelta(seconds=1)
+        master.nextHistorySnap = snap
+        master.sampleHistory()
+        # Kept under the start of the five minutes that just ended
+        (start, watts), = master.settings["history"]
+        assert start == (snap - timedelta(minutes=5)).isoformat(timespec="seconds")
+        assert watts == master.convertAmpsToWatts(24)
+        assert master.historyWatts() == 0
+        master.queue_background_task.assert_called_once_with({"cmd": "saveSettings"})
+
+    def test_an_idle_bucket_keeps_no_history(self, master):
+        master.queue_background_task = Mock()
+        master.sampleHistory()
+        master.nextHistorySnap = datetime.now().astimezone() - timedelta(seconds=1)
+        master.sampleHistory()
+        assert master.settings.get("history", []) == []
+        master.queue_background_task.assert_not_called()
+
+    def test_history_older_than_two_days_is_dropped_at_a_snap(self, master):
+        master.watch = Mock(chargingAmps=Mock(return_value=10))
+        master.queue_background_task = Mock()
+        old = (datetime.now().astimezone() - timedelta(days=3)).isoformat()
+        master.settings["history"] = [(old, 1000.0)]
+        master.sampleHistory()
+        master.nextHistorySnap = datetime.now().astimezone() - timedelta(seconds=1)
+        master.sampleHistory()
+        assert [w for _, w in master.settings["history"]] == [
+            master.convertAmpsToWatts(10)
+        ]
 
 
 class TestSettingsInitialization:
