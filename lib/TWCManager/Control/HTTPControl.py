@@ -1,3 +1,4 @@
+import errno
 import jinja2
 import json
 import logging
@@ -24,6 +25,23 @@ logger = LoggerFactory.get_logger("HTTP", "Control")
 
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
     address_family = socket.AF_INET6
+
+
+class ThreadingSimpleServerIPv4(ThreadingMixIn, HTTPServer):
+    address_family = socket.AF_INET
+
+
+def createServer(port, handler):
+    # Listen on IPv6 (which also accepts IPv4 on a dual-stack host), falling
+    # back to IPv4 only on a host with IPv6 disabled (#721). Any other error,
+    # such as the port being in use, is raised to the caller.
+    try:
+        return ThreadingSimpleServer(("::", port), handler)
+    except OSError as e:
+        if e.errno not in (errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL):
+            raise
+        logger.info("HTTPControl: IPv6 unavailable (%s), listening on IPv4 only", e)
+        return ThreadingSimpleServerIPv4(("0.0.0.0", port), handler)
 
 
 class HTTPControl:
@@ -74,7 +92,7 @@ class HTTPControl:
 
         while port_attempt < max_port_attempts and httpd is None:
             try:
-                httpd = ThreadingSimpleServer(("::", self.httpPort), HTTPHandler)
+                httpd = createServer(self.httpPort, HTTPHandler)
                 logger.info(
                     "HTTPControl: HTTP server created successfully on port %s",
                     self.httpPort,
