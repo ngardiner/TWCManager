@@ -4,13 +4,17 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
 
-## v1.3.5 - Upcoming
+## v1.3.4.post1 - 2026-10-26
+
+**Bugfix release for the Fleet API line**
 
 * Bugfixes
     * Fix: Fronius read timeouts are logged and skipped instead of raising a traceback
     * Fix: An HTTP POST without a Content-Length header no longer crashes the request handler (closes #666)
     * Fix: A 401 on a Tesla API vehicle command refreshes an expired token and retries once, and clears a dead token so commands fall back to BLE (closes #689)
     * (@MikeBishop) - Fix: The Docker image installs TWCManager, and the sample config parses again (#718)
+* Architecture
+    * (@MikeBishop) - Release Docker images also move the base version tag (v1.3.4) and minor line tag (v1.3) (#720)
 
 ## v1.3.4 - 2026-10-23
 
