@@ -185,16 +185,23 @@ class Watch:
                 where = presence(self.master, v)
                 yield v, where, situation(self.master, v, where)
 
+    def chargingAmps(self) -> float:
+        # Cars charging at home on chargers that report to no TWC, watched or
+        # covered by a feed: a TWC naming a car counts its draw itself
+        return sum(
+            v.value("actualCurrent") or 0
+            for v in self.master.vehicleRegistry.vehicles()
+            if not v.isAnonymous
+            and twcVinAt(self.master, v) <= NEVER
+            and situation(self.master, v) == HOME_CHARGING
+        )
+
     def unexplainedWatts(self) -> float:
         # Consumption less the charging known of, where the meter sees it
         m = self.master
         if not m.subtractChargerLoad:
             return m.getConsumption()
-        gen3 = m.getModuleByName("Gen3TWCs")
-        amps = sum(u.currentAmps for u in (gen3.allEVSEs if gen3 else []))
-        for v, _, state in self._watched():
-            amps += (v.value("actualCurrent") or 0) if state == HOME_CHARGING else 0
-        return m.getConsumption() - m.getChargerLoad() - m.convertAmpsToWatts(amps)
+        return m.getConsumption() - m.getChargerLoad()
 
     def loadSample(self, now: Optional[float] = None) -> None:
         # A step nothing known explains may be a car starting or ending a

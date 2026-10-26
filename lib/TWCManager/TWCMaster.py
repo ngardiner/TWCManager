@@ -965,9 +965,15 @@ class TWCMaster:
             logger.warning("Plug session update failed: %s", e, exc_info=True)
 
     def getChargerLoad(self):
-        # Calculate in watts the load that the charger is generating so
-        # that we can exclude it from the consumption if necessary
+        # The watts charging draws through the meter, excluded from the
+        # house's consumption under subtractChargerLoad: what the Gen2 slaves
+        # report, what the Gen3 units read, and the watched cars charging at
+        # home on chargers no TWC reports. Leaving any out counts a car's own
+        # draw as house load, and a green policy then shrinks its offer
+        gen3 = self.getModuleByName("Gen3TWCs")
         amps = self.getTotalAmpsInUse()
+        amps += sum(u.currentAmps for u in (gen3.allEVSEs if gen3 else []))
+        amps += self.watch.chargingAmps() if self.watch else 0
         return self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
 
     def getConsumption(self):

@@ -29,7 +29,7 @@ def test_a_step_up_reads_the_awake_home_car_and_a_step_down_reads_the_charging_o
 def test_known_draw_is_subtracted_only_when_configured():
     m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
     v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("actualCurrent", 20, "TeslaBLE")
-    w = Watch(m, clock=c); m.setConsumption("t", 6000)
+    w = m.watch = Watch(m, clock=c); m.setConsumption("t", 6000)
     m.subtractChargerLoad = False; assert w.unexplainedWatts() == 6000
     m.subtractChargerLoad = True;  assert w.unexplainedWatts() == pytest.approx(6000 - 20 * 240)
 
@@ -66,3 +66,34 @@ def test_a_cycling_load_reads_a_car_once_a_courtesy_window():
     assert reads.count == 1
     c.t += 600; step(m, w, c, 2500, 500); step(m, w, c, 500, 2500); w.pass_(); runPending(r.ble)
     assert reads.count == 2
+
+
+def test_the_charger_load_counts_gen3_units_and_watched_cars_charging_at_home():
+    # A car's own draw left in the house's consumption shrinks its green offer
+    from types import SimpleNamespace
+    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
+    v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("actualCurrent", 20, "TeslaBLE")
+    gen3 = SimpleNamespace(allEVSEs=[SimpleNamespace(currentAmps=16.0)])
+    lookup = m.getModuleByName
+    m.getModuleByName = lambda name: gen3 if name == "Gen3TWCs" else lookup(name)
+    m.getRealPowerFactor = lambda amps: 1
+    assert m.getChargerLoad() == pytest.approx(16 * 240)                 # no watch: Gen3 alone
+    m.watch = Watch(m, clock=c)
+    assert m.getChargerLoad() == pytest.approx((16 + 20) * 240)
+    m.subtractChargerLoad = True; m.setConsumption("t", 9000)
+    assert m.watch.unexplainedWatts() == pytest.approx(9000 - 36 * 240)
+
+
+def test_the_charger_load_counts_a_feed_covered_car_once_and_a_twc_named_car_not_at_all():
+    # A feed covers the car, so the watch leaves it alone; its draw is still
+    # the charger's. A TWC naming it counts the draw on its own
+    from tests.unit.reconcile_helpers import gen2Slave, liveFeed
+    m, r, v, c = setup(here=False); placeAt(m, v, HOME); liveFeed(m, "TeslaMateVehicle")
+    for field, value in (("state", "online"), ("chargingState", "Charging"), ("actualCurrent", 20)):
+        v.observe(field, value, "TeslaMateVehicle")
+    m.getRealPowerFactor = lambda amps: 1
+    w = m.watch = Watch(m, clock=c)
+    assert w.chargingAmps() == 20
+    m.vehicleRegistry.observeTwcVin("8244", VIN); gen2Slave(m, "8244", state=0x03)
+    assert w.chargingAmps() == 0
+

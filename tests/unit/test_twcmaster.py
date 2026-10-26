@@ -86,7 +86,7 @@ class TestTWCMasterAmperage:
         from TWCManager.TWCMaster import TWCMaster
         master = TWCMaster("AB", mock_config)
         master.registerModule = Mock()
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[]))
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -140,7 +140,7 @@ class TestTWCMasterSlaveManagement:
         from TWCManager.TWCMaster import TWCMaster
         master = TWCMaster("AB", mock_config)
         master.registerModule = Mock()
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[]))
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -198,7 +198,7 @@ class TestTWCMasterSettings:
         from TWCManager.TWCMaster import TWCMaster
         master = TWCMaster("AB", mock_config)
         master.registerModule = Mock()
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[]))
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -238,7 +238,7 @@ class TestTWCMasterConfiguration:
         from TWCManager.TWCMaster import TWCMaster
         master = TWCMaster("AB", mock_config)
         master.registerModule = Mock()
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[]))
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -347,7 +347,7 @@ class TestTWCMasterHistory:
         from TWCManager.TWCMaster import TWCMaster
         master = TWCMaster("AB", mock_config)
         master.registerModule = Mock()
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[]))
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -391,7 +391,7 @@ class TestSettingsInitialization:
         from TWCManager.TWCMaster import TWCMaster
         master = TWCMaster("AB", mock_config)
         master.registerModule = Mock()
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[]))
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -551,7 +551,7 @@ class TestSettingsEdgeCases:
         from TWCManager.TWCMaster import TWCMaster
         master = TWCMaster("AB", mock_config)
         master.registerModule = Mock()
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[]))
         master.getModulesByType = Mock(return_value=[])
         return master
     
@@ -627,7 +627,7 @@ class TestSubtractChargerLoadGetMaxAmps:
 
         master = TWCMaster("AB", mock_config)
         master.registerModule = Mock()
-        master.getModuleByName = Mock(return_value=Mock())
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[]))
         master.getModulesByType = Mock(return_value=[])
         return master
 
