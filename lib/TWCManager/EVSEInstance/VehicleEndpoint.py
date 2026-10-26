@@ -1,22 +1,33 @@
 """
-EVSEInstance for a registry vehicle whose charge rate a vehicle provider sets.
+A registry vehicle whose charge rate a vehicle provider sets, as a charging
+endpoint.
 
 The endpoint reads only the registry's latest values and never calls a
-provider: the distributor runs on the serial thread, so a rate is desired
-state, which the reconciler delivers through the provider order (the local
-path first; a paid provider only where no local one covers the rate).
+provider: the distributor runs on the control tick, which must not wait on
+a car, so a rate is desired state, which the reconciler delivers through the
+provider order (the local path first; a paid provider only where no local
+one covers the rate). The endpoint holds no state of its own.
 """
+
+from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Reconcile.Belief import known
+from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
+
+# A TWC drawing at least this is charging a car: the threshold at which
+# TWCSlave flags isCharging and queries the VIN
+POWER_FLOWING_AMPS = 1.0
 
 
 class VehicleEndpoint(EVSEInstance):
     # Tesla vehicles accept as low as 5 A (car-side minimum)
     MIN_AMPS = 5
+    isLocal = False
+    controllers = ["VehicleEndpoints"]
 
     def __init__(self, vehicle, order, master):
         self.vehicle = vehicle
@@ -24,25 +35,12 @@ class VehicleEndpoint(EVSEInstance):
         self.master = master
         self.configConfig = master.config.get("config", {})
 
-    # ------------------------------------------------------------------
-    # EVSEInstance: identity
-    # ------------------------------------------------------------------
-
     @property
     def ID(self) -> str:
         return "Vehicle-%s" % self.vehicle.vin
 
-    # ------------------------------------------------------------------
-    # EVSEInstance: capabilities
-    # ------------------------------------------------------------------
-
     def _candidates(self):
         return self.order.candidates(self.vehicle, SET_AMPS)
-
-    @property
-    def provider(self) -> str:
-        candidates = self._candidates()
-        return candidates[0].name if candidates else ""
 
     @property
     def isReadOnly(self) -> bool:
@@ -52,25 +50,9 @@ class VehicleEndpoint(EVSEInstance):
         return not self._candidates()
 
     @property
-    def isLocal(self) -> bool:
-        return False
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: state
-    # ------------------------------------------------------------------
-
-    @property
-    def isCharging(self) -> bool:
-        return self.vehicle.value("chargingState") == "Charging"
-
-    @property
     def wantsToCharge(self) -> bool:
         # "Stopped" is a paused session: the car takes power if offered
         return self.vehicle.value("chargingState") in ("Charging", "Stopped")
-
-    @property
-    def currentAmps(self) -> float:
-        return self.vehicle.value("actualCurrent", 0) or 0
 
     @property
     def currentVoltage(self) -> list:
@@ -93,14 +75,6 @@ class VehicleEndpoint(EVSEInstance):
         ]
 
     @property
-    def currentPower(self) -> float:
-        return self.convertAmpsToWatts(self.currentAmps, self.currentVoltage)
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: power limits
-    # ------------------------------------------------------------------
-
-    @property
     def minPower(self) -> float:
         return self.convertAmpsToWatts(self.MIN_AMPS, self.currentVoltage)
 
@@ -109,10 +83,6 @@ class VehicleEndpoint(EVSEInstance):
         return self.convertAmpsToWatts(
             vehicleMaxAmps(self.vehicle, self.configConfig), self.currentVoltage
         )
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: optional properties
-    # ------------------------------------------------------------------
 
     @property
     def currentVIN(self) -> str:
@@ -127,14 +97,6 @@ class VehicleEndpoint(EVSEInstance):
         if self.wantsToCharge or self.vehicle.value("pluggedIn") is True:
             return True
         return None
-
-    @property
-    def controllers(self) -> list:
-        return ["VehicleEndpoints"]
-
-    # ------------------------------------------------------------------
-    # EVSEInstance: control
-    # ------------------------------------------------------------------
 
     def requestedAmps(self):
         # The car's own current request we believe (a read or our write)
@@ -153,3 +115,84 @@ class VehicleEndpoint(EVSEInstance):
         amps = max(1, int(self.convertWattsToAmps(watts, self.currentVoltage)))
         # The reconciler sends it once; a newer reading that disagrees resends
         desired.set(key, AMPS, amps, "distributor")
+
+
+def _unknownKey(key) -> bool:
+    # A point that cannot name its car: no key, or an anonymous plug session
+    return key is None or isAnonKey(key)
+
+
+def _blindTWCs(master) -> Tuple[bool, bool]:
+    """How far an unnamed car on a local charging point may reach.
+
+    Returns (blind, unknown). A slave names its car when its vehicleKey
+    is a VIN (currentVIN, or lastVIN while it reports a plugged state),
+    so a stopped car does not hide the others. unknown is True when some
+    slave's key is None or anonymous; blind when such a slave reports a
+    plugged state (non-00) or draws power, so it might be serving any
+    car. An occupied Gen3 that can't name its car (anonymous, or no
+    key at all) could be serving any account car, so it blinds too. So
+    does an open Gen2 link with no slave linked (at startup, or after a
+    slave times out); a closed link controls no TWC. A failed scan fails
+    closed.
+    """
+    blind = False
+    unknown = False
+    try:
+        slaves = master.getSlaveTWCs()
+        if not slaves and master.busUp():
+            blind = unknown = True
+        for slave in slaves:
+            if not _unknownKey(getattr(slave, "vehicleKey", None)):
+                continue
+            unknown = True
+            if (
+                slave.reportedState != 0x00
+                or slave.reportedAmpsActual >= POWER_FLOWING_AMPS
+            ):
+                blind = True
+        gen3 = master.getModuleByName("Gen3TWCs")
+        if gen3 is not None:
+            for unit in gen3.devices():
+                if unit.occupied is True and _unknownKey(unit.vehicleKey):
+                    blind = True
+    except Exception:
+        return True, True
+    return blind, unknown
+
+
+def _telemetryPluggedIn(vehicle):
+    # A live telemetry feed (TeslaMate) says the cable is plugged in.
+    # Live is the telemetryChargeLimit criterion: syncSource is the
+    # telemetry module, which reverts to "TeslaAPI" after SYNC_TIMEOUT.
+    return vehicle.syncSource != "TeslaAPI" and vehicle.value("pluggedIn") is True
+
+
+def vehicleEndpoints(master) -> List[VehicleEndpoint]:
+    """A VehicleEndpoint for each registry car an enabled TeslaAPI places
+    at home.
+
+    While a charging point that can't name its car is plugged in or draws
+    power, it might be serving any of them, so none is listed: an
+    endpoint would get its own power share and its own rate commands. A
+    Gen2 idle at 00 may still hide a plugged-in car, so while any point
+    can't name its car, a car live telemetry says is plugged in is not
+    listed either. A car on a named point is listed; the distributor
+    merges it with that point. Read-only endpoints are listed too (the
+    distributor skips them). Dropping an endpoint strands nothing: stops
+    go to master.stopCarsCharging by VIN.
+    """
+    carapi = master.getModuleByName("TeslaAPI")
+    try:
+        if carapi is None or not carapi.enabled():
+            return []
+    except Exception:
+        return []
+    blind, unknown = _blindTWCs(master)
+    if blind:
+        return []
+    return [
+        VehicleEndpoint(vehicle, master.providerOrder, master)
+        for vehicle, car in master.vehicleRegistry.attached("TeslaAPI")
+        if car.atHome and not (unknown and _telemetryPluggedIn(vehicle))
+    ]

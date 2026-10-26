@@ -388,3 +388,78 @@ class TestLoggerFactoryIntegration:
 
         assert hasattr(LoggerFactory, "get_logger")
         assert callable(LoggerFactory.get_logger)
+
+
+def _launcher_source():
+    with open(os.path.join(_LIB_DIR, "TWCManager", "TWCManager.py")) as f:
+        return f.read()
+
+
+def _launcher_function(name):
+    # TWCManager.py runs at import: one function is compiled from its source
+    path = os.path.join(_LIB_DIR, "TWCManager", "TWCManager.py")
+    fn = next(
+        n
+        for n in ast.parse(_launcher_source()).body
+        if isinstance(n, ast.FunctionDef) and n.name == name
+    )
+    ns = {}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), path, "exec"), ns)
+    return ns[name]
+
+
+def _loop_source():
+    # The serial loop: from the outer "while True:" to the shutdown
+    source = _launcher_source()
+    start = source.index("\nwhile True:")
+    return source[start : source.index("shutdownRequested", start)]
+
+
+class TestTokenRefreshTask:
+    """Tesla tokens refresh on the background thread, never the serial loop (#690)."""
+
+    def _run(self, carapi):
+        master = Mock()
+        master.getModuleByName.return_value = carapi
+        refreshTokens = _launcher_function("refreshTokens")
+        try:
+            refreshTokens(master)
+        except RuntimeError:
+            pass
+        return master
+
+    @pytest.mark.parametrize("pending", [True, False])
+    def test_refresh_tokens_task_requeues_itself(self, pending):
+        carapi = Mock()
+        carapi.listPending.return_value = pending
+        master = self._run(carapi)
+        carapi.refreshTokenIfNeeded.assert_called_once_with()
+        assert carapi.loadList.call_count == (1 if pending else 0)
+        master.queue_background_task.assert_called_once_with(
+            {"cmd": "refreshTokens"}, delay=300
+        )
+
+    def test_a_raising_refresh_still_requeues(self):  # F10
+        carapi = Mock()
+        carapi.refreshTokenIfNeeded.side_effect = RuntimeError("boom")
+        master = self._run(carapi)
+        master.queue_background_task.assert_called_once_with(
+            {"cmd": "refreshTokens"}, delay=300
+        )
+
+    def test_without_teslaapi_it_still_requeues(self):
+        master = self._run(None)
+        master.queue_background_task.assert_called_once_with(
+            {"cmd": "refreshTokens"}, delay=300
+        )
+
+    def test_it_is_dispatched_and_queued_at_startup(self):
+        source = _launcher_source()
+        assert 'task["cmd"] == "refreshTokens"' in source
+        assert 'master.queue_background_task({"cmd": "refreshTokens"}, delay=300)' in source
+
+    def test_the_serial_loop_never_refreshes_tokens(self):
+        src = _loop_source()
+        assert "while True:" in src and "flushRS485" in src
+        assert "refreshTokenIfNeeded" not in src
+        assert "lastTeslaTokenRefreshCheck" not in src

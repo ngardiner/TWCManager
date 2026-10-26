@@ -1,7 +1,10 @@
 #! /usr/bin/python3
 
-from TWCManager.EVSEController.Gen2TWCs import Gen2TWCs
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
+from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
+from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
+from TWCManager.TWCSlave import Offer, OfferContext
+from collections import deque
 from datetime import datetime, timedelta
 import json
 import logging
@@ -38,8 +41,26 @@ from TWCManager.Vehicle.Reconcile.Targets import (
 logger = LoggerFactory.get_logger("Master", "Master")
 
 
+# A fresh install's settings, and the keys every loaded settings file gets
+DEFAULT_SETTINGS = {
+    "chargeNowAmps": 0,
+    "chargeStopMode": "1",
+    "chargeNowTimeEnd": 0,
+    "homeLat": 10000,
+    "homeLon": 10000,
+    "hourResumeTrackGreenEnergy": -1,
+    "kWhDelivered": 119,
+    "nonScheduledAmpsMax": 0,
+    "respondToSlaves": 1,
+    "scheduledAmpsDaysBitmap": 0x7F,
+    "scheduledAmpsEndHour": -1,
+    "scheduledAmpsMax": 0,
+    "scheduledAmpsStartHour": -1,
+    "sendServerTime": 0,
+}
+
+
 class TWCMaster:
-    allowed_flex = 0
     backgroundTasksQueue = queue.Queue()
     backgroundTasksCmds = {}
     backgroundTasksLock = threading.Lock()
@@ -54,7 +75,6 @@ class TWCMaster:
     generationValues = {}
     lastkWhMessage = time.time()
     lastkWhPoll = 0
-    lastTeslaTokenRefreshCheck = 0
     lastSaveFailed = 0
     lastTWCResponseMsg = None
     lastUpdateCheck = 0
@@ -66,29 +86,13 @@ class TWCMaster:
     overrideMasterHeartbeatData = b""
     protocolVersion = 2
     releasedModules = []
-    settings = {
-        "chargeNowAmps": 0,
-        "chargeStopMode": "1",
-        "chargeNowTimeEnd": 0,
-        "homeLat": 10000,
-        "homeLon": 10000,
-        "hourResumeTrackGreenEnergy": -1,
-        "kWhDelivered": 119,
-        "nonScheduledAmpsMax": 0,
-        "respondToSlaves": 1,
-        "scheduledAmpsDaysBitmap": 0x7F,
-        "scheduledAmpsEndHour": -1,
-        "scheduledAmpsMax": 0,
-        "scheduledAmpsStartHour": -1,
-        "sendServerTime": 0,
-    }
+    settings = dict(DEFAULT_SETTINGS)
     slaveHeartbeatData = bytearray(
         [0x01, 0x0F, 0xA0, 0x0F, 0xA0, 0x00, 0x00, 0x00, 0x00]
     )
     slaveTWCs = {}
     slaveTWCRoundRobin = []
     stopTimeout = datetime.max
-    spikeAmpsToCancel6ALimit = 16
     subtractChargerLoad = False
     treatGenerationAsGridDelivery = False
     TWCID = None
@@ -116,6 +120,9 @@ class TWCMaster:
         self.modules = {}
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
+        # RS-485 messages from any thread, sent by the serial loop between
+        # slave replies (sendRS485, flushRS485)
+        self._outbox = deque()
         # Guards mutation of self.settings from non-serial threads; saves
         # serialise under it and write the file outside it. Lock order:
         # TeslaBLE._bleLock -> settingsLock -> registry/vehicle locks.
@@ -140,22 +147,7 @@ class TWCMaster:
         # hour after startup, once providers have reclaimed their cars, so a
         # persisted car Fleet still lists is not expired and re-created.
         self.lastVehicleExpiry = time.time()
-        self.settings = {
-            "chargeNowAmps": 0,
-            "chargeStopMode": "1",
-            "chargeNowTimeEnd": 0,
-            "homeLat": 10000,
-            "homeLon": 10000,
-            "hourResumeTrackGreenEnergy": -1,
-            "kWhDelivered": 119,
-            "nonScheduledAmpsMax": 0,
-            "respondToSlaves": 1,
-            "scheduledAmpsDaysBitmap": 0x7F,
-            "scheduledAmpsEndHour": -1,
-            "scheduledAmpsMax": 0,
-            "scheduledAmpsStartHour": -1,
-            "sendServerTime": 0,
-        }
+        self.settings = dict(DEFAULT_SETTINGS)
         self.advanceHistorySnap()
         if config["config"].get("maxAmpsAllowedFromGrid", None) is None:
             self.setLimitAmpsToDivideAmongSlaves(
@@ -164,12 +156,6 @@ class TWCMaster:
 
         # Register ourself as a module, allows lookups via the Module architecture
         self.registerModule({"name": "master", "ref": self, "type": "Master"})
-
-        # Register the Gen2TWCs EVSEController so power distribution can
-        # discover RS485 slaves through the unified EVSEController interface
-        self.registerModule(
-            {"name": "Gen2TWCs", "ref": Gen2TWCs(self), "type": "EVSEController"}
-        )
 
     def addkWhDelivered(self, kWh):
         self.settings["kWhDelivered"] = self.settings.get("kWhDelivered", 0) + kWh
@@ -198,12 +184,12 @@ class TWCMaster:
 
     def withdrawStartCharging(self, vin):
         # A start not wanted any more (too little on offer): its desire goes;
-        # its record stays for the next start (I4)
+        # its record stays for the next start
         for v in self._chargeTargets(vin, START_CHARGING):
             self.desired.clearIf(v.key, CHARGING, True)
 
     def _chargeTargets(self, vin, capability):
-        # As main: a named car; for an anonymous point, a mode-1 start or
+        # A named car; for an anonymous point, a mode-1 start or
         # stop and a mode-3 start went unaddressed (broadcastVehicles)
         targets = targetsFor(self, vin or None, capability)
         mode = int(self.settings.get("chargeStopMode", 1))
@@ -219,7 +205,7 @@ class TWCMaster:
     def _wantCharging(self, vin, value):
         capability = START_CHARGING if value else STOP_CHARGING
         for v in self._chargeTargets(vin, capability):
-            # The same value withdrawn earlier keeps its record inside main's
+            # The same value withdrawn earlier keeps its record inside the
             # 60 s gate, unless the car has reported since its last send
             rec = self.desired.record(v.key, CHARGING)
             keep = rec.lastSentAt > 0 and not newerReading(v, CHARGING, rec.lastSentAt)
@@ -391,9 +377,6 @@ class TWCMaster:
         # in the queue are done.
         self.backgroundTasksQueue.task_done()
 
-    def getAllowedFlex(self):
-        return self.allowed_flex
-
     def getBackgroundTask(self):
         result = None
 
@@ -513,55 +496,113 @@ class TWCMaster:
                 matched.append({"name": module, "ref": modinfo["ref"]})
         return matched
 
-    def getAllEVSEs(self) -> list:
-        """Return all EVSEInstance objects from every registered EVSEController."""
-        evses = []
-        for module in self.getModulesByType("EVSEController"):
-            evses.extend(module["ref"].allEVSEs)
-        return evses
-
     def chargingPoints(self) -> list:
-        """Every endpoint grouped into charging points by the car it serves."""
-        from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
+        # Every endpoint, grouped by the car it serves. A slave that has not
+        # replied yet reports nothing (00, 0 A), so it is offered nothing
+        gen3 = self.getModuleByName("Gen3TWCs")
+        endpoints = (
+            [s for s in self.getSlaveTWCs() if s.heardFrom]
+            + vehicleEndpoints(self)
+            + (gen3.allEVSEs if gen3 else [])
+        )
+        return groupEndpoints(self, endpoints)
 
-        return groupEndpoints(self, self.getAllEVSEs())
+    def _budgets(self) -> dict:
+        # Watts each group of endpoints may draw in all: the wiring for the
+        # Gen2 slaves, the fuses for the Gen3 units; each car limits itself
+        cfg = self.config["config"]
+        budgets = {
+            "Gen2TWCs": cfg.get("wiringMaxAmpsAllTWCs", 6)
+            * cfg.get("defaultVoltage", 240)
+            * cfg.get("numberOfPhases", 1),
+            "VehicleEndpoints": float("inf"),
+        }
+        gen3 = self.getModuleByName("Gen3TWCs")
+        if gen3 is not None:
+            budgets["Gen3TWCs"] = gen3.maxPower
+        return budgets
 
-    def distributeEVSEPower(self) -> None:
-        """Centralized watt-based power distribution across charging points.
+    def controlPass(self, now=None, distribute=True) -> None:
+        """The control tick's pass (ControlTick, fakeMaster 1 only), for
+        every install: Gen2, Gen3 and vehicle-only alike. With no charging
+        endpoint the distributor finds nothing to do.
+        """
+        now = time.time() if now is None else now
+        points = self.distributeEVSEPower() if distribute else self.chargingPoints()
+        # chargeStopMode 2 silences the heartbeat, and with it the replies:
+        # the offers hold, no stop is cancelled and no gate runs
+        if (
+            self.settings.get("respondToSlaves", 1) == 0
+            and self.settings.get("respondToSlavesExpiry", now) > now
+        ):
+            return
+        ctx = OfferContext(
+            self.getMaxAmpsToDivideAmongSlaves(),
+            self.num_cars_charging_now(),
+            int(self.settings.get("chargeRateControl", 1)),
+            self.getTotalAmpsInUse(),
+            {
+                bytes(e.TWCID): p.confirmed()
+                for p in points
+                for e in p.localEndpoints
+                if hasattr(e, "pointAmps")
+            },
+        )
+        for slave in self.getSlaveTWCs():
+            if not slave.heardFrom:
+                # Not heard from yet: no offer, so its heartbeat says nothing
+                continue
+            slave.offer = slave.offerFor(slave.pointAmps, ctx, now)
+            key = slave.vehicleKey
+            if key is not None and slave.offer.amps > 0:
+                # Power is on offer: a stop not yet delivered is moot
+                self.cancelStopCarsCharging(key)
+            gate = slave.chargeGate(now, key)
+            if gate == "cancelStop":
+                logger.debug(
+                    "Don't stop charging TWC: %s yet because: offer changed "
+                    "%ds ago (< 60) or actual amps changed %ds ago (< %d)",
+                    self.hex_str(slave.TWCID),
+                    now - slave.timeLastAmpsOfferedChanged,
+                    now - slave.timeReportedAmpsActualChangedSignificantly,
+                    slave.startStopDelay,
+                )
+            if gate:
+                {
+                    "stop": self.stopCarsCharging,
+                    "cancelStop": self.cancelStopCarsCharging,
+                    "start": self.startCarsCharging,
+                    "withdraw": self.withdrawStartCharging,
+                }[gate](key)
 
-        Replaces the per-slave fair-share amps calculation in
-        receive_slave_heartbeat with a controller-agnostic algorithm that
-        allocates per charging point: a TWC and the car it serves are one
-        point, budgeted once.  After this method runs:
-        - Gen2TWC._evseTargetAmps is set; the RS485 heartbeat then sends it.
-          With a car member, ChargingPoint splits the rate by
-          chargeRateControl and owns the car's amps.
+    def withdrawOffers(self) -> None:
+        # The control pass keeps failing, so stop offering power: a Gen2 TWC
+        # gets a 0 offer (its idle minimum) and a Gen3 unit a 0 target. A car
+        # that carries its own rate keeps its last commanded rate; only the
+        # AMPS desire is cleared. Slaves first, so a failing chargingPoints()
+        # cannot leave them on a stale offer
+        for slave in self.getSlaveTWCs():
+            if slave.heardFrom:
+                slave.offer = Offer(0, 0)
+        for point in self.chargingPoints():
+            if not point.isReadOnly:
+                point.setTargetPower(0)
+
+    def distributeEVSEPower(self) -> list:
+        """Watt-based power distribution across charging points.
+
+        The one distributor for every install. It allocates per charging
+        point: a TWC and the car it serves are one point, budgeted once.
+        After this method runs:
+        - Gen2TWC.pointAmps is set; controlPass makes the offer from it and
+          the RS485 heartbeat sends that. ChargingPoint splits the rate by
+          chargeRateControl and owns the car's amps. A slave not yet heard
+          from is no endpoint (chargingPoints) and gets no target.
         - Each Gen3 unit's own target is handed to Gen3TWCs.setUnitTarget.
         - A car on no TWC has desired amps (VehicleEndpoint.setTargetPower).
 
-        A point not wanting power (an idle TWC) gets a target of 0 and counts
-        nothing against the budget.  On the wire, TWCSlave offers it 0 when no
-        car is charging (a Gen2 treats 0 as its hardware minimum) and its
-        hardware minimum when another car charges with at least
-        minAmpsPerTWC of power per car, so it can see a car plug in.
-
-        Only runs when an EVSEController other than Gen2TWCs is registered;
-        pure Gen2 deployments keep the existing per-slave heartbeat
-        distribution.
-
-        Ported from ngardiner/TWCManager#483 (MikeBishop).
+        Returns the charging points it built.
         """
-        controllers = self.getModulesByType("EVSEController")
-        if not controllers:
-            return
-
-        # Only activate the centralized distributor when VehicleEndpoints is
-        # present — otherwise the existing per-slave heartbeat logic is sufficient
-        # and more battle-tested for pure Gen2 deployments.
-        non_gen2 = [c for c in controllers if c["name"] != "Gen2TWCs"]
-        if not non_gen2:
-            return
-
         points = self.chargingPoints()
         wants_power = [p for p in points if p.wantsToCharge and not p.isReadOnly]
 
@@ -575,11 +616,9 @@ class TWCMaster:
 
         if wants_power:
             # Per-controller remaining power budgets and point counts
-            controller_budgets: dict = {}
+            controller_budgets = self._budgets()
             controller_counts: dict = {}
-            for mod in controllers:
-                name = mod["name"]
-                controller_budgets[name] = mod["ref"].maxPower
+            for name in controller_budgets:
                 controller_counts[name] = sum(
                     1 for p in wants_power if name in p.controllers
                 )
@@ -641,6 +680,7 @@ class TWCMaster:
                 ", ".join("%s=%d W" % (pid, watts) for pid, watts in offers)
                 or "no points",
             )
+        return points
 
     # When each refused point was last logged
     _refusedPointLogged = {}
@@ -650,7 +690,12 @@ class TWCMaster:
         # left it nothing. With a plugged, named car that is a missed charge,
         # so it is said at INFO, at most hourly per point.
         now = time.time()
-        if not point.currentVIN or point.occupied is not True:
+        vins = [
+            e.vehicleKey
+            for e in point.endpoints
+            if e.vehicleKey and not isAnonKey(e.vehicleKey)
+        ]
+        if not vins or not any(e.occupied is True for e in point.endpoints):
             return
         if now - self._refusedPointLogged.get(point.ID, 0) < 3600:
             return
@@ -658,12 +703,36 @@ class TWCMaster:
         logger.info(
             "%s: %s is plugged in, but its limits leave it none of %d W",
             point.ID,
-            point.currentVIN,
+            vins[0],
             available,
         )
 
     def getInterfaceModule(self):
         return self.getModulesByType("Interface")[0]["ref"]
+
+    def busUp(self):
+        bus = self.getModulesByType("Interface")
+        return bool(bus) and getattr(bus[0]["ref"], "connected", True)
+
+    def sendRS485(self, msg):
+        # Any thread: a write in the middle of a slave's reply corrupts both
+        self._outbox.append(msg)
+
+    def flushRS485(self):
+        # Serial thread only. A closed link drops them: sent late, a stop could
+        # reach a car that should be charging by then
+        if not self.busUp():
+            if self._outbox:
+                logger.info(
+                    "Dropped %d RS-485 messages: the link is closed", len(self._outbox)
+                )
+                self._outbox.clear()
+            return 0
+        sent = 0
+        while self._outbox:
+            self.getInterfaceModule().send(self._outbox.popleft())
+            sent += 1
+        return sent
 
     def getScheduledAmpsDaysBitmap(self):
         return self.settings.get("scheduledAmpsDaysBitmap", 0x7F)
@@ -739,7 +808,7 @@ class TWCMaster:
         now = time.time()
         if now >= self.lastkWhPoll + 60:
             for slaveTWC in self.getSlaveTWCs():
-                self.getInterfaceModule().send(
+                self.sendRS485(
                     bytearray(b"\xfb\xeb")
                     + self.TWCID
                     + slaveTWC.TWCID
@@ -838,9 +907,6 @@ class TWCMaster:
             data["chargeNowAmps"] = self.settings["chargeNowAmps"]
         return data
 
-    def getSpikeAmps(self):
-        return self.spikeAmpsToCancel6ALimit
-
     def getTimeLastTx(self):
         return self.getInterfaceModule().timeLastTx
 
@@ -861,7 +927,7 @@ class TWCMaster:
             prefixByte = bytearray(b"\xfb\xf1")
 
         if prefixByte:
-            self.getInterfaceModule().send(
+            self.sendRS485(
                 prefixByte
                 + self.TWCID
                 + slaveID
@@ -972,9 +1038,10 @@ class TWCMaster:
         # When subtractChargerLoad is enabled, remove the charger's own draw
         # from consumptionA here (incremental step), consistent with what
         # getGenerationOffset() does for the de-novo step below.  Without this,
-        # the spike-to-cancel-6A-limit temporarily drives consumptionA far above
-        # generationA, making newOffer go deeply negative and clamping the result
-        # to 0 A even though net available power is still positive.
+        # a charger drawing above its share (a car ramping up, or a brief
+        # overshoot) drives consumptionA far above generationA, making
+        # newOffer go deeply negative and clamping the result to 0 A even
+        # though net available power is still positive.
         if self.subtractChargerLoad:
             chargerA = float(self.convertWattsToAmps(self.getChargerLoad()))
             consumptionA = max(0.0, consumptionA - chargerA)
@@ -1011,8 +1078,8 @@ class TWCMaster:
         return self.slaveTWCRoundRobin[id]
 
     def getSlaveTWCs(self):
-        # Returns a list of all Slave TWCs
-        return self.slaveTWCRoundRobin
+        # A copy: other threads never iterate the serial thread's live list
+        return list(self.slaveTWCRoundRobin)
 
     def getTotalAmpsInUse(self):
         # Returns the number of amps currently in use by all TWCs
@@ -1085,24 +1152,9 @@ class TWCMaster:
         backupFileName = fileName + ".backup"
 
         if not os.path.exists(fileName):
-            # Initialize with class defaults if file doesn't exist
+            # No file yet: a fresh install
             with self.settingsLock:
-                self.settings = {
-                    "chargeNowAmps": 0,
-                    "chargeStopMode": "1",
-                    "chargeNowTimeEnd": 0,
-                    "homeLat": 10000,
-                    "homeLon": 10000,
-                    "hourResumeTrackGreenEnergy": -1,
-                    "kWhDelivered": 119,
-                    "nonScheduledAmpsMax": 0,
-                    "respondToSlaves": 1,
-                    "scheduledAmpsDaysBitmap": 0x7F,
-                    "scheduledAmpsEndHour": -1,
-                    "scheduledAmpsMax": 0,
-                    "scheduledAmpsStartHour": -1,
-                    "sendServerTime": 0,
-                }
+                self.settings = dict(DEFAULT_SETTINGS)
             return
 
         # Read and parse the file(s) into a local with no lock held; the
@@ -1154,27 +1206,11 @@ class TWCMaster:
                 "If this is the case, you may need to locate the old config file and migrate some settings manually."
             )
 
-        # Step 1b - Merge loaded settings with defaults to ensure all required keys exist
-        defaults = {
-            "chargeNowAmps": 0,
-            "chargeStopMode": "1",
-            "chargeNowTimeEnd": 0,
-            "homeLat": 10000,
-            "homeLon": 10000,
-            "hourResumeTrackGreenEnergy": -1,
-            "kWhDelivered": 119,
-            "nonScheduledAmpsMax": 0,
-            "respondToSlaves": 1,
-            "scheduledAmpsDaysBitmap": 0x7F,
-            "scheduledAmpsEndHour": -1,
-            "scheduledAmpsMax": 0,
-            "scheduledAmpsStartHour": -1,
-            "sendServerTime": 0,
-        }
+        # Step 1b - every default key exists
         with self.settingsLock:
             if loaded is not None:
                 self.settings = loaded
-            for key, value in defaults.items():
+            for key, value in DEFAULT_SETTINGS.items():
                 if key not in self.settings:
                     self.settings[key] = value
             registryBlob = self.settings.get("vehicleRegistry")
@@ -1282,6 +1318,12 @@ class TWCMaster:
         return slaveTWC
 
     def num_cars_charging_now(self):
+        # A pure count, safe from any thread
+        return sum(s.isCharging for s in self.getSlaveTWCs())
+
+    def observeChargingSessions(self):
+        # Serial thread only: starts and ends charging sessions from what
+        # the slaves report
         carsCharging = 0
         for slaveTWC in self.getSlaveTWCs():
             if slaveTWC.reportedAmpsActual >= 1.0:
@@ -1336,7 +1378,7 @@ class TWCMaster:
                         self.recordVehicleSessionEnd(slaveTWC)
                         self._plugSession(slaveTWC, False)
                         # The next session lifts the car's own rate again
-                        slaveTWC._resetVehicleRateRaised()
+                        slaveTWC.plugSessions += 1
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
                 elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES or (
@@ -1364,8 +1406,6 @@ class TWCMaster:
 
         if carsCharging == 0:
             self.stopTimeout = datetime.max
-
-        return carsCharging
 
     def queue_background_task(self, task, delay=0):
         if delay > 0:
@@ -1825,7 +1865,7 @@ class TWCMaster:
     def sendStartCommand(self):
         # This function will loop through each of the Slave TWCs, and send them the start command.
         for slaveTWC in self.getSlaveTWCs():
-            self.getInterfaceModule().send(
+            self.sendRS485(
                 bytearray(b"\xfc\xb1")
                 + self.TWCID
                 + slaveTWC.TWCID
@@ -1837,7 +1877,7 @@ class TWCMaster:
         # If the subTWC parameter is supplied, we only stop the specified TWC
         for slaveTWC in self.getSlaveTWCs():
             if (not subTWC) or (subTWC == slaveTWC.TWCID):
-                self.getInterfaceModule().send(
+                self.sendRS485(
                     bytearray(b"\xfc\xb2")
                     + self.TWCID
                     + slaveTWC.TWCID
@@ -1848,9 +1888,6 @@ class TWCMaster:
         # transition: a policy change, a decision that ends an adopted value
         self.policyLimit = limit
         applyPolicyLimit(self, limit, decision=transition)
-
-    def setAllowedFlex(self, amps):
-        self.allowed_flex = amps if amps >= 0 else 0
 
     def setChargeNowAmps(self, amps):
         # Accepts a number of amps to define the amperage at which we
@@ -1881,7 +1918,7 @@ class TWCMaster:
     def setGeneration(self, source, value):
         # Some EMS modules report generation as a negative value (e.g. -5000W
         # means 5000W generated). Negate such values so the rest of the code
-        # always works with positive generation watts (closes #442).
+        # always works with positive generation watts.
         if value < 0:
             value = -value
         self.generationValues[source] = value
@@ -1973,9 +2010,6 @@ class TWCMaster:
         with self.settingsLock:
             self.settings["scheduledAmpsFlexStart"] = enabled
 
-    def setSpikeAmps(self, amps):
-        self.spikeAmpsToCancel6ALimit = amps
-
     def snapHistoryData(self):
         snaptime = self.nextHistorySnap
         avgCurrent = 0
@@ -2044,7 +2078,7 @@ class TWCMaster:
     def stopRespondingToSlaves(self):
         # Every slave stops charging once we go quiet; resumes after a minute.
         # The expiry first: the serial thread reads both without the lock, and
-        # a 0 seen with the old expiry would be reset at once (M1)
+        # a 0 seen with the old expiry would be reset at once
         with self.settingsLock:
             self.settings["respondToSlavesExpiry"] = time.time() + 60
             self.settings["respondToSlaves"] = 0

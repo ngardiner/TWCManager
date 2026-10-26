@@ -1,5 +1,5 @@
 """
-EVSEController for Tesla Wall Connector Generation 3 devices.
+The controller for Tesla Wall Connector Generation 3 devices.
 
 Gen3 TWCs do not use the RS485 TWC master/slave protocol.  Instead, each
 unit acts as a Modbus RTU *client* that polls a Neurio energy meter to
@@ -37,7 +37,7 @@ Configuration (under ``controller.Gen3TWCs`` in config.json)::
     }
 
 The ``devices`` list enumerates every Gen3 TWC on the bus.  Each entry
-maps to a ``Gen3TWC`` EVSEInstance.  If a device is unreachable (no vitals
+maps to a ``Gen3TWC`` endpoint.  If a device is unreachable (no vitals
 response) it is omitted from ``allEVSEs`` until a fetch succeeds.  The
 vitals are fetched on the background thread (task ``gen3Vitals``, queued
 here when a unit's cache is stale), never on the caller's thread.
@@ -58,8 +58,6 @@ import logging
 import struct
 import threading
 from typing import TYPE_CHECKING, Dict, List, Optional
-
-from TWCManager.EVSEController.EVSEController import EVSEController
 
 if TYPE_CHECKING:
     from TWCManager.EVSEInstance.Gen3TWC import Gen3TWC as Gen3TWCType
@@ -148,13 +146,11 @@ def _build_static_registers() -> list[int]:
     return regs
 
 
-# ---------------------------------------------------------------------------
-# Gen3TWCs EVSEController
-# ---------------------------------------------------------------------------
+class Gen3TWCs:
+    """Gen3 Tesla Wall Connectors via Neurio Modbus emulation.
 
-
-class Gen3TWCs(EVSEController):
-    """EVSEController for Gen3 Tesla Wall Connectors via Neurio Modbus emulation."""
+    Registered as module type "EVSEController" under the name "Gen3TWCs".
+    """
 
     name = "Gen3TWCs"
     # Republish only when the headroom moves by more than this (or the
@@ -179,7 +175,7 @@ class Gen3TWCs(EVSEController):
         self._lock = threading.Lock()
         self._registers: list[int] = _build_static_registers()
 
-        # Per-EVSEInstance cache: ip -> Gen3TWC, built once here so every
+        # Per-unit cache: ip -> Gen3TWC, built once here so every
         # thread sees the same instances
         from TWCManager.EVSEInstance.Gen3TWC import Gen3TWC
 
@@ -282,8 +278,8 @@ class Gen3TWCs(EVSEController):
         self.vinReader.apply(self.devices())
 
     def _supply(self):
-        """(phases, voltage) of the first device, as the published value
-        has always used."""
+        """(phases, voltage) of the first device, which the published
+        value uses."""
         devices = self.devices()
         if not devices:
             return 1, float(
@@ -477,10 +473,6 @@ class Gen3TWCs(EVSEController):
             self._port,
             self._baudrate,
         )
-
-    # ------------------------------------------------------------------
-    # EVSEController interface
-    # ------------------------------------------------------------------
 
     def devices(self) -> List["Gen3TWCType"]:
         """Every configured unit, reachable or not."""

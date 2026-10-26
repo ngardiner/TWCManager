@@ -270,7 +270,6 @@ class TestPolicySelection:
         master.getModuleByName = Mock(return_value=Mock())
         master.getModulesByType = Mock(return_value=[])
         master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.setAllowedFlex = Mock()
         master.queue_background_task = Mock()
         return master
     
@@ -433,7 +432,6 @@ class TestPolicyEdgeCases:
             "nonScheduledAmpsMax": 0,
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.setAllowedFlex = Mock()
         master.vehicleRegistry.attached = Mock(return_value=[])
         master.getModuleByName = Mock(return_value=Mock())
         master.getModulesByType = Mock(return_value=[])
@@ -529,7 +527,6 @@ class TestPolicyIntegration:
             "hourResumeTrackGreenEnergy": -1,
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.setAllowedFlex = Mock()
         master.vehicleRegistry.attached = Mock(return_value=[])
         master.getModuleByName = Mock(return_value=Mock())
         master.getModulesByType = Mock(return_value=[])
@@ -607,7 +604,6 @@ class TestDirectPolicyEvaluation:
             "nonScheduledAmpsMax": 0,
         }
         master.setMaxAmpsToDivideAmongSlaves = Mock()
-        master.setAllowedFlex = Mock()
         master.vehicleRegistry.attached = Mock(return_value=[])
         master.getModuleByName = Mock(return_value=Mock())
         master.getModulesByType = Mock(return_value=[])

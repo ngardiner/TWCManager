@@ -7,7 +7,6 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 from TWCManager.TWCMaster import TWCMaster
 from tests.unit.test_gen2twc_provider import CONFIG
 from tests.unit.test_provider_order import fleet
@@ -42,9 +41,6 @@ def real(minAmps, ranges=None, feed=40):
     iface = Mock()
     modules = {"TeslaAPI": carapi, "Policy": policy}
     m.getModuleByName = lambda n: modules.get(n)
-    m.registerModule(
-        {"name": "VehicleEndpoints", "ref": VehicleEndpoints(m), "type": "EVSEController"}
-    )
     m.registerModule({"name": "Dummy", "ref": iface, "type": "Interface"})
     m.providerOrder.register(fleet())
     m.getMaxAmpsToDivideAmongSlaves = lambda: feed
@@ -52,10 +48,13 @@ def real(minAmps, ranges=None, feed=40):
 
 
 def heartbeat(s, state, maxA, actA):
+    # The reply, the tick's offers (the targets the test distributed), then
+    # the heartbeat
     mx, ac = int(maxA * 100), int(actA * 100)
     s.receive_slave_heartbeat(
         bytearray([state, mx >> 8, mx & 0xFF, ac >> 8, ac & 0xFF, 0, 0])
     )
+    s.master.controlPass(distribute=False)
     s.send_master_heartbeat()
 
 
@@ -64,13 +63,9 @@ def wireAmps(iface):
     return ((hb[1] << 8) + hb[2]) / 100
 
 
-def offers(s, iface, beats=10, spike=True):
+def offers(s, iface, beats=10):
     # The wire offers over a run of heartbeats, the clock run past each 5 s
-    # step. With the 6 A-limit workaround on, a car that draws nothing is
-    # spiked above the offer (pre-existing TWCSlave behaviour); off, the
-    # offer itself goes out.
-    s.master.settings["spikeAmpsProactively"] = int(spike)
-    s.master.settings["spikeAmpsReactively"] = int(spike)
+    # step
     sent = []
     for _ in range(beats):
         s.timeLastAmpsOfferedChanged -= 10
@@ -82,6 +77,7 @@ def offers(s, iface, beats=10, spike=True):
 def idleSlave(m, twcid=b"\x82\x44"):
     s = m.newSlave(twcid, 80)
     s.protocolVersion = 1
+    s.heardFrom = True  # it has replied
     s.reportedState, s.reportedAmpsMax, s.reportedAmpsActual = 0x04, 0, 0
     return s
 
@@ -92,16 +88,15 @@ def point(m, s):
 
 def test_idle_twc_sends_zero_which_the_twc_treats_as_its_hardware_minimum():
     # minAmpsPerTWC is 12. The distributor's target for an idle TWC is 0 and
-    # the heartbeat sends 0 (spike or no spike). A Gen2 TWC treats an offer of
+    # the heartbeat sends 0. A Gen2 TWC treats an offer of
     # 0 as its hardware minimum, so it still sees a car plug in.
     m, iface = real(minAmps=12)
     s = idleSlave(m)
     assert s.minAmpsToOffer() == 12
     m.distributeEVSEPower()
-    assert s._evseTargetAmps == 0
+    assert s.pointAmps == 0
     assert point(m, s).minPower == s.convertAmpsToWatts(12, s.currentVoltage)
     assert set(offers(s, iface)) == {0}
-    assert set(offers(s, iface, spike=False)) == {0}
 
 
 def test_idle_twc_offered_6a_on_wire_when_other_car_charges():
@@ -111,9 +106,9 @@ def test_idle_twc_offered_6a_on_wire_when_other_car_charges():
     chargingSlave(m, b"\x82\x45", VIN)
     idle = idleSlave(m)
     m.distributeEVSEPower()
-    assert idle._evseTargetAmps == 0
+    assert idle.pointAmps == 0
     assert idle.minAmpsTWCSupports == 6
-    assert set(offers(idle, iface, spike=False)) == {6}
+    assert set(offers(idle, iface)) == {6}
 
 
 def test_range_override_governs_allocation_not_the_idle_offer():
@@ -121,7 +116,7 @@ def test_range_override_governs_allocation_not_the_idle_offer():
     s = idleSlave(m)
     assert s.minAmps == 8 and s.minAmpsToOffer() == 8
     m.distributeEVSEPower()
-    assert s._evseTargetAmps == 0
+    assert s.pointAmps == 0
     assert point(m, s).minPower == s.convertAmpsToWatts(8, s.currentVoltage)
 
 
@@ -145,6 +140,7 @@ def chargingAndIdle(feed):
     m, iface = real(minAmps=12, feed=feed)
     busy = m.newSlave(b"\x82\x45", 80)
     busy.protocolVersion = 1
+    busy.heardFrom = True  # it has replied
     busy.currentVIN = VIN
     busy.reportedState, busy.reportedAmpsMax, busy.reportedAmpsActual = 0x01, 32, 20
     v = m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
@@ -155,7 +151,7 @@ def chargingAndIdle(feed):
     v.observe("chargingState", "Charging", "OwnerAPI")
     idle = idleSlave(m)
     m.distributeEVSEPower()
-    return busy._evseTargetAmps, idle._evseTargetAmps
+    return busy.pointAmps, idle.pointAmps
 
 
 def test_idle_minimum_does_not_starve_a_charging_twc():
@@ -174,17 +170,19 @@ def test_start_request_follows_the_range_override():
     s.protocolVersion = 2
     s.currentVIN = "5YJ3E1EA1KF000001"
     m.startCarsCharging = Mock()
-    s.lastAmpsOffered = 8
-    s.send_master_heartbeat()
+    s.pointAmps = 8
+    m.controlPass(distribute=False)  # the tick's offer and gates
+    assert s.offer.amps == 8
     m.startCarsCharging.assert_called_once_with("5YJ3E1EA1KF000001")
-    s.lastAmpsOffered = 7
-    s.send_master_heartbeat()
-    assert m.startCarsCharging.call_count == 1
+    s.pointAmps = 7
+    m.controlPass(distribute=False)
+    assert s.offer.amps == 0 and m.startCarsCharging.call_count == 1
 
 
 def chargingSlave(m, twcid, vin):
     s = m.newSlave(twcid, 80)
     s.protocolVersion = 1
+    s.heardFrom = True  # it has replied
     s.currentVIN = vin
     s.reportedState, s.reportedAmpsMax, s.reportedAmpsActual = 0x01, 32, 20
     v = m.vehicleRegistry.getOrCreate(vin, "OwnerAPI")
@@ -203,7 +201,7 @@ def test_idle_minimum_is_not_counted_against_the_budget():
     busy = chargingSlave(m, b"\x82\x45", VIN)
     idle = idleSlave(m)
     m.distributeEVSEPower()
-    assert (busy._evseTargetAmps, idle._evseTargetAmps) == (32, 0)
+    assert (busy.pointAmps, idle.pointAmps) == (32, 0)
 
 
 def test_idle_minimum_ignores_the_controller_budget():
@@ -212,14 +210,14 @@ def test_idle_minimum_ignores_the_controller_budget():
     busy = chargingSlave(m, b"\x82\x45", VIN)
     idle = idleSlave(m)
     m.distributeEVSEPower()
-    assert (busy._evseTargetAmps, idle._evseTargetAmps) == (32, 0)
+    assert (busy.pointAmps, idle.pointAmps) == (32, 0)
 
 
 def test_idle_twc_gets_zero_when_policy_budget_is_zero():
     m, iface = real(minAmps=12, feed=0)
     idle = idleSlave(m)
     m.distributeEVSEPower()
-    assert idle._evseTargetAmps == 0
+    assert idle.pointAmps == 0
 
 
 def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
@@ -227,7 +225,7 @@ def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
     busy = chargingSlave(m, b"\x82\x45", VIN)
     idle = idleSlave(m)
     m.distributeEVSEPower()
-    assert busy._evseTargetAmps + idle._evseTargetAmps == 32
+    assert busy.pointAmps + idle.pointAmps == 32
     # The idle TWC's car plugs in and wants power
     idle.currentVIN = "5YJ3E1EA1KF000002"
     idle.reportedState, idle.reportedAmpsMax, idle.reportedAmpsActual = 0x01, 32, 20
@@ -240,8 +238,8 @@ def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
     )
     v.observe("chargingState", "Charging", "OwnerAPI")
     m.distributeEVSEPower()
-    assert busy._evseTargetAmps == idle._evseTargetAmps == 16
-    assert busy._evseTargetAmps + idle._evseTargetAmps <= 32
+    assert busy.pointAmps == idle.pointAmps == 16
+    assert busy.pointAmps + idle.pointAmps <= 32
 
 
 def test_charging_point_below_min_amps_per_twc_gets_a_stop():
@@ -250,11 +248,11 @@ def test_charging_point_below_min_amps_per_twc_gets_a_stop():
     m, iface = real(minAmps=12, feed=10)
     busy = chargingSlave(m, b"\x82\x45", VIN)
     m.distributeEVSEPower()
-    assert busy._evseTargetAmps == 0
+    assert busy.pointAmps == 0
     # Two cars, 20 A: the 10 A fair share is under the floor, so that car is
     # stopped and the other takes the rest, never a partial amount
     m, iface = real(minAmps=12, feed=20)
     a = chargingSlave(m, b"\x82\x45", VIN)
     b = chargingSlave(m, b"\x82\x46", "5YJ3E1EA1KF000002")
     m.distributeEVSEPower()
-    assert sorted([a._evseTargetAmps, b._evseTargetAmps]) == [0, 20]
+    assert sorted([a.pointAmps, b.pointAmps]) == [0, 20]

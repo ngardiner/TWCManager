@@ -17,14 +17,15 @@ def _evse(max_power, min_power=1200):
 
 def _master(evses, amps):
     m = TWCMaster.__new__(TWCMaster)
-    m.config = {"config": {"defaultVoltage": 240, "numberOfPhases": 1}}
-    ctrl = MagicMock()
-    ctrl.maxPower = 100000
-    # A non-Gen2 controller makes the distributor run.
-    m.getModulesByType = lambda t: [
-        {"name": "Gen2TWCs", "ref": ctrl},
-        {"name": "VehicleEndpoints", "ref": ctrl},
-    ]
+    # Wiring for 400 A: no budget but the feed binds
+    m.config = {
+        "config": {
+            "defaultVoltage": 240,
+            "numberOfPhases": 1,
+            "wiringMaxAmpsAllTWCs": 400,
+        }
+    }
+    m.getModuleByName = lambda n: None
     m.chargingPoints = lambda: evses
     m.getMaxAmpsToDivideAmongSlaves = lambda: amps
     return m

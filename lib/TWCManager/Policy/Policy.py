@@ -56,7 +56,6 @@ class Policy:
             "condition": ["gte", "lt", "lte", "ne"],
             "value": ["settings.sunrise", "settings.sunset", "tm_hour", 2],
             "background_task": "checkGreenEnergy",
-            "allowed_flex": "config.greenEnergyFlexAmps",
             "charge_limit": "config.greenEnergyLimit",
         },
         # If all else fails (ie no other policy match), we will charge at
@@ -79,7 +78,6 @@ class Policy:
             "condition": ["eq"],
             "value": [3],
             "background_task": "checkGreenEnergy",
-            "allowed_flex": "config.greenEnergyFlexAmps",
             "charge_limit": "config.greenEnergyLimit",
         },
     ]
@@ -283,9 +281,6 @@ class Policy:
                 )
                 logger.debug("Charge at %.2f" % self.policyValue(policy["charge_amps"]))
 
-        # Set flex, if any
-        self.master.setAllowedFlex(self.policyValue(policy.get("allowed_flex", 0)))
-
         # If a background task is defined for this policy, queue it
         bgt = policy.get("background_task", None)
         if bgt:
@@ -305,7 +300,7 @@ class Policy:
         # to stop charging via the API. Only apply it when we are actually trying
         # to stop charging (maxAmps == 0); otherwise a stale override from a
         # previous stop attempt would incorrectly cap the limit when charging
-        # resumes (closes #586).
+        # resumes.
         chargeAmps = self.master.getMaxAmpsToDivideAmongSlaves()
         if self.limitOverride and chargeAmps == 0:
             currentCharge = (

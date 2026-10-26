@@ -23,7 +23,7 @@ CONFIG = {
 
 
 def make(config=CONFIG):
-    m = TWCMaster("AB", config)
+    m = TWCMaster(b"\x77\x77", config)  # bytes, as the launcher passes it
     m.getModuleByName = Mock(return_value=None)
     s = m.newSlave(b"\x82\x44", 80)  # slaveTWCs is keyed by bytes
     return m, s
@@ -170,15 +170,23 @@ def test_disruptive_stop_declared_very_high_cost_and_off_by_default():
     # Desired state only: the reconciler delivers it through this provider
     assert m.desired.get(VIN, CHARGING).value is False
     assert m.settings["respondToSlaves"] == 1
+
+
+def test_mode_3_stop_is_queued_for_the_serial_loop():
+    m, s = make()
+    p = m.providerOrder.provider("Gen2TWC")
+    s.currentVIN = VIN
     m.settings["chargeStopMode"] = "3"
-    m.sendStopCommand = Mock()
-    # Queued for the serial thread's heartbeat; nothing is written here
-    assert p.stopCharging(VIN) == O.Outcome(O.DONE, "queued") and s.stopRequested
-    assert m.sendStopCommand.call_count == 0
+    m.getModulesByType = Mock(
+        side_effect=AssertionError("no write off the serial thread")
+    )
+    # Queued for the serial loop; nothing is written here
+    assert p.stopCharging(VIN) == O.Outcome(O.DONE, "queued")
+    assert [msg[:2] for msg in m._outbox] == [b"\xfc\xb2"]
 
 
 def test_set_amps_publishes_a_target_for_the_heartbeat():
     m, s = make()
     p = m.providerOrder.provider("Gen2TWC")
     s.currentVIN = VIN
-    assert p.setAmps(VIN, 16).kind == O.DONE and s._evseTargetAmps == 16
+    assert p.setAmps(VIN, 16).kind == O.DONE and s.pointAmps == 16

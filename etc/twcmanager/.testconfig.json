@@ -107,16 +107,6 @@
         # this value can be set to 0 unless you wish to manually adjust what it returns.
         "greenEnergyAmpsOffset": 1.05,
 
-        # If green energy dips below the target charge amount while already charging,
-        # how much extra current should be drawn to keep charging?  This avoids frequently
-        # stopping and starting charging on a day with variable solar output, at the cost
-        # of drawing energy from sources other than solar.
-        "greenEnergyFlexAmps": 0,
-
-        # If you want to use start charging with greenEnergyFlexAmps as it delays stopping
-        # you have to set this config to true
-        "useFlexAmpsToStartCharge": false,
-
         # If the conditions for green energy briefly fail to match, how long should the
         # Track Green Energy policy continue to run?  (Mainly useful if you're adding
         # non-time-based restrictions below.)

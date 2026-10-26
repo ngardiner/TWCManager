@@ -125,8 +125,8 @@ class TeslaBLE:
             "TeslaBLE", {}
         )
 
-        # Retry policy is the reconciler's; maxRetries, retryDelay and
-        # circuitBreaker* are no longer read.
+        # Retry policy is the reconciler's: the maxRetries, retryDelay and
+        # circuitBreaker* settings are ignored.
         self.commandTimeout = ble_config.get("commandTimeout", 15)
 
         # Persistent D-Bus session daemon shared across all tesla-control calls.

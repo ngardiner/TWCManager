@@ -69,7 +69,7 @@ class Desired(NamedTuple):
     # The value is the outside limit being put back
     restore: bool = False
     # A raise-to-max of the car's own current limit, which ignores the
-    # local-amps rule (#660)
+    # local-amps rule
     lift: bool = False
 
 
@@ -118,9 +118,9 @@ class AttemptRecord:
         self.wakeCheckBy: Optional[str] = None
         self.settledAt: Optional[float] = None
         self.pendingSave: Any = None
-        # Sends that found the current value unreadable (a limit's c4 backstop)
+        # Sends that found the current value unreadable (a limit's backstop)
         self.unread = 0
-        # The value a clearIf withdrew; set() may take the record back (I4)
+        # The value a clearIf withdrew; set() may take the record back
         self.clearedValue: Any = None
 
     def newDesire(self) -> None:
@@ -128,7 +128,7 @@ class AttemptRecord:
         # refusal does not
         self.excluded = {p: k for p, k in self.excluded.items() if k != UNSUPPORTED}
         self.lastFreeAt = 0
-        # The NOT_SENT hold belongs to the desire it came from (I1)
+        # The NOT_SENT hold belongs to the desire it came from
         self.lastOutcome = None
         self.lastOutcomeAt = 0
         self.paidSends = 0
@@ -230,7 +230,7 @@ class DesiredStore:
         keep=False,
     ) -> bool:
         # keep: a value clearIf withdrew comes back on its old record, so
-        # its paid budget is not spent again (I4)
+        # its paid budget is not spent again
         _checkAspect(aspect)
         ignored = False
         changed = False
@@ -335,7 +335,7 @@ class DesiredStore:
                 return True
             want = state.desired.get(aspect)
             # Only an attempt made for the current desire settles it or
-            # spends its budget (C1); any attempt feeds the free channel
+            # spends its budget; any attempt feeds the free channel
             current = (
                 want is not None
                 and want.value == attempt.value
@@ -349,7 +349,7 @@ class DesiredStore:
             sent = not isNotSent(outcome)
             if sent and outcome.kind not in EXCLUDING:
                 # Even for a replaced desire: a start still in flight when
-                # the desire flips spaces the stop (I5). An excluding outcome
+                # the desire flips spaces the stop. An excluding outcome
                 # changed nothing on the car: the fallback need not wait
                 record.lastSentAt = now
             if current and sent:

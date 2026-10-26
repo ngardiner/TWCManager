@@ -38,7 +38,7 @@ _REFRESHED = Outcome(DONE, "refreshed")
 # Tesla refused an Owner API command or wake for one car: it wants signed
 # commands (noteOwnerCommandRefused)
 _SIGNING_REQUIRED = Outcome(REFUSED, "signing required")
-# Tesla takes no Owner API commands at all any more: no Owner command or wake
+# Tesla takes no Owner API commands at all: no Owner command or wake
 # goes to any car (noteOwnerCommandsRetired)
 _OWNER_RETIRED = Outcome(REFUSED, "owner commands retired")
 
@@ -59,7 +59,7 @@ class CarApiState:
     delayNextWakeAttempt = 0
     online = None  # the free online check: True, False, None (no answer)
     onlineCheckedAt = 0  # ... reused for 120 s from here
-    # As listed: Owner API commands only for "off" (#659). The latch is set
+    # As listed: Owner API commands only for "off". The latch is set
     # by a 403 to one (noteOwnerCommandRefused)
     commandSigning = None
     ownerCommandsRefused = False
@@ -101,7 +101,7 @@ class TeslaAPI:
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
         "CN": "https://fleet-api.prd.cn.vn.cloud.tesla.cn/api/1/vehicles",
         # Not a Fleet region: the Owner API used by TeslaMate tokens. It reads,
-        # and commands only a car that takes unsigned commands (#659).
+        # and commands only a car that takes unsigned commands.
         # fleetRegions() leaves it out of every region list and lookup.
         "OwnerAPI": "https://owner-api.teslamotors.com/api/1/vehicles",
     }
@@ -254,7 +254,7 @@ class TeslaAPI:
             return
         # Each claim follows its slot live, so a token pasted or synced after
         # the listing manages the car without a re-list; the Owner claim also
-        # follows this car's signing (#659)
+        # follows this car's signing
         vehicle.claim("OwnerAPI", lambda: self.ownerCommandsAllowed(state), "listed")
         vehicle.claim("FleetAPI", lambda: self.fleetSlot.usable("command"), "listed")
         # A cloud account listing is a sighting.
@@ -283,26 +283,13 @@ class TeslaAPI:
         # slot holds no refresh token, so it never refreshes.
         for slot in (self.ownerSlot, self.fleetSlot):
             if slot.needsRefresh():
-                self.refreshSlot(slot, ifNeeded=True)
+                logger.log(logging.INFO8, "Attempting token refresh")
+                self.refreshSlot(slot)
 
-    def refreshSlot(self, slot, saveOnFailure=True, ifNeeded=False):
+    def refreshSlot(self, slot, saveOnFailure=True):
         # Refreshes one slot's tokens. Returns slot.refresh()'s result:
         # "success", "rejected", "unreachable" or "not_configured".
         # saveOnFailure=False leaves saving a failure's state to the caller.
-        # ifNeeded=True skips the refresh unless the token is due for one.
-        spending = slot.refreshToken
-        with slot.lock:
-            if slot.refreshToken != spending:
-                # Another thread refreshed, pasted or cleared the token while
-                # this one waited; spending the old one again would fail.
-                return "success" if slot.accessToken else "not_configured"
-            if ifNeeded and not slot.needsRefresh():
-                return "success"
-            if ifNeeded:
-                logger.log(logging.INFO8, "Attempting token refresh")
-            return self._refreshSlotLocked(slot, saveOnFailure)
-
-    def _refreshSlotLocked(self, slot, saveOnFailure):
         result = slot.refresh()
         if result == "success":
             self.master.queue_background_task({"cmd": "saveSettings"})
@@ -337,13 +324,13 @@ class TeslaAPI:
         # slot). A transport error is logged and carried by its type alone,
         # never its text (it can hold the header).
         while True:
-            sent = slot.accessToken
+            claimed = slot.changes
             try:
                 req = getattr(requests, method)(
                     slot.baseURL[: -len("vehicles")] + path,
                     headers={
                         "accept": "application/json",
-                        "Authorization": "Bearer " + sent,
+                        "Authorization": "Bearer " + slot.accessToken,
                     },
                     json=body,
                     verify=slot.verifyCert,
@@ -357,7 +344,7 @@ class TeslaAPI:
                 "Car API %s %s: HTTP %s" % (method, path, req.status_code),
             )
             outcome = self._classify(
-                slot, req.status_code, purpose, req.text, vehicle, tries > 0, sent
+                slot, req.status_code, purpose, req.text, vehicle, tries > 0, claimed
             )
             if outcome is not _REFRESHED:
                 return req, outcome
@@ -366,7 +353,7 @@ class TeslaAPI:
                 return req, Outcome(REFUSED, "401")
 
     def _classify(
-        self, slot, status, purpose, body, vehicle=None, refresh=True, sent=None
+        self, slot, status, purpose, body, vehicle=None, refresh=True, claimed=None
     ):
         # What an answer means, acted on: None for an HTTP 200 (unless it is
         # an Owner command's refusal), else an Outcome. purpose is "read",
@@ -393,44 +380,44 @@ class TeslaAPI:
             return Outcome(REFUSED, str(status))
         label = slot.kind.capitalize()
         if status == 401:
-            with slot.lock:
-                if sent is not None and slot.accessToken != sent:
-                    # Another thread refreshed or replaced the token while
-                    # this request was out (#689): send again with the new
-                    # one rather than clear it.
-                    return _REFRESHED if slot.accessToken else Outcome(REFUSED, "401")
-                if (
-                    refresh
-                    and "expired" in body
-                    and slot.source != "synced"
-                    and slot.refreshToken
-                ):
-                    result = self.refreshSlot(slot)
-                    if result == "success":
-                        return _REFRESHED
-                    if result == "unreachable":
-                        return Outcome(UNREACHABLE, "token refresh")
-                    if paid and not slot.empty():
-                        # Expired and the refresh failed (a 5xx, no client ID):
-                        # the tokens are kept, as refresh() alone clears on a
-                        # 401, but no later round pays for another 401. A
-                        # successful refresh (setTokens) lifts the refusal.
-                        logger.error(
-                            "Tesla %s API token has expired and could not be "
-                            "refreshed (%s); not sending commands with it until "
-                            "it is refreshed or replaced." % (label, result)
-                        )
-                        slot.refuse("command")
-                    return Outcome(REFUSED, "401")
-                # Retrying a bad token might make Tesla block remote access to
-                # the car: nothing more is sent with it until the user supplies
-                # fresh tokens
-                logger.error(
-                    "Tesla %s API token was rejected (HTTP 401); removing it." % label
-                )
-                slot.clear()
-                self.master.queue_background_task({"cmd": "saveSettings"})
+            if claimed is not None and slot.changes != claimed:
+                # Another thread refreshed or replaced the tokens while this
+                # request was out: send again with the new ones
+                return _REFRESHED if not slot.empty() else Outcome(REFUSED, "401")
+            if (
+                refresh
+                and "expired" in body
+                and slot.source != "synced"
+                and slot.refreshToken
+            ):
+                result = self.refreshSlot(slot)
+                if result == "success":
+                    return _REFRESHED
+                if result == "unreachable":
+                    return Outcome(UNREACHABLE, "token refresh")
+                if paid and not slot.empty():
+                    # Expired and the refresh failed (a 5xx, no client ID):
+                    # the tokens are kept, as refresh() alone clears on a
+                    # 401, but no later round pays for another 401. A
+                    # successful refresh (setTokens) lifts the refusal.
+                    logger.error(
+                        "Tesla %s API token has expired and could not be "
+                        "refreshed (%s); not sending commands with it until "
+                        "it is refreshed or replaced." % (label, result)
+                    )
+                    slot.refuse("command")
                 return Outcome(REFUSED, "401")
+            # Retrying a bad token might make Tesla block remote access to
+            # the car: nothing more is sent with it until the user supplies
+            # fresh tokens
+            if not slot.clear(claimed):
+                # Replaced since: keep the new tokens
+                return _REFRESHED if not slot.empty() else Outcome(REFUSED, "401")
+            logger.error(
+                "Tesla %s API token was rejected (HTTP 401); removing it." % label
+            )
+            self.master.queue_background_task({"cmd": "saveSettings"})
+            return Outcome(REFUSED, "401")
         if owner:
             refused = self.ownerRefusal(vehicle, status, body)
             if refused is not None:
@@ -551,7 +538,7 @@ class TeslaAPI:
         # True when the Owner token may command the car (its CarApiState):
         # the token is not refused commands (an expired one that could not
         # refresh, a 412), Tesla lists the car with command_signing exactly
-        # "off" (#659), and no Owner command to it has come back 403 since.
+        # "off", and no Owner command to it has come back 403 since.
         # "required", no field, or any other value is read-only: fail closed
         return car is not None and self.ownerReadOnlyReason(car) is None
 
@@ -614,7 +601,7 @@ class TeslaAPI:
 
     def loadList(self):
         # The vehicle list (a free call) loads here, and held limits waiting
-        # on it resolve: the cloud providers serve only listed cars (C1)
+        # on it resolve: the cloud providers serve only listed cars
         if self.registry.attached("TeslaAPI"):
             self.resolveHeldLimits()
         elif not self.getCarApiRetryRemaining():
@@ -641,7 +628,7 @@ class TeslaAPI:
         # Held limits older releases keyed by vehicle ID move under the VIN
         # (free calls, only while any wait). Owner and Fleet may be different
         # accounts: every usable slot's list counts, and a list that failed
-        # defers it to the next check (I9)
+        # defers it to the next check
         held = getattr(self.master, "heldLimits", None)
         if not isinstance(held, HeldLimits) or not held.waiting():
             return
@@ -659,7 +646,7 @@ class TeslaAPI:
         # One free GET of the slot's vehicle list: the listed cars; None when
         # the slot refused (it is cleared or paused, with no API error
         # backoff, so the next poll can use the other slot at once); False on
-        # any other failure. The Owner API no longer lists vehicles under
+        # any other failure. The Owner API does not list vehicles under
         # /vehicles (it answers 412 "only available on fleetapi"); /products
         # still does, with energy sites that addVehicle skips (no VIN).
         path = "products" if slot.tokenType == "owner" else "vehicles"
@@ -1093,10 +1080,6 @@ class TeslaAPI:
         if self.syncedSlotLocked(slot):
             self.logSyncedSlotLocked(slot)
             return "token_sync"
-        with slot.lock:
-            return self._pasteRefreshTokenLocked(slot, token)
-
-    def _pasteRefreshTokenLocked(self, slot, token):
         previous = slot.snapshot()
         previousErrors = (self.carApiLastErrorTime, self.errorCount)
         slot.clear()
@@ -1149,8 +1132,7 @@ class TeslaAPI:
         slot = self.slotOfType(kind)
         if slot is None:
             return False
-        with slot.lock:
-            slot.clear()
+        slot.clear()
         self.master.queue_background_task({"cmd": "saveSettings"})
         return True
 
@@ -1223,8 +1205,7 @@ class TeslaAPI:
         if source != "synced" and self.syncedSlotLocked(slot):
             self.logSyncedSlotLocked(slot)
             return "token_sync"
-        with slot.lock:
-            slot.setTokens(accessToken, refreshToken, expireTime, source)
+        slot.setTokens(accessToken, refreshToken, expireTime, source)
         return "success"
 
     def migrateSavedTokens(self, settings, syncConfigured):
@@ -1631,7 +1612,7 @@ class TeslaAPI:
             self.resetCarApiLastErrorTime()
             self._wakeSettled(car)
             # The wake's answer replaces the cached "asleep": the read that
-            # follows it goes out (C1)
+            # follows it goes out
             car.online, car.onlineCheckedAt = True, now
             # A command sent at once after a wake can fail with
             # could_not_wake_buses; let the car settle
@@ -1895,7 +1876,7 @@ class TeslaAPI:
                     return False, None
                 # Transient errors (vehicle unavailable, operation_timedout,
                 # etc.) retry after a short delay, without incrementing
-                # errorCount into the full exponential backoff (closes #377).
+                # errorCount into the full exponential backoff.
                 logger.log(
                     logging.INFO8,
                     "Transient error for %s: %s.  Will retry shortly."
@@ -1912,8 +1893,8 @@ class TeslaAPI:
     def _readFresh(self, vehicle, field, maxAge):
         # Reads field through the registry cascade (BLE, then the cloud API;
         # never a wake). Success is a newer observation, one within maxAge,
-        # or an API status deferral (which reports stored values unfetched,
-        # as update_vehicle_data always has). A stale value handed back after
+        # or an API status deferral (which reports stored values unfetched).
+        # A stale value handed back after
         # every source failed is a failure.
         car = vehicle.attachment("TeslaAPI")
         before = vehicle.latest(field)

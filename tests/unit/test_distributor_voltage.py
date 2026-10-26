@@ -16,7 +16,12 @@ from unittest.mock import MagicMock
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC
 from TWCManager.TWCMaster import TWCMaster
 
-THREE_PHASE_400 = {"defaultVoltage": 400, "numberOfPhases": 3}
+# Wiring well above the offers, so the budget is never the limit here
+THREE_PHASE_400 = {
+    "defaultVoltage": 400,
+    "numberOfPhases": 3,
+    "wiringMaxAmpsAllTWCs": 80,
+}
 
 
 def _evse():
@@ -36,13 +41,7 @@ def _twc(volts):
 def _master(evses, amps, slaves, config):
     m = TWCMaster.__new__(TWCMaster)
     m.config = {"config": config}
-    ctrl = MagicMock()
-    ctrl.maxPower = 100000
-    # A non-Gen2 controller makes the distributor run.
-    m.getModulesByType = lambda t: [
-        {"name": "Gen2TWCs", "ref": ctrl},
-        {"name": "VehicleEndpoints", "ref": ctrl},
-    ]
+    m.getModuleByName = lambda name: None
     m.chargingPoints = lambda: evses
     m.getMaxAmpsToDivideAmongSlaves = lambda: amps
     m.getSlaveTWCs = lambda: slaves
@@ -68,4 +67,4 @@ def test_policy_amps_reach_the_twc_unchanged():
     e = _evse()
     e.setTargetPower.side_effect = twc.setTargetPower
     _master([e], 16, [twc], THREE_PHASE_400).distributeEVSEPower()
-    assert twc._evseTargetAmps == 16
+    assert twc.pointAmps == 16

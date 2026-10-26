@@ -68,13 +68,14 @@ def test_charging_session_begins_and_ends_anonymous_vehicle(master):
     s.reportedAmpsActual = 5.0
     s.isCharging = 0
     s.chargingDroppedBelowThresholdTime = 0
+    s.plugSessions = 0  # a Mock slave: the session counter is a real int
     master.getSlaveTWCs = Mock(return_value=[s])
-    master.num_cars_charging_now()
+    master.observeChargingSessions()
     assert master.vehicleRegistry.get("anon:8244") is not None
     s.reportedAmpsActual = 0.0
     s.chargingDroppedBelowThresholdTime = 1  # long ago
-    master.num_cars_charging_now()
-    assert master.vehicleRegistry.get("anon:8244") is None
+    master.observeChargingSessions()
+    assert master.vehicleRegistry.get("anon:8244") is None and s.plugSessions == 1
 
 
 # Fix round 1: confirmation retries, per-TWC dedupe, delayed-queue ties.

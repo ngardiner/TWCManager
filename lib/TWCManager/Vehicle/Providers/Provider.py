@@ -6,7 +6,7 @@ from .Capability import COMMANDS, START_CHARGING, STOP_CHARGING, Cost, Declarati
 # What a cloud provider may not do under each suppression condition: no
 # command under ble_only, no stop when the user chose a disruptive local
 # stop (chargeStopMode 2/3), which pays nothing, and under mode 2 no start
-# either: on main a mode-2 start only answered the slaves again
+# either: mode 2 starts by answering the slaves again
 CLOUD_SUPPRESSED = {
     "ble_only": COMMANDS,
     "localStops": frozenset({STOP_CHARGING}),

@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
 # The longest a pass waits for a wake
 TICK = 1.0
-# Two knobs that share their values today (the 300 s limit gap
+# Two knobs that share their values (the 300 s limit gap
 # and the 60 s start/stop gate): PAID_AFTER, how long the free channel must
 # have failed before a paid provider is used; RETRY, the gap before the same
 # aspect is tried again. Split the table to tune one alone
@@ -79,19 +79,19 @@ RESTORE_RETRY = 3600.0
 # A free channel failing but untried for this long gets the real command
 # before money is spent
 PROBE_AFTER = 600.0
-# A start waits this long after a limit write (today's 5 s sleep)
+# A start waits this long after a limit write
 LIMIT_THEN_START_GAP = 5.0
-# The least time between two sends of one aspect to one car, by any
-# providers: HA's former start/stop gate, and main's 15 s Fleet rate pacing
+# The least time between two sends of one aspect to one car, whichever
+# providers carry them: it spaces start/stop toggles and rate changes
 MIN_SEND_GAP = {CHARGE_LIMIT: 10.0, CHARGING: 10.0, AMPS: 15.0}
 # A limit held unsent for one of these (both NOT_SENT) cannot be delivered
-# (c4)
 _REFUSALS = frozenset({"wake refused", "no command token"})
 
 # A car reporting one of these is drawing power, so awake
 _DRAWING = frozenset({"Charging", "Starting"})
-# The plan order: a limit is planned before a start
-_ORDER = (CHARGE_LIMIT, CHARGING, AMPS)
+# The plan order: a limit, then the rate before a start (less overshoot);
+# a stop never waits behind a rate
+_ORDER, _STOP_ORDER = (CHARGE_LIMIT, AMPS, CHARGING), (CHARGE_LIMIT, CHARGING, AMPS)
 
 
 def _tier(provider, capability) -> int:
@@ -192,7 +192,8 @@ class VehicleReconciler(threading.Thread):
             vehicle = self.master.vehicleRegistry.get(key)
             if vehicle is None:
                 continue
-            for aspect in _ORDER:
+            stop = getattr(self.desired.get(key, CHARGING), "value", None) is False
+            for aspect in _STOP_ORDER if stop else _ORDER:
                 try:
                     attempt = self.plan(vehicle, aspect, now)
                 except Exception as e:
@@ -262,7 +263,7 @@ class VehicleReconciler(threading.Thread):
             and now - rec.lastOutcomeAt
             < (WAKE_CHECK if rec.wakeCheckBy else RETRY[aspect])
         ):
-            # Wake held, backoff, wake refused: no resubmit loop (H2). A
+            # Wake held, backoff, wake refused: no resubmit loop. A
             # refusal excluded its provider, so the next one goes at once
             return None
         if aspect == CHARGE_LIMIT:
@@ -277,7 +278,7 @@ class VehicleReconciler(threading.Thread):
         held = self._held(vehicle)
         if satisfied(aspect, d.value, k):
             if d.restore and held is not None and held.held is not None:
-                # Already back at the outside limit: nothing is held (c6)
+                # Already back at the outside limit: nothing is held
                 self.master.heldLimits.remove(vehicle.vin)
                 self.desired.clear(key, aspect)
             return None
@@ -294,7 +295,7 @@ class VehicleReconciler(threading.Thread):
             newerReading(vehicle, aspect, rec.settledAt)
             and now - rec.lastSentAt >= RETRY[aspect]
         ):
-            # Settled without a stamp: wait for a newer reading (N1)
+            # Settled without a stamp: wait for a newer reading
             return None
         capability = CAPABILITY_FOR(aspect, d.value)
         cands = [
@@ -326,7 +327,7 @@ class VehicleReconciler(threading.Thread):
             and now - ch.lastAttemptAt < PROBE_AFTER
         )
         # At most two paid sends per arm, and two arms per desire: one send,
-        # then one more after a failure or a reading that reached the car (I2)
+        # then one more after a failure or a reading that reached the car
         # A start goes with the limit first: its wake carries the limit
         ride = aspect == CHARGE_LIMIT and self._startWanted(vehicle, config)
         field = FIELD_FOR[aspect]
@@ -348,10 +349,10 @@ class VehicleReconciler(threading.Thread):
         ):
             # No paid send reached the car: a reading shows it awake, a start
             # will wake it, or the arm ended on a failed wake. At most two
-            # more sends, once per desire, each with the normal wake and read
-            # (N1, I2). Written without the store's lock: a newDesire()
+            # more sends, once per desire, each with the normal wake and read.
+            # Written without the store's lock: a newDesire()
             # racing it can inherit rearmed and lose a retry, never gain a
-            # paid send (final review M6)
+            # paid send
             rec.paidSends = 0
             rec.rearmed = True
             rec.paidRetryDue = False
@@ -390,9 +391,9 @@ class VehicleReconciler(threading.Thread):
             ):
                 # A limit always goes first, and settles before a start
                 return None
-        # The blind retry never wakes (M8) and reads nothing: the first
+        # The blind retry never wakes and reads nothing: the first
         # attempt read. A paid attempt reads only a value older than its
-        # whole window (I3)
+        # whole window
         blind = p in paid and rec.paidRetryDue
         wake = wakes and (p.local or aspect != AMPS) and not blind
         attempt = Attempt(
@@ -408,7 +409,7 @@ class VehicleReconciler(threading.Thread):
                 else READ_MAX_AGE + (PAID_AFTER[aspect] if p in paid else 0)
             ),
             restore=d.restore,
-            # A desire set after this pass began is still this attempt's (N2)
+            # A desire set after this pass began is still this attempt's
             since=max(now, d.at),
             force=aspect == CHARGE_LIMIT
             and needsLiveRead(d.restore, k.value if k else None, held),
@@ -435,7 +436,7 @@ class VehicleReconciler(threading.Thread):
             and start.value is True
             and not satisfied(CHARGING, True, k)
             and handsOff(vehicle, CHARGING, True, k, config) is None
-            # A start that would itself spend a cloud wake (not mode 2's) (N1)
+            # A start that would itself spend a cloud wake (not mode 2's)
             and any(
                 not p.local and p.declares(WAKE)
                 for p in self.master.providerOrder.candidates(vehicle, START_CHARGING)
@@ -444,16 +445,16 @@ class VehicleReconciler(threading.Thread):
 
     @staticmethod
     def _chargingSince(vehicle, aspect, since) -> bool:
-        # A car drawing power is awake: a lowered limit gets one more send
-        # (I4). Not "Complete": a finished car may be asleep
+        # A car drawing power is awake: a lowered limit gets one more send.
+        # Not "Complete": a finished car may be asleep
         return aspect == CHARGE_LIMIT and any(
             obs.value in _DRAWING for obs in _newer(vehicle, FIELD_FOR[CHARGING], since)
         )
 
     def _limitSpent(self, vehicle, limit) -> bool:
-        # The limit cannot be delivered, so it no longer holds the start
-        # (c4): every provider that can serve this car is excluded (a paired
-        # BLE with its radio down still can: readiness is the claim, M11);
+        # The limit cannot be delivered, so it no longer holds the start:
+        # every provider that can serve this car is excluded (a paired
+        # BLE with its radio down still can: readiness is the claim);
         # both paid sends went to a car that answered; its one re-arm is
         # used with no blind retry left; a refusal holds it unsent; or the
         # car's limit could not be read twice, RETRY apart
@@ -475,7 +476,7 @@ class VehicleReconciler(threading.Thread):
         return self.master.heldLimits.get(vehicle.vin) if vehicle.vin else None
 
     def _save(self, vehicle, outside, held) -> None:
-        # HeldLimits.set rounds floats (80.0 from Home Assistant) (L26)
+        # HeldLimits.set rounds floats (80.0 from Home Assistant)
         if vehicle.vin:
             self.master.heldLimits.set(vehicle.vin, outside=outside, held=held)
 

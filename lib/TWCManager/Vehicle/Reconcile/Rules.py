@@ -1,7 +1,6 @@
-# The charge-limit decision rules, from presence/2's ChargeLimitRules.
-# decideChargeLimit is pure: no I/O, no master. The reconciler's beforeWrite
-# runs it on the worker after the read, then saves, sends or settles as it
-# says. The saved record is a HeldLimit (HeldLimits.py): None is nothing
+# The charge-limit decision rules. decideChargeLimit is pure: no I/O, no
+# master. The reconciler's beforeWrite runs it on the worker after the read,
+# then saves, sends or settles as it says. The saved record is a HeldLimit (HeldLimits.py): None is nothing
 # held; a save with held None removes the record.
 from typing import NamedTuple, Optional
 
@@ -43,7 +42,7 @@ class ChargeLimitDecision(NamedTuple):
 
 
 def _clamped(limit):
-    # Tesla accepts 50-100 only (ledger L28): a migrated or configured value
+    # Tesla accepts 50-100 only: a migrated or configured value
     # outside that range is sent at the nearest end
     return min(MAX_LIMIT, max(MIN_LIMIT, limit))
 
