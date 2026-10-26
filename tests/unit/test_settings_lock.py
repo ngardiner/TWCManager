@@ -48,8 +48,8 @@ def test_settings_lock_is_reentrant(tmp_path):
     m = make(tmp_path)
     with m.settingsLock:
         with m.settingsLock:
-            m.setSetting("x", 1)
-    assert m.getSetting("x") == 1
+            m.settings["x"] = 1
+    assert m.settings["x"] == 1
 
 
 def test_save_serialises_under_lock_and_writes_outside(tmp_path):
@@ -76,20 +76,12 @@ def test_save_serialises_under_lock_and_writes_outside(tmp_path):
     assert json.load(open(tmp_path / "settings.json"))["chargeStopMode"] == "1"
 
 
-def test_set_setting_takes_the_lock_and_get_does_not(tmp_path):
-    m = make(tmp_path)
-    m.settingsLock = CountingLock()
-    m.setSetting("k", 2)
-    assert m.getSetting("k") == 2
-    assert m.settingsLock.enters == 1  # reads stay unlocked (ruling 3 / P4)
-
-
 def test_off_thread_master_writers_take_the_lock(tmp_path):
     m = make(tmp_path)
     m.queue_background_task = Mock()
     m.settingsLock = CountingLock()
-    m.saveNormalChargeLimit("V", 90, 80)
-    m.removeNormalChargeLimit("V")
+    m.heldLimits.set("5YJ3E1EA1KF000001", 90, 80)
+    m.heldLimits.remove("5YJ3E1EA1KF000001")
     m.setChargeNowAmps(10)
     m.setHomeLat(1.0)
     assert m.settingsLock.enters == 4
@@ -109,3 +101,19 @@ def test_load_reads_file_outside_lock_and_assigns_under_it(tmp_path):
     with patch("builtins.open", opener):
         m.loadSettings()
     assert seen == {"open_locked": False} and m.settings["chargeStopMode"] == "2"
+
+
+def test_stop_responding_writes_the_expiry_before_the_zero(tmp_path):
+    # Final review M1: the serial thread reads both without the lock; a 0
+    # with the old, past expiry would be reset to 1 at once
+    class Recording(dict):
+        writes = []
+
+        def __setitem__(self, key, value):
+            self.writes.append(key)
+            super().__setitem__(key, value)
+
+    m = make(tmp_path)
+    m.settings = Recording(m.settings)
+    m.stopRespondingToSlaves()
+    assert m.settings.writes == ["respondToSlavesExpiry", "respondToSlaves"]

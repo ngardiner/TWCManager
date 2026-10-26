@@ -93,7 +93,6 @@ def test_registry_liveness_feeds_age_and_trusted():
     assert v.age("chargeLimit") == 100.0
     v.noteWrite("chargeLimit", 90, "TeslaAPI")
     c.t = 1700.0
-    assert v.fresherThanWrite("chargeLimit") is False
     assert v.trusted("chargeLimit").value == 80
     assert v.age("name") is None
 
@@ -215,8 +214,10 @@ def test_feed_vouches_only_for_fields_it_reported():
 
 
 def test_feed_outage_costs_one_cloud_read_not_one_per_window():  # C1 probe
-    from TWCManager.Vehicle.Registry.ReadSource import ReadSource
+    from TWCManager.Vehicle.Providers import Capability as C
+    from TWCManager.Vehicle.Providers.Provider import Provider
     from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+    from tests.unit.teslatokens import wire_reads
 
     for cloudLat in (51.50000001, 51.5):  # differing digits, then identical
         c = Clock()
@@ -225,16 +226,20 @@ def test_feed_outage_costs_one_cloud_read_not_one_per_window():  # C1 probe
         reg.registerLiveness("TeslaMateVehicle", lambda v: c.t if live["up"] else None)
         calls = []
 
-        class Cloud(ReadSource):
-            name = "TeslaAPI"
-            order = 1
-            fields = frozenset({"lat"})
+        class Cloud(Provider):
+            name = "OwnerAPI"
+            FIELDS = frozenset({"lat"})
+            DECLARATIONS = {C.READ_CHARGE: C.Declaration(C.CLOUD_FREE)}
 
-            def fetch(self, vehicle, field, allowWake):
+            def ready(self, vehicle, capability):
+                return True
+
+            def fetch(self, vehicle, field, allowWake=False):
                 calls.append(c.t)
-                return {"lat": cloudLat}
+                vehicle.observe("lat", cloudLat, "TeslaAPI")
+                return True
 
-        reg.registerReadSource(Cloud())
+        wire_reads(reg, Cloud())
         v = reg.getOrCreate(VIN, "test")
         v.observe("lat", 51.5, "TeslaMateVehicle", at=100.0)
         assert v.read("lat", maxAge=0).source == "TeslaAPI"  # feed down

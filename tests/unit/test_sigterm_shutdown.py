@@ -140,3 +140,27 @@ def test_main_loop_exits_when_a_handler_swallows_the_interrupt():
     assert "shutdownRequested = True" in handler[: handler.index("signal.signal(")]
     catch_all = source[source.index('logger.info("Unhandled Exception:"') :]
     assert "if shutdownRequested:" in catch_all[: catch_all.index("time.sleep(5)")]
+
+
+def test_vehicle_drains_leave_twenty_seconds_for_settings():
+    # TWCManager.py runs at import: the helper is compiled from its source
+    import ast
+
+    path = os.path.join(REPO, "lib", "TWCManager", "TWCManager.py")
+    source = open(path).read()
+    fn = next(
+        n
+        for n in ast.parse(source).body
+        if isinstance(n, ast.FunctionDef) and n.name == "shutdownTimeouts"
+    )
+    ns = {}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), path, "exec"), ns)
+    f = ns["shutdownTimeouts"]
+    # 60 s at most for the vehicle drain, and 20 s always left for saveSettings
+    assert f(1000.0, 1080.0) == 1060.0
+    assert f(1000.0, 1050.0) == 1030.0
+    assert f(1000.0, 1200.0) == 1060.0
+    stop = source.index("master.reconciler.stop()")
+    drain = source.index("master.reconciler.drain(")
+    assert stop < drain and "vehicleCommandQueue" not in source
+    assert "shutdownTimeouts(time.time(), shutdownDeadline)" in source[stop:drain]

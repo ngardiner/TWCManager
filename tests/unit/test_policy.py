@@ -340,6 +340,26 @@ class TestPolicySelection:
         policy.clearOverride()
         assert policy.limitOverride is False
 
+    def test_enforce_sets_the_policy_limit_on_the_master(self, policy):
+        """The policy's charge limit goes to master.setPolicyLimit: None for
+        no limit, the override's limit while charging is stopped, and a
+        transition only when the policy changed."""
+        master = policy.master
+        master.getModuleByName = Mock(return_value=Mock(minBatteryLevelAtHome=70))
+        master.getMaxAmpsToDivideAmongSlaves = Mock(return_value=0)
+        master.vehicleRegistry.attached = Mock(return_value=[])
+        policy.enforcePolicy({"name": "Charge Now", "charge_limit": 90})
+        master.setPolicyLimit.assert_called_with(90, transition=True)
+        policy.limitOverride = True
+        policy.enforcePolicy({"name": "Charge Now", "charge_limit": 90})
+        master.setPolicyLimit.assert_called_with(69, transition=False)
+        policy.enforcePolicy({"name": "Track Green Energy", "charge_limit": 40})
+        master.setPolicyLimit.assert_called_with(None, transition=True)
+        assert not master.queue_background_task.call_args_list or all(
+            c.args[0].get("cmd") != "applyChargeLimit"
+            for c in master.queue_background_task.call_args_list
+        )
+
 
 class TestPolicyInitialization:
     """Test policy initialization and configuration."""

@@ -51,6 +51,35 @@ policy changes, and to cars which arrive while the policy is in effect.  The
 car's original charge limit is remembered and restored when the car leaves or
 when a new policy does not apply a limit.
 
+A car counts as at home when:
+
+1. a TWC reports it by VIN; else
+2. for a car on your Tesla API account, its latest known position (from any
+   source, including TeslaMate and Fleet Telemetry, which cost nothing)
+   decides: at home within `atHomeRadius` of the home location, away
+   otherwise; else
+3. for a car on your Tesla API account, with no usable position: it was last
+   seen plugged in at home, or TWCManager holds a limit on it (it applied one
+   earlier, including before a restart); else
+4. a car Home Assistant tracks counts as at home exactly when Home Assistant
+   says so; else
+5. it has a BLE key paired with TWCManager.
+
+This is re-checked on every policy pass, so after a restart a car that is
+asleep and plugged in is found again from its last position, without waking
+it. A car leaves when its position places it away from home; a position
+stamped no later than TWCManager's last limit write to that car (such as a
+retained MQTT position delivered again) does not count as leaving.
+
+The home location is set from the first fresh position a Tesla API vehicle
+read returns (a billed `vehicle_data` call on the Fleet API) or that Home
+Assistant reports. Until it is set, no position can place a car at home or
+away, so presence relies on steps 1 and 3-5: a car TWCManager holds a limit
+on, or a car with a BLE key, still gets the policy's limit. You can also set
+the home location yourself: the web interface can learn it from a vehicle's
+current position, or set `homeLat` and `homeLon` with the
+[setSetting API](modules/control_HTTP_API/setSetting.md).
+
 Acceptable values are 50-100; -1 means not to apply a limit / restore the car's
 original limit.
 

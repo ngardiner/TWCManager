@@ -1,8 +1,8 @@
 import time
 from unittest.mock import Mock
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
-from TWCManager.Vehicle.Registry.Sources import TeslaBLEReadSource, TeslaAPIReadSource
-from tests.unit.teslatokens import FakeMaster, new_api, owner_token
+from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
+from tests.unit.teslatokens import FakeMaster, new_api, owner_token, wire_reads
 
 VIN = "5YJ3E1EA1KF000001"
 
@@ -14,15 +14,15 @@ def setup(ble_result, clock=time.time):
     ble.get_charge_state.return_value = ble_result
     ble.get_location_state.return_value = None
     master.modules.update(
-        {"VehiclePriority": Mock(commandPolicy="prefer_ble"), "TeslaBLE": ble}
+        {"TeslaBLE": ble}
     )
     api = new_api(master=master)
     api.carApiVehicles = []
     # The cloud read source reads through the Owner slot
     api.storeToken(owner_token())
-    reg.registerReadSource(TeslaBLEReadSource(ble, master))
+    wire_reads(reg, TeslaBLEProvider(ble, master), *api.providers())
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     car.is_awake = Mock(return_value=True)
     # The API source writes through descriptors; the stand-in must too.
     car.update_vehicle_data = Mock(
@@ -204,7 +204,8 @@ def test_null_gps_as_of_is_not_observed():
     assert reg.get(VIN).latest("gpsAsOf") is None and car.batteryLevel == 70
 
 
-def test_teslable_registers_its_read_source(tmp_path):
+def test_teslable_provider_reads_through_the_module(tmp_path):
+    from TWCManager.Vehicle.Providers import Capability as C
     from unittest.mock import patch
     from TWCManager.Vehicle.TeslaBLE import TeslaBLE
 
@@ -216,8 +217,9 @@ def test_teslable_registers_its_read_source(tmp_path):
         TeslaBLE, "_start_dbus_session"
     ):
         ble = TeslaBLE(master)
-    sources = master.vehicleRegistry.readSources()
-    assert [s.name for s in sources] == ["TeslaBLE"] and sources[0].ble is ble
+    (p,) = ble.providers()
+    assert p.ble is ble and p.cost(C.READ_CHARGE) == C.LOCAL
+    assert p.FIELDS == C.CHARGE_FIELDS | C.LOCATION_FIELDS
 
 
 def test_ble_reply_with_no_values_falls_through_to_api():
@@ -250,3 +252,25 @@ def test_read_stamped_like_the_previous_one_still_counts_as_fetched():
     assert car.update_charge() is True and car.batteryLevel == 61
     ble.get_charge_state.assert_called_once()
     assert car.lastAPIAccessTime > 0
+
+
+def test_a_status_deferral_ends_the_read_walk_before_home_assistant():  # 13b M1
+    # Owner and HA both ready: the deferred car reports its stored values
+    # with no request, and HA (billed, after the cloud API) is never read
+    from TWCManager.Vehicle.Providers.HomeAssistantProvider import (
+        HomeAssistantProvider,
+    )
+
+    car, ble, reg = setup(None)
+    ha = Mock()
+    ha.enabled.return_value = True
+    hv = Mock()
+    reg.get(VIN).attach("HomeAssistant", hv)
+    reg.providerOrder.register(HomeAssistantProvider(ha))
+    car.update_vehicle_data = Mock(return_value=True)
+    reg.get(VIN).observe("batteryLevel", 40, "TeslaAPI", at=0.0)
+    car.statusDeferral = time.time() + 1800
+    assert car.update_charge() is True
+    car.is_awake.assert_not_called()
+    car.update_vehicle_data.assert_not_called()
+    hv.parse_from_home_assistant.assert_not_called()

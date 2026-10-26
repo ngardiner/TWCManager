@@ -5,6 +5,8 @@ import pytest
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
+from TWCManager.Vehicle.Reconcile import Outcome as O
+from TWCManager.Vehicle.Reconcile.Desired import CHARGING
 
 VIN = "5YJ3E1EA1KF000001"
 CONFIG = {
@@ -35,7 +37,7 @@ def test_master_registers_gen2_provider_and_read_order():
     m, s = make()
     assert [p.name for p in m.providerOrder.providers()] == ["Gen2TWC"]
     assert isinstance(m.providerOrder.provider("Gen2TWC"), Gen2TWCProvider)
-    assert m.vehicleRegistry._readOrder is not None
+    assert m.vehicleRegistry.providerOrder is m.providerOrder
 
 
 def test_ranges_follow_the_device_and_wiring():
@@ -85,7 +87,6 @@ def test_provider_readiness_and_range_per_vehicle():
     assert p.ampsRange(v) == (5, 32) and p.covers(v, 5)
     m.settings["chargeRateControl"] = "2"
     assert p.ready(v, C.SET_AMPS) is False
-    assert p.ready(v, C.READ_VIN) and p.declarations()[C.READ_VIN].passive
 
 
 # Mode 3 hands the rate to the vehicle API below 6 A (TWCSlave's literal
@@ -158,21 +159,26 @@ def test_disruptive_stop_declared_very_high_cost_and_off_by_default():
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
     s.currentVIN = VIN
     assert p.cost(C.STOP_CHARGING) == C.DISRUPTIVE and p.ready(v, C.STOP_CHARGING) is False
-    assert p.stopCharging(VIN) is False
+    assert p.stopCharging(VIN) == O.Outcome(O.UNSUPPORTED, "mode 1")
     m.settings["chargeStopMode"] = "2"
-    assert p.ready(v, C.STOP_CHARGING) and p.stopCharging(VIN) is True
+    assert p.ready(v, C.STOP_CHARGING) and p.stopCharging(VIN) == O.Outcome(
+        O.DONE, "respond"
+    )
     assert m.settings["respondToSlaves"] == 0
     m.settings["respondToSlaves"] = 1
     m.stopCarsCharging(VIN)
-    assert m.settings["respondToSlaves"] == 0  # same helper
+    # Desired state only: the reconciler delivers it through this provider
+    assert m.desired.get(VIN, CHARGING).value is False
+    assert m.settings["respondToSlaves"] == 1
     m.settings["chargeStopMode"] = "3"
     m.sendStopCommand = Mock()
-    assert p.stopCharging(VIN) is True
-    m.sendStopCommand.assert_called_once_with(s.TWCID)
+    # Queued for the serial thread's heartbeat; nothing is written here
+    assert p.stopCharging(VIN) == O.Outcome(O.DONE, "queued") and s.stopRequested
+    assert m.sendStopCommand.call_count == 0
 
 
 def test_set_amps_publishes_a_target_for_the_heartbeat():
     m, s = make()
     p = m.providerOrder.provider("Gen2TWC")
     s.currentVIN = VIN
-    assert p.setAmps(VIN, 16) is True and s._evseTargetAmps == 16
+    assert p.setAmps(VIN, 16).kind == O.DONE and s._evseTargetAmps == 16

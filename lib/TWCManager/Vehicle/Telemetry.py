@@ -4,7 +4,6 @@ import threading
 from typing import Optional
 
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Vehicle.Providers.TelemetryProvider import TelemetryProvider
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("Telemetry", "Vehicle")
@@ -97,9 +96,6 @@ class TelmetryBase:
             timer = threading.Timer(30, self.doMQTT)
             timer.daemon = True
             timer.start()
-
-    def providers(self):
-        return [TelemetryProvider(self)]
 
     def doMQTT(self):
         client_name = f"TWC{self.__class__.__name__}"
@@ -263,7 +259,7 @@ class TelmetryBase:
         # source's last report is not news either: restamping it would make
         # a stale value look newer than our own write, and an unhealthy
         # feed's value look current.
-        mine = vehicle.reportedBy(field, source)
+        mine = vehicle.reported(field).get(source)
         if mine is not None and mine.value == value:
             return
         # A different retained value may predate our own write: stamped no
@@ -361,10 +357,9 @@ class TelmetryBase:
             return False
         vehicle = self.registry.findByName(vehicle_name)
         if vehicle is None and loadList:
-            # The API vehicle list is otherwise only loaded when a command
-            # needs the API, which may never happen when BLE handles
-            # everything. Callers on latency-sensitive threads pass
-            # loadList=False.
+            # The API vehicle list may not be loaded yet (checkCharge loads
+            # it at startup and on each arrival). Callers on
+            # latency-sensitive threads pass loadList=False.
             carapi = self.master.getModuleByName("TeslaAPI")
             if carapi and not carapi.getCarApiRetryRemaining():
                 carapi.loadVehicleList()
@@ -386,6 +381,3 @@ class TelmetryBase:
             f"'{vehicle_name}' to attach telemetry to; will retry",
         )
         return False
-
-    def updateSettings(self):
-        return True

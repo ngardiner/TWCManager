@@ -23,6 +23,10 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     # Heartbeat states in which a car is plugged in
     PLUGGED_STATES = (0x01, 0x03, 0x04, 0x05, 0x08, 0x09)
 
+    # Set by ChargingPoint.setTargetPower each pass: the point has a car
+    # member, which owns the car's amps; the heartbeat then writes none
+    pointOwnsAmps = False
+
     def __init__(self, TWCID, maxAmps, config, master):
         # Backing stores for properties that shadow TWCSlave class attributes.
         # These must be initialised before TWCSlave.__init__ runs so that any
@@ -34,6 +38,10 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         # When not None, send_master_heartbeat() uses this value directly
         # instead of recomputing the per-car fair share.
         self._evseTargetAmps = None
+
+        # A mode-3 stop: set off the serial thread (Gen2TWCProvider),
+        # consumed and sent by send_master_heartbeat on it.
+        self.stopRequested = False
 
         TWCSlave.__init__(self, TWCID, maxAmps, config, master)
 
@@ -88,10 +96,16 @@ class Gen2TWC(EVSEInstance, TWCSlave):
 
     @property
     def vehicleKey(self):
-        if self.currentVIN:
-            return self.currentVIN.upper()
+        reg = self.master.vehicleRegistry
         anonKey = ANON_PREFIX + self.twcid
-        if self.master.vehicleRegistry.get(anonKey) is not None:
+        if self.currentVIN and (
+            reg.get(self.currentVIN.upper()) is not None
+            or reg.isPending(self.twcid)
+            or reg.get(anonKey) is None
+        ):
+            return self.currentVIN.upper()
+        if reg.get(anonKey) is not None:
+            # Also for a VIN the registry rejected: the session stays anonymous
             return anonKey
         if self.lastVIN and self.reportedState in self.PLUGGED_STATES:
             # The car last confirmed here has shown no unplug evidence
@@ -161,6 +175,11 @@ class Gen2TWC(EVSEInstance, TWCSlave):
             return TWCSlave.minAmpsToOffer(self)
         return max(override, self.minAmpsTWCSupports)
 
+    def layerFloorAmps(self):
+        # Mode 3 hands the rate to the car below this: the heartbeat's
+        # literal 6 A handoff, never below the TWC's own minimum
+        return max(6, self.minAmpsToOffer())
+
     @property
     def minAmps(self) -> float:
         # What the heartbeat will really send, so an idle TWC's minimum
@@ -192,12 +211,7 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         return ["Gen2TWCs"]
 
     # ------------------------------------------------------------------
-    # EVSEInstance: control
-    #
-    # setTargetPower / startCharging / stopCharging are stubs in Phase 2.
-    # The full watt-based implementation arrives in Phase 4 when the
-    # centralized power distribution loop replaces the per-slave heartbeat
-    # amps calculation.
+    # EVSEInstance: control (start and stop are the heartbeat's)
     # ------------------------------------------------------------------
 
     def setTargetPower(self, watts: float) -> None:
@@ -210,9 +224,3 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         amps = self.convertWattsToAmps(watts, self.currentVoltage)
         self._evseTargetAmps = amps
         self.lastAmpsDesired = amps  # kept for compatibility / logging
-
-    def startCharging(self) -> None:
-        """Charging start is managed by the RS485 heartbeat cycle."""
-
-    def stopCharging(self) -> None:
-        """Charging stop is managed by the RS485 heartbeat cycle."""

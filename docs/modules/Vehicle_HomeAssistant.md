@@ -83,13 +83,9 @@ After discovery, **ongoing interaction uses the Home Assistant REST API only**:
 
 The module uses this data to:
 
-* populate each vehicle's:
-  * `battery_level`
-  * `charging_state` / `charging`
-  * `time_to_full_charge`
-  * `available_current` / `actual_current`
-  * `voltage` and `phases`
-  * `lat`, `lon`, and `at_home`
+* report each vehicle's battery level, charge limit, charge current setting,
+  charging state and location to TWCManager's vehicle registry
+* keep each vehicle's `battery_level`, `lat`, `lon` and `at_home`
 * expose aggregate properties to TWCManager such as:
   * `numCarsAtHome`
   * `minBatteryLevelAtHome`
@@ -111,7 +107,7 @@ To control charging, the module calls **Home Assistant services**:
   → `POST /api/services/number/set_value` with
     `{"entity_id": "number.<slug>_charge_current", "value": <amps>}`
 
-TWCManager's existing logic (like `applyChargeLimit`, `car_api_charge`, `setChargeRate`) is wired to call these Home Assistant services instead of the direct Tesla API.
+TWCManager sets the charge limit, starts and stops charging, and sets the charge rate by calling these Home Assistant services instead of the direct Tesla API.
 
 ## TWCManager Configuration
 
@@ -150,7 +146,7 @@ You can generate a long-lived token in Home Assistant under:
 * If the module is enabled but no Tesla vehicles are discovered:
   * It logs a warning and exposes no cars to TWCManager.
 * If Home Assistant is temporarily unreachable:
-  * `car_api_available()` returns `False`, and TWCManager will not attempt charge actions through this backend until connectivity is restored.
+  * Its service calls fail, and TWCManager falls back to its other vehicle providers (or retries later) until connectivity is restored.
 * If a specific entity is missing (e.g. `number.<slug>_charge_current`):
   * That feature (e.g. setting amps) is skipped, but other features (start/stop, limit, SOC) can still work if their entities exist.
 

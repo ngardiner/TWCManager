@@ -11,19 +11,15 @@ from tests.unit.test_carapivehicle_registry import api_with_registry
 from tests.unit.teslatokens import fleet_token, owner_token
 VIN1 = "5YJ3E1EA1KF000001"; VIN2 = "5YJ3E1EA1KF000002"
 
-class Clock:
-    def __init__(self, t=1000.0): self.t = t
-    def __call__(self): return self.t
-
 def master(settings=None, *providers, slaves=()):
     m = Mock(); m.settings = settings or {}; m.config = {"config": {"wiringMaxAmpsPerTWC": 32, "defaultVoltage": 240}}
-    m.stats = {"moduleSuccess": {}, "moduleFailures": {}}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
     for p in providers: m.providerOrder.register(p)
     carapi = Mock(); carapi.enabled.return_value = True
     m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else None; m.getSlaveTWCs = lambda: list(slaves); return m
 
 def car(m, vin, atHome=True, syncSource="TeslaAPI", pluggedIn=None):
-    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome, syncSource=syncSource, pluggedIn=pluggedIn)); return v
+    v = m.vehicleRegistry.getOrCreate(vin, "TeslaAPI"); v.attach("TeslaAPI", SimpleNamespace(VIN=vin, atHome=atHome, syncSource=syncSource, pluggedIn=pluggedIn, locate=lambda: None)); return v
 
 def slave(key=None, amps=0.0, state=0x00): return SimpleNamespace(vehicleKey=key, reportedAmpsActual=amps, reportedState=state)
 
@@ -53,13 +49,13 @@ def test_state_from_registry_values_without_reads():
     assert e.wantsToCharge and not e.isCharging and e.occupied is True and e.maxPower == 32 * 240   # the pilot is not the car's limit
     v.observe("chargeCurrentRequestMax", 16, "TeslaAPI"); assert e.maxPower == 16 * 240
 
-def test_set_target_power_queues_on_change_or_after_refresh():
-    c = Clock(); m = master({}, fleet()); e = VehicleEndpoint(car(m, VIN1), m.providerOrder, m, clock=c)
-    e.setTargetPower(0); m.queue_vehicle_command.assert_not_called()
-    e.setTargetPower(2400); e.setTargetPower(2400)
-    m.queue_vehicle_command.assert_called_once_with({"cmd": "setAmps", "vin": VIN1, "amps": 10})
-    c.t += 600; e.setTargetPower(2400); assert m.queue_vehicle_command.call_count == 2
-    e.setTargetPower(100); assert m.queue_vehicle_command.call_args.args[0]["amps"] == 1
+def test_set_target_power_sets_desired_amps():                            # slim Task 12b
+    from TWCManager.Vehicle.Reconcile.Desired import AMPS, DesiredStore
+    m = master({}, fleet()); m.desired = DesiredStore(); e = VehicleEndpoint(car(m, VIN1), m.providerOrder, m)
+    e.setTargetPower(0); assert m.desired.get(VIN1, AMPS) is None
+    e.setTargetPower(2400); d = m.desired.get(VIN1, AMPS); assert (d.value, d.by) == (10, "distributor")
+    e.setTargetPower(100); assert m.desired.get(VIN1, AMPS).value == 1                  # vehicle amps are never 0
+    e.setTargetPower(0); assert m.desired.get(VIN1, AMPS) is None                        # a zero offer withdraws the rate
 
 def test_controller_lists_at_home_api_cars_and_keeps_blind_rules():
     m = master({}, fleet()); car(m, VIN1); car(m, VIN2, atHome=False); m.vehicleRegistry.beginPlugSession("8244")

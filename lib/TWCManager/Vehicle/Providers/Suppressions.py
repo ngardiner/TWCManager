@@ -1,10 +1,12 @@
 # Which provider may not perform which operation: the explicit
-# providerSuppressions setting, plus the commandPolicy setting mapped onto
-# providers. Settings are read on every call, so a change applies at once.
+# providerSuppressions setting, plus each provider's SUPPRESSED table for the
+# conditions in force (commandPolicy, and chargeStopMode 2/3). Settings are
+# read on every call, so a change applies at once.
 import logging
 from typing import Dict, FrozenSet
 
-from .Capability import ALL, COMMANDS
+from .Capability import ALL
+from .Provider import suppressedFor
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Providers")
 
@@ -72,10 +74,6 @@ class Suppressions:
             return "prefer_ble"
         return policy
 
-    @property
-    def commandPolicyOverridden(self) -> bool:
-        return bool(self.configPolicy)
-
     def explicit(self) -> Dict[str, FrozenSet[str]]:
         settings = getattr(self.master, "settings", None) or {}
         merged = _parse(settings.get("providerSuppressions"), "settings")
@@ -84,16 +82,25 @@ class Suppressions:
         )
         return merged
 
+    def conditions(self) -> FrozenSet[str]:
+        # The commandPolicy, plus "localStops" when the user chose a
+        # disruptive local stop, and "silentStops" for mode 2
+        conditions = {self.commandPolicy}
+        settings = getattr(self.master, "settings", None) or {}
+        try:
+            mode = int(settings.get("chargeStopMode", 1))
+            if mode in (2, 3):
+                conditions.add("localStops")
+            if mode == 2:
+                conditions.add("silentStops")
+        except (TypeError, ValueError):
+            pass
+        return frozenset(conditions)
+
     def suppressed(self, provider, capability) -> bool:
         if capability in self.explicit().get(provider.name, frozenset()):
             return True
-        policy = self.commandPolicy
-        if policy == "ble_only":
-            return not provider.local and capability in COMMANDS
-        if policy == "api_only":
-            # Today api_only blocks BLE commands and the BLE read source alike
-            return provider.name == "TeslaBLE"
-        return False
+        return any(capability in suppressedFor(provider, c) for c in self.conditions())
 
     def noticeOnce(self) -> None:
         if self.commandPolicy != "api_only" or self._noticed:

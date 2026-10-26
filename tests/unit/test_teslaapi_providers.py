@@ -6,6 +6,7 @@ import pytest
 from requests_mock import ANY
 
 from TWCManager.Vehicle.Providers import Capability as C
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.test_carapivehicle_registry import api_with_registry, VIN
 from tests.unit.teslatokens import fleet_token, owner_token
 
@@ -24,18 +25,12 @@ def test_two_providers_with_honest_costs():
         False,
     )
     assert owner.cost(C.READ_CHARGE) == C.CLOUD_FREE and owner.cost(C.SET_AMPS) == C.OWNER_COMMAND
-    assert (
-        fleet.cost(C.READ_ONLINE) == C.CLOUD_FREE
-        and fleet.cost(C.READ_CHARGE) == C.FLEET_DATA
-    )
+    assert fleet.cost(C.READ_CHARGE) == C.FLEET_DATA
     assert fleet.cost(C.SET_AMPS) == C.FLEET_COMMAND and fleet.cost(C.WAKE) == C.FLEET_WAKE
-    assert fleet.declarations()[C.SET_AMPS].rateLimit == C.RateLimit(50, 60)
+    assert fleet.declarations()[C.SET_AMPS] == C.Declaration(C.FLEET_COMMAND)   # pacing is the reconciler's MIN_SEND_GAP
     # no tokens yet
     assert fleet.available(C.SET_AMPS) is False and owner.available(C.READ_CHARGE) is True
-    assert (api.ownerReadSource.provider, api.fleetReadSource.provider) == (
-        "OwnerAPI",
-        "FleetAPI",
-    )
+    assert owner.FIELDS == fleet.FIELDS == C.CHARGE_FIELDS | C.LOCATION_FIELDS
     assert (owner.module, fleet.module) == (api, api)
 
 
@@ -45,17 +40,9 @@ def test_fleet_reads_only_when_owner_cannot():
     v = reg.get(VIN)
     owner, fleet = api.providers()
     api.storeToken(fleet_token())
-    assert (
-        fleet.ready(v, C.READ_CHARGE)
-        and api.fleetReadSource.canRead(v)
-        and not owner.ready(v, C.READ_CHARGE)
-    )
+    assert fleet.ready(v, C.READ_CHARGE) and not owner.ready(v, C.READ_CHARGE)
     api.storeToken(owner_token())
-    assert (
-        owner.ready(v, C.READ_CHARGE)
-        and not fleet.ready(v, C.READ_CHARGE)
-        and not api.fleetReadSource.canRead(v)
-    )
+    assert owner.ready(v, C.READ_CHARGE) and not fleet.ready(v, C.READ_CHARGE)
     assert fleet.ready(v, C.SET_AMPS) and fleet.ready(v, C.WAKE) and fleet.available(C.WAKE)
 
 
@@ -77,36 +64,43 @@ def test_claims_are_live_and_follow_the_slots():
 def test_fleet_commands_resolve_the_car_by_vin():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     owner, fleet = api.providers()
-    api.setChargeRate = Mock(return_value=True)
-    api.wakeVehicle = Mock(return_value=True)
-    assert fleet.setAmps(VIN, 10) is True
-    api.setChargeRate.assert_called_once_with(10, vehicle=car)
-    assert fleet.wake(VIN) is True
-    api.wakeVehicle.assert_called_once_with(car)
-    assert fleet.setAmps("5YJ3E1EA1KF000009", 10) is False
-    assert fleet.wake("5YJ3E1EA1KF000009") is False
+    api.command = Mock(return_value=O.Outcome(O.DONE))
+    api.wakeOutcome = Mock(return_value=O.Outcome(O.DONE))
+    fleet.clock = lambda: 1000.0
+    assert fleet.setAmps(VIN, 10) == O.Outcome(O.DONE)
+    api.command.assert_called_once_with(car, "set_charging_amps", {"charging_amps": 10})
+    assert fleet.wake(VIN) == O.Outcome(O.DONE)
+    api.wakeOutcome.assert_called_once_with(car, now=1000.0)
+    assert fleet.setAmps("5YJ3E1EA1KF000009", 10) == O.Outcome(O.UNSUPPORTED, "not listed")
+    assert fleet.wake("5YJ3E1EA1KF000009") == O.Outcome(O.UNSUPPORTED, "not listed")
+    assert owner.setAmps(VIN, 10) == O.Outcome(O.DONE)    # the Owner provider shares the command path
 
 
-def test_read_source_passes_its_slot_to_the_car():
+@pytest.mark.parametrize("which", [0, 1])
+def test_each_provider_reads_through_its_own_slot(which):
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(owner_token())
     v = reg.get(VIN)
     car.statusDeferral = 0
     car.is_awake = Mock(return_value=True)
     car.update_vehicle_data = Mock(return_value=True)
-    assert api.ownerReadSource.fetch(v, "chargeLimit", False) == {}
-    car.is_awake.assert_called_once_with(slot=api.ownerSlot)
-    car.update_vehicle_data.assert_called_once_with(slot=api.ownerSlot)
+    slot = (api.ownerSlot, api.fleetSlot)[which]
+    assert api.providers()[which].fetch(v, "chargeLimit", allowWake=True) is True
+    car.is_awake.assert_called_once_with(slot=slot)
+    car.update_vehicle_data.assert_called_once_with(slot=slot)
+    car.is_awake.return_value = False  # asleep: never woken, no paid read
+    assert api.providers()[which].fetch(v, "chargeLimit", allowWake=True) is False
+    assert car.update_vehicle_data.call_count == 1
 
 
 def test_a_paused_slot_sends_nothing(requests_mock):
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(owner_token())
     api.ownerSlot.pause()
     anything = requests_mock.register_uri(
@@ -153,7 +147,7 @@ def test_owner_reads_cost_nothing_with_a_fleet_token_held(requests_mock, case):
     state, payload = OWNER_READS[case]
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(fleet_token())
     api.storeToken(owner_token())
     car.statusDeferral = 0
@@ -180,7 +174,7 @@ def test_fleet_reads_when_owner_holds_no_token(requests_mock):
     # Today's slotFor("read") rule: Fleet's vehicle_data is the only read.
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(fleet_token())
     car.statusDeferral = 0
     car.lastVehicleAwakeTime = 0
@@ -202,7 +196,7 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     # not tried again.
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
-    car = api.getCarApiVehicles()[0]
+    car = api.carApiVehicles[0]
     api.storeToken(fleet_token())
     api.storeToken(owner_token())
     car.statusDeferral = 0

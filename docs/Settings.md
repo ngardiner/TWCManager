@@ -56,9 +56,9 @@ This setting specifies that any vehicle which requests to start charging will be
 
 ### Vehicle Command Policy
 
-Vehicle commands (start and stop charging, set the charge rate, set the charge limit, wake) walk a fixed order of providers: the TWC itself, then BLE, then the cloud, with billed providers (the Fleet API, then Home Assistant) last. The first provider that succeeds wins. The Vehicle Command Policy suppresses providers in that order:
+Vehicle commands (start and stop charging, set the charge rate, set the charge limit, wake) go to the first ready provider in a fixed order: the TWC itself, then BLE, then the cloud, with billed providers (the Fleet API, then Home Assistant) last. Free providers are always tried first. A billed provider is used only when no free one can serve the car, or after the free ones have failed for 5 minutes (charge limit) or 60 seconds (start/stop, amps), and sends each desired value at most four times. The Vehicle Command Policy suppresses providers in that order:
 
-   * `prefer_ble` - Prefer local (BLE), fall back to cloud. Nothing is suppressed. This is the default.
+   * `prefer_ble` - Prefer local (BLE), fall back to cloud after a delay. Nothing is suppressed. This is the default.
    * `ble_only` - Local only - never send billed cloud commands. Every non-local provider (the Fleet API and Home Assistant) is suppressed for commands; cloud reads still run.
    * `api_only` - Cloud only - never use BLE. TeslaBLE is suppressed for every operation, reads as well as commands.
 
@@ -66,7 +66,11 @@ Setting `commandPolicy` under `vehicle` in config.json hard-sets the policy and 
 
 #### Who sets a car's charge rate
 
-Every Fleet API command is billed, so the Fleet API never sets a car's charge rate where a local path can: the TWC the car is plugged into, or BLE for a paired car. A car on a TWC gets its rate from the TWC. A BLE-paired car on a mobile connector (or any charger TWCManager does not control) gets its rate over BLE only; before v1.4.0 it got it from the Fleet API. If the BLE command fails, the Fleet API does not step in. To let the Fleet API carry the rate for such a car, use `api_only`. Charge Rate Control modes 2 and 3 are unchanged.
+Every Fleet API command is billed, so the Fleet API never sets a car's charge rate where a local path can: the TWC the car is plugged into, or BLE for a paired car. A car on a TWC gets its rate from the TWC. A BLE-paired car on a mobile connector (or any charger TWCManager does not control) gets its rate over BLE only; before v1.4.0 it got it from the Fleet API. If the BLE command fails, the Fleet API does not step in. To let the Fleet API carry the rate for such a car, use `api_only`. Under Charge Rate Control mode 2 (and mode 3 below 6 A), the TWC offers the car's share, not its maximum, until the car's rate is confirmed by a delivered command or a reading; a rate that cannot be delivered leaves the TWC enforcing the share.
+
+#### BLE retries
+
+A BLE command that times out or fails to connect is retried once, two seconds later; any other failure is reported straight away. The vehicle command order then decides when to try again and whether to fall back to the cloud. The `maxRetries`, `retryDelay`, `circuitBreakerThreshold` and `circuitBreakerTimeout` keys under `config.moduleConfiguration.TeslaBLE` were removed in v1.4.0 and are ignored if present.
 
 #### providerSuppressions
 
@@ -79,7 +83,7 @@ For finer control than the policy, the `providerSuppressions` setting (in settin
 }
 ```
 
-Provider names are `Gen2TWC`, `Gen3TWC`, `TeslaBLE`, `OwnerAPI`, `FleetAPI` and `HomeAssistant`, plus the telemetry feeds `TeslaMateVehicle` and `FleetTelemetryMQTT` (which only report, so a suppression has no effect on them). Capability names are the reads `readList`, `readOnline`, `readCharge`, `readLocation`, `readPlug`, `readVin`, `readAmps` and `wallConnectorVins`, and the commands `setChargeLimit`, `startCharging`, `stopCharging`, `setAmps` and `wake`; `"*"` suppresses every operation. Suppressing `readCharge` also takes the provider out of vehicle reads. Unknown names are ignored. The suppressions apply on top of the Vehicle Command Policy.
+Provider names are `Gen2TWC`, `Gen3TWC`, `TeslaBLE`, `OwnerAPI`, `FleetAPI` and `HomeAssistant`. The telemetry feeds (TeslaMate, Fleet Telemetry) only report, so they are not providers and cannot be suppressed. Capability names are the reads `readCharge` (charge state and location) and `wallConnectorVins`, and the commands `setChargeLimit`, `startCharging`, `stopCharging`, `setAmps` and `wake`; `"*"` suppresses every operation. Suppressing `readCharge` also takes the provider out of vehicle reads. Unknown names are ignored, including the earlier `readList`, `readOnline`, `readLocation`, `readPlug`, `readVin` and `readAmps`, which nothing ever read. The suppressions apply on top of the Vehicle Command Policy.
 
 ### Consumption Offsets
 

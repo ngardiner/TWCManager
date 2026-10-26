@@ -256,7 +256,8 @@ class Policy:
         self.enforcePolicy(self.getPolicyByName(self.active_policy))
 
     def enforcePolicy(self, policy, updateLatch=False):
-        if self.active_policy != str(policy["name"]):
+        transition = self.active_policy != str(policy["name"])
+        if transition:
             self.fireWebhook("exit")
 
             logger.info(
@@ -267,11 +268,6 @@ class Policy:
             self.active_policy = str(policy["name"])
             self.limitOverride = False
             self.fireWebhook("enter")
-
-            # Clear stopAskingToStartCharging so we try charging each car at
-            # least once
-            for vehicle in self.master.vehicleRegistry.attached("TeslaAPI"):
-                vehicle.stopAskingToStartCharging = False
 
         if updateLatch and "latch_period" in policy:
             policy["__latchTime"] = time.time() + policy["latch_period"] * 60
@@ -321,10 +317,10 @@ class Policy:
         elif self.limitOverride and chargeAmps > 0:
             # Charging has resumed; clear the override so the limit is restored
             self.limitOverride = False
-        if not (limit >= 50 and limit <= 100):
-            limit = -1
-        self.master.lastChargeLimitApplied = limit
-        self.master.queue_background_task({"cmd": "applyChargeLimit", "limit": limit})
+        # A new policy is a decision: it ends a limit the user set in the car
+        self.master.setPolicyLimit(
+            limit if 50 <= limit <= 100 else None, transition=transition
+        )
 
         # Report current policy via Status modules
         for module in self.master.getModulesByType("Status"):

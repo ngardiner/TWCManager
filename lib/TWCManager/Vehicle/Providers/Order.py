@@ -4,18 +4,14 @@
 # works on a snapshot.
 import json
 import logging
-from typing import Any, Callable, List, Optional
+import time
+from typing import Collection, List, Optional
 
-from ..Registry.ReadSource import ReadSource
-from .Capability import READ_CHARGE, READS, SET_AMPS, TIER_BILLED, WAKE
+from .Capability import READ_CHARGE, SET_AMPS, TIER_BILLED, WAKE
 from .Provider import Provider
 from .Suppressions import Suppressions
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Providers")
-
-# Where a read source with no registered provider sorts
-UNKNOWN_TIER = 9
-UNKNOWN_RANK = 999
 
 
 class ProviderOrder:
@@ -56,7 +52,7 @@ class ProviderOrder:
         found = []
         for index, p in self._indexed():
             declaration = p.declarations().get(capability)
-            if declaration is None or declaration.passive:
+            if declaration is None:
                 continue
             if self.suppressions.suppressed(p, capability):
                 continue
@@ -83,10 +79,9 @@ class ProviderOrder:
         amps: Optional[float] = None,
         localRule: bool = True,
     ) -> List[Provider]:
-        # localRule False: readiness only. A vehicle-rate change (the
-        # facade's setChargeRate, the debug page) must reach the car even
-        # where the TWC covers the rate, since the TWC cannot lift the car's
-        # own current limit (#660)
+        # localRule False: readiness only. A lift or the debug page's rate
+        # must reach the car even where the TWC covers the rate, since the
+        # TWC cannot lift the car's own current limit (#660)
         found = [
             p for p in self.ordered(capability) if self._ready(p, vehicle, capability)
         ]
@@ -109,62 +104,45 @@ class ProviderOrder:
                 found = [p for p in found if p.cost(capability).tier < TIER_BILLED]
         return found
 
-    def orderReadSources(self, sources: List[ReadSource]) -> List[ReadSource]:
-        keyed = []
-        for index, source in enumerate(sources):
-            p = self.provider(getattr(source, "provider", ""))
-            if p is None:
-                tier, rank = UNKNOWN_TIER, UNKNOWN_RANK
-            else:
-                if self.suppressions.suppressed(p, READ_CHARGE):
-                    continue
-                tier = min(
-                    (d.cost.tier for c, d in p.declarations().items() if c in READS),
-                    default=UNKNOWN_TIER,
-                )
-                rank = p.rank
-            keyed.append(((tier, rank, getattr(source, "order", 0), index), source))
-        return [s for _, s in sorted(keyed, key=lambda e: e[0])]
-
-    def _count(self, kind, name) -> None:
-        stats = getattr(self.master, "stats", None)
-        if isinstance(stats, dict):
-            counts = stats.setdefault(kind, {})
-            counts[name] = counts.get(name, 0) + 1
-
-    def dispatch(
+    def read(
         self,
         vehicle,
-        capability,
-        call: Callable[[Provider], Any],
-        amps=None,
-        attempts: Optional[int] = None,
-        localRule: bool = True,
-    ) -> Any:
-        # attempts overrides each provider's own count (the debug API: one)
-        for p in self.candidates(vehicle, capability, amps, localRule):
-            if p.module is None:
-                # The TWC providers: a dispatched command runs off the main
-                # loop and must not write a TWC target; the distributor owns it
+        field: str,
+        allowWake: bool = False,
+        providers: Optional[Collection] = None,
+    ):
+        """The registry's read cascade: the providers that fetch field,
+        cheapest first; providers (objects or names) limits it to those.
+        Readiness is asked just before each fetch, since one fetch can change
+        the next one's: a refused Owner read hands reads to Fleet. A raising
+        fetch counts as failed and logs only its exception type. Called with
+        no lock held: fetches do I/O."""
+        for p in self.ordered(READ_CHARGE):
+            if field not in p.FIELDS:
                 continue
-            for _ in range(attempts or p.attempts()):
-                try:
-                    result = call(p)
-                except Exception as e:
-                    logger.debug(
-                        "%s %s raised %s", p.name, capability, type(e).__name__
-                    )
-                    continue
-                if result and result != "error":
-                    self._count("moduleSuccess", p.name)
-                    return result
-            self._count("moduleFailures", p.name)
-        return False
+            if providers is not None and p not in providers and p.name not in providers:
+                continue
+            if not self._ready(p, vehicle, READ_CHARGE):
+                continue
+            try:
+                fetched = p.fetch(vehicle, field, allowWake)
+            except Exception as e:
+                logger.debug("%s read of %s raised %s", p.name, field, type(e).__name__)
+                continue
+            if fetched and vehicle.latest(field) is not None:
+                return vehicle.latest(field)
+        return None
 
     def debugCommand(self, command: str, vin: str, parameters: str) -> bool:
+        """The debug page's /api/sendTeslaAPICommand: one one-shot attempt
+        through the reconciler, on the first provider able to carry it. One
+        provider per command, no fall-through and no retry: a user-initiated
+        command is never sent twice. Returns True when an attempt was submitted; the
+        reconciler logs its outcome at INFO."""
         vehicle = self.master.vehicleRegistry.get(vin)
         if vehicle is None:
             return False
+        amps = None
         if command == "setChargeRate":
             try:
                 params = json.loads(parameters)
@@ -177,26 +155,50 @@ class ProviderOrder:
                 amps = max(1, int(float(params.get("charge_rate", 0))))
             except (TypeError, ValueError, OverflowError):
                 return False
-            return bool(
-                self.dispatch(
-                    vehicle,
-                    SET_AMPS,
-                    lambda p: p.setAmps(vin, amps),
-                    attempts=1,
-                    localRule=False,
-                )
-            )
-        if command == "wakeVehicle":
-            # User-initiated: a failed wake is never sent twice
-            return bool(self.dispatch(vehicle, WAKE, lambda p: p.wake(vin), attempts=1))
-        return False
+            capability = SET_AMPS
+        elif command == "wakeVehicle":
+            capability = WAKE
+        else:
+            return False
+        reconciler = getattr(self.master, "reconciler", None)
+        if reconciler is None:
+            logger.debug("Debug %s for %s: no reconciler", command, vin)
+            return False
+        # Readiness only for a rate (localRule False): the TWC cannot lift
+        # the car's own current limit (#660). A TWC provider (no module) is
+        # never written from the HTTP thread; the distributor owns its target
+        provider = next(
+            (
+                p
+                for p in self.candidates(vehicle, capability, amps, localRule=False)
+                if p.module is not None
+            ),
+            None,
+        )
+        if provider is None:
+            return False
+        # Lazy: Reconcile imports this package's Capability
+        from ..Reconcile.Desired import Attempt
+
+        attempt = Attempt(
+            key=vin,
+            aspect=None,
+            capability=capability,
+            value=amps,
+            provider=provider.name,
+            wake=False,
+            maxAge=None,
+            restore=False,
+            since=time.time(),
+        )
+        return bool(reconciler.submit(attempt))
 
 
 def registerProviders(master) -> List[str]:
     # Called from TWCManager.py after the module-load loop
     for mod in master.getModulesByType("Vehicle"):
         # One module's failure must not stop the others, or startup. Visible:
-        # a skipped TeslaBLE leaves its read source unsuppressed under api_only
+        # a skipped module neither reads nor commands
         try:
             for provider in getattr(mod["ref"], "providers", lambda: [])():
                 master.providerOrder.register(provider)
