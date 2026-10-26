@@ -1222,7 +1222,8 @@ class TWCSlave:
     def getLastVehicle(self):
         currentVehicle = None
         lastVehicle = None
-        for vehicle in self.master.getModuleByName("TeslaAPI").getCarApiVehicles():
+        carapi = self.master.getModuleByName("TeslaAPI")
+        for vehicle in carapi.getCarApiVehicles() if carapi else []:
             if self.currentVIN == vehicle.VIN:
                 currentVehicle = vehicle
             if self.lastVIN == vehicle.VIN:

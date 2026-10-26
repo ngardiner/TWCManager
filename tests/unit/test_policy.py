@@ -340,6 +340,17 @@ class TestPolicySelection:
         policy.clearOverride()
         assert policy.limitOverride is False
 
+    def test_a_disabled_tesla_api_changes_policy_and_leaves_the_limit(self, policy):
+        """vehicle.teslaAPI disabled: getModuleByName answers None. A policy
+        change has no API vehicles to reset, and the override has no battery
+        level to lower the limit below, so the policy's own limit applies."""
+        master = policy.master
+        master.getModuleByName = Mock(return_value=None)
+        policy.enforcePolicy({"name": "Charge Now", "charge_limit": 90})
+        policy.limitOverride = True
+        policy.enforcePolicy({"name": "Charge Now", "charge_limit": 90})
+        assert master.lastChargeLimitApplied == 90
+
 
 class TestPolicyInitialization:
     """Test policy initialization and configuration."""
