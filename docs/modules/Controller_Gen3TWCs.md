@@ -159,7 +159,7 @@ needs:
   DIN Tesla reports for the unit.  With only one Gen3 and one Wall
   Connector on the account, no DIN is needed.
 
-The cloud lookup has not yet been tested on real hardware.
+The cloud lookup has not yet been tested on real hardware (see [Limitations](#limitations)).
 
 ## Multiple Gen3 units
 
@@ -170,10 +170,19 @@ sum of their targets (see above).  Each unit's own draw can differ from
 its own target, especially when the units have different `fuseAmps`.
 
 Because the value is shared, one unit cannot be stopped while another
-charges: a unit with a zero target can still draw up to the shared
-headroom.  TWCManager reports this as a limitation of the Gen3 control
-path whenever more than one unit has a car connected, so it can stop
-that car another way (for example, over Bluetooth or the Fleet API).
+charges: a unit with a zero target is left out of the calculation and can
+still draw up to the shared headroom.  While more than one unit has a car
+connected, the Gen3 reports `NO_INDIVIDUAL_STOP`.  In practice:
+
+- When one car's allowance drops to zero while the other car keeps
+  charging, the first car may keep charging at up to the shared headroom
+  until the other car stops too.
+- A stop sent for one of those cars never goes through the Gen3 unit; it
+  goes to the car's own providers (Bluetooth LE first, then the cloud),
+  subject to your Vehicle Command Policy.  Without a paired BLE key or a
+  Fleet API token that can command the car, nothing else can stop it.
+- With only one unit occupied, a zero target does stop it (full fuse
+  presented as house load).
 
 ```json
 "devices": [
@@ -181,6 +190,20 @@ that car another way (for example, over Bluetooth or the Fleet API).
     { "ip": "192.168.1.101", "fuseAmps": 48, "phases": 1 }
 ]
 ```
+
+## How a Gen3 car is commanded
+
+- **Charge rate** - set only through the unit's target and the shared
+  headroom above.  TWCManager sends no charge-rate command to the car, and
+  Charge Rate Control modes 2 and 3 do not add one for a car on a Gen3.
+- **Charge limit and wake** - sent to the car like any other car's, through
+  the vehicle providers in order: Bluetooth LE (local, free) first, then the
+  cloud.  The Vehicle Command Policy (`prefer_ble`, `ble_only`, `api_only`)
+  and `providerSuppressions` apply; see [Settings.md](../Settings.md).  The
+  provider that represents the unit itself is named `Gen3TWC` there.
+- **Reads** - plug state and current come from the unit's vitals, not the
+  car.  The energy-site lookup that names the car is a free read and never
+  wakes it.
 
 ## Mixed Gen2 + Gen3 deployments
 
@@ -219,11 +242,17 @@ same fair-share algorithm.
 - **Indirect control** - The Gen3's own hardware limits (6 A minimum,
   circuit maximum) override TWCManager's target if it falls outside that
   range.
-- **Shared headroom** - Multiple Gen3 units on the same bus share one
+- **No individual stop** - Multiple Gen3 units on the same bus share one
   house-load figure.  Their total follows the sum of the targets, but no
-  unit can be stopped alone while another charges.
-- **Untested on hardware** - Multi-unit sharing and the zero-headroom
-  stop have not yet been verified on real Gen3 units.
+  unit can be stopped alone while another charges
+  (see [Multiple Gen3 units](#multiple-gen3-units)).
+- **Unit-tested only** - Gen3 support is covered by unit tests; it has not
+  been run against real Gen3 units.  Still unverified on hardware: the
+  zero-headroom stop, multi-unit sharing, that `live_status` lists the
+  Wall Connector with the connected car's VIN, the DIN format
+  (`<part_number>--<serial_number>` from `/api/1/version`), whether the
+  Owner API (TeslaMate) token can read `live_status`, and how soon the
+  energy site stops naming a car that has left.
 
 ## Troubleshooting
 
