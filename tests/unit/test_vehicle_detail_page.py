@@ -33,7 +33,7 @@ def test_detail_renders_without_history_and_shows_ble_status():  # Review Focus 
     m.modules = {"TeslaBLE": object()}
     html = render(m, status())
     assert "In range (not paired)" in html and "Not Implemented" not in html
-    assert 'value="scan"' in html and 'value="pair"' in html and "managed" in html
+    assert 'value="scan"' in html and 'value="pair"' in html and "Tier" not in html
     assert "42 s ago" in html and "Pair with Vehicle" in html
     assert "Re-pair" not in html
 
@@ -172,3 +172,33 @@ def test_forget_keeps_a_record_that_has_history():  # I1
     assert forgetVehicle(m, TYPO) == "/vehicles"
     assert m.vehicleRegistry.get(TYPO) is None
     assert m.settings["Vehicles"][TYPO]["chargeSessions"] == 2
+
+
+def test_forget_refuses_a_car_listed_after_the_check(monkeypatch):  # F7
+    from TWCManager.Control import HTTPControl
+    from tests.unit.teslatokens import new_api
+
+    m = master()
+    m.queue_background_task = Mock()
+    v = added(m)
+    m.config = {"config": {}}
+    api = new_api(master=m)
+    # The check passed; the account lists the car before the forget
+    monkeypatch.setattr(
+        HTTPControl,
+        "canForgetVehicle",
+        lambda master, vin: api.addVehicle({"id": 1, "vin": TYPO, "display_name": "C"})
+        or True,
+    )
+    assert HTTPControl.forgetVehicle(m, TYPO) == "/vehicleDetail/" + TYPO
+    assert m.vehicleRegistry.get(TYPO) is v and TYPO in m.settings["Vehicles"]
+    assert v.attachment("TeslaAPI") is not None
+
+
+def test_scan_pending_page_refreshes_itself_only_while_pending():
+    m = master()
+    m.modules = {"TeslaBLE": object()}
+    pending = render(m, status(scanPending=True))
+    assert '<meta http-equiv="refresh" content="3">' in pending
+    assert 'http-equiv="refresh"' not in render(m, status())
+    assert 'http-equiv="refresh"' not in render(m, None)

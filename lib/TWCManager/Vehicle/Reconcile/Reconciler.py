@@ -25,6 +25,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from ...VehicleCommandQueue import VehicleCommandQueue
+from ..Registry.Fields import READ_MAX_AGE
 from ..Providers.Capability import (
     NO_INDIVIDUAL_STOP,
     SET_CHARGE_LIMIT,
@@ -37,6 +38,7 @@ from . import Run
 from .Desired import AMPS, CAPABILITY_FOR, CHARGE_LIMIT, CHARGING, FIELD_FOR, Attempt
 from .Outcome import (
     ERROR,
+    EXCLUDING,
     QUEUE_DETAILS,
     SATISFIED,
     SETTLED,
@@ -63,7 +65,7 @@ logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
 # The longest a pass waits for a wake
 TICK = 1.0
-# Two knobs that share their values today (CarApiVehicle's 300 s limit gap
+# Two knobs that share their values today (the 300 s limit gap
 # and the 60 s start/stop gate): PAID_AFTER, how long the free channel must
 # have failed before a paid provider is used; RETRY, the gap before the same
 # aspect is tried again. Split the table to tune one alone
@@ -77,8 +79,6 @@ RESTORE_RETRY = 3600.0
 # A free channel failing but untried for this long gets the real command
 # before money is spent
 PROBE_AFTER = 600.0
-# The read before a write accepts a value this old (CarApiVehicle.READ_MAX_AGE)
-READ_MAX_AGE = 300.0
 # A start waits this long after a limit write (today's 5 s sleep)
 LIMIT_THEN_START_GAP = 5.0
 # The least time between two sends of one aspect to one car, by any
@@ -258,10 +258,12 @@ class VehicleReconciler(threading.Thread):
             last is not None
             and isNotSent(last)
             and last.detail not in QUEUE_DETAILS
+            and last.kind not in EXCLUDING
             and now - rec.lastOutcomeAt
             < (WAKE_CHECK if rec.wakeCheckBy else RETRY[aspect])
         ):
-            # Wake held, backoff, wake refused: no resubmit loop (H2)
+            # Wake held, backoff, wake refused: no resubmit loop (H2). A
+            # refusal excluded its provider, so the next one goes at once
             return None
         if aspect == CHARGE_LIMIT:
             adopted = self._adoptable(vehicle, d)
@@ -392,13 +394,14 @@ class VehicleReconciler(threading.Thread):
         # attempt read. A paid attempt reads only a value older than its
         # whole window (I3)
         blind = p in paid and rec.paidRetryDue
+        wake = wakes and (p.local or aspect != AMPS) and not blind
         attempt = Attempt(
             key,
             aspect,
             capability,
             d.value,
             p.name,
-            wake=wakes and (p.local or aspect != AMPS) and not blind,
+            wake=wake,
             maxAge=(
                 None
                 if aspect == AMPS or blind
@@ -409,9 +412,20 @@ class VehicleReconciler(threading.Thread):
             since=max(now, d.at),
             force=aspect == CHARGE_LIMIT
             and needsLiveRead(d.restore, k.value if k else None, held),
+            wakeSkipped=None if wake else self._whyNoWake(aspect, p, k, blind),
         )
         rec.inFlight = attempt
         return attempt
+
+    @staticmethod
+    def _whyNoWake(aspect, p, k, blind) -> str:
+        if blind:
+            return "blind paid retry"
+        if aspect == AMPS and not p.local:
+            return "billed provider never wakes for amps"
+        if aspect == CHARGE_LIMIT and k is None:
+            return "current limit unknown"
+        return "lower never wakes"
 
     def _startWanted(self, vehicle, config) -> bool:
         start = self.desired.get(vehicle.key, CHARGING)

@@ -8,7 +8,9 @@ from .Rules import VEHICLE_SOURCES_EXCLUDED
 
 # Sources whose every reading came from the car itself (c2). Exact source
 # names; Fleet Telemetry always counts (U2)
-LIVE_READ_SOURCES = frozenset({"TeslaBLE", "TeslaAPI", "FleetTelemetryMQTT"})
+LIVE_READ_SOURCES = frozenset(
+    {"TeslaBLE", "OwnerAPI", "FleetAPI", "FleetTelemetryMQTT"}
+)
 # TWC current at or above this means the car is drawing power
 POWER_FLOWING_AMPS = 1.0
 

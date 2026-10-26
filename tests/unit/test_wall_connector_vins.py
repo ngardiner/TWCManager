@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, Mock, patch
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.WallConnectorVins import WallConnectorVinReader
-from tests.unit.test_carapivehicle_registry import VIN
+from tests.unit.test_teslaapi_registry import VIN
 from tests.unit.test_gen3twc_provider import Clock, make as make_gen3, vitals, VIN1, VIN2, IP1, IP2
 from tests.unit.teslatokens import new_api, owner_token, fleet_token
 DIN = "1457768-02-G--TG123"
@@ -15,7 +15,7 @@ def live(vin=VIN, din=DIN): return {"response": {"wall_connectors": [{"din": din
 def setup(requests_mock, status=200, vin=VIN, din=DIN):
     m, ctl, p = make_gen3(); m.config["vehicle"] = {"teslaAPI": {"enabled": True}}; m.tokenSyncEnabled.return_value = False
     m.modules = {}; m.settings = {}; m.settingsLock = threading.RLock()
-    api = new_api(master=m); api.carApiVehicles = []; api.storeToken(owner_token()); reg = m.vehicleRegistry
+    api = new_api(master=m); api.storeToken(owner_token()); reg = m.vehicleRegistry
     requests_mock.get(re.compile(r".*/api/1/products$"), json=PRODUCTS)
     requests_mock.get(re.compile(r".*/energy_sites/7/live_status$"), status_code=status, json=live(vin, din) if status == 200 else {})
     m.providerOrder = ProviderOrder(m); [m.providerOrder.register(x) for x in api.providers()]

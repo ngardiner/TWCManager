@@ -91,7 +91,7 @@ def test_heartbeat_does_not_write_amps_for_a_point_with_a_vehicle_member():
 def test_fleet_never_sets_a_rate_the_twc_covers_but_carries_a_lift():          # paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); pt, s = point(m, v, 3)
     pt.setTargetPower(10 * 240); r.pass_(); assert f.calls == []                          # 10 A: the TWC covers it; the request is unknown, so no lift under mode 3
-    v.observe("chargeCurrentRequest", 6, "TeslaAPI"); pt.setTargetPower(10 * 240); r.pass_(); assert f.calls == [("setAmps", VIN, 32)]
+    v.observe("chargeCurrentRequest", 6, "OwnerAPI"); pt.setTargetPower(10 * 240); r.pass_(); assert f.calls == [("setAmps", VIN, 32)]
     c.t += MIN_SEND_GAP[AMPS]; pt.setTargetPower(4 * 240); r.pass_(); assert f.calls[-1] == ("setAmps", VIN, 4) and len(f.calls) == 2
 
 def test_legacy_heartbeat_path_sets_desired_and_the_lift_once():
@@ -108,14 +108,14 @@ def test_a_session_end_resets_the_once_per_session_lift():
 
 def test_user_changed_amps_are_resent_on_the_next_reading_under_mode_2():   # as main: overridden
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); b = prov(m, "TeslaBLE"); pt, s = point(m, v, 2); pt.setTargetPower(20 * 240); r.pass_()
-    c.t += 61; v.observe("chargeCurrentRequest", 16, "TeslaAPI"); assert r.pass_() == 1 and b.calls[-1] == ("setAmps", VIN, 20)
+    c.t += 61; v.observe("chargeCurrentRequest", 16, "OwnerAPI"); assert r.pass_() == 1 and b.calls[-1] == ("setAmps", VIN, 20)
 
 @pytest.mark.parametrize("mode", [1, 3])
 def test_user_changed_amps_after_a_lift_are_left_alone(mode):              # main's once-per-session raise
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); b = prov(m, "TeslaBLE"); v.observe("chargeCurrentRequest", 6, "TeslaBLE")
     pt, s = point(m, v, mode); pt.setTargetPower(10 * 240); r.pass_(); r.pass_()
     assert cmds(b) == ["setAmps"] and b.calls[-1] == ("setAmps", VIN, 32)
-    c.t += 61; v.observe("chargeCurrentRequest", 16, "TeslaAPI"); pt.setTargetPower(20 * 240)   # above the user's 16; TeslaMate never publishes it (pre-flight L11)
+    c.t += 61; v.observe("chargeCurrentRequest", 16, "OwnerAPI"); pt.setTargetPower(20 * 240)   # above the user's 16; TeslaMate never publishes it (pre-flight L11)
     assert r.pass_() == 0 and cmds(b) == ["setAmps"]
 
 def test_failed_paid_rate_retries_once_then_waits_for_a_new_value():        # paid counted
@@ -143,7 +143,7 @@ def anonTwc(*outcomes):
     # first; VIN3 is on a TWC that names it
     from tests.unit.reconcile_helpers import placeAt
     from tests.unit.teslatokens import new_api
-    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),)))); m.settings["chargeRateControl"] = "2"; api = new_api(master=m); del m.modules["TeslaAPI"]
+    m, r, v, c = setup(fleet(*(outcomes or (O.Outcome(O.DONE),)))); m.settings["chargeRateControl"] = "2"; api = new_api(master=m)
     for i, vin in enumerate((VIN, VIN2, VIN3, VIN4)):
         api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, m.vehicleRegistry.get(vin))   # at home by position
     s, other = m.getSlaveTWCs()[0], m.newSlave(b"\x82\x45", 80); other.currentVIN = VIN3
@@ -152,15 +152,15 @@ def anonTwc(*outcomes):
 
 def test_an_anonymous_twc_rates_only_plugged_in_cars_else_vehicles_0():    # I2, paid counted
     m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")
-    m.vehicleRegistry.get(VIN2).observe("chargingState", "Charging", "TeslaAPI"); m.vehicleRegistry.get(VIN3).observe("chargingState", "Charging", "TeslaAPI")
-    m.vehicleRegistry.get(VIN4).observe("chargingState", "Disconnected", "TeslaAPI")
+    m.vehicleRegistry.get(VIN2).observe("chargingState", "Charging", "OwnerAPI"); m.vehicleRegistry.get(VIN3).observe("chargingState", "Charging", "OwnerAPI")
+    m.vehicleRegistry.get(VIN4).observe("chargingState", "Disconnected", "OwnerAPI")
     for i in range(3600): s._queueChargeRate(10 + i % 2); r.pass_(); c.t += 1
     assert {x[1] for x in f.calls} == {VIN2} and len(f.calls) <= 240 and all(x[0] == "setAmps" for x in f.calls)   # never an unplugged car, nor a named one; no wake
     m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")                     # none known plugged in: main's vehicles[0]
     s._queueChargeRate(10); r.pass_(); assert f.calls == [("setAmps", VIN, 10)]
     m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI")                     # HA says "Stopped" for an unplugged car (rereview N1)
     for vin in (VIN, VIN2, VIN4):
-        m.vehicleRegistry.get(vin).observe("chargingState", "Disconnected", "TeslaAPI")
+        m.vehicleRegistry.get(vin).observe("chargingState", "Disconnected", "OwnerAPI")
         m.vehicleRegistry.get(vin).observe("chargingState", "Stopped", "HomeAssistant", at=c() + 1)
     for i in range(3600): s._queueChargeRate(10 + i % 2); r.pass_(); c.t += 1
     assert {x[1] for x in f.calls} == {VIN} and len(f.calls) <= 240                 # the vehicles[0] fallback only, no fan-out
@@ -171,15 +171,15 @@ def test_an_anonymous_twc_rates_only_plugged_in_cars_else_vehicles_0():    # I2,
 
 def test_an_anonymous_mode_1_lift_goes_to_the_plugged_in_car_only():    # I2, paid counted
     m, r, v, c, s = anonTwc(); f = prov(m, "FleetAPI"); m.settings["chargeRateControl"] = "1"
-    m.vehicleRegistry.get(VIN2).observe("chargingState", "Stopped", "TeslaAPI")              # plugged in, paused
+    m.vehicleRegistry.get(VIN2).observe("chargingState", "Stopped", "OwnerAPI")              # plugged in, paused
     s._requestVehicleRateRaise()
     for _ in range(5): r.pass_(); c.t += 61
     assert f.calls == [("setAmps", VIN2, 32)] and s.vehicleRateRaised
 
 def test_a_car_that_leaves_the_anonymous_set_loses_the_heartbeat_rate():  # I2
-    m, r, v, c, s = anonTwc(O.Outcome(O.UNREACHABLE)); v.observe("chargingState", "Charging", "TeslaAPI")
+    m, r, v, c, s = anonTwc(O.Outcome(O.UNREACHABLE)); v.observe("chargingState", "Charging", "OwnerAPI")
     s._queueChargeRate(10); assert m.desired.get(VIN, AMPS).value == 10
-    c.t += 1; v.observe("chargingState", "Disconnected", "TeslaAPI"); m.vehicleRegistry.get(VIN2).observe("chargingState", "Charging", "TeslaAPI")
+    c.t += 1; v.observe("chargingState", "Disconnected", "OwnerAPI"); m.vehicleRegistry.get(VIN2).observe("chargingState", "Charging", "OwnerAPI")
     s._queueChargeRate(10); assert m.desired.get(VIN, AMPS) is None and m.desired.get(VIN2, AMPS).value == 10
 
 def test_heartbeat_withdraws_its_rate_when_the_offer_drops_below_the_minimum():   # M2
@@ -193,7 +193,7 @@ def test_heartbeat_withdraws_its_rate_when_the_offer_drops_below_the_minimum(): 
 def test_mode_3_lift_goes_once_per_range_entry_even_when_the_car_clamps_it():   # I1, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); f = prov(m, "FleetAPI"); pt, s = point(m, v, 3)
     for _ in range(240):                                                     # an hour of readings every 15 s: the car clamps at 24
-        v.observe("chargeCurrentRequest", 24, "TeslaAPI"); pt.setTargetPower(30 * 240); r.pass_(); c.t += 15
+        v.observe("chargeCurrentRequest", 24, "OwnerAPI"); pt.setTargetPower(30 * 240); r.pass_(); c.t += 15
     assert f.calls == [("setAmps", VIN, 32)]
     pt.setTargetPower(5 * 240); r.pass_(); assert f.calls[-1] == ("setAmps", VIN, 5) and not s.vehicleRateRaised   # below the floor: the car carries
     c.t += 15; pt.setTargetPower(30 * 240); r.pass_()
@@ -232,5 +232,5 @@ def test_failed_paid_rate_waits_for_a_newer_reading_once_per_desire(fails, after
     m, r, v, c = setup(fleet(fails)); f = prov(m, "FleetAPI"); e = VehicleEndpoint(v, m.providerOrder, m)
     e.setTargetPower(10 * 240); r.pass_(); c.t += RETRY[AMPS]; r.pass_(); c.t += 3600; r.pass_(); assert len(f.calls) == 2
     for _ in range(3):
-        c.t += RETRY[AMPS]; v.observe("chargeCurrentRequest", 9, "TeslaAPI"); r.pass_(); c.t += RETRY[AMPS]; r.pass_()
+        c.t += RETRY[AMPS]; v.observe("chargeCurrentRequest", 9, "OwnerAPI"); r.pass_(); c.t += RETRY[AMPS]; r.pass_()
     assert len(f.calls) == after and not any(x[0] == "wake" for x in f.calls)

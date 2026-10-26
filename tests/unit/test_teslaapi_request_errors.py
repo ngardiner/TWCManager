@@ -13,6 +13,7 @@ import pytest
 import requests
 
 from tests.unit.teslatokens import FLEET_NA_URL, fleet_token
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 VIN = "5YJ3E1EA0KF000001"
 NEW_ACCESS = fleet_token(jti="new")
@@ -44,11 +45,8 @@ def api():
 
 @pytest.fixture
 def vehicle(api):
-    from TWCManager.Vehicle.TeslaAPI import CarApiVehicle
-
-    return CarApiVehicle(
-        {"id": 1, "vin": VIN, "display_name": "Car"}, api, api.master.config
-    )
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"})
+    return api.registry.get(VIN)
 
 
 class TestRefresh:
@@ -72,10 +70,10 @@ class TestGetCarApi:
     PATH = VIN + "/vehicle_data"
     URL = FLEET_NA_URL + "/" + PATH
 
-    def test_request_never_sent(self, vehicle, requests_mock):
+    def test_request_never_sent(self, api, vehicle, requests_mock):
         requests_mock.get(self.URL, exc=requests.exceptions.ConnectionError)
 
-        assert vehicle.get_car_api(self.PATH, checkReady=False) == (False, None)
+        assert api.get_car_api(vehicle, self.PATH, checkReady=False) == (False, None)
 
     def test_expired_token_refreshes_and_retries_with_new_token(
         self, api, vehicle, requests_mock
@@ -96,7 +94,7 @@ class TestGetCarApi:
             },
         )
 
-        ok, response = vehicle.get_car_api(self.PATH, checkReady=False)
+        ok, response = api.get_car_api(vehicle, self.PATH, checkReady=False)
 
         assert ok is True
         assert response == {"ok": True}
@@ -168,6 +166,7 @@ EXPECTED = {
 def backoff_of(api, car):
     # "car": that car alone backs off (its errorCount, not the module's);
     # "module": every car and the vehicle list do
+    car = car.attachment("TeslaAPI")
     onCar = bool(car.lastErrorTime or car.errorCount)
     onModule = bool(api.carApiLastErrorTime or api.errorCount)
     return {(False, False): None, (True, False): "car", (False, True): "module"}.get(
@@ -177,13 +176,18 @@ def backoff_of(api, car):
 
 def run_path(api, path):
     if path == "read":
-        car = api.carApiVehicles[0]
-        return car.get_car_api(HOME_VIN + "/vehicle_data", checkReady=False)[0]
+        car = api.registry.get(HOME_VIN)
+        return api.get_car_api(car, HOME_VIN + "/vehicle_data", checkReady=False)[0]
     if path == "list":
-        api.carApiVehicles = []
+        # Nothing listed yet: the list is fetched
+        api.registry = VehicleRegistry({})
         return api.loadVehicleList()
     if path == "command":
-        return tuple(api.command(api.carApiVehicles[0], "charge_stop"))
+        return tuple(
+            api.command(
+                api.registry.get(HOME_VIN), "charge_stop", slot=api.fleetSlot
+            )
+        )
     return api.wallConnectorVins(api.fleetSlot)
 
 
@@ -275,11 +279,11 @@ def test_a_wake_answering_online_refreshes_the_online_cache(requests_mock, monke
         FLEET_NA_URL + "/" + HOME_VIN + "/wake_up",
         json={"response": {"state": "online"}},
     )
-    assert car.is_awake() is False and check.call_count == 1
+    assert api.is_awake(car) is False and check.call_count == 1
     clk.t += 100
-    assert api.wakeOutcome(car).kind == DONE and wake.call_count == 1
+    assert api.wakeOutcome(car, slot=api.fleetSlot).kind == DONE and wake.call_count == 1
     clk.t += 50  # 150 s after the check, 50 s after the wake
-    assert car.is_awake() is True and check.call_count == 1
+    assert api.is_awake(car) is True and check.call_count == 1
     assert wake.last_request.timeout == 10
 
 
@@ -301,7 +305,7 @@ def test_a_refresh_spends_one_of_a_reads_three_tries(requests_mock, monkeypatch)
     data = requests_mock.get(
         PATH_URLS["read"], [{"status_code": 401, "text": "token expired"}] + [busy] * 5
     )
-    assert car.get_car_api(HOME_VIN + "/vehicle_data", checkReady=False) == (
+    assert api.get_car_api(car, HOME_VIN + "/vehicle_data", checkReady=False) == (
         False,
         None,
     )
@@ -337,7 +341,7 @@ def test_a_read_refreshes_at_most_once_across_its_tries(
         FLEET_REFRESH_URL, json=token_response(fleet_token(jti="new"))
     )
     data = requests_mock.get(PATH_URLS["read"], answers + [BUSY] * 3)
-    assert car.get_car_api(HOME_VIN + "/vehicle_data", checkReady=False) == (
+    assert api.get_car_api(car, HOME_VIN + "/vehicle_data", checkReady=False) == (
         False,
         None,
     )
@@ -377,11 +381,12 @@ def test_a_fleet_401_never_refreshes_the_owner_slot(path, requests_mock):
         ],
     )
     if path == "read":
-        car.get_car_api(
+        api.get_car_api(
+            car,
             HOME_VIN + "/vehicle_data", checkReady=False, slot=api.fleetSlot
         )
     else:
-        api.command(car, "charge_stop")
+        api.command(car, "charge_stop", slot=api.fleetSlot)
     assert fleetAuth.call_count == 1 and ownerAuth.call_count == 0
 
 

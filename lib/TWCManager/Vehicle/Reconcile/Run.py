@@ -106,9 +106,16 @@ def _call(provider, capability, vin, value):
     return method(vin)
 
 
-def _wake(provider, vin):
+def _wake(provider, vin, capability):
     # The outcome that ends the attempt, or None to send the command
     woke = checked(provider, WAKE, provider.wake(vin))
+    logger.info(
+        "%s wake for %s before %s: %s",
+        provider.name,
+        vin,
+        capability,
+        (woke.kind + " " + woke.detail).strip(),
+    )
     if woke.kind == REFUSED:
         return _tagged(woke, "wake ")
     if woke.kind not in _WAKE_PROCEEDS:
@@ -147,7 +154,7 @@ def runAttempt(reconciler, attempt) -> Outcome:
     wakeFirst = attempt.wake and not provider.local and provider.declares(WAKE)
     try:
         if wakeFirst:
-            early = _wake(provider, vin)
+            early = _wake(provider, vin, attempt.capability)
             if early is not None:
                 return early
         field = FIELD_FOR[aspect] if aspect is not None else None
@@ -176,9 +183,21 @@ def runAttempt(reconciler, attempt) -> Outcome:
         if early is not None:
             return _tagged(early, "rules: ")
         if attempt.wake and not wakeFirst and provider.declares(WAKE):
-            early = _wake(provider, vin)
+            early = _wake(provider, vin, attempt.capability)
             if early is not None:
                 return early
+        elif (
+            attempt.wakeSkipped
+            and provider.declares(WAKE)
+            and not (isStop(attempt) or attempt.restore)
+        ):
+            logger.info(
+                "%s no wake for %s before %s: %s",
+                provider.name,
+                vin,
+                attempt.capability,
+                attempt.wakeSkipped,
+            )
         outcome = checked(
             provider,
             attempt.capability,

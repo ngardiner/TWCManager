@@ -119,19 +119,23 @@ class TestUnknownToken:
         api = new_api()
         api.storeToken(fleet_token())
         vehicle = add_home_vehicle(api)
-        vehicle.lastAPIAccessTime = 0
+        vehicle.attachment("TeslaAPI").lastAPIAccessTime = 0
         # As restored from settings: a token of unknown type in the slot.
         api.fleetSlot.setTokens("not-a-jwt-at-all")
 
         assert api.slotFor("read") is None and api.slotFor("command") is None
-        assert vehicle.is_awake() is False
+        assert api.is_awake(vehicle) is False
         refused = Outcome(REFUSED, "no command token")
-        assert api.wakeOutcome(vehicle) == refused
-        assert api.command(vehicle, "set_charging_amps", {"charging_amps": 10}) == refused
+        for slot in (api.ownerSlot, api.fleetSlot):
+            assert api.wakeOutcome(vehicle, slot=slot) == refused
+            assert (
+                api.command(vehicle, "set_charging_amps", {"charging_amps": 10}, slot=slot)
+                == refused
+            )
 
         assert any_call.call_count == 0
         assert api.getCarApiLastErrorTime() == 0
-        assert vehicle.lastErrorTime == 0
+        assert vehicle.attachment("TeslaAPI").lastErrorTime == 0
 
 
 class TestOddAud:
@@ -197,12 +201,12 @@ class TestSwitching:
         owner = requests_mock.get(OWNER_URL + "/5YJ3E1EA1KF000001", json={"response": {}})
         proxy_api.storeToken(fleet_token())
         vehicle = add_home_vehicle(proxy_api)
-        vehicle.is_awake()
+        proxy_api.is_awake(vehicle)
         assert proxy.last_request.verify == PROXY_CERT
 
         proxy_api.storeToken(owner_token())
-        vehicle.lastVehicleAwakeTime = 0
-        vehicle.is_awake()
+        vehicle.attachment("TeslaAPI").onlineCheckedAt = 0
+        proxy_api.is_awake(vehicle)
         assert owner.last_request.verify is True
 
     def test_classification_logged_without_token(self, caplog):

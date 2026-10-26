@@ -45,7 +45,7 @@ def test_heartbeat_skips_the_registry_write_for_a_pending_vin():             # S
 
 def test_heartbeat_readings_are_not_evidence_for_a_car_with_vehicle_reads():   # S4, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "not_charging"))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
-    v.observe("chargingState", "Charging", "TeslaAPI"); m.stopCarsCharging(VIN); r.pass_(); assert cmds(f) == ["stopCharging"]
+    v.observe("chargingState", "Charging", "FleetAPI"); m.stopCarsCharging(VIN); r.pass_(); assert cmds(f) == ["stopCharging"]
     for _ in range(10): c.t += 61; drive(m, s, amps_actual=12.0); r.pass_()                                                # readings every heartbeat, past RETRY each time
     assert cmds(f) == ["stopCharging"]                                                                                    # no vehicle read arrived: not re-sent
 
@@ -74,18 +74,18 @@ def test_complete_or_disconnected_car_is_left_alone():
     v.observe("chargingState", "Complete", "TeslaBLE"); assert r.pass_() == 0 and m.providerOrder.provider("TeslaBLE").calls == []
 
 def test_stop_falls_to_fleet_after_60s_once():                               # Review Focus 1
-    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m, v); v.observe("chargingState", "Charging", "TeslaAPI"); f = m.providerOrder.provider("FleetAPI")
+    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m, v); v.observe("chargingState", "Charging", "FleetAPI"); f = m.providerOrder.provider("FleetAPI")
     m.stopCarsCharging(VIN); r.pass_(); assert f.calls == [] and len(m.providerOrder.provider("TeslaBLE").calls) == 1
     c.t += PAID_AFTER[CHARGING] - 1; r.pass_(); assert f.calls == []
     c.t += 1; r.pass_(); assert f.calls == [("stopCharging", VIN, None)]
     c.t += 3600; r.pass_(); assert len(f.calls) == 1
 
 def test_disruptive_stop_waits_for_ble_only_when_ble_is_set_up_for_the_car():
-    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m, v); v.observe("chargingState", "Charging", "TeslaAPI")
+    m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m, v); v.observe("chargingState", "Charging", "FleetAPI")
     m.settings["chargeStopMode"] = "2"; m.stopCarsCharging(VIN); r.pass_()
     assert m.settings.get("respondToSlaves", 1) == 1 and len(m.providerOrder.provider("TeslaBLE").calls) == 1   # BLE ready for this car: tried first
     c.t += PAID_AFTER[CHARGING]; r.pass_(); assert m.settings["respondToSlaves"] == 0 and m.providerOrder.provider("FleetAPI").calls == []   # billed stops suppressed under mode 2
-    m2, r2, v2, c2 = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m2, v2); v2.observe("chargingState", "Charging", "TeslaAPI")
+    m2, r2, v2, c2 = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m2, v2); v2.observe("chargingState", "Charging", "FleetAPI")
     m2.providerOrder.provider("TeslaBLE").ready = lambda vehicle, cap: False                                   # no key, or a refused one
     m2.settings["chargeStopMode"] = "2"; m2.stopCarsCharging(VIN); r2.pass_()
     assert m2.settings["respondToSlaves"] == 0 and m2.providerOrder.provider("TeslaBLE").calls == []           # at once
@@ -112,7 +112,7 @@ def test_mode_2_start_after_a_ble_stop_goes_through_ble():
     c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert cmds(m.providerOrder.provider("TeslaBLE")) == ["stopCharging", "startCharging"] and m.settings.get("respondToSlaves", 1) == 1
 
 def test_mode_2_start_after_our_stop_needs_no_slave():                      # ledger L50
-    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Charging", "TeslaAPI"); m.settings["chargeStopMode"] = "2"
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Charging", "FleetAPI"); m.settings["chargeStopMode"] = "2"
     m.stopCarsCharging(VIN); r.pass_(); assert m.settings["respondToSlaves"] == 0 and m.desired.state(VIN).lastStopProvider == "Gen2TWC"
     m.slaveTWCs.pop(s.TWCID); m.slaveTWCRoundRobin.remove(s); assert m.getSlaveTWCs() == []     # aged out about 26 s after the stop
     c.t += 61; v.observe("chargingState", "Stopped", "TeslaMateVehicle"); m.startCarsCharging(VIN); r.pass_()
@@ -137,20 +137,20 @@ def test_gen3_multi_unit_stop_uses_the_car_not_the_bus():
 
 def test_shared_free_failure_lets_a_later_aspect_go_paid_at_once():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
-    v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
+    v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")
     r.pass_(); c.t += PAID_AFTER[CHARGE_LIMIT]; r.pass_(); assert cmds(f) == ["setChargeLimit"]
     c.t += LIMIT_THEN_START_GAP + 1; m.startCarsCharging(VIN); r.pass_(); assert cmds(f) == ["setChargeLimit", "startCharging"]   # no fresh 60 s wait
 
 def test_free_failure_windows_run_concurrently_not_summed():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
-    v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Charging", "TeslaAPI")
+    v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Charging", "FleetAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.stopCarsCharging(VIN); r.pass_()
     c.t += PAID_AFTER[CHARGING]; r.pass_(); assert cmds(f) == ["stopCharging"]
     c.t += PAID_AFTER[CHARGE_LIMIT] - PAID_AFTER[CHARGING]; r.pass_(); assert cmds(f) == ["stopCharging", "setChargeLimit"]
 
 def test_a_free_success_puts_ble_first_again():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE), O.Outcome(O.UNREACHABLE), O.Outcome(O.DONE)), fleet(O.Outcome(O.DONE), O.Outcome(O.DONE))); onTwc(m, v); b = m.providerOrder.provider("TeslaBLE"); f = m.providerOrder.provider("FleetAPI")
-    v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.startCarsCharging(VIN); r.pass_(); c.t += PAID_AFTER[CHARGING]; r.pass_(); assert cmds(f) == ["startCharging"]   # BLE's wake and start consumed the two UNREACHABLEs
     c.t += PROBE_AFTER; m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); r.pass_()                                    # untried long enough: the real command over BLE first
     assert cmds(b) == ["startCharging", "setChargeLimit"] and len(cmds(f)) == 1 and m.desired.free(VIN).failingSince is None   # a BLE DONE
@@ -158,7 +158,7 @@ def test_a_free_success_puts_ble_first_again():
 
 def test_paid_calls_never_exceed_desired_changes():
     m, r, v, c = setup(ble(O.Outcome(O.UNREACHABLE)), fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
-    v.observe("chargeLimit", 90, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI"); changes = 0
+    v.observe("chargeLimit", 90, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI"); changes = 0
     for limit, start in ((50, True), (60, False), (70, True)):
         m.desired.set(VIN, CHARGE_LIMIT, limit, "policy", decision=True); changes += 1
         (m.startCarsCharging if start else m.stopCarsCharging)(VIN); changes += 1
@@ -166,12 +166,12 @@ def test_paid_calls_never_exceed_desired_changes():
     assert len(cmds(f)) <= changes
 
 def test_a_start_that_keeps_failing_is_bounded():                           # paid counted
-    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "timeout"))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.UNREACHABLE, "timeout"))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     for _ in range(60): m.startCarsCharging(VIN); c.t += 60; r.pass_()                                          # the heartbeat decides it every cycle for an hour
     assert len(cmds(f)) <= 4 and len(f.calls) - len(cmds(f)) <= 4
 
 def test_a_stop_that_keeps_failing_is_bounded():                            # paid counted
-    m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "not accepted"))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Charging", "TeslaAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.ERROR, "not accepted"))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Charging", "FleetAPI")
     for i in range(60):
         m.stopCarsCharging(VIN); c.t += 60; r.pass_()
         if i % 5 == 0: v.observe("chargingState", "Charging", "TeslaMateVehicle")                                 # a report now and then
@@ -186,7 +186,7 @@ def test_an_app_start_after_our_stop_is_stopped_again_once_per_newer_reading(): 
     assert len(cmds(b)) == 2                                                 # no newer reading: our stamp holds
 
 def test_zero_offer_clears_a_pending_start_and_sends_no_wake():             # Review Focus 3, paid counted
-    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.startCarsCharging(VIN); m.setMaxAmpsToDivideAmongSlaves(0); drive(m, s, amps_actual=0.0)
     assert m.desired.get(VIN, CHARGING) is None
     for _ in range(5): c.t += 61; drive(m, s, amps_actual=0.0); r.pass_()
@@ -211,13 +211,13 @@ def test_cancel_drops_a_pending_stop_only():
     m.startCarsCharging(VIN); assert m.cancelStopCarsCharging(VIN) == 0 and m.desired.get(VIN, CHARGING).value is True   # a start is never cancelled
 
 def test_cancel_withdraws_a_queued_stop():
-    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); onTwc(m, v); v.observe("chargingState", "Charging", "TeslaAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); onTwc(m, v); v.observe("chargingState", "Charging", "FleetAPI")
     r.cancel = Mock(return_value=1); m.stopCarsCharging(VIN); assert m.cancelStopCarsCharging(VIN) == 1
     r.cancel.assert_called_once_with(VIN)
 
 def test_fleet_only_car_with_a_pending_schedule_gets_no_start_or_wake(requests_mock):   # pre-flight H3, paid counted
     m, r, v, c, api = fleetOnTwc(requests_mock)
-    v.observe("scheduledChargingPending", True, "TeslaAPI"); m.startCarsCharging(VIN)
+    v.observe("scheduledChargingPending", True, "FleetAPI"); m.startCarsCharging(VIN)
     for _ in range(5): m.startCarsCharging(VIN); r.pass_()
     assert calls(requests_mock, "wake_up") == [] and calls(requests_mock, "charge_start") == []
 
@@ -240,7 +240,7 @@ def fleetOnTwc(requests_mock, inline_=True, state="online", listed=True, read=Tr
     if listed:
         api.addVehicle({"id": 1, "vin": VIN, "display_name": "Car"}); placeAt(m, v)
     onTwc(m, v)
-    if read: v.observe("chargingState", "Stopped", "TeslaAPI")
+    if read: v.observe("chargingState", "Stopped", "FleetAPI")
     requests_mock.get(FLEET_CAR, json={"response": {"state": state}})
     requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"charge_state": {"charging_state": "Stopped", "charge_limit_soc": 90},
                                                                     "drive_state": {"latitude": 1.0, "longitude": 2.0}, "vehicle_state": {}}})
@@ -259,7 +259,7 @@ def test_fleet_start_sends_the_limit_first(requests_mock, monkeypatch):     # Ta
     assert requests_mock.request_history[0].url == FLEET_CAR                # the free online check comes first
 
 def test_fleet_wake_comes_after_a_free_online_check(requests_mock):         # paid counted
-    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.carApiVehicles[0]
+    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = v.attachment("TeslaAPI")
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "asleep"}})
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()                            # the wake hold is over
     m.startCarsCharging(VIN); r.pass_()
@@ -273,7 +273,7 @@ def test_a_fleet_only_car_is_stopped_once_the_list_loads(requests_mock):    # C1
     from tests.unit.teslatokens import FLEET_NA_URL
     m, r, v, c, api = fleetOnTwc(requests_mock, listed=False)
     requests_mock.get(FLEET_NA_URL, json={"response": [{"id": 1, "vin": VIN, "display_name": "Car"}], "count": 1})
-    v.observe("chargingState", "Charging", "TeslaAPI"); m.stopCarsCharging(VIN); r.pass_()
+    v.observe("chargingState", "Charging", "FleetAPI"); m.stopCarsCharging(VIN); r.pass_()
     assert calls(requests_mock, "charge_stop") == [] and m.desired.record(VIN, CHARGING).lastOutcome is None   # not listed: no candidate yet
     api.updateChargeAtHome(); r.pass_()
     assert len(calls(requests_mock, "charge_stop")) == 1 and calls(requests_mock, "wake_up") == []
@@ -300,7 +300,7 @@ def test_an_asleep_fleet_car_with_an_unknown_limit_is_woken_then_limited_then_st
     import TWCManager.Vehicle.Reconcile.Reconciler as rec
     import TWCManager.Vehicle.TeslaAPI as teslaapi
     monkeypatch.setattr(rec, "LIMIT_THEN_START_GAP", 0.0); monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
-    m, r, v, c, api = fleetOnTwc(requests_mock); car = api.carApiVehicles[0]
+    m, r, v, c, api = fleetOnTwc(requests_mock); car = v.attachment("TeslaAPI")
     requests_mock.get(FLEET_CAR, [{"json": {"response": {"state": "asleep"}}}, {"json": {"response": {"state": "online"}}}])
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()                            # the wake hold is over
     assert v.value("chargeLimit") is None                                                                           # nothing read since the restart
@@ -311,13 +311,13 @@ def test_an_asleep_fleet_car_with_an_unknown_limit_is_woken_then_limited_then_st
     assert requests_mock.request_history[0].url == FLEET_CAR and len(calls(requests_mock, "vehicle_data")) <= 1   # the free check first
 
 def test_a_limit_that_stays_unreadable_stops_holding_the_start():          # C1 backstop
-    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.startCarsCharging(VIN)                                        # no read source: the limit is never known
     for _ in range(12): c.t += 60; r.pass_()
     assert "startCharging" in cmds(f) and "setChargeLimit" not in cmds(f)
 
 def fanOutCars(m):
-    reg = m.vehicleRegistry; anon = reg.beginPlugSession("8244"); api = new_api(master=m); del m.modules["TeslaAPI"]
+    reg = m.vehicleRegistry; anon = reg.beginPlugSession("8244"); api = new_api(master=m)
     for i, (vin, at) in enumerate(((VIN, HOME), ("5YJ3E1EA1KF000002", AWAY), ("5YJ3E1EA1KF000003", HOME))):
         api.addVehicle({"id": i, "vin": vin, "display_name": None}); placeAt(m, reg.get(vin), at)       # located by position
     other = reg.get("5YJ3E1EA1KF000003"); other.observe("twcVin", "8245", "TWC")
@@ -340,7 +340,7 @@ def test_an_anonymous_point_fans_out_as_main_did():                         # I1
     m.settings["chargeStopMode"] = "1"; m.startCarsCharging(VIN); assert wanted(m, True) == [VIN]                   # a named car stays addressed
 
 def test_mode_2_starts_no_paid_provider():                                  # I2, paid counted
-    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.settings["chargeStopMode"] = "2"; m.startCarsCharging(VIN)
     for _ in range(5): c.t += 61; r.pass_()
     assert f.calls == []
@@ -348,17 +348,17 @@ def test_mode_2_starts_no_paid_provider():                                  # I2
 
 def test_a_car_below_min_charge_level_is_not_stopped():                     # I3, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
-    m.config["config"]["minChargeLevel"] = 50; v.observe("batteryLevel", 20, "TeslaAPI"); v.observe("chargingState", "Charging", "TeslaAPI")
+    m.config["config"]["minChargeLevel"] = 50; v.observe("batteryLevel", 20, "FleetAPI"); v.observe("chargingState", "Charging", "FleetAPI")
     m.stopCarsCharging(VIN); r.pass_(); assert f.calls == []
-    v.observe("batteryLevel", 60, "TeslaAPI"); c.t += 61; r.pass_(); assert cmds(f) == ["stopCharging"]
+    v.observe("batteryLevel", 60, "FleetAPI"); c.t += 61; r.pass_(); assert cmds(f) == ["stopCharging"]
 
 def test_a_car_at_its_limit_is_not_started():                               # #591, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
-    v.observe("batteryLevel", 80, "TeslaAPI"); v.observe("chargeLimit", 80, "TeslaAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    v.observe("batteryLevel", 80, "FleetAPI"); v.observe("chargeLimit", 80, "FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.startCarsCharging(VIN); r.pass_(); assert f.calls == []
 
 def test_offer_flaps_do_not_multiply_paid_starts():                         # I4 + N3, paid counted
-    m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "requested"))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "TeslaAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "requested"))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     for _ in range(30): m.startCarsCharging(VIN); r.pass_(); c.t += 11; m.withdrawStartCharging(VIN); r.pass_(); c.t += 11
     assert len(cmds(f)) <= 30 * 22 // 60 + 1                                                                       # main's 60 s gate, not one per flap (30)
     n = len(cmds(f)); c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert len(cmds(f)) == n + 1                  # N3: kept no longer than 60 s
@@ -383,7 +383,7 @@ def test_load_list_logs_why_no_token_is_usable_once_per_reason(caplog):    # rev
 def test_mode_2_limit_buys_no_wake_for_a_start_the_cloud_cannot_send(requests_mock, monkeypatch):   # N1, paid counted
     import TWCManager.Vehicle.TeslaAPI as teslaapi
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
-    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = api.carApiVehicles[0]; m.settings["chargeStopMode"] = "2"
+    m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = v.attachment("TeslaAPI"); m.settings["chargeStopMode"] = "2"
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "asleep"}})
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()
     m.setPolicyLimit(50, transition=True); m.startCarsCharging(VIN)
@@ -402,7 +402,7 @@ def test_the_fan_out_stop_sends_nothing_to_an_asleep_car(requests_mock):  # N2, 
 
 def test_a_stale_charging_reading_on_a_car_now_asleep_sends_no_stop(requests_mock):   # N2, paid counted
     m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep", read=False)
-    v.observe("chargingState", "Charging", "TeslaAPI", at=time.time() - 3600)                                     # older than any read window
+    v.observe("chargingState", "Charging", "FleetAPI", at=time.time() - 3600)                                     # older than any read window
     m.stopCarsCharging(VIN)
     for _ in range(5): r.pass_()
     assert calls(requests_mock, "charge_stop") == [] and calls(requests_mock, "wake_up") == [] and len(calls(requests_mock, VIN)) == 1   # one free check
@@ -462,13 +462,13 @@ def test_a_fleet_command_for_one_car_sends_nothing_for_another_listed_car(reques
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     VIN2 = "5YJ3E1EA1KF000002"
     m, r, v, c, api = fleetOnTwc(requests_mock)
-    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); b = api.getVehicleByVIN(VIN2); placeAt(m, m.vehicleRegistry.get(VIN2))
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Other"}); b = m.vehicleRegistry.get(VIN2).attachment("TeslaAPI"); placeAt(m, m.vehicleRegistry.get(VIN2))
     requests_mock.get(FLEET_CAR[:-len(VIN)] + VIN2, json={"response": {"state": "asleep"}})
     held = (b.firstChargeNeededTime, b.lastChargeNeededTime, b.delayNextWakeAttempt)
     m.startCarsCharging(VIN); r.pass_()                                                           # a start
-    v.observe("chargeLimit", 50, "TeslaAPI"); m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); r.pass_()   # a raise
+    v.observe("chargeLimit", 50, "FleetAPI"); m.desired.set(VIN, CHARGE_LIMIT, 80, "policy"); r.pass_()   # a raise
     m.desired.record(VIN, CHARGING).lastSentAt -= 60                                             # past the send gap (wall clock)
-    v.observe("chargingState", "Charging", "TeslaAPI"); m.stopCarsCharging(VIN); r.pass_()       # a stop
+    v.observe("chargingState", "Charging", "FleetAPI"); m.stopCarsCharging(VIN); r.pass_()       # a stop
     assert [len(calls(requests_mock, x)) for x in ("charge_start", "set_charge_limit", "charge_stop")] == [1, 1, 1]
     assert not any(VIN2 in q.url for q in requests_mock.request_history)                          # no command, read or wake for B
     assert (b.firstChargeNeededTime, b.lastChargeNeededTime, b.delayNextWakeAttempt) == held

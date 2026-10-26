@@ -11,7 +11,7 @@ import pytest
 
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.test_provider_outcomes_cloud import calls, fleet
-from tests.unit.test_carapivehicle_registry import VIN
+from tests.unit.test_teslaapi_registry import VIN
 from tests.unit.teslatokens import fleet_token
 
 

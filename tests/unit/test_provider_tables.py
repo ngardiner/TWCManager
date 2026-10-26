@@ -12,7 +12,7 @@ from TWCManager.Vehicle.Providers.TeslaAPIProviders import FleetAPIProvider, Own
 from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.teslatokens import fleet_token, owner_token
-from tests.unit.test_carapivehicle_registry import VIN, api_with_registry
+from tests.unit.test_teslaapi_registry import VIN, api_with_registry
 
 def master(settings=None):
     m = Mock(); m.settings = dict(settings or {}); m.config = {}
@@ -115,7 +115,9 @@ def test_tables_match_the_declarations_they_replace():
     assert byName["Gen3TWC"].declarations() == {c: D(C.LOCAL) for c in (C.SET_AMPS, C.START_CHARGING, C.STOP_CHARGING)}
     assert byName["TeslaBLE"].declarations() == {c: D(C.LOCAL) for c in (C.READ_CHARGE, C.SET_CHARGE_LIMIT, C.START_CHARGING, C.STOP_CHARGING, C.SET_AMPS, C.WAKE)}
     wcv = D(C.CLOUD_FREE)
-    assert byName["OwnerAPI"].declarations() == dict({C.READ_CHARGE: D(C.CLOUD_FREE), C.READ_WALL_CONNECTOR_VINS: wcv}, **{c: D(C.OWNER_COMMAND) for c in C.COMMANDS})
+    assert byName["OwnerAPI"].declarations() == {C.READ_CHARGE: D(C.CLOUD_FREE),
+        C.SET_CHARGE_LIMIT: D(C.OWNER_COMMAND), C.START_CHARGING: D(C.OWNER_COMMAND), C.STOP_CHARGING: D(C.OWNER_COMMAND), C.SET_AMPS: D(C.OWNER_COMMAND),
+        C.WAKE: D(C.OWNER_COMMAND), C.READ_WALL_CONNECTOR_VINS: wcv}   # #659: unsigned cars only
     assert byName["FleetAPI"].declarations() == {C.READ_CHARGE: D(C.FLEET_DATA),
         C.SET_CHARGE_LIMIT: D(C.FLEET_COMMAND), C.START_CHARGING: D(C.FLEET_COMMAND), C.STOP_CHARGING: D(C.FLEET_COMMAND), C.SET_AMPS: D(C.FLEET_COMMAND),
         C.WAKE: D(C.FLEET_WAKE), C.READ_WALL_CONNECTOR_VINS: wcv}
@@ -148,7 +150,7 @@ def test_a_403_on_wake_refuses_wakes_only(requests_mock, monkeypatch):     # pai
     from tests.unit.reconcile_helpers import Clock
     monkeypatch.setattr(T.time, "sleep", Mock())
     clk = Clock(1000.0); api, reg = api_with_registry(); api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"}); api.storeToken(fleet_token())
-    api.master.config = {"config": {}}; p = api.providers()[1]; p.clock = clk; api.now = clk; api.wakeDelayMins = 0; car = api.carApiVehicles[0]
+    api.master.config = {"config": {}}; p = api.providers()[1]; p.clock = clk; api.now = clk; api.wakeDelayMins = 0
     requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
     requests_mock.post(re.compile(r".*/wake_up$"), status_code=403, json={})
     requests_mock.post(re.compile(r".*/command/.*"), json={"response": {"result": True}})

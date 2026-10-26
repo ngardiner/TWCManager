@@ -53,7 +53,7 @@ def test_second_matching_sighting_records_one_session(master):
 
 
 def test_known_vehicle_records_on_first_sighting(master):
-    master.vehicleRegistry.getOrCreate(VIN, "TeslaAPI")
+    master.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
     master.vehicleRegistry.beginPlugSession("8244")
     master.recordVehicleVIN(slave(VIN))
     assert master.settings["Vehicles"][VIN]["chargeSessions"] == 1
@@ -140,7 +140,7 @@ def test_confirmation_retries_are_bounded(master):
 def test_no_retry_once_confirmed_or_rejected(master):
     s = charging_slave(VIN)
     master.getSlaveTWCs = Mock(return_value=[s])
-    master.vehicleRegistry.getOrCreate(VIN, "TeslaAPI")
+    master.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
     master.vehicleRegistry.beginPlugSession("8244")
     master.recordVehicleVIN(s)  # confirmed at once
     s.lastVINQuery = time.time() - 61
@@ -203,7 +203,7 @@ def test_confirmed_vin_queues_the_home_check_off_the_serial_thread(master):
     master.getModuleByName = Mock(
         side_effect=lambda n: api if n == "TeslaAPI" else None
     )
-    master.vehicleRegistry.getOrCreate(VIN, "TeslaAPI")
+    master.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
     master.recordVehicleVIN(slave(VIN))
     api.vehicleIsDefinitelyHome.assert_not_called()
     master.queue_background_task.assert_any_call(

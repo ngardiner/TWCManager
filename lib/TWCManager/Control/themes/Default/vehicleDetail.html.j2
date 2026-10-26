@@ -3,6 +3,8 @@
   <head>
     <title>TWCManager</title>
     {% include 'bootstrap.html.j2' %}
+    {% set status = bleStatus(url.path.split("/")[2]) if 'TeslaBLE' in master.modules else none %}
+    {% if status and status.scanPending %}<meta http-equiv="refresh" content="3">{% endif %}
   </head>
   <body>
     {% include 'navbar.html.j2' %}
@@ -15,15 +17,13 @@
     <table>
       <tr>
         <th>Name</th><td>&nbsp;</td>
-        <th>Tier</th><td>&nbsp;</td>
         <th>Providers</th><td>&nbsp;</td>
         <th>Last seen</th>
       </tr>
       <tr>
         <td>{{ row.name }}</td><td>&nbsp;</td>
-        <td>{{ row.tier }}</td><td>&nbsp;</td>
-        <td>{% for c in row.claims %}{{ c.provider }} ({{ c.status }}){% if not loop.last %}, {% endif %}{% endfor %}</td><td>&nbsp;</td>
-        <td>{{ ageText(row.lastSeenAge) }} via {{ row.lastSeenSource }}</td>
+        <td>{% for line in providerLines(regVehicle) %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td><td>&nbsp;</td>
+        <td>{{ ageText(row.lastSeenAge) }} via {{ sourceName(row.lastSeenSource) }}</td>
       </tr>
     </table>
     {% if canForget(vin) %}
@@ -114,7 +114,6 @@
     </table>
     {% endif %}
 
-    {% set status = bleStatus(vin) if 'TeslaBLE' in master.modules else none %}
     {% if status %}
       <p>&nbsp;</p>
       <h3>BLE Control</h3>

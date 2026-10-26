@@ -50,7 +50,7 @@ def test_set_and_remove():
 def test_believed_prefers_a_newer_read_over_our_write():
     m, s = make()
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
-    v.observe("chargeLimit", 90, "TeslaAPI")
+    v.observe("chargeLimit", 90, "OwnerAPI")
     assert v.believed("chargeLimit").value == 90
     v.noteWrite("chargeLimit", 50, "TeslaBLE")
     # our write is newer than the read
@@ -69,7 +69,7 @@ def test_believed_prefers_a_newer_read_over_our_write():
 def test_latest_from_skips_excluded_sources():
     m, s = make()
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
-    v.observe("chargingState", "Stopped", "TeslaAPI", at=100.0)
+    v.observe("chargingState", "Stopped", "OwnerAPI", at=100.0)
     v.observe("chargingState", "Charging", "Gen2TWC", at=200.0)
     assert v.latestFrom("chargingState", exclude={"Gen2TWC"}).value == "Stopped"
     assert v.believed("chargingState", exclude={"Gen2TWC"}).value == "Stopped"
@@ -79,15 +79,15 @@ def test_latest_from_skips_excluded_sources():
 def test_trusted_with_exclude_reads_past_the_excluded_source():
     m, s = make()
     v = m.vehicleRegistry.getOrCreate(VIN, "t")
-    v.observe("chargeLimit", 90, "TeslaAPI", at=100.0)
+    v.observe("chargeLimit", 90, "OwnerAPI", at=100.0)
     v.noteWrite("chargeLimit", 50, "TeslaBLE")
     w = v.lastWrite("chargeLimit").at
-    v.observe("chargeLimit", 70, "TeslaAPI", at=w + 1)
+    v.observe("chargeLimit", 70, "OwnerAPI", at=w + 1)
     v.observe("chargeLimit", 60, "Gen2TWC", at=w + 2)
     assert v.trusted("chargeLimit").source == "Gen2TWC"
     assert v.trusted("chargeLimit", exclude={"Gen2TWC"}).value == 70
     # every source excluded: nothing is trusted, not the store's latest
-    assert v.trusted("chargeLimit", exclude={"Gen2TWC", "TeslaAPI"}) is None
+    assert v.trusted("chargeLimit", exclude={"Gen2TWC", "OwnerAPI"}) is None
 
 
 # Migration safety
@@ -118,7 +118,7 @@ def fileMaster(tmp_path, blob):
     (tmp_path / "settings.json").write_text(json.dumps(blob))
     m = TWCMaster("AB", {"config": dict(CONFIG["config"], settingsPath=str(tmp_path))})
     # loadSettings hands saved tokens to TeslaAPI; no car is listed yet.
-    api = Mock(carApiVehicles=[])
+    api = Mock()
     m.getModuleByName = Mock(side_effect=lambda n: api if n == "TeslaAPI" else None)
     m.queue_background_task = Mock()
     # loadSettings queues saves of its own; count the store's alone.
@@ -264,7 +264,7 @@ def test_store_works_before_load_and_on_a_bare_master():
 
 
 def test_teslaapi_listing_without_a_store_is_harmless():
-    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.test_teslaapi_registry import api_with_registry
 
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
@@ -387,7 +387,7 @@ def test_listing_before_load_is_resolved_on_the_next_check(tmp_path, requests_mo
     # TeslaMate token sync and retained telemetry can list cars before
     # loadSettings runs: the next checkCharge resolves (free calls only)
     from tests.unit.teslatokens import FLEET_NA_URL, fleet_token
-    from tests.unit.test_carapivehicle_registry import api_with_registry
+    from tests.unit.test_teslaapi_registry import api_with_registry
 
     m = fileMaster(tmp_path, {"chargeLimits": {"1492931337": [75, 60]}})
     api, reg = api_with_registry()
@@ -415,3 +415,70 @@ def test_set_refuses_a_non_vin_and_maps_zero_to_no_entry(caplog):
     m.heldLimits.set(VIN, 80, 50)
     m.heldLimits.set(VIN, 80, 0)
     assert m.heldLimits.get(VIN) is None
+
+
+# One-pass migration (Phase 3.5 Task 1): characterization
+
+
+def test_waiting_is_false_before_load():
+    # loadSettings reads chargeLimits just before load(): nothing waits sooner
+    ns = SimpleNamespace(
+        settings={"chargeLimits": {"11": [80, 60]}},
+        queue_background_task=Mock(),
+        settingsLock=threading.RLock(),
+    )
+    h = HeldLimits(ns)
+    assert not h.waiting()
+    h.resolveLegacyIds({11: VIN})
+    assert ns.settings == {"chargeLimits": {"11": [80, 60]}}
+    ns.queue_background_task.assert_not_called()
+
+
+def test_an_id_naming_a_vin_load_migrated_keeps_that_entry(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {VIN: [70, 55], "11": [90, 50]}
+    m.heldLimits.load()
+    with caplog.at_level(logging.INFO):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert m.heldLimits.get(VIN) == HeldLimit(70, 55)
+    assert m.settings["chargeLimits"] == {VIN: [70, 55]}
+    infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert any(
+        "11" in i and VIN in i and "kept normal limit 70%, discarded 90%" in i
+        for i in infos
+    )
+
+
+def test_an_id_keys_out_of_range_hold_warns_at_load_not_at_resolve(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {"11": [80, 30]}
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.load()
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warned) == 1 and "out of range" in warned[0]
+    assert not m.heldLimits.waiting()  # dropped at load: nothing waits
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert m.heldLimits.get(VIN) is None
+
+
+def test_a_resolve_saves_once_and_logs_no_migrated_line(caplog):
+    m, s = make()
+    m.settings["chargeLimits"] = {"11": [80, 60]}
+    m.heldLimits.load()
+    m.queue_background_task = Mock()
+    with caplog.at_level(logging.INFO):
+        m.heldLimits.resolveLegacyIds({11: VIN})
+    assert m.queue_background_task.call_args_list == [(({"cmd": "saveSettings"},),)]
+    assert "Migrated chargeLimits" not in caplog.text
+    assert m.heldLimits.get(VIN) == HeldLimit(80, 60)
+
+
+def test_a_non_dict_charge_limits_never_waits():  # pre-flight F9
+    m, s = make()
+    m.settings["chargeLimits"] = [["11", 80]]
+    m.heldLimits.load()
+    assert not m.heldLimits.waiting()
+    assert m.settings["chargeLimits"] == [["11", 80]]

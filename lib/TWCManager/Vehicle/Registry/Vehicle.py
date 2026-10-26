@@ -3,9 +3,9 @@
 import logging
 import threading
 import time
-from typing import Any, Callable, Collection, Dict, List, Optional, Union
+from typing import Any, Callable, Collection, Dict, List, Optional, Tuple, Union
 
-from .Fields import NOT_TRACKED, FieldStore, Observation
+from .Fields import NOT_TRACKED, TELEMETRY_SOURCES, FieldStore, Observation
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 
@@ -40,6 +40,12 @@ class Claim:
 
 
 class Vehicle:
+    # Telemetry (an external module such as TeslaMate) is the sync source
+    # while its latest "state" observation is younger than this. Age is
+    # liveness-aware: on a connected, healthy feed a car that has sent
+    # nothing for hours (asleep) stays telemetry-sourced.
+    SYNC_TIMEOUT = 60 * 60
+
     def __init__(
         self,
         key: str,
@@ -157,6 +163,23 @@ class Vehicle:
             field, liveAt=self._liveAt(field, obs, exclude), obs=obs
         )
 
+    # Sync state is the latest "state" observation's source and age.
+
+    def telemetryState(self) -> Tuple[Optional[Observation], Optional[float]]:
+        obs = self.latest("state")
+        if obs is None or obs.source not in TELEMETRY_SOURCES:
+            return obs, None
+        return obs, self.age("state")
+
+    @property
+    def syncSource(self) -> str:
+        # The module keeping the car current, never shown: the TeslaAPI
+        # module (either slot) when no telemetry feed is live
+        obs, age = self.telemetryState()
+        if age is not None and age <= self.SYNC_TIMEOUT:
+            return obs.source
+        return "TeslaAPI"
+
     def value(self, field: str, default: Any = None) -> Any:
         obs = self._fields.latest(field)
         return default if obs is None else obs.value
@@ -190,7 +213,7 @@ class Vehicle:
         got = order.read(self, field, allowWake, providers) if order else None
         return got if got is not None else self.latest(field)
 
-    # Claims and tier
+    # Claims
 
     def claim(
         self,
@@ -212,14 +235,6 @@ class Vehicle:
     def claims(self) -> Dict[str, Claim]:
         with self._lock:
             return dict(self._claims)
-
-    @property
-    def tier(self) -> str:
-        # Callables run outside the lock: they may call into other modules.
-        return self._tierOf([c.commands for c in self.claims.values()])
-
-    def _tierOf(self, commands: List[bool]) -> str:
-        return "managed" if not self.isAnonymous and any(commands) else "observed"
 
     # Attachments
 
@@ -246,7 +261,6 @@ class Vehicle:
             {"provider": c.provider, "status": c.status, "commands": c.commands}
             for c in self.claims.values()
         ]
-        tier = self._tierOf([c["commands"] for c in claims])
         if self.isAnonymous:
             point = self.key[5:]
         else:
@@ -268,7 +282,6 @@ class Vehicle:
             "name": self.name,
             "anonymous": self.isAnonymous,
             "userAsserted": self.userAsserted,
-            "tier": tier,
             "claims": claims,
             "point": point,
             "lastSeen": lastSeen,
