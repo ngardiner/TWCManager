@@ -4,9 +4,81 @@
 
 If you're having trouble getting TWCManager working, check out our [Troubleshooting Guide](Troubleshooting.md) to see if any of our tips help you out!
 
+## Supported setups
+
+You can combine any charging stations (EVSEs) and car connections below. Any one is enough to start with, and each one you add makes TWCManager work better. We recommend at least one way to **command** each car and one way to **hear from** it.
+
+### Charging stations (EVSEs)
+
+| EVSE | What you need | Guide |
+| ---- | ------------- | ----- |
+| Gen2 Tesla Wall Connector | An RS-485 adapter wired to the Wall Connector's load-sharing terminals, with its rotary switch set to F. TWCManager takes the master's place and sets each unit's current. Units with firmware 4.5.3 or later also report which car is plugged in. | [Installation Guide](InstallationGuide.md), [RS485](modules/Interface_RS485.md) |
+| Gen3 Tesla Wall Connector, over RS-485 (1.4.0) | An RS-485 adapter wired to the Wall Connector's Neurio meter terminals, with the Wall Connector reachable on your network. TWCManager sets each unit's current by emulating the Neurio meter. To know which car is charging on which unit, TWCManager also needs the units registered in the Tesla app and a Fleet API token with the `energy_device_data` scope (1.4.1); see [Gen3 status](Gen3_Status.md#which-car-is-on-a-gen3). | [Gen3 status](Gen3_Status.md), [Gen3TWCs](modules/Controller_Gen3TWCs.md) |
+| Car-side control of unmanaged EVSEs -- Tesla UMC, third-party, etc. (1.4.0) | A way to command the car (below). TWCManager sets the car's own charge rate, and notices the car arriving, plugging in, charging and leaving (1.4.1). | [Vehicle watch](Settings.md#vehicle-watch) |
+
+You can mix Gen2 and Gen3 units, use either one alone, or use neither (1.4.1 for an install without Gen2). Gen2 and Gen3 each need their own RS-485 adapter, so a Gen3-only install still has one, wired to the Gen3's Neurio terminals. Without a Gen2 adapter, leave the `interface` settings as shipped: TWCManager logs once that it can't open the adapter and carries on.
+
+### Ways to command the car
+
+These start and stop charging, set the charge rate and charge limit, and wake the car. TWCManager always tries the free ones first (the Wall Connector itself, then Bluetooth) and uses a billed one only when no free one can do the job. The [Vehicle Command Policy](Settings.md#vehicle-command-policy) on the Settings page lets you rule some out, for example to never pay for a command.
+
+| Path | Cost | What you need | Guide |
+| ---- | ---- | ------------- | ----- |
+| Bluetooth (TeslaBLE) | Free, local | The car within Bluetooth range of the TWCManager host, and a key paired with it. No Tesla account. | [TeslaBLE](modules/Vehicle_TeslaBLE.md) |
+| Tesla Fleet API | Billed per command and wake | Your own app registered with Tesla, and the Vehicle Command proxy. | [Tesla Fleet API](modules/Vehicle_TeslaAPI.md) |
+| Tesla Owner API | Free | An Owner API token (for example from TeslaMate). It commands only cars Tesla lists with `command_signing: off`, seen on older Model S and X. Deprecated by Tesla; it may stop working without notice, so pair Bluetooth or set up the Fleet API as well. | [Owner API tokens](modules/Vehicle_TeslaAPI.md#owner-api-tokens) |
+| Home Assistant | Billed like the Fleet API; used only when the Fleet API can't be | Home Assistant's Tesla Fleet integration. It can't wake the car. | [Home Assistant](modules/Vehicle_HomeAssistant.md) |
+
+### Ways to hear from the car
+
+These tell TWCManager whether each car is home, plugged in, charging, awake or asleep.
+
+| Source | How | Cost | Guide |
+| ------ | --- | ---- | ----- |
+| TeslaMate | Reports each change as it happens. TeslaMate normally reads cars through the Owner API, which is deprecated by Tesla and may stop working without notice; Fleet Telemetry doesn't depend on it. | Free | [TeslaMate](modules/Vehicle_TeslaMate.md) |
+| Fleet Telemetry | Reports each change as it happens | Tesla bills the data the car sends | [Fleet Telemetry](modules/Vehicle_FleetTelemetryMQTT.md) |
+| Bluetooth | TWCManager asks when it needs to; a car in range answers even asleep, without waking | Free, local | [TeslaBLE](modules/Vehicle_TeslaBLE.md) |
+| Home Assistant | TWCManager asks when it needs to | Free | [Home Assistant](modules/Vehicle_HomeAssistant.md) |
+| Tesla API | TWCManager asks when it needs to | Free on the Owner API (deprecated by Tesla; it may stop working without notice, so prefer Fleet Telemetry), billed on the Fleet API | [Tesla Fleet API](modules/Vehicle_TeslaAPI.md) |
+
+### What you go without
+
+| If you have no... | TWCManager still... | But you lose |
+| ----------------- | ------------------- | ------------ |
+| Wall Connector | Sets the charge rate of a car on a Tesla UMC or another charging station through the car itself (Bluetooth and Home Assistant can do this from 1.4.1), and notices it arriving, plugging in, charging and leaving (1.4.1). | Control of any car it can't command. Without a Wall Connector or Bluetooth, TWCManager can't learn where home is: set it on the Settings page, or no car is treated as home. |
+| TeslaMate or Fleet Telemetry | Checks on each car without waking it, and reads it when something changes. A Wall Connector reports its own car plugging in and charging. | Instant news of changes away from a Wall Connector. On the Fleet API, reads cost about $0.01 a day per car, within the `watch` budget ([Settings](Settings.md#budget)). |
+| Way to command the car | Sets the current each Wall Connector offers. | Charge limits, waking the car, and a clean stop. A car can be stopped only through its Wall Connector; on a Gen2, by methods a Tesla tolerates only a few times per session (see [Stop Charging Method](Settings.md#stop-charging-method)). |
+| Bluetooth | Commands and reads the car through the cloud. | Free local commands, and knowing the car is home because it is in range. Commands it would have sent may be billed on the Fleet API instead. |
+
+### Energy sources (EMS)
+
+An EMS module reads your solar inverter or energy meter. It is optional.
+
+* **Without an EMS:** Scheduled Charging, Charge Now and the Non-Scheduled charge rate all work, but there is no solar charging.
+* **With an EMS:** Track Green Energy charges from your solar generation. If the EMS also reads your house's consumption:
+   * charging uses only the surplus your house doesn't use;
+   * `maxAmpsAllowedFromGrid` in config.json can cap what charging draws from the grid outside solar charging;
+   * if your meter counts the cars' charging too, `subtractChargerLoad` in config.json keeps it from counting as house load, for Gen2 and Gen3 Wall Connectors and cars on other charging stations alike;
+   * TWCManager notices a car starting or stopping on a charging station it doesn't control, from the jump in your house's load (1.4.1; `emsTrigger` under [Vehicle watch](Settings.md#consumption-step)).
+
+[Consumption Offsets](Settings.md#consumption-offsets) can stand in for a consumption reading you don't have. The EMS modules are listed in the [main README](../README.md#ems-interfaces).
+
+## The Vehicles page
+
+The web interface's Vehicles page lists every car TWCManager knows, with:
+
+* whether it is Home, Probably home (for example, driving and not yet seen elsewhere) or Away (1.4.1);
+* how TWCManager reaches it (Bluetooth, the Tesla API, Home Assistant, a Wall Connector);
+* what TWCManager last checked on it and when it checks next (1.4.1);
+* when it was last seen, and its own charge limit.
+
+Open a car to pair it over Bluetooth (Pair with Vehicle), scan for it (Scan for vehicle, where a scan can run; otherwise the reason it can't), see commands TWCManager is waiting to send and why (1.4.1), and see any problem with its Fleet Telemetry configuration.
+
+How TWCManager decides whether a car is home, and learns where home is, is described under Charge Limits in [Policy Customization](PolicyCustomization.md#charge-limits) and Home Location in [Settings](Settings.md#home-location).
+
 ## Physical (RS-485) Installation
 
-Please see the [Installation Guide](InstallationGuide.md) for detailed information on the installation of the Tesla Wall Connector interface to TWCManager.
+Please see the [Installation Guide](InstallationGuide.md) for detailed information on wiring a Gen2 Tesla Wall Connector to TWCManager. For a Gen3, see [Gen3TWCs](modules/Controller_Gen3TWCs.md). A car-only install needs no wiring.
 
 ## Software Installation
 
@@ -24,7 +96,7 @@ The TWCManager configuration file at ```/etc/twcmanager/config.json``` has lots 
 
 ## Gen3 Wall Connector
 
-TWCManager supports Tesla Wall Connector Generation 3 units as of v1.4.0 via Neurio Modbus emulation.
+TWCManager supports Tesla Wall Connector Generation 3 units (1.4.0) via Neurio Modbus emulation, with or without Gen2 units (Gen3 without Gen2, 1.4.1).
 
    * [Gen3 Status and Architecture](Gen3_Status.md) - how Gen3 control works and its limitations
    * [Controller_Gen3TWCs module reference](modules/Controller_Gen3TWCs.md) - configuration guide
@@ -34,6 +106,10 @@ TWCManager supports Tesla Wall Connector Generation 3 units as of v1.4.0 via Neu
 Your contributions are most welcome! If you've been working on a new EMS module or you want to contribute to the project in any way, please take a look at our [Development Guide](DevelopmentGuide.md) and feel free to get involved!
 
 ## Frequently Asked Questions
+
+### My car doesn't show up on the Vehicles page. How do I add it?
+
+TWCManager learns about a car when a Gen2 Wall Connector reports its VIN, the Tesla energy site names it on a Gen3, or a Tesla API token, TeslaMate, Fleet Telemetry or Home Assistant lists it. If none of those applies, for example you use Bluetooth only and your Wall Connector doesn't report VINs, enter the car's VIN under **Add vehicle by VIN** on the Vehicles page (1.4.1). Then open the car and pair it over Bluetooth. A car you added this way that TWCManager has never seen otherwise can be removed again with **Forget this vehicle** on its page.
 
 ### How many units can be set up in this fashion?
 
