@@ -1230,24 +1230,27 @@ class TWCMaster:
         # saved must still count as synced.
         teslamateConfig = self.config.get("vehicle", {}).get("TeslaMate", {}) or {}
         syncConfigured = bool(teslamateConfig.get("syncTokens", False))
-        if carapi.migrateSavedTokens(self.settings, syncConfigured):
-            # Writes the migrated keys, so a dropped TeslaMate refresh token
-            # leaves settings.json too.
-            self.queue_background_task({"cmd": "saveSettings"})
-        carapi.restoreSlot(
-            carapi.fleetSlot,
-            self.settings.get("carApiBearerToken", ""),
-            self.settings.get("carApiRefreshToken", ""),
-            self.settings.get("carApiTokenExpireTime", ""),
-            self.settings.get("carApiTokenSource") or "pasted",
-        )
-        carapi.restoreSlot(
-            carapi.ownerSlot,
-            self.settings.get("ownerApiBearerToken", ""),
-            self.settings.get("ownerApiRefreshToken", ""),
-            self.settings.get("ownerApiTokenExpireTime", ""),
-            self.settings.get("ownerApiTokenSource") or "pasted",
-        )
+        # None when vehicle.teslaAPI is disabled: its saved tokens stay in
+        # settings untouched, for when it is turned back on
+        if carapi is not None:
+            if carapi.migrateSavedTokens(self.settings, syncConfigured):
+                # Writes the migrated keys, so a dropped TeslaMate refresh
+                # token leaves settings.json too.
+                self.queue_background_task({"cmd": "saveSettings"})
+            carapi.restoreSlot(
+                carapi.fleetSlot,
+                self.settings.get("carApiBearerToken", ""),
+                self.settings.get("carApiRefreshToken", ""),
+                self.settings.get("carApiTokenExpireTime", ""),
+                self.settings.get("carApiTokenSource") or "pasted",
+            )
+            carapi.restoreSlot(
+                carapi.ownerSlot,
+                self.settings.get("ownerApiBearerToken", ""),
+                self.settings.get("ownerApiRefreshToken", ""),
+                self.settings.get("ownerApiTokenExpireTime", ""),
+                self.settings.get("ownerApiTokenSource") or "pasted",
+            )
 
         # We start with vehicles, but this should be templated in future for all modules to both remove the above logic,
         # and to push settings logic out to the individual modules
@@ -1697,14 +1700,16 @@ class TWCMaster:
         # Step 1 - Merge any config from other modules
         carapi = self.getModuleByName("TeslaAPI")
         with self.settingsLock:
-            self.settings["carApiBearerToken"] = carapi.fleetSlot.accessToken
-            self.settings["carApiRefreshToken"] = carapi.fleetSlot.refreshToken
-            self.settings["carApiTokenExpireTime"] = carapi.fleetSlot.expireTime
-            self.settings["ownerApiBearerToken"] = carapi.ownerSlot.accessToken
-            self.settings["ownerApiRefreshToken"] = carapi.ownerSlot.refreshToken
-            self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
-            self.settings["carApiTokenSource"] = carapi.fleetSlot.source
-            self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
+            # A disabled TeslaAPI leaves the saved tokens as they are
+            if carapi is not None:
+                self.settings["carApiBearerToken"] = carapi.fleetSlot.accessToken
+                self.settings["carApiRefreshToken"] = carapi.fleetSlot.refreshToken
+                self.settings["carApiTokenExpireTime"] = carapi.fleetSlot.expireTime
+                self.settings["ownerApiBearerToken"] = carapi.ownerSlot.accessToken
+                self.settings["ownerApiRefreshToken"] = carapi.ownerSlot.refreshToken
+                self.settings["ownerApiTokenExpireTime"] = carapi.ownerSlot.expireTime
+                self.settings["carApiTokenSource"] = carapi.fleetSlot.source
+                self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
             self.settings["vehicleRegistry"] = self.vehicleRegistry.toJSON()
             try:
                 # Keep default arguments (C encoder): adding indent/default/cls

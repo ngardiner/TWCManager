@@ -1976,7 +1976,10 @@ def CreateHTTPHandlerClass(master):
                 ) and self.getFieldValue(key) != "":
                     carapi = master.getModuleByName("TeslaAPI")
                     result = "success"
-                    if key == "carApiBearerToken":
+                    if carapi is None:
+                        # vehicle.teslaAPI is disabled: nothing to store in
+                        result = "error"
+                    elif key == "carApiBearerToken":
                         # Stored in the slot of its type, with the refresh
                         # token if one was pasted too; otherwise the slot
                         # keeps its refresh token.

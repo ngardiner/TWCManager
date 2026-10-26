@@ -473,3 +473,18 @@ def test_owner_token_stays_pasted_when_sync_not_configured(tmp_path):
     assert api.ownerSlot.source == "pasted"
     assert api.ownerSlot.refreshToken == "r1"
     assert api.ownerSlot.expireTime == saved
+
+
+def test_a_disabled_tesla_api_starts_and_keeps_its_saved_tokens(tmp_path):
+    # vehicle.teslaAPI.enabled=false: getModuleByName answers None, and
+    # startup and every settings save must still run, leaving the saved
+    # tokens for when the module is turned back on
+    token = owner_token()
+    master, api, modules = master_with_settings(
+        tmp_path, {"ownerApiBearerToken": token, "ownerApiTokenSource": "pasted"}
+    )
+    del modules["TeslaAPI"]
+    master.loadSettings()
+    master.saveSettings()
+    saved = json.loads((tmp_path / "settings.json").read_text())
+    assert saved["ownerApiBearerToken"] == token

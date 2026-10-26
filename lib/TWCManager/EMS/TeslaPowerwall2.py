@@ -237,8 +237,10 @@ class TeslaPowerwall2:
 
     def getStormWatch(self):
         carapi = self.master.getModuleByName("TeslaAPI")
-        carapi.refreshTokenIfNeeded()
-        slot = carapi.slotFor("energy")
+        # No Tesla API (disabled in config) is the same as no energy token
+        if carapi is not None:
+            carapi.refreshTokenIfNeeded()
+        slot = carapi.slotFor("energy") if carapi is not None else None
         now = time.time()
         key = "CLOUD/live_status"
 

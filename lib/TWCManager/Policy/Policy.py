@@ -302,10 +302,11 @@ class Policy:
         # previous stop attempt would incorrectly cap the limit when charging
         # resumes.
         chargeAmps = self.master.getMaxAmpsToDivideAmongSlaves()
-        if self.limitOverride and chargeAmps == 0:
-            currentCharge = (
-                self.master.getModuleByName("TeslaAPI").minBatteryLevelAtHome - 1
-            )
+        # Without the Tesla API (disabled in config) the battery level is not
+        # known, so there is no limit to lower below it
+        carapi = self.master.getModuleByName("TeslaAPI")
+        if self.limitOverride and chargeAmps == 0 and carapi is not None:
+            currentCharge = carapi.minBatteryLevelAtHome - 1
             if currentCharge < 50:
                 currentCharge = 50
             limit = currentCharge if limit == -1 else min(limit, currentCharge)
