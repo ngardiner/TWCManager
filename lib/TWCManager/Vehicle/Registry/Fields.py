@@ -41,7 +41,22 @@ FIELDS = (
     "chargeCurrentRequestMax",
     # The charge-port door, which VCSEC reports only while the car is awake
     "chargePortOpen",
+    # How the car looks, for the Vehicles pages' picture
+    "carType",
+    "exteriorColor",
+    "wheelType",
+    "trimBadging",
+    "optionCodes",
 )
+
+# The appearance fields by the names the Tesla API and compositor.js use
+APPEARANCE = {
+    "car_type": "carType",
+    "exterior_color": "exteriorColor",
+    "wheel_type": "wheelType",
+    "trim_badging": "trimBadging",
+    "option_codes": "optionCodes",
+}
 
 # Source names are module class names. A source is report-on-change exactly
 # when it has registered liveness with the registry.

@@ -274,6 +274,8 @@ class Watch:
                 # Covered or not watched: an old ask must not fire later
                 self._want.pop(vin, None)
             want = self._want.get(vin)
+        if why and why.startswith(COVERED) and state in AWAKE:
+            self._look(v, busy, now)
         if where != HOME and now < self._backAt(v, now):
             # Nothing an away car does needs asking before it could be back
             return
@@ -349,6 +351,22 @@ class Watch:
         # The cascade itself: None when the read failed, not the old value
         read = lambda: order.read(v, "chargingState", False, found) is not None
         self._submit(v, "read", read, worker, miss)
+
+    def _look(self, v, busy, now) -> None:
+        # One read of how a car looks, for its picture, when no source said:
+        # a feed covering it keeps off the cloud reads that would carry it.
+        # A failed read is tried again an hour on
+        api = self.master.getModuleByName("TeslaAPI")
+        if v.value("carType") or "look" in busy or not v.attachment("TeslaAPI"):
+            return
+        with self._lock:
+            last, at = self._last.get((v.vin, "look"), ("", NEVER))
+        if api is None or last not in ("", MISS) or now < at + 3600:
+            return
+        if not self.master.watchBudget.spend(api.readPrice(), ROUTINE):
+            self._settle(v.vin, "look", now)
+            return
+        self._submit(v, "look", lambda: api.readAppearance(v), "cloud")
 
     def _backAt(self, v, now) -> float:
         # The soonest an away car could be home: its last fix (with none, the
