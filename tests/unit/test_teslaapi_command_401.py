@@ -15,6 +15,7 @@ from tests.unit.teslatokens import FLEET_REFRESH_URL, fleet_token, new_api
 OPAQUE_REFRESH = "NA_0123456789abcdef0123456789abcdef"
 OK = {"json": {"response": {"result": True, "reason": ""}}}
 EXPIRED = {"status_code": 401, "text": "token expired (401)"}
+VIN = "5YJ3E1EA1KF000001"
 DEAD = {"status_code": 401, "text": '{"error": "invalid bearer token"}'}
 
 
@@ -29,10 +30,10 @@ class _NoThread:
 def api(monkeypatch):
     import TWCManager.Vehicle.TeslaAPI as teslaapi
 
-    monkeypatch.setattr(teslaapi, "Thread", lambda *a, **k: _NoThread())
+    monkeypatch.setattr(teslaapi, "Thread", lambda *a, **k: _NoThread(), raising=False)
     monkeypatch.setattr(teslaapi.time, "sleep", lambda s: None)
     a = new_api()
-    a.addVehicle({"id": 1, "vin": "V1", "display_name": "Car1"})
+    a.addVehicle({"id": 1, "vin": VIN, "display_name": "Car1"})
     v = a.getCarApiVehicles()[0]
     v.atHome = True
     v.lastAPIAccessTime = time.time()
@@ -60,7 +61,7 @@ def bearer(request):
 def command(api, name):
     v = api.getCarApiVehicles()[0]
     if name == "charge_stop":
-        return api.car_api_charge({"cmd": "charge", "charge": False, "vin": "V1"})
+        return api.car_api_charge({"cmd": "charge", "charge": False, "vin": VIN})
     if name == "set_charging_amps":
         return api.setChargeRate(16, v)
     if name == "wake_up":
@@ -73,7 +74,7 @@ COMMANDS = ["charge_stop", "set_charging_amps", "wake_up", "set_charge_limit"]
 
 
 def url(name):
-    return re.compile(r".*/V1/(command/)?" + name + "$")
+    return re.compile(r".*/" + VIN + "/(command/)?" + name + "$")
 
 
 @pytest.mark.parametrize("name", COMMANDS)
