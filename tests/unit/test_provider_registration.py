@@ -55,6 +55,16 @@ def test_register_providers_collects_every_vehicle_module_in_rank_order():
     assert registerProviders(m) == ["TeslaBLE", "HomeAssistant"]      # rank order, not module order
 
 
+def test_a_disabled_vehicle_module_registers_no_providers():
+    # A module that says it is disabled (vehicle.teslaAPI.enabled=false) must
+    # stay out of the order, as it stays out of getModuleByName
+    m = Mock(); m.settings = {}; m.config = {}; m.stats = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    api = Mock(); api.enabled = lambda: False; api.providers = lambda: [ownerStub(), fleetStub()]
+    ble = Mock(); ble.enabled = lambda: True; ble.providers = lambda: [bleStub()]
+    m.getModulesByType = Mock(return_value=[{"name": "TeslaAPI", "ref": api}, {"name": "TeslaBLE", "ref": ble}])
+    assert registerProviders(m) == ["TeslaBLE"]
+
+
 # HomeAssistant comes last, after the free providers and Fleet, and never
 # commands under ble_only
 
@@ -126,11 +136,12 @@ def test_no_vehicle_modules_registers_only_gen2():
 
 def test_default_boot_registers_unconfigured_modules_that_never_command():
     # A config with no vehicle sections still loads TeslaAPI and HomeAssistant
-    # (the module loop's enabled default); neither may reach a car or a site
+    # (the module loop's enabled default); neither may reach a car or a site.
+    # HomeAssistant is disabled without its section, so it registers nothing
     m = TWCMaster("AB", CONFIG)
     for name, cls in (("TeslaAPI", TeslaAPI), ("HomeAssistant", HomeAssistant)):
         m.registerModule({"name": name, "ref": cls(m), "type": "Vehicle"})
-    assert registerProviders(m) == ["Gen2TWC", "OwnerAPI", "FleetAPI", "HomeAssistant"]
+    assert registerProviders(m) == ["Gen2TWC", "OwnerAPI", "FleetAPI"]
     v = m.vehicleRegistry.getOrCreate(VIN, "test")
     for cap in sorted(C.COMMANDS):
         assert [p.name for p in m.providerOrder.candidates(v, cap) if not p.local] == []

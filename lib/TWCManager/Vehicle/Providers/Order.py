@@ -198,7 +198,12 @@ def registerProviders(master) -> List[str]:
         # One module's failure must not stop the others, or startup. Visible:
         # a skipped TeslaBLE leaves its read source unsuppressed under api_only
         try:
-            for provider in getattr(mod["ref"], "providers", lambda: [])():
+            providers = getattr(mod["ref"], "providers", lambda: [])()
+            # The rule getModuleByName applies: a module that says it is
+            # disabled in config neither reads nor commands
+            if providers and not getattr(mod["ref"], "enabled", lambda: True)():
+                continue
+            for provider in providers:
                 master.providerOrder.register(provider)
         except Exception as e:
             logger.warning(
