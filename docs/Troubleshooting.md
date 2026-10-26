@@ -4,9 +4,9 @@
 
 ### Debug Level
 
-Before undertaking any troubleshooting, the number one most useful piece of informaton to have on hand is a lot with the debugLevel turned up high. 
+Before undertaking any troubleshooting, the number one most useful piece of informaton to have on hand is a log with the logLevel turned down low. 
 
-To make sure you capture everything, set debugLevel to 11 in ```/etc/twcmanager/config.json``` and run TWCManager in the following way to log the output:
+To make sure you capture everything, set ```logLevel``` to 9 in ```/etc/twcmanager/config.json``` and run TWCManager in the following way to log the output:
 
 ```python -u -m TWCManager | tee debug.log```
 

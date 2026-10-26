@@ -48,7 +48,7 @@ which returns `vehicle_connected`, `vehicle_current_a`, `grid_v`,
 
 | Component | Detail |
 |-----------|--------|
-| RS485 adapter | A **second** USB-to-RS485 adapter, separate from the one used for Gen2 slaves.  Connected to the Gen3's Neurio meter terminals. |
+| RS485 adapter | A USB-to-RS485 adapter connected to the Gen3's Neurio meter terminals.  With Gen2 TWCs as well, this is a **second** adapter, separate from the one used for Gen2 slaves; a Gen3-only install needs only this one (1.4.1). |
 | Serial wiring | 2-wire RS485 between the adapter and the Gen3's Neurio header |
 | Network | The Gen3 must be reachable by IP for vitals readback |
 | Tesla account (optional) | To name the car on each Gen3, the Gen3 must be registered in the Tesla app, and TWCManager needs a token that can read energy data (a Fleet API token with the `energy_device_data` scope) |
@@ -61,15 +61,13 @@ which returns `vehicle_connected`, `vehicle_current_a`, `grid_v`,
 
 ## Multiple Gen3 units
 
-Multiple Gen3 TWCs sharing the same Neurio RS485 bus are supported.
-Each unit is its own target, as a Gen2 TWC is: the distributor budgets
-each unit (and the car on it) separately.  All units still poll the same
-fake Neurio server and read the same house load, so TWCManager picks the
-one house load at which the units with a target together draw the sum of
-their targets.  A car that draws less than its headroom (for example, a
-full battery) frees that share for the other units.  Units with
-different fuse ratings can end up drawing differently from their own
-targets.
+Several Gen3 Wall Connectors can share one Neurio RS485 bus.
+TWCManager shares the available power between them as it does between
+Gen2 units.  All units on the bus read the same emulated meter, though,
+so TWCManager can only set their total: it picks the meter reading at
+which they draw what it wants in all.  A car that takes less than it is
+offered (for example, a full battery) leaves the rest for the other
+units.  Units with different fuse ratings may split the total unevenly.
 
 In practice, a mixed Gen2+Gen3 deployment runs two RS485 buses:
 
@@ -80,15 +78,23 @@ In practice, a mixed Gen2+Gen3 deployment runs two RS485 buses:
 
 ## Which car is on a Gen3
 
-The vitals API cannot say which car is connected.  A connect starts an
-anonymous session, and TWCManager names the car by a free read of your
-energy site's `live_status`, which lists each Wall Connector by DIN with
-the VIN of the car on it.  This needs the Gen3 registered in the Tesla app
-and a token that can read energy data.  A unit's optional `din` key fixes
-a wrong DIN guess.  Until the energy site names the car, a single known
-car that has just reported being plugged in is taken as the one at the
-unit.  See [Controller_Gen3TWCs.md](modules/Controller_Gen3TWCs.md#which-car-is-connected)
-for the rules.
+A Gen3 Wall Connector reports that a car is plugged in, but not which
+one.  TWCManager finds out from Tesla (1.4.1), which lists the car on
+each Wall Connector on your energy site.  The lookup is free and never
+wakes the car.  For it to work:
+
+- register each Gen3 Wall Connector in the Tesla app;
+- give TWCManager a Fleet API token with the `energy_device_data` scope
+  (see [Tesla Fleet API](modules/Vehicle_TeslaAPI.md));
+- if the log shows `no DIN match` for a unit, set that unit's `din` key
+  (see [Gen3TWCs](modules/Controller_Gen3TWCs.md#which-car-is-connected)).
+
+Without it, TWCManager still sets each Wall Connector's current, and if
+exactly one car has just reported plugging in, takes that car to be the
+one on the unit.  Otherwise the car stays unnamed until it is unplugged.
+While an unnamed car is plugged in, TWCManager doesn't set the charge
+rate of any car on a charging station it doesn't control, since that car
+might be the one on the Wall Connector.
 
 ---
 
@@ -107,10 +113,8 @@ for the rules.
 
 ## Limitations
 
-- **No VIN reporting** - The Gen3 vitals API does not expose a vehicle
-  VIN. A car is grouped into a Gen3 unit's charging point only when it is
-  identified (from the energy site's wall connector list, or as the single
-  freshly plugged-in candidate); otherwise the unit's car stays anonymous.
+- **No VIN reporting** - The Wall Connector itself doesn't say which car
+  is plugged in; see [Which car is on a Gen3](#which-car-is-on-a-gen3).
 - **Indirect control** - Charge rate is set indirectly via the synthetic
   house load.  The Gen3's own minimum (6 A) and maximum (circuit limit)
   still apply and override TWCManager's target if it falls outside that

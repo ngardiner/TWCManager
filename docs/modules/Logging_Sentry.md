@@ -8,7 +8,7 @@ Using sentry, applications can be profiled and monitored for errors across relea
 
 ## Installation
 
-Note: Using Sentry requires a minimum Python version of 3.4.
+Sentry works on every Python version TWCManager supports.
 
 All dependencies and prerequisites for using Sentry are installed automatically as part of the ```setup.py``` script.
 

@@ -76,7 +76,7 @@ sudo docker compose -f docker-compose.yml up -d
 
 ## Monitoring the container operation
 
-After starting TWCManager, the script will run in the foreground and will regularly update with the current status. If you specified detach mode (with the ```-d``` parameter), the information can be viewed by using the ```docker logs docker_twcmanager_1 -f``` command.
+After starting TWCManager, the script will run in the foreground and will regularly update with the current status. If you specified detach mode (with the ```-d``` parameter), the information can be viewed by running ```sudo docker compose -f docker-compose.yml logs -f``` in the directory holding your ```docker-compose.yml```.
 
 An example output is as follows:
 

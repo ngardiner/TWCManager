@@ -3,9 +3,9 @@ Tesla Bluetooth Low Energy (BLE)
 
 ## Introduction
 
-This module provides experimental support for the Tesla BLE (Bluetooth Low Energy) interface to Tesla vehicles.
+This module talks to Tesla vehicles over Bluetooth Low Energy (BLE), using Tesla's `tesla-control` tool. It is free and local: it needs no Tesla account and no internet connection, only the car in Bluetooth range of the TWCManager host.
 
-It is currently capable of starting and stopping charging, and controlling the charge rate in line with the configurable charge rate options (Settings > Charge Rate Control).
+Over BLE, TWCManager starts and stops charging, sets the charge rate and the charge limit, wakes the car, and reads its charge state and location. BLE is the first command path TWCManager tries after the charging station itself, ahead of every cloud path (see Vehicle Command Policy in [Settings](../Settings.md#vehicle-command-policy)). A car in range also answers a free sleep-state check, which tells TWCManager the car is home.
 
 ## Installation of tesla-control binary
 
@@ -13,7 +13,7 @@ The tesla-control binary can be built for you via the TWCManager Makefile.
 
 ### Installation Steps
 
-  * Update twcmanager to at least vx.xx (update after release) to introduce Tesla BLE support (you could alternatively do this via the web-based update option)
+  * Install TWCManager, if you have not already
 
 ```make install```
 
@@ -58,11 +58,11 @@ By default, TWCManager uses the TWC to control charge rate. This behaviour is co
 
 ## FAQs
 
-* *Why does BLE currently require API as a fallback?*
+* *Do I need the Tesla API as well as BLE?*
 
-TWCManager was written with an explicit dependency on the API. BLE replaces some but not all of the API's functionality. For example, we cannot discover all vehicles on an account with BLE.
+No, but BLE alone is a trade-off. BLE works only while the car is in range of the TWCManager host. Once the car leaves, TWCManager can't read it, see where it is, wake it or send it anything (such as restoring its charge limit) until it is back in range. It notices the car is back by scanning for it. BLE also can't list the cars on your account, and naming the car on a Gen3 Wall Connector needs the Tesla API.
 
-The approach taken is to replace the API calls where an appropriate BLE replacement exists. This has the benefit of using API only as a fallback when BLE fails, which improves reliability.
+So a car is known to TWCManager when a Gen2 TWC reads its VIN, the Tesla energy site names it on a Gen3, a Tesla API token, telemetry feed or Home Assistant lists it, or you add it by VIN on the Vehicles page (1.4.1). After that, BLE alone can control it at home. With a Tesla API connection or a telemetry feed as well, TWCManager can follow the car while it is away, and falls back to the cloud when BLE fails, subject to the Vehicle Command Policy.
 
 * *Why does TWCManager sometimes not send a command to a sleeping car?*
 

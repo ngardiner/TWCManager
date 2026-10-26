@@ -44,7 +44,7 @@ The Do not Charge action states that outside of scheduled or Track Green Energy 
 
       * Track Green Energy
 
-This is an option that currently does not operate (and will only set Non-Scheduled Charging rate to 0). In future, this will allow continuing of Track Green Energy behaviour outside of the hard-coded daylight hours (6am - 8pm).
+This option continues Track Green Energy outside its usual hours, which run from sunrise to sunset (6am to 8pm until TWCManager has looked up sunrise and sunset for your home location). With it, charging follows your generation and consumption at any hour.
 
 ### Charge Authorization Mode
 
@@ -63,18 +63,18 @@ This setting specifies that any vehicle which requests to start charging will be
 Vehicle commands (start and stop charging, set the charge rate, set the charge limit, wake) go to the first ready provider in a fixed order: the TWC itself, then BLE, then the cloud, with billed providers (the Owner API, which Tesla does not bill but which is paced like a billed provider, for a car Tesla lists with `command_signing: off`; then the Fleet API, then Home Assistant) last. Free providers are always tried first. A billed provider is used only when no free one can serve the car, or after the free ones have failed for 5 minutes (charge limit) or 60 seconds (start/stop, amps), and sends each desired value at most four times. A start is done while the TWC the car is plugged into measures at least 1 A, in the last 30 seconds and since the car last reported, so no start or retry goes to a car already charging. The Vehicle Command Policy suppresses providers in that order:
 
    * `prefer_ble` - Prefer local (BLE), fall back to cloud after a delay. Nothing is suppressed. This is the default.
-   * `ble_only` - Local only - never send billed cloud commands. Every non-local provider (the Fleet API and Home Assistant) is suppressed for commands; cloud reads still run.
+   * `ble_only` - Local only - never send billed cloud commands. Every non-local provider (the Owner API, the Fleet API and Home Assistant) is suppressed for commands; cloud reads still run.
    * `api_only` - Cloud only - never use BLE. TeslaBLE is suppressed for every operation, reads as well as commands.
 
 Setting `commandPolicy` under `vehicle` in config.json hard-sets the policy and disables this control.
 
 #### Who sets a car's charge rate
 
-Every Fleet API command is billed, so the Fleet API never sets a car's charge rate where a local path can: the TWC the car is plugged into, or BLE for a paired car. A car on a TWC gets its rate from the TWC. A BLE-paired car on a mobile connector (or any charger TWCManager does not control) gets its rate over BLE only; before v1.4.0 it got it from the Fleet API. If the BLE command fails, the Fleet API does not step in. To let the Fleet API carry the rate for such a car, use `api_only`. Under Charge Rate Control mode 2 (and mode 3 below 6 A), the TWC offers the car's share, not its maximum, until the car's rate is confirmed by a delivered command or a reading; a rate that cannot be delivered leaves the TWC enforcing the share.
+Every Fleet API command is billed, so TWCManager never uses the Fleet API to set a car's charge rate where a local path can: the TWC the car is plugged into, or BLE for a paired car. Charge Rate Control modes 2 and 3, which ask for the rate as a vehicle command, are the exception: there the rate goes through the vehicle command order, and the Fleet API may carry it. A car on a TWC gets its rate from the TWC. A BLE-paired car on a mobile connector (or any EVSE TWCManager does not control) gets its rate over BLE only (1.4.1). If the BLE command fails, the Fleet API does not step in. To let the Fleet API carry the rate for such a car, use `api_only`. Under Charge Rate Control mode 2 (and mode 3 below 6 A), the TWC offers the car's share, not its maximum, until the car's rate is confirmed by a delivered command or a reading; a rate that cannot be delivered leaves the TWC enforcing the share.
 
 #### BLE retries
 
-A BLE command that times out or fails to connect is retried once, two seconds later; any other failure is reported straight away. The vehicle command order then decides when to try again and whether to fall back to the cloud. The `maxRetries`, `retryDelay`, `circuitBreakerThreshold` and `circuitBreakerTimeout` keys under `config.moduleConfiguration.TeslaBLE` were removed in v1.4.0 and are ignored if present.
+A BLE command that times out or fails to connect is retried once, two seconds later; any other failure is reported straight away. The vehicle command order then decides when to try again and whether to fall back to the cloud. The `maxRetries`, `retryDelay`, `circuitBreakerThreshold` and `circuitBreakerTimeout` keys under `config.moduleConfiguration.TeslaBLE` are ignored (1.4.1).
 
 #### providerSuppressions
 
@@ -171,7 +171,7 @@ All keys are optional. The `watch` block goes at the top level of `config.json`,
 
 `enabled` turns the whole watch off. `emsTrigger` turns off the consumption step alone. While it is on, an energy source is configured and a car is watched, the source is read on every policy pass, as `policy.alwaysPollEMS` does, not only under a green policy; the step needs a fresh reading to see a car start or stop on another charger.
 
-The `cloudUpdateInterval` setting is the Powerwall module's cloud cache time. It no longer sets how often cars are read.
+The `cloudUpdateInterval` setting is the Powerwall module's cloud cache time. It does not set how often cars are read; the watch does.
 
 The Vehicles page shows, for each car, whether it is watched (and if not, why), the last check and its answer, and when the next one is due.
 
@@ -201,14 +201,12 @@ In other words, during car charging, you want your utility meter to show a value
 
 If you are able to obtain consumption details from an energy management system, don't add consumption offsets (unless you need them for other purposes), as TWCManager will query your EMS to determine the power being consumed.
 
+### Tesla API tokens
+
+The Settings page shows a slot for an Owner API token and one for a Fleet API token, each with its status and a Remove token button. TWCManager can hold both: reads use the free Owner API, and commands go through the [vehicle command order](#vehicle-command-policy). See [Tesla Fleet API](modules/Vehicle_TeslaAPI.md) for logging in, and [TeslaMate](modules/Vehicle_TeslaMate.md) for syncing a token from TeslaMate.
+
 ### Manual Tesla API key override
 
-In some instances, you may prefer to obtain the Tesla API keys yourself. The main benefit of this approach is that you do not need to provide your Tesla username or password to TWCManager.
+If you already hold Tesla API tokens from another application, you can paste them here instead of logging in. The Settings page links a <a href="http://registration.teslatasks.com/generateTokens">third-party token generator</a>; using it means giving that service your Tesla credentials. A pasted access token goes into the Owner API or the Fleet API slot according to its type, with the refresh token if you paste one too. A refresh token pasted on its own replaces the tokens in the slot of its type and is refreshed at once; if Tesla rejects it, the previous tokens are kept.
 
-Another reason to use this feature might be as a temporary workaround if the Tesla authentication flow is changed or the TWCManager authentication function is faulty.
-
-Note: Providing your Tesla username and password to TWCManager to automatically fetch your Tesla API access and refresh tokens does not put your credentials at significant risk as they are only used once to fetch the token before being destroyed, however there may nonetheless be a preference not to provide these credentials at all.
-
-To obtain the key, you will need some knowledge of the Tesla API authentication flow. To assist with this, a <a href="http://registration.teslatasks.com/generateTokens">link</a> to a service which can assist you with this process is provided, however this does therefore require you to provide your credentials to that service. Otherwise, you may want to research the Tesla authentication flow and obtain the tokens yourself, or to obtain them from another application that you have previously authenticated to.
-
-Providing any value for the Access or Refresh tokens will result in the current stored tokens being overridden with the value you supply. We don't perform any validation of the tokens and the previous values are lost. Back up your settings.json file prior to entering your token manually if you need to revert your settings.
+Pasting a token replaces the tokens stored in that slot. Back up your settings.json file before entering a token manually if you may need to revert.

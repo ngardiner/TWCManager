@@ -30,7 +30,7 @@ You need:
    * Each Tesla exposed as a device with:
      * manufacturer `Tesla`
      * model like `Model 3`, `Model Y`, `Model X`, `Model S`
-     * a **serial number** equal to the VIN (e.g. `5YJ3F7EA4KF449191`)
+     * a **serial number** equal to the VIN (e.g. `5YJ3E1EA1KF000000`)
    * Entities such as:
      * `sensor.<car>_battery_level`
      * `sensor.<car>_charging`
