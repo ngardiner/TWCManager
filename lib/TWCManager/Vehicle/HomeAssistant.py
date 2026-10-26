@@ -29,6 +29,7 @@ from typing import Dict, List, Optional
 import requests
 import websockets
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
 from TWCManager.Vehicle.Registry.Sources import HomeAssistantReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
@@ -187,6 +188,8 @@ class HomeAssistant:
     lastStateRefreshTime = 0
     connectionFailures = 0  # bumped by _get_state on a connection error
     stateRefreshInterval = 30  # Minimum seconds between state refreshes per vehicle
+    # Set once connectivity is verified; the provider reads through it
+    readSource = None
 
     def __init__(self, master):
         self.master = master
@@ -261,7 +264,8 @@ class HomeAssistant:
             self._enabled = False
             return
 
-        self.registry.registerReadSource(HomeAssistantReadSource(self))
+        self.readSource = HomeAssistantReadSource(self)
+        self.registry.registerReadSource(self.readSource)
 
         try:
             self._discover_vehicles()
@@ -278,6 +282,9 @@ class HomeAssistant:
 
     def enabled(self) -> bool:
         return self._enabled
+
+    def providers(self):
+        return [HomeAssistantProvider(self)]
 
     # ----------------------------------------------------------------------
     # Discovery via WebSocket API
@@ -571,8 +578,19 @@ class HomeAssistant:
 
         return self._get_state(ent) is not None
 
+    def _vehiclesFor(self, vin) -> Optional[list]:
+        # Every HA car for a broadcast; only the named car when a VIN is
+        # given (looked up as HomeAssistantProvider does), or None when the
+        # VIN is not one of HA's cars
+        if not vin:
+            return list(self.carApiVehicles)
+        registryVehicle = self.registry.get(str(vin).upper())
+        hv = registryVehicle.attachment("HomeAssistant") if registryVehicle else None
+        return None if hv is None else [hv]
+
     def car_api_charge(self, task) -> str:
         charge = task.get("charge", None) if isinstance(task, dict) else task
+        vin = task.get("vin") if isinstance(task, dict) else None
         now = time.time()
         if now - self.carApiLastStartOrStopChargeTime < 10:
             logger.debug("Charge command rate limited (10s minimum between commands)")
@@ -580,6 +598,11 @@ class HomeAssistant:
 
         if not self.car_api_available():
             logger.debug("Home Assistant API not available for charge command")
+            return "error"
+
+        vehicles = self._vehiclesFor(vin)
+        if vehicles is None:
+            logger.debug("Charge command for a vehicle Home Assistant does not hold")
             return "error"
 
         desired = charge  # True = start, False = stop
@@ -590,7 +613,7 @@ class HomeAssistant:
         result = "success"
         vehicles_processed = 0
 
-        for v in self.carApiVehicles:
+        for v in vehicles:
             v.refresh_from_home_assistant(self)
 
             if not v.at_home:
@@ -645,10 +668,15 @@ class HomeAssistant:
             logger.debug("Home Assistant API not available for charge limit")
             return "error"
 
+        vehicles = self._vehiclesFor(kwargs.get("vin"))
+        if vehicles is None:
+            logger.debug("Charge limit for a vehicle Home Assistant does not hold")
+            return "error"
+
         result = "success"
         vehicles_processed = 0
 
-        for v in self.carApiVehicles:
+        for v in vehicles:
             v.refresh_from_home_assistant(self)
             if not v.at_home:
                 logger.debug("%s not at home; skipping charge limit", v.name)
@@ -784,6 +812,7 @@ class HomeAssistant:
     def updateChargeAtHome(self):
         for v in self.carApiVehicles:
             v.refresh_from_home_assistant(self)
+        return True
 
     @property
     def numCarsAtHome(self):

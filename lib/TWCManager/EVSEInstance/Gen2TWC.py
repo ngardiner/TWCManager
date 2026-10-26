@@ -9,6 +9,7 @@ Ported from ngardiner/TWCManager#483 (MikeBishop); adapted for current main.
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.TWCSlave import TWCSlave
+from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 
 
 class Gen2TWC(EVSEInstance, TWCSlave):
@@ -18,6 +19,9 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     the EVSEInstance interface on top, allowing the controller-agnostic power
     distribution loop to treat Gen2 devices the same as any other EVSE.
     """
+
+    # Heartbeat states in which a car is plugged in
+    PLUGGED_STATES = (0x01, 0x03, 0x04, 0x05, 0x08, 0x09)
 
     def __init__(self, TWCID, maxAmps, config, master):
         # Backing stores for properties that shadow TWCSlave class attributes.
@@ -44,6 +48,10 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     # ------------------------------------------------------------------
     # EVSEInstance: capabilities
     # ------------------------------------------------------------------
+
+    @property
+    def twcid(self) -> str:
+        return "%02X%02X" % (self.TWCID[0], self.TWCID[1])
 
     @property
     def isReadOnly(self) -> bool:
@@ -79,6 +87,29 @@ class Gen2TWC(EVSEInstance, TWCSlave):
         self._gen2_currentVIN = value
 
     @property
+    def vehicleKey(self):
+        if self.currentVIN:
+            return self.currentVIN.upper()
+        anonKey = ANON_PREFIX + self.twcid
+        if self.master.vehicleRegistry.get(anonKey) is not None:
+            return anonKey
+        if self.lastVIN and self.reportedState in self.PLUGGED_STATES:
+            # The car last confirmed here has shown no unplug evidence
+            return self.lastVIN.upper()
+        return None
+
+    @property
+    def occupied(self):
+        if (
+            self.currentVIN
+            or self.reportedAmpsActual >= 1.0
+            or self.reportedState in self.PLUGGED_STATES
+        ):
+            return True
+        # A Gen2 reports 00 for a sleeping plugged car, so 00 is not "empty"
+        return None
+
+    @property
     def wantsToCharge(self) -> bool:
         """True when a vehicle is plugged in and willing to accept power.
 
@@ -106,13 +137,51 @@ class Gen2TWC(EVSEInstance, TWCSlave):
     def currentPower(self) -> float:
         return self.convertAmpsToWatts(self.reportedAmpsActual, self.currentVoltage)
 
+    # ------------------------------------------------------------------
+    # EVSEInstance: amps range
+    # ------------------------------------------------------------------
+
+    def _rangeOverride(self, key):
+        # controller.Gen2TWCs.ranges.<twcid>.<key>, when a positive number
+        controller = self.master.config.get("controller.Gen2TWCs", {})
+        ranges = controller.get("ranges", {}) if isinstance(controller, dict) else {}
+        override = ranges.get(self.twcid, {}) if isinstance(ranges, dict) else {}
+        value = override.get(key) if isinstance(override, dict) else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if value > 0:
+                return value
+        return None
+
+    def minAmpsToOffer(self):
+        # The per-TWC minAmps override replaces minAmpsPerTWC for this TWC,
+        # never below what the TWC can start a car at. The heartbeat zeroes
+        # any offer below this while no car charges.
+        override = self._rangeOverride("minAmps")
+        if override is None:
+            return TWCSlave.minAmpsToOffer(self)
+        return max(override, self.minAmpsTWCSupports)
+
+    @property
+    def minAmps(self) -> float:
+        # What the heartbeat will really send, so an idle TWC's minimum
+        # reaches the wire
+        return self.minAmpsToOffer()
+
+    @property
+    def maxOfferAmps(self) -> float:
+        # TWCSlave.maxAmps is the linkready maximum; this is what we offer
+        override = self._rangeOverride("maxAmps")
+        if override is not None:
+            return override
+        return min(self.wiringMaxAmps, self.maxAmps or self.wiringMaxAmps)
+
     @property
     def minPower(self) -> float:
-        return self.convertAmpsToWatts(self.minAmpsTWCSupports, self.currentVoltage)
+        return self.convertAmpsToWatts(self.minAmps, self.currentVoltage)
 
     @property
     def maxPower(self) -> float:
-        return self.convertAmpsToWatts(self.wiringMaxAmps, self.currentVoltage)
+        return self.convertAmpsToWatts(self.maxOfferAmps, self.currentVoltage)
 
     # ------------------------------------------------------------------
     # EVSEInstance: controller membership

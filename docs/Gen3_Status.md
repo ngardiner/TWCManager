@@ -76,8 +76,9 @@ In practice, a mixed Gen2+Gen3 deployment runs two RS485 buses:
 ## Limitations
 
 - **No VIN reporting** - The Gen3 vitals API does not expose a vehicle
-  VIN, so `MergedEVSE` deduplication (for vehicles visible via both a
-  Gen3 TWC and the Tesla Fleet API) is not available for Gen3 units.
+  VIN. A car is grouped into a Gen3 unit's charging point only when it is
+  identified (from the energy site's wall connector list, or as the single
+  freshly plugged-in candidate); otherwise the unit's car stays anonymous.
 - **Indirect control** - Charge rate is set indirectly via the synthetic
   house load.  The Gen3's own minimum (6 A) and maximum (circuit limit)
   still apply and override TWCManager's target if it falls outside that

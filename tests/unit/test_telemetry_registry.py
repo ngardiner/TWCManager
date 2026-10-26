@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.unit.teslatokens import FakeMaster, new_api
-from TWCManager.EVSEController.TeslaAPIController import TeslaAPIController
+from tests.unit.teslatokens import FakeMaster, new_api, owner_token
+from TWCManager.EVSEController.VehicleEndpoints import VehicleEndpoints
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Telemetry import TelmetryBase
 from TWCManager.Vehicle.TeslaMateVehicle import TeslaMateVehicle
@@ -185,6 +185,8 @@ def teslamate(monkeypatch):
     api.carApiVehicles = []
     master.modules["TeslaAPI"] = api
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    # The Owner API token TeslaMate syncs: the cloud read source can read.
+    api.storeToken(owner_token(), "", "synced")
     car = api.getCarApiVehicles()[0]
     # A cloud call returns nothing usable; tests assert it is never made.
     car.get_car_api = Mock(return_value=(False, None))
@@ -209,6 +211,14 @@ def test_healthy_teslamate_car_reads_without_api_calls(teslamate):  # ruling 1
     assert reg.get(VIN).latest("lat").source == "TeslaMateVehicle"
 
 
+def test_teslamate_reports_the_cars_own_ac_maximum(teslamate):
+    tm, car, reg = teslamate
+    feed(tm, charge_current_request_max="48")
+    assert reg.get(VIN).value("chargeCurrentRequestMax") == 48
+    feed(tm, charge_current_request_max="")  # an empty payload is no reading
+    assert reg.get(VIN).value("chargeCurrentRequestMax") is None
+
+
 def test_feed_vouches_for_a_value_the_api_reobserved(teslamate):  # ruling 3
     tm, car, reg = teslamate
     feed(tm, state="online", latitude="37.0", longitude="-122.0")
@@ -228,14 +238,14 @@ def test_feed_outage_then_recovery_pays_one_cloud_read(teslamate):  # C1
     feed(tm, state="online", latitude="37.0", longitude="-122.0")
     calls = []
 
-    def vehicleData():
+    def vehicleData(slot=None):
         calls.append(1)
         car.lat = 37.00000001  # the API's digits differ from TeslaMate's
         car.lon = -122.0
         return True
 
     car.update_vehicle_data = vehicleData
-    car.is_awake = lambda: True
+    car.is_awake = lambda slot=None: True
     tm.mqttDisconnect(None, None, None, 7)  # broker blip
     assert car.update_location(0) is True and len(calls) == 1
     tm.mqttConnect(Mock(), None, None, 0)  # back; parked car publishes nothing
@@ -251,11 +261,11 @@ def test_sleeping_car_on_healthy_feed_stays_telemetry_sourced(teslamate):  # rul
     v.observe("state", "asleep", "TeslaMateVehicle", at=0.0)
     v.observe("pluggedIn", True, "TeslaMateVehicle", at=0.0)
     assert car.syncSource == "TeslaMateVehicle"
-    assert TeslaAPIController._telemetryPluggedIn(car) is True
+    assert VehicleEndpoints._telemetryPluggedIn(car) is True
     assert car.is_awake() is False and not car.get_car_api.called
     tm.noteHealthy("7", "false")  # TeslaMate stopped polling
     assert car.syncSource == "TeslaAPI"
-    assert TeslaAPIController._telemetryPluggedIn(car) is False
+    assert VehicleEndpoints._telemetryPluggedIn(car) is False
     tm.noteHealthy("7", "true")
     tm.mqttDisconnect(None, None, None, 7)  # broker gone
     assert car.syncSource == "TeslaAPI"

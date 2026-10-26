@@ -41,9 +41,9 @@ def _master(evses, amps, slaves, config):
     # A non-Gen2 controller makes the distributor run.
     m.getModulesByType = lambda t: [
         {"name": "Gen2TWCs", "ref": ctrl},
-        {"name": "TeslaAPIController", "ref": ctrl},
+        {"name": "VehicleEndpoints", "ref": ctrl},
     ]
-    m.getDedupedEVSEs = lambda: evses
+    m.chargingPoints = lambda: evses
     m.getMaxAmpsToDivideAmongSlaves = lambda: amps
     m.getSlaveTWCs = lambda: slaves
     return m

@@ -940,13 +940,10 @@ def CreateHTTPHandlerClass(master):
                 vin = data.get("vehicleVIN", None)
                 params = str(data.get("parameters", None))
 
-                carapi = master.getModuleByName("TeslaAPI")
-                if carapi is None:
-                    self.send_response(400)
-                    self.end_headers()
-                    return
-                res = carapi.apiDebugInterface(command, vin, params)
-                if res == True:
+                # Through the provider order: BLE-only installs can wake
+                # from the debug page too
+                res = master.providerOrder.debugCommand(command, vin, params)
+                if res is True:
                     self.send_response(200)
                     self.end_headers()
                 else:

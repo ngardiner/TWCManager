@@ -53,8 +53,8 @@ By default, TWCManager uses the TWC to control charge rate. This behaviour is co
    * Click on the Settings tab
    * Find the option "Charge Rate Control"
    * Select either of the following options:
-      * Use Tesla API Exclusively to control Charge Rate
-      * Use TWC >= 6A + Tesla API <6A to control Charge Rate
+      * Use a vehicle command (BLE or API) exclusively to control charge rate
+      * Use TWC >= 6A + vehicle command (BLE or API) < 6A
 
 ## FAQs
 

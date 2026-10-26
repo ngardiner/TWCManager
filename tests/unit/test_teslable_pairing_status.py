@@ -71,6 +71,25 @@ def test_state_read_success_proves_key():
     )
 
 
+def test_charge_read_reports_the_cars_own_ac_maximum():
+    ble, reg, master = make()
+    ble._run_command_with_timeout = Mock(
+        return_value=(
+            b'{"chargeState": {"chargerPilotCurrent": 6, "chargeCurrentRequestMax": 48}}',
+            b"",
+            0,
+        )
+    )
+    state = ble.get_charge_state(VIN)
+    assert state["availableCurrent"] == 6 and state["chargeCurrentRequestMax"] == 48
+    assert (
+        ble.readSource.fetch(reg.getOrCreate(VIN, "t"), "chargingState", False)[
+            "chargeCurrentRequestMax"
+        ]
+        == 48
+    )
+
+
 def test_update_settings_reclaims_paired_vins():
     ble, reg, master = make()
     master.settings["Vehicles"][VIN]["ble"] = {"status": "paired", "since": 1.0}

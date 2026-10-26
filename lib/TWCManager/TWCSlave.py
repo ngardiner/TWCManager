@@ -111,6 +111,12 @@ class TWCSlave:
 
         self._queueChargeRate(self.wiringMaxAmps, done)
 
+    def minAmpsToOffer(self):
+        # The lowest offer this TWC makes: the configured minAmpsPerTWC, or
+        # what the TWC can reliably start a car at when that is higher
+        # (6 when unset, as in TWCManager's default config)
+        return max(self.configConfig.get("minAmpsPerTWC", 6), self.minAmpsTWCSupports)
+
     def _resetVehicleRateRaised(self):
         self.vehicleRateRaised = False
         self._vehicleRateRaiseGen += 1
@@ -567,7 +573,9 @@ class TWCSlave:
                     # to near zero within a few seconds.
                     self.master.stopCarsCharging(self.currentVIN)
             elif (
-                self.lastAmpsOffered >= self.config["config"]["minAmpsPerTWC"]
+                # minAmpsToOffer: this TWC's floor, which a per-TWC range
+                # override can set below minAmpsPerTWC
+                self.lastAmpsOffered >= self.minAmpsToOffer()
                 and self.reportedAmpsActual < 1.0
                 and self.reportedState != 0x02
             ):
@@ -747,9 +755,7 @@ class TWCSlave:
                 + "."
             )
 
-        minAmpsToOffer = self.config["config"]["minAmpsPerTWC"]
-        if self.minAmpsTWCSupports > minAmpsToOffer:
-            minAmpsToOffer = self.minAmpsTWCSupports
+        minAmpsToOffer = self.minAmpsToOffer()
 
         if (
             desiredAmpsOffered < minAmpsToOffer

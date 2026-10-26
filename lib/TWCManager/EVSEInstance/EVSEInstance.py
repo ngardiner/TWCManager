@@ -12,8 +12,8 @@ class EVSEInstance(abc.ABC):
 
     Concrete implementations include:
     - Gen2TWC: a TWC Gen2 slave device connected over RS485
-    - TeslaAPIEVSE: a vehicle accessible via the Tesla Fleet API
-    - MergedEVSE: a deduplicated proxy combining multiple views of the same vehicle
+    - VehicleEndpoint: a vehicle whose charge rate a vehicle provider sets
+    - ChargingPoint: the endpoints serving one car, grouped by vehicle key
     """
 
     # ------------------------------------------------------------------
@@ -98,6 +98,16 @@ class EVSEInstance(abc.ABC):
     def controllers(self) -> list:
         """List of EVSEController names that manage this EVSE instance."""
         return []
+
+    @property
+    def vehicleKey(self):
+        """Registry key of the vehicle this endpoint serves, or None."""
+        return None
+
+    @property
+    def occupied(self):
+        """True when a car is connected, False when none is, None if unknown."""
+        return None
 
     # ------------------------------------------------------------------
     # Control

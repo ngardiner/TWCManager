@@ -9,10 +9,14 @@ import secrets
 import ssl
 from threading import RLock
 import time
-from typing import Any
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
+    FleetAPIProvider,
+    OwnerAPIProvider,
+)
 from TWCManager.Vehicle.Registry.Fields import TELEMETRY_SOURCES
 from TWCManager.Vehicle.Registry.Sources import TeslaAPIReadSource
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
@@ -57,6 +61,10 @@ class TLS13Adapter(HTTPAdapter):
 class TeslaAPI:
     # A charge rate the car accepted is not resent for this long (seconds).
     CHARGE_RATE_RESEND_AFTER = 600
+    # The energy-site list (/products) is fetched at most this often (seconds)
+    ENERGY_SITES_TTL = 3600
+    # Seconds a free energy-site request may take (background thread)
+    ENERGY_TIMEOUT = 10
     regionURL = {
         "NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
         "EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles",
@@ -153,9 +161,25 @@ class TeslaAPI:
     def __init__(self, master):
         self.master = master
         self.registry = VehicleRegistry.forMaster(master)
-        self.registry.registerReadSource(TeslaAPIReadSource(self))
+        # One read source per token slot, Owner first: the Fleet source reads
+        # (paid) only when the Owner slot cannot.
+        self.ownerReadSource = TeslaAPIReadSource(self, "owner")
+        self.fleetReadSource = TeslaAPIReadSource(self, "fleet")
+        self.registry.registerReadSource(self.ownerReadSource)
+        self.registry.registerReadSource(self.fleetReadSource)
         # slot.changes when a skipped sync was last logged, per slot.
         self.syncSkipLoggedAt = {"owner": None, "fleet": None}
+        # Energy-site state per slot kind, for the Wall Connector VIN read.
+        # (slot.changes, time, sites) of the last good /products answer
+        self._energySites = {}
+        # time.time() when the slot's sites were found to hold no Wall
+        # Connector; ready again after ENERGY_SITES_TTL
+        self._energySitesEmpty = {}
+        # Site IDs whose live_status had no wall_connectors key, until the
+        # site list is fetched again
+        self._wallConnectorSitesDropped = {}
+        # slot.changes when the slot's token was refused energy data
+        self._wallConnectorsRefused = {}
 
         try:
             self.config = master.config
@@ -199,6 +223,9 @@ class TeslaAPI:
     def enabled(self) -> bool:
         return self._enabled
 
+    def providers(self):
+        return [OwnerAPIProvider(self), FleetAPIProvider(self)]
+
     def addVehicle(self, json):
         if "vin" in json:
             try:
@@ -208,32 +235,6 @@ class TeslaAPI:
                 logger.debug("Skipping a listed vehicle without a usable VIN")
                 return
             self.carApiVehicles.append(car)
-
-    def apiDebugInterface(self, command, vin, parameters):
-        # Provides an interface from the Web UI to allow commands to be run interactively
-
-        vehicle = self.getVehicleByVIN(vin)
-        if not vehicle:
-            return False
-
-        # Get parameters
-        params = {}
-        try:
-            params = json.loads(parameters)
-        except json.decoder.JSONDecodeError:
-            pass
-
-        # Execute specified command
-        if command == "setChargeRate":
-            charge_rate = params.get("charge_rate", 0)
-            self.setChargeRate(charge_rate, vehicle)
-            return True
-        elif command == "wakeVehicle":
-            self.wakeVehicle(vehicle)
-            return True
-
-        # If we make it here, we did not execute a command
-        return False
 
     def refreshTokenTypeKnown(self, token):
         # True when the refresh token's type can be told from the token
@@ -882,19 +883,20 @@ class TeslaAPI:
                 vehicle.delayNextWakeAttempt = 0
 
         if now - self.getLastStartOrStopChargeTime() < 60:
-            # Don't start or stop more often than once a minute
+            # Don't start or stop more often than once a minute. A skip, not
+            # a failure: "error" would hand the command to the next provider
             logger.log(
                 logging.DEBUG2,
                 "car_api_charge return because not long enough since last carApiLastStartOrStopChargeTime",
             )
-            return "error"
+            return "skipped"
 
         if self.car_api_available(charge=charge, vin=vin) is False:
             logger.log(
                 logging.INFO8,
                 "car_api_charge return because car_api_available() == False",
             )
-            return "error"
+            return self._unavailableResult()
 
         startOrStop = "start" if charge else "stop"
         result = "success"
@@ -1217,7 +1219,18 @@ class TeslaAPI:
             return apiResponseDict["response"]["string"].split(": ")[-1]
         return ""
 
-    def applyChargeLimit(self, limit, checkArrival=False, checkDeparture=False):
+    def applyChargeLimit(
+        self,
+        limit,
+        checkArrival=False,
+        checkDeparture=False,
+        vin=None,
+        remoteOnly=False,
+    ):
+        # vin: act on that car only. remoteOnly asks for a cloud path, which
+        # this is. A targeted call is neither held by nor counted in the
+        # once-a-minute limit Policy's broadcasts keep.
+        target = str(vin).upper() if vin else None
         if self.refuseCommandIfReadOnly("set_charge_limit"):
             return "error"
         if limit != -1 and (limit < 50 or limit > 100):
@@ -1233,16 +1246,18 @@ class TeslaAPI:
 
         now = time.time()
         if (
-            not checkArrival
+            target is None
+            and not checkArrival
             and not checkDeparture
             and now - self.carApiLastChargeLimitApplyTime < 60
         ):
-            # Don't change limits more often than once a minute
+            # Don't change limits more often than once a minute. A skip, not
+            # a failure: "error" would hand the limit to the next provider
             logger.log(
                 logging.DEBUG2,
                 "applyChargeLimit return because under 60 sec since last carApiLastChargeLimitApplyTime",
             )
-            return "error"
+            return "skipped"
 
         # We need to try to apply limits if:
         #   - We think the car is at home and the limit has changed
@@ -1252,8 +1267,17 @@ class TeslaAPI:
         #
         # We do NOT opportunistically check for arrivals, because that would be a
         # continuous API poll.
+        vehicles = [
+            v
+            for v in self.carApiVehicles
+            if target is None or str(v.VIN).upper() == target
+        ]
+        if target is not None and not vehicles:
+            logger.log(logging.INFO8, "applyChargeLimit: no such vehicle")
+            return "error"
+
         needToWake = False
-        for vehicle in self.carApiVehicles:
+        for vehicle in vehicles:
             if self.refuseCommandFor(vehicle, "set_charge_limit"):
                 continue
             wasAtHome, outside, lastApplied = self.master.getNormalChargeLimit(
@@ -1275,14 +1299,14 @@ class TeslaAPI:
                 vehicle.stopTryingToApplyLimit = False
                 vehicle.stopAskingToStartCharging = False
 
-        if needToWake and self.car_api_available(applyLimit=True) is False:
+        if needToWake and self.car_api_available(applyLimit=True, vin=target) is False:
             logger.log(
                 logging.INFO8,
                 "applyChargeLimit return because car_api_available() == False",
             )
-            return "error"
+            return self._unavailableResult()
 
-        if self.lastChargeLimitApplied != limit:
+        if target is None and self.lastChargeLimitApplied != limit:
             if limit != -1:
                 logger.log(
                     logging.INFO2,
@@ -1297,11 +1321,14 @@ class TeslaAPI:
                 )
             self.lastChargeLimitApplied = limit
 
-        self.carApiLastChargeLimitApplyTime = now
+        if target is None:
+            self.carApiLastChargeLimitApplyTime = now
 
         needSleep = False
-        for vehicle in self.carApiVehicles:
+        refused = False
+        for vehicle in vehicles:
             if self.refuseCommandFor(vehicle, "set_charge_limit"):
+                refused = True
                 continue
             if vehicle.stopTryingToApplyLimit or not vehicle.ready():
                 continue
@@ -1379,6 +1406,9 @@ class TeslaAPI:
 
             if vehicle.atHome and vehicle.stopTryingToApplyLimit:
                 needSleep = True
+            if self.readOnlyFor(vehicle):
+                # Tesla refused the Owner API limit sent just now
+                refused = True
 
         if needSleep:
             # If you start charging too quickly after setting the charge limit,
@@ -1389,6 +1419,26 @@ class TeslaAPI:
 
         if checkArrival:
             self.updateChargeAtHome()
+
+        # VehiclePriority reads None as failure and would try the next
+        # provider (Home Assistant: a second, billed command). A car this
+        # module may not command is a failure, so the next provider gets it.
+        return "error" if refused else "success"
+
+    def _unavailableResult(self):
+        # car_api_available() is False on a failure (no usable token, no
+        # vehicle list, the error backoff) and also while it holds off waking
+        # a car on purpose (wakeDelayMins, the post-wake wait). A hold is a
+        # skip: "error" would hand the command to the next provider (Home
+        # Assistant, billed), which would wake the car.
+        if (
+            self.slotFor("command") is not None
+            and self.slotFor("read") is not None
+            and self.getVehicleCount() > 0
+            and not self.getCarApiRetryRemaining()
+        ):
+            return "skipped"
+        return "error"
 
     def getCarApiErrorRetryMins(self, vehicle=None):
         errorCount = self.errorCount
@@ -1408,6 +1458,160 @@ class TeslaAPI:
         if slot.tokenType == "owner":
             return slot.baseURL[: -len("vehicles")] + "products"
         return slot.baseURL
+
+    # Energy sites and the Wall Connector VINs. Only the free /products and
+    # /energy_sites/<id>/live_status are ever requested here: never a vehicle
+    # endpoint, vehicle_data, a wake or a command. Background thread only.
+    # Unverified on hardware: that live_status lists wall_connectors, each
+    # with a din and, while a car is connected, its vin (tesla-fleet-api npm
+    # types), and whether the Owner API serves live_status at all (a refusal
+    # falls to the Fleet slot).
+
+    def _energyURL(self, slot, path):
+        # The API root under the slot's vehicles URL, as vehicleListURL
+        return slot.baseURL[: -len("vehicles")] + path
+
+    def _energyGet(self, slot, path):
+        # (status code, parsed body or None); a transport error raises
+        req = requests.get(
+            self._energyURL(slot, path),
+            headers={
+                "accept": "application/json",
+                "Authorization": "Bearer " + slot.accessToken,
+            },
+            verify=slot.verifyCert,
+            timeout=self.ENERGY_TIMEOUT,
+        )
+        try:
+            body = req.json()
+        except ValueError:
+            body = None
+        return req.status_code, body
+
+    # Answers that latch the Wall Connector read off for a slot until its
+    # token changes, as the vehicle reads treat 403/410/412
+    ENERGY_REFUSALS = (401, 403, 410, 412)
+
+    def _energyRefused(self, slot, status, liveStatus=False):
+        # A 404 from live_status on the Owner API is taken as the Owner API
+        # not serving it (unverified), so the Fleet slot is asked instead
+        return status in self.ENERGY_REFUSALS or (
+            liveStatus and status == 404 and slot.kind == "owner"
+        )
+
+    def _refuseWallConnectors(self, slot, status):
+        if status == 403:
+            # Only a 403 says the scope is missing; a 401 is authentication
+            slot.reportScopeRefused("energy", refused=True)
+        self._wallConnectorsRefused[slot.kind] = slot.changes
+        logger.info(
+            "Wall Connector VINs: %s token refused energy data (HTTP %d); not "
+            "asking again until the token changes" % (slot.kind, status)
+        )
+
+    def _fetchEnergySites(self, slot) -> Optional[List[dict]]:
+        # The slot's energy sites, cached for ENERGY_SITES_TTL; None when
+        # they could not be read. Never raises.
+        now = time.time()
+        cached = self._energySites.get(slot.kind)
+        if (
+            cached is not None
+            and cached[0] == slot.changes
+            and now - cached[1] < self.ENERGY_SITES_TTL
+        ):
+            return cached[2]
+        try:
+            status, body = self._energyGet(slot, "products")
+        except requests.exceptions.RequestException as e:
+            logger.debug("Energy sites: %s", type(e).__name__)
+            return None
+        if self._energyRefused(slot, status):
+            self._refuseWallConnectors(slot, status)
+            return None
+        if status != 200:
+            return None
+        try:
+            sites = [
+                entry
+                for entry in body["response"]
+                if isinstance(entry, dict) and "energy_site_id" in entry
+            ]
+        except (KeyError, TypeError):
+            return None
+        self._energySites[slot.kind] = (slot.changes, now, sites)
+        self._wallConnectorSitesDropped[slot.kind] = set()
+        return sites
+
+    def energySites(self, slot=None) -> List[dict]:
+        # The /products entries with an energy_site_id; [] on failure
+        slot = slot or self.slotFor("energy")
+        if slot is None:
+            return []
+        sites = self._fetchEnergySites(slot)
+        return [] if sites is None else list(sites)
+
+    def wallConnectorVinsReady(self, slot) -> bool:
+        # Cache reads only, no I/O (a provider's ready() asks this). The
+        # scope is checked first: usable() would log a missing one, and this
+        # is asked of every token whether or not a Gen3 is configured.
+        if slot is None or not slot.grants("energy") or not slot.usable("energy"):
+            return False
+        if self._wallConnectorsRefused.get(slot.kind) == slot.changes:
+            return False
+        emptyAt = self._energySitesEmpty.get(slot.kind)
+        return emptyAt is None or time.time() - emptyAt >= self.ENERGY_SITES_TTL
+
+    def wallConnectorVins(self, slot) -> Optional[Dict[str, str]]:
+        # {din: vin} over every energy site's live_status wall_connectors
+        # that report a vin. None when nothing could be read or the token
+        # was refused. Never raises.
+        if slot is None:
+            return None
+        self.refreshTokenIfNeeded()
+        sites = self._fetchEnergySites(slot)
+        if sites is None:
+            return None
+        dropped = self._wallConnectorSitesDropped.setdefault(slot.kind, set())
+        siteIDs = [s["energy_site_id"] for s in sites]
+        siteIDs = [i for i in siteIDs if i not in dropped]
+        if not siteIDs:
+            self._energySitesEmpty[slot.kind] = time.time()
+            return {}
+        self._energySitesEmpty.pop(slot.kind, None)
+        vins = {}
+        answered = False
+        for siteID in siteIDs:
+            try:
+                status, body = self._energyGet(
+                    slot, "energy_sites/%s/live_status" % siteID
+                )
+            except requests.exceptions.RequestException as e:
+                logger.debug("Wall Connector VINs: %s", type(e).__name__)
+                continue
+            if self._energyRefused(slot, status, liveStatus=True):
+                self._refuseWallConnectors(slot, status)
+                return None
+            if status != 200:
+                continue
+            response = body.get("response") if isinstance(body, dict) else None
+            if not isinstance(response, dict):
+                continue
+            answered = True
+            connectors = response.get("wall_connectors")
+            if connectors is None:
+                # No Wall Connector at this site (a Powerwall alone)
+                dropped.add(siteID)
+                continue
+            for wc in connectors if isinstance(connectors, list) else []:
+                if not isinstance(wc, dict):
+                    continue
+                din, vin = wc.get("din"), wc.get("vin")
+                if isinstance(din, str) and din and isinstance(vin, str) and vin:
+                    vins[din] = vin
+        if all(i in dropped for i in siteIDs):
+            # No site has a Wall Connector: not ready until the list is due
+            self._energySitesEmpty[slot.kind] = time.time()
+        return vins if answered else None
 
     def getCarApiRetryRemaining(self, vehicle=None):
         # Calculate the amount of time remaining until the API can be queried
@@ -2199,10 +2403,13 @@ class TeslaAPI:
         return True
 
     def updateChargeAtHome(self):
+        # True when this module holds cars to refresh, so VehiclePriority's
+        # walk ends here; False lets another module refresh its own cars
         for car in self.carApiVehicles:
             if car.atHome:
                 car.update_charge()
         self.lastChargeCheck = time.time()
+        return bool(self.carApiVehicles)
 
     def vehicleScheduledChargingPending(self, vin=None):
         # True if the named (or any at-home) vehicle reports it is waiting on
@@ -2361,6 +2568,7 @@ class CarApiVehicle:
     chargeLimit = RegistryField("chargeLimit", -1)
     chargingState = RegistryField("chargingState", "Unknown")
     availableCurrent = RegistryField("availableCurrent", 0)
+    chargeCurrentRequestMax = RegistryField("chargeCurrentRequestMax", None)
     voltage = RegistryField("voltage", 0)
     phases = RegistryField("phases", 0)
     timeToFullCharge = RegistryField("timeToFullCharge", 0.0)
@@ -2398,14 +2606,22 @@ class CarApiVehicle:
         self.ownerCommandsRetired = False
 
     def _bind(self, vehicle, listed=False):
-        # Joins the registry vehicle: the claim follows command access. A
-        # listing attaches this object; a rebind (after a forget) only takes
-        # an empty attachment, so a stale object never displaces a newer one.
+        # Joins the registry vehicle with both claims. The Owner claim
+        # follows this car's command_signing and the Fleet claim the Fleet
+        # slot, live, so a token pasted or synced after the listing manages
+        # the car without a re-list. A listing attaches this object; a rebind (after a forget)
+        # only takes an empty attachment, so a stale object never displaces a
+        # newer one.
         if vehicle is not self._vehicle:
             if listed or vehicle.attachment("TeslaAPI") is None:
                 vehicle.attach("TeslaAPI", self)
             carapi = self.carapi
-            vehicle.claim("TeslaAPI", lambda: not carapi.readOnly, "listed")
+            vehicle.claim(
+                "OwnerAPI", lambda: carapi.ownerCommandsAllowed(self), "listed"
+            )
+            vehicle.claim(
+                "FleetAPI", lambda: carapi.fleetSlot.usable("command"), "listed"
+            )
             self._vehicle = vehicle
         return vehicle
 
@@ -2483,7 +2699,7 @@ class CarApiVehicle:
         )
         return False
 
-    def is_awake(self, minInterval=120, telemetryNotBefore=0):
+    def is_awake(self, minInterval=120, telemetryNotBefore=0, slot=None):
         # Free sources only: telemetry, else the vehicle state GET
         # (vehicles/{vin}; not charged on the Fleet API). Never vehicle_data.
         # The newest observation wins: telemetry (any state) is trusted only
@@ -2491,8 +2707,6 @@ class CarApiVehicle:
         # that GET's cached result or GET again.
         # telemetryNotBefore: also ignore telemetry stamped earlier (e.g.
         # before a wake_up we sent; it can't tell us whether the wake worked).
-        # Fresh is the registry's age, so a live feed keeps an old reading
-        # fresh; it still loses to a state GET made after it.
         now = time.time()
         obs, age = self._telemetryState()
         if (
@@ -2508,17 +2722,22 @@ class CarApiVehicle:
         if now - self.lastVehicleAwakeTime < minInterval:
             return self.lastVehicleAwakeState
         result, response = self.get_car_api(
-            str(self.VIN), checkReady=False, provesOnline=False
+            str(self.VIN), checkReady=False, provesOnline=False, slot=slot
         )
         awakeState = result and response.get("state", "") == "online"
         self.lastVehicleAwakeState = awakeState
         self.lastVehicleAwakeTime = now
         return awakeState
 
-    def get_car_api(self, path, checkReady=True, provesOnline=True):
+    def get_car_api(self, path, checkReady=True, provesOnline=True, slot=None):
         # path is relative to the read slot's base URL, e.g. "<VIN>" or
-        # "<VIN>/vehicle_data?endpoints=...".
-        slot = self.carapi.slotFor("read")
+        # "<VIN>/vehicle_data?endpoints=...". slot (a read source's) overrides
+        # slotFor("read").
+        if slot is None:
+            slot = self.carapi.slotFor("read")
+        elif not slot.usable("read"):
+            # Cleared or paused since the source chose it
+            return False, None
         if slot is None:
             # No usable token (car_api_available logs why).
             return False, None
@@ -2655,7 +2874,7 @@ class CarApiVehicle:
         self.atHome = self.carapi.is_location_home(self.lat, self.lon, gpsAge)
         return True
 
-    def update_vehicle_data(self):
+    def update_vehicle_data(self, slot=None):
         path = (
             str(self.VIN)
             + "/vehicle_data?endpoints="
@@ -2670,7 +2889,7 @@ class CarApiVehicle:
             return True
 
         try:
-            result, response = self.get_car_api(path)
+            result, response = self.get_car_api(path, slot=slot)
         except TypeError:
             logger.error("Got None response from get_car_api()")
             return False
@@ -2724,6 +2943,7 @@ class CarApiVehicle:
                 ("battery_level", "batteryLevel"),
                 ("time_to_full_charge", "timeToFullCharge"),
                 ("charger_pilot_current", "availableCurrent"),
+                ("charge_current_request_max", "chargeCurrentRequestMax"),
                 ("charger_actual_current", "actualCurrent"),
                 ("charger_phases", "phases"),
                 ("charger_voltage", "voltage"),

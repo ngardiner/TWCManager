@@ -38,13 +38,17 @@ Configuration (under ``controller.Gen3TWCs`` in config.json)::
 
 The ``devices`` list enumerates every Gen3 TWC on the bus.  Each entry
 maps to a ``Gen3TWC`` EVSEInstance.  If a device is unreachable (no vitals
-response) it is omitted from ``allEVSEs`` for that polling cycle.
+response) it is omitted from ``allEVSEs`` until a fetch succeeds.  The
+vitals are fetched on the background thread (task ``gen3Vitals``, queued
+here when a unit's cache is stale), never on the caller's thread.
 
-Multiple Gen3 devices sharing the same Neurio bus see the same fake house
-load.  In a single-device deployment this is exact.  In multi-device
-deployments the distributor should allocate the *total* Gen3 target to the
-sum of all units; since each unit self-limits by the same headroom, they
-naturally share it equally (assuming identical fuse ratings).
+Every Gen3 on the bus reads the same fake house load ``H`` and charges at
+up to ``h_i = fuse_i - H``.  The distributor addresses each unit
+separately, exactly as Gen2 slaves; this controller records each unit's own
+target and water-fills one ``H`` so that the units' total draw matches the
+sum of the targets (``solve``).  A unit whose car draws less than its
+headroom frees that share for its siblings.  A unit with a zero target
+cannot be stopped while a sibling holds one: it may still draw up to ``h``.
 """
 
 from __future__ import annotations
@@ -53,7 +57,7 @@ import asyncio
 import logging
 import struct
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from TWCManager.EVSEController.EVSEController import EVSEController
 
@@ -153,6 +157,13 @@ class Gen3TWCs(EVSEController):
     """EVSEController for Gen3 Tesla Wall Connectors via Neurio Modbus emulation."""
 
     name = "Gen3TWCs"
+    # Every unit reads the one fake-Neurio value
+    sharedControl = True
+    # Republish only when the headroom moves by more than this (or the
+    # targets change)
+    DAMP_AMPS = 1.0
+    # Every targeted unit keeps at least the minimum pilot
+    MIN_AMPS = 6.0
 
     def __init__(self, master):
         self.master = master
@@ -170,8 +181,32 @@ class Gen3TWCs(EVSEController):
         self._lock = threading.Lock()
         self._registers: list[int] = _build_static_registers()
 
-        # Per-EVSEInstance cache: ip -> Gen3TWC
+        # Per-EVSEInstance cache: ip -> Gen3TWC, built once here so every
+        # thread sees the same instances
+        from TWCManager.EVSEInstance.Gen3TWC import Gen3TWC
+
         self._evse_cache: dict = {}
+        for device_cfg in self._devices:
+            ip = device_cfg.get("ip", "")
+            if ip and ip not in self._evse_cache:
+                self._evse_cache[ip] = Gen3TWC(device_cfg, self, master)
+
+        # Names a Gen3's car from the energy site's live_status (free)
+        from TWCManager.Vehicle.Providers.WallConnectorVins import (
+            WallConnectorVinReader,
+        )
+
+        self.vinReader = WallConnectorVinReader(
+            master, getattr(master, "providerOrder", None)
+        )
+
+        # Each unit's own target in watts, and what was last published.
+        # Guards the solve and the publish so two threads never publish out
+        # of order; taken before _lock, never inside it.
+        self._targetLock = threading.RLock()
+        self._unitTargets: Dict[str, float] = {}
+        self._publishedLoad: Optional[float] = None
+        self._publishedTargets: Dict[str, float] = {}
 
         # Background thread running the asyncio Modbus server
         self._server_thread: threading.Thread | None = None
@@ -189,8 +224,8 @@ class Gen3TWCs(EVSEController):
         """Update the synthetic house-load registers served to Gen3 TWCs.
 
         The Gen3 TWC reads this value and charges at
-        ``fuse_capacity - house_watts``.  Call this from ``Gen3TWC.setTargetPower``
-        with ``house_watts = fuse_watts - target_watts``.
+        ``fuse_capacity - house_watts``.  ``republish`` calls this with the
+        load ``solve`` chose for every unit's target.
 
         Args:
             watts:   Total synthetic house load in watts.
@@ -225,6 +260,149 @@ class Gen3TWCs(EVSEController):
             phase_amps,
             phases,
         )
+
+    # ------------------------------------------------------------------
+    # Per-unit targets and the one shared house load
+    # ------------------------------------------------------------------
+
+    @property
+    def unitTargets(self) -> Dict[str, float]:
+        """Each unit's own target in watts."""
+        with self._targetLock:
+            return dict(self._unitTargets)
+
+    def setUnitTarget(self, unitId: str, watts: float) -> None:
+        """Record one unit's target and republish the shared house load."""
+        with self._targetLock:
+            self._unitTargets[unitId] = max(0.0, float(watts))
+            self.republish()
+
+    def noteVitals(self, unit, rising: bool) -> None:
+        """Called by a unit after each successful vitals fetch (background
+        thread, no lock held): closes the loop on the measured draw at the
+        vitals cadence, then asks the energy site which car is connected
+        while a session is anonymous."""
+        self.republish()
+        if unit._version is None and not unit.device_cfg.get("din"):
+            unit.refreshVersion()
+        if rising:
+            self.vinReader.noteConnect(unit)
+        self.vinReader.apply(self.devices())
+
+    def _supply(self):
+        """(phases, voltage) of the first device, as the published value
+        has always used."""
+        devices = self.devices()
+        if not devices:
+            return 1, float(
+                self.master.config.get("config", {}).get("defaultVoltage", 240)
+            )
+        first = devices[0]
+        voltage = next(
+            (v for v in first.currentVoltage if v > 0),
+            float(self.master.config.get("config", {}).get("defaultVoltage", 240)),
+        )
+        return first.phases, voltage
+
+    def _maxFuse(self) -> float:
+        return max((d.fuseAmps for d in self.devices()), default=0.0)
+
+    def _servedLoad(self) -> float:
+        with self._targetLock:
+            published = self._publishedLoad
+        return self._maxFuse() if published is None else published
+
+    def headroom(self) -> float:
+        """The first device's current headroom in amps."""
+        devices = self.devices()
+        if not devices:
+            return 0.0
+        return round(devices[0].fuseAmps - self._servedLoad(), 2)
+
+    def demandAmps(self, unit) -> float:
+        """What a unit would draw from a headroom: its measured current when
+        its car is holding below the published headroom, else unbounded."""
+        if not unit.isReachable:
+            return float("inf")
+        vitals = unit.vitals
+        try:
+            measured = float(vitals.get("vehicle_current_a", 0.0))
+        except (TypeError, ValueError):
+            return float("inf")
+        h = unit.fuseAmps - self._servedLoad()
+        charging = str(vitals.get("evse_state", "")).lower() == "charging"
+        if charging and 1.0 <= measured < h - self.DAMP_AMPS:
+            return measured
+        return float("inf")
+
+    def solve(self) -> float:
+        """The house load in amps whose headroom serves every target.
+
+        Water-filling: the largest H at which the units with a target, each
+        drawing min(demand, fuse - H), together draw the sum of the targets,
+        clamped so every targeted unit keeps MIN_AMPS.  Units with no target
+        are left out: they cannot be stopped through the shared value.
+        """
+        with self._targetLock:
+            targets = dict(self._unitTargets)
+            devices = self.devices()
+            maxFuse = self._maxFuse()
+            _, voltage = self._supply()
+            active = []
+            for unit in devices:
+                watts = targets.get(unit.ID, 0.0)
+                if watts > 0:
+                    amps = watts / (voltage * max(unit.phases, 1))
+                    active.append((unit.fuseAmps, self.demandAmps(unit), amps))
+            if not active:
+                return round(maxFuse, 2)
+            wanted = sum(a for _, _, a in active)
+
+            def served(load, demands):
+                return sum(
+                    min(d, max(0.0, f - load)) for (f, _, _), d in zip(active, demands)
+                )
+
+            demands = [d for _, d, _ in active]
+            if served(0.0, demands) < wanted:
+                # Measured draws below the targets even at the full fuse are
+                # cars still ramping, not a binding cap: solve as if every
+                # unit were unconstrained, so one unit gets its own target
+                demands = [float("inf")] * len(active)
+            lo, hi = 0.0, maxFuse
+            if served(lo, demands) >= wanted:
+                for _ in range(20):
+                    mid = (lo + hi) / 2
+                    if served(mid, demands) >= wanted:
+                        lo = mid
+                    else:
+                        hi = mid
+            load = min(round(lo, 2), min(f for f, _, _ in active) - self.MIN_AMPS)
+            return round(max(0.0, load), 2)
+
+    def republish(self) -> None:
+        """Recompute the shared house load and publish it when the headroom
+        moved by more than DAMP_AMPS or the targets changed."""
+        with self._targetLock:
+            if not self.devices():
+                return
+            load = self.solve()
+            targets = {k: v for k, v in self._unitTargets.items() if v > 0}
+            if (
+                self._publishedLoad is not None
+                and targets == self._publishedTargets
+                and abs(load - self._publishedLoad) <= self.DAMP_AMPS
+            ):
+                return
+            phases, voltage = self._supply()
+            self._publishedLoad = load
+            self._publishedTargets = targets
+            logger.debug("Gen3TWCs: targets %s -> house load %.2f A", targets, load)
+            # _lock is taken inside, after _targetLock: the order is fixed
+            # load is amps per phase; setHouseWatts spreads watts over phases
+            self.setHouseWatts(
+                watts=load * voltage * phases, phases=phases, voltage=voltage
+            )
 
     def _make_action(self):
         """Return the async action callback for pymodbus SimDevice.
@@ -319,22 +497,24 @@ class Gen3TWCs(EVSEController):
     # EVSEController interface
     # ------------------------------------------------------------------
 
+    def devices(self) -> List["Gen3TWCType"]:
+        """Every configured unit, reachable or not."""
+        return list(self._evse_cache.values())
+
     @property
     def allEVSEs(self) -> list:
-        """Return a Gen3TWC EVSEInstance for each configured device."""
-        from TWCManager.EVSEInstance.Gen3TWC import Gen3TWC
+        """The units whose last vitals fetch succeeded.  A stale cache queues
+        one background fetch; nothing here does I/O."""
+        devices = self.devices()
+        if any(d.vitalsStale() for d in devices):
+            self.master.queue_background_task({"cmd": "gen3Vitals"})
+        return [d for d in devices if d.isReachable]
 
-        evses = []
-        for device_cfg in self._devices:
-            ip = device_cfg.get("ip", "")
-            if not ip:
-                continue
-            if ip not in self._evse_cache:
-                self._evse_cache[ip] = Gen3TWC(device_cfg, self, self.master)
-            evse = self._evse_cache[ip]
-            if evse.isReachable:
-                evses.append(evse)
-        return evses
+    def refreshVitals(self) -> None:
+        """Fetch every stale unit's vitals.  Background thread only."""
+        for device in self.devices():
+            if device.vitalsStale():
+                device.refreshVitals()
 
     @property
     def maxPower(self) -> float:

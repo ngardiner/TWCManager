@@ -17,6 +17,7 @@ CHARGE_FIELDS = frozenset(
         "phases",
         "scheduledChargingPending",
         "timeToFullCharge",
+        "chargeCurrentRequestMax",
     }
 )
 LOCATION_FIELDS = frozenset({"lat", "lon", "gpsAsOf"})
@@ -26,6 +27,7 @@ class TeslaBLEReadSource(ReadSource):
     name = "TeslaBLE"
     order = 0
     fields = CHARGE_FIELDS | LOCATION_FIELDS
+    provider = "TeslaBLE"
 
     def __init__(self, ble, master):
         self.ble = ble
@@ -33,10 +35,9 @@ class TeslaBLEReadSource(ReadSource):
 
     def canRead(self, vehicle) -> bool:
         # Only claimed VINs: each miss costs the BLE command timeout.
-        if not vehicle.vin or "TeslaBLE" not in vehicle.claims:
-            return False
-        vp = self.master.getModuleByName("VehiclePriority")
-        return getattr(vp, "commandPolicy", "prefer_ble") != "api_only"
+        # commandPolicy is not consulted here: the provider order drops a
+        # suppressed source before the cascade sees it.
+        return bool(vehicle.vin) and "TeslaBLE" in vehicle.claims
 
     def _location(self, vin: str) -> Optional[Dict[str, Any]]:
         loc = self.ble.get_location_state(vin)
@@ -70,15 +71,30 @@ class TeslaBLEReadSource(ReadSource):
 
 
 class TeslaAPIReadSource(ReadSource):
+    # One per token slot. The observation source stays "TeslaAPI"; the
+    # provider says which slot paid for the read.
     name = "TeslaAPI"
     order = 1
     fields = CHARGE_FIELDS | LOCATION_FIELDS
 
-    def __init__(self, carapi):
+    def __init__(self, carapi, kind: str = "owner"):
         self.carapi = carapi
+        self.kind = kind
+        self.provider = "FleetAPI" if kind == "fleet" else "OwnerAPI"
+
+    def slot(self):
+        if self.kind == "fleet":
+            return self.carapi.fleetSlot
+        return self.carapi.ownerSlot
 
     def canRead(self, vehicle) -> bool:
-        return vehicle.attachment("TeslaAPI") is not None
+        if vehicle.attachment("TeslaAPI") is None:
+            return False
+        if not self.slot().usable("read"):
+            return False
+        # A Fleet vehicle_data is paid: only when the Owner slot cannot read,
+        # as slotFor("read") chooses
+        return self.kind != "fleet" or not self.carapi.ownerSlot.usable("read")
 
     def fetch(self, vehicle, field: str, allowWake: bool) -> Optional[Dict[str, Any]]:
         # Never wakes, whatever allowWake says: a cloud wake is never worth a
@@ -90,11 +106,12 @@ class TeslaAPIReadSource(ReadSource):
             # As update_vehicle_data: a deferred car reports its stored
             # values without a request.
             return {}
+        slot = self.slot()
         # Free online check (vehicles/{vin}) before a paid vehicle_data.
-        if not car.is_awake():
+        if not car.is_awake(slot=slot):
             return None
         # update_vehicle_data observes through the CarApiVehicle fields.
-        return {} if car.update_vehicle_data() else None
+        return {} if car.update_vehicle_data(slot=slot) else None
 
 
 # What Home Assistant's entities can report.
@@ -108,6 +125,7 @@ class HomeAssistantReadSource(ReadSource):
     # After the cloud API (1): HA mirrors the cloud, so it reads last.
     order = 2
     fields = HA_FIELDS
+    provider = "HomeAssistant"
 
     def __init__(self, ha):
         self.ha = ha
