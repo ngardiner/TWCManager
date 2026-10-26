@@ -150,6 +150,10 @@ You can generate a long-lived token in Home Assistant under:
 * If a specific entity is missing (e.g. `number.<slug>_charge_current`):
   * That feature (e.g. setting amps) is skipped, but other features (start/stop, limit, SOC) can still work if their entities exist.
 
+Home Assistant reads are made when TWCManager asks for a car's state, at most once every 30 seconds per car; Home Assistant is not a live feed, so the [vehicle watch](../Settings.md#vehicle-watch) still looks after a car that only Home Assistant reports on.
+
+In the vehicle command order, Home Assistant comes last, after the Fleet API, and is treated as billed: like the Fleet API, it waits for the free paths (a TWC or Bluetooth) unless none can serve the car, and it is used only when the Fleet API is unavailable or has refused. It cannot wake a car. The `ble_only` Vehicle Command Policy, or a `providerSuppressions` entry for `HomeAssistant`, rules it out (see [Settings](../Settings.md#vehicle-command-policy)).
+
 The model is deliberately conservative: it won't try to use or guess entities that it did not positively match based on the slug and the `tesla_fleet` platform.
 
 ## When to Use This Integration

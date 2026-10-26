@@ -105,8 +105,12 @@ git checkout main
 make install
 ```
 
+## Optional: Bluetooth (TeslaBLE)
+
+To control cars over Bluetooth, build ```tesla-control``` with ```make tesla-control``` and install the ```bluez``` package (```sudo apt-get install -y bluez```) for range scans. See [TeslaBLE](modules/Vehicle_TeslaBLE.md).
+
 ## Configure TWCManager
-After performing the installation tasks above, edit the /etc/twcmanager/config.json file and customize to suit your environment.
+After performing the installation tasks above, edit the /etc/twcmanager/config.json file and customize to suit your environment. See [Supported setups](README.md#supported-setups) for the charging stations, car connections and energy sources you can combine. A Gen3-only or car-only install needs no Gen2 RS-485 adapter and no change to the ```interface``` settings (1.4.1); a Gen3 still needs its own RS-485 adapter, wired to its Neurio meter terminals.
 
 The following documents provide detail on specific areas of configuration:
 

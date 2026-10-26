@@ -67,14 +67,22 @@ The following API endpoints exist:
 | [cancelChargeNow](control_HTTP_API/cancelChargeNow.md) | POST | Cancels active chargeNow configuration        |
 | [chargeNow](control_HTTP_API/chargeNow.md)             | POST  | Instructs charger to start charging at specified rate |
 | [deleteConsumptionOffset](control_HTTP_API/deleteConsumptionOffset.md) | POST | Delete a Consumption Offset value |
+| getActivePolicyAction    | GET    | Provides the active policy's action: 1 charge at a fixed rate, 2 do not charge, 3 track green energy |
 | getConfig                | GET    | Provides the current configuration                |
 | [getConsumptionOffsets](control_HTTP_API/getConsumptionOffsets.md) | GET | List configured offsets               |
+| getHistory               | GET  | Provides the charging history of the last two days, in 5 minute steps |
+| getLastTWCResponse       | GET  | Provides the last response to a debug command      |
 | getPolicy                | GET  | Provides the policy configuration                 |
 | getSlaveTWCs             | GET  | Provides a list of connected Slave TWCs and their state |
 | getStatus                | GET  | Provides the current status (Charge Rate, Policy) |
 | getUUID                  | GET  | Provides a unique ID for this particular master, based on the physical MAC address |
 | [saveSettings](control_HTTP_API/saveSettings.md)         | POST | Saves settings to settings file |
+| sendDebugCommand         | POST | Sends a debug command to the TWCs (used by the Debug page) |
 | [sendStartCommand](control_HTTP_API/sendStartCommand.md) | POST | Sends the Start command to all Slave TWCs    |
+| sendTeslaAPICommand      | POST | Sends a vehicle command through the command order, for the car named by `vehicleVIN` (used by the Debug page) |
+| setConsumptionOffset     | POST | Sets the green energy offset in amps (`offset`)    |
+| setLatLon                | POST | Sets the home location (`lat`, `lon`)              |
+| setPolicy                | POST | Selects a policy by name (`policy`)                |
 | [setSetting](control_HTTP_API/setSetting.md)             | POST | Set settings directly via API |
 | [sendStopCommand](control_HTTP_API/sendStopCommand.md)   | POST | Sends the Stop command to all Slave TWCs     |
 | [setScheduledChargingSettings](control_HTTP_API/setScheduledChargingSettings.md)  | POST | Saves Scheduled Charging settings --> can be retrieved with getStatus |

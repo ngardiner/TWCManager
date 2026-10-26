@@ -18,6 +18,8 @@ Some examples of Serial configuration include:
 ```"port": "/dev/ttyUSB0"``` - Connection to a USB to RS485 adaptor
 ```"port": "/dev/ttyS0"```   - Connection to an onboard Serial interface
 
+If the adapter is missing or cannot be opened, TWCManager logs one error and tries again every 30 seconds, so an adapter plugged in late is picked up without a restart (1.4.1). A Gen3-only or car-only install can leave the RS485 settings as shipped. The RS485 interface stands down if its port is the one the Gen3 controller uses.
+
 ## Network Communications
 
 There are two different network protocols which are supported by the RS485 module. These are less configurable than the alternate planned TCP module, however the TCP module is not yet available for use.

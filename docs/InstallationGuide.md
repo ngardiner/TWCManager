@@ -1,5 +1,7 @@
 # Installation Guide
 
+This guide covers wiring a Gen2 Tesla Wall Connector to TWCManager over RS-485. A Gen3 Wall Connector is wired to its Neurio meter terminals instead; see [Gen3TWCs](modules/Controller_Gen3TWCs.md). A car-only install, where TWCManager controls cars over Bluetooth or the Tesla API, needs no wiring at all (see [Supported setups](README.md#supported-setups)).
+
 ## Before You Begin
 
 The following steps will involve opening your Tesla Wall Charger (TWC) chassis cover for the purpose of connecting RS-485 wires to a number of terminals on the TWC. These terminals are adjacent to live components within the Tesla Wall Charger, and the risk of electrocution if appropriate safety steps are not taken is **high**.

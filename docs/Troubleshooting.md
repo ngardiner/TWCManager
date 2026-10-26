@@ -16,6 +16,12 @@ Please provide the log output when you [raise an issue on GitHub](https://github
 
 Are you using the development version of TWCManager? If so, and if you are having issues, please switch to the Stable version and see if it is working. If so, you've found a bug! Please [raise an issue on GitHub](https://github.com/ngardiner/TWCManager/issues/) and let us know.
 
+## Vehicles
+
+For a problem with a car (it is not charging, is charging when it should not, or is not seen arriving or leaving), start with the web interface's Vehicles page (1.4.1). It shows whether each car is Home, Probably home or Away, how TWCManager reaches it, and when TWCManager last checked on it and what it found. A car's own page lists the commands TWCManager is waiting to send, each with the reason it hasn't been sent yet, its Bluetooth pairing status, and any problem with its Fleet Telemetry configuration. See [The Vehicles page](README.md#the-vehicles-page) and Vehicle watch in [Settings](Settings.md#vehicle-watch).
+
+The log also has an INFO line for each command's result, each billed Fleet API request, and each change a telemetry feed reports in a car's plug state, driving state or geofence.
+
 ## Adapter
 
    * The required adaptor for this communication is an **RS485** adaptor. Be careful that you are not using an RS232 adaptor which is more common, but which uses a different duplexing system and uses more pins to communicate.
