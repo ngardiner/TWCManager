@@ -5,6 +5,9 @@ RUN cd /usr/src && git clone --branch ${TWC_REF} https://github.com/ngardiner/TW
 
 # Install TWCManager
 RUN cd /usr/src/TWCManager && make docker SUDO=""
+# make docker puts tesla-control in /home/twcmanager/gobin, but TWCManager
+# runs as root, so TeslaBLE's ~/gobin is /root/gobin; find it on the PATH
+ENV PATH="/home/twcmanager/gobin:${PATH}"
 
 VOLUME /etc/twcmanager
 WORKDIR /usr/src/TWCManager
