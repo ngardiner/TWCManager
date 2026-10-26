@@ -169,7 +169,7 @@ All keys are optional. The `watch` block goes at the top level of `config.json`,
 }
 ```
 
-`enabled` turns the whole watch off. `emsTrigger` turns off the consumption step alone.
+`enabled` turns the whole watch off. `emsTrigger` turns off the consumption step alone. While it is on, an energy source is configured and a car is watched, the source is read on every policy pass, as `policy.alwaysPollEMS` does, not only under a green policy; the step needs a fresh reading to see a car start or stop on another charger.
 
 The `cloudUpdateInterval` setting is the Powerwall module's cloud cache time. It no longer sets how often cars are read.
 

@@ -359,6 +359,21 @@ class TestPolicySelection:
             for c in master.queue_background_task.call_args_list
         )
 
+    @pytest.mark.parametrize("wants", [True, False])
+    def test_a_non_green_policy_polls_the_meter_when_the_watch_wants_it(
+        self, policy, wants
+    ):
+        master = policy.master
+        master.watch = Mock(wantsEMS=Mock(return_value=wants))
+        master.getModuleByName = Mock(return_value=Mock(minBatteryLevelAtHome=70))
+        master.getMaxAmpsToDivideAmongSlaves = Mock(return_value=0)
+        master.vehicleRegistry.attached = Mock(return_value=[])
+        policy.enforcePolicy({"name": "Non Scheduled Charging", "charge_amps": 6})
+        queued = [
+            c.args[0].get("cmd") for c in master.queue_background_task.call_args_list
+        ]
+        assert ("checkGreenEnergy" in queued) is wants
+
 
 class TestPolicyInitialization:
     """Test policy initialization and configuration."""

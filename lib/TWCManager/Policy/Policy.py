@@ -290,7 +290,10 @@ class Policy:
         # If we are not checking green energy already but we need to, queue that
         # as well.
         if bgt != "checkGreenEnergy":
-            alwaysPoll = self.config.get("policy", {}).get("alwaysPollEMS", False)
+            watch = getattr(self.master, "watch", None)
+            alwaysPoll = self.config.get("policy", {}).get("alwaysPollEMS", False) or (
+                watch is not None and watch.wantsEMS()
+            )
             maxAmps = self.config.get("config", {}).get("maxAmpsAllowedFromGrid", None)
             if alwaysPoll or maxAmps or self.policyIsGreen():
                 self.master.queue_background_task({"cmd": "checkGreenEnergy"})

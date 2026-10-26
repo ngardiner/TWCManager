@@ -185,6 +185,18 @@ class Watch:
                 where = presence(self.master, v)
                 yield v, where, situation(self.master, v, where)
 
+    def wantsEMS(self) -> bool:
+        # The consumption step needs the meter read on every policy pass,
+        # green policy or not, but only while a watched car could be the
+        # one starting or stopping: otherwise nothing reads it for the step
+        s = self._settings
+        return bool(
+            s["enabled"]
+            and s["emsTrigger"]
+            and self.master.getModulesByType("EMS")
+            and any(True for _ in self._watched())
+        )
+
     def chargingAmps(self) -> float:
         # Cars charging at home on chargers that report to no TWC, watched or
         # covered by a feed: a TWC naming a car counts its draw itself

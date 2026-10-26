@@ -97,3 +97,18 @@ def test_the_charger_load_counts_a_feed_covered_car_once_and_a_twc_named_car_not
     m.vehicleRegistry.observeTwcVin("8244", VIN); gen2Slave(m, "8244", state=0x03)
     assert w.chargingAmps() == 0
 
+
+def test_the_watch_wants_the_meter_read_while_its_step_can_run():
+    # Without a green policy nothing else reads the meter, and the
+    # consumption step would never see a car start on another charger
+    m, r, v, c = setup(here=False, ble=True)
+    w = Watch(m, clock=c)
+    m.getModulesByType = lambda kind: [{"name": "Meter"}] if kind == "EMS" else []
+    assert w.wantsEMS()
+    w._settings["emsTrigger"] = False
+    assert not w.wantsEMS()
+    w._settings["emsTrigger"] = True
+    m.vehicleRegistry.forget(VIN)  # no watched car: nothing for the step to find
+    assert not w.wantsEMS()
+    m.getModulesByType = lambda kind: []
+    assert not w.wantsEMS()
