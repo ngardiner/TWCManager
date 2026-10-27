@@ -4,7 +4,9 @@ This document logs the changes per release of TWCManager.
 
 ## v1.4.0 - Upcoming Development release
 
-## v1.3.4.post2 - Upcoming
+## v1.3.4.post2 - 2026-10-27
+
+**Bugfix release for the Fleet API line**
 
 * Bugfixes
     * (@MikeBishop) - Fix: Turning the Tesla API off (`vehicle.teslaAPI.enabled: false`) no longer stops TWCManager at startup, on a settings save or on a policy pass; the web interface, Storm Watch and the policy's stop-by-limit override treat it as no Tesla API, and saved tokens are kept for when it is turned back on
