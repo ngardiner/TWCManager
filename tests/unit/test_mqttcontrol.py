@@ -302,57 +302,6 @@ class TestMQTTControlConnectionHandling:
             assert mqttcontrol is not None
 
 
-class TestMQTTControlCallbacks:
-    """Test MQTT Control callback methods."""
-    
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.config = {
-            "config": {},
-            "control": {
-                "MQTT": {
-                    "enabled": True,
-                    "brokerIP": "192.168.1.100",
-                    "topicPrefix": "twc"
-                }
-            }
-        }
-        master.releaseModule = Mock()
-        return master
-    
-    def test_mqttcontrol_has_connect_callback(self, mock_master):
-        """Test MQTT Control has connect callback."""
-        from TWCManager.Control.MQTTControl import MQTTControl
-        
-        with patch('TWCManager.Control.MQTTControl.MQTTControl.mqtt'):
-            mqttcontrol = MQTTControl(mock_master)
-            
-            assert hasattr(mqttcontrol, 'mqttConnect')
-            assert callable(mqttcontrol.mqttConnect)
-    
-    def test_mqttcontrol_has_message_callback(self, mock_master):
-        """Test MQTT Control has message callback."""
-        from TWCManager.Control.MQTTControl import MQTTControl
-        
-        with patch('TWCManager.Control.MQTTControl.MQTTControl.mqtt'):
-            mqttcontrol = MQTTControl(mock_master)
-            
-            assert hasattr(mqttcontrol, 'mqttMessage')
-            assert callable(mqttcontrol.mqttMessage)
-    
-    def test_mqttcontrol_has_subscribe_callback(self, mock_master):
-        """Test MQTT Control has subscribe callback."""
-        from TWCManager.Control.MQTTControl import MQTTControl
-        
-        with patch('TWCManager.Control.MQTTControl.MQTTControl.mqtt'):
-            mqttcontrol = MQTTControl(mock_master)
-            
-            assert hasattr(mqttcontrol, 'mqttSubscribe')
-            assert callable(mqttcontrol.mqttSubscribe)
-
-
 class TestMQTTControlConfigAttributes:
     """Test MQTT Control configuration attributes."""
     

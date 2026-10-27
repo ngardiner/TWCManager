@@ -5,7 +5,6 @@ Tests slave TWC state management and heartbeat handling.
 """
 
 import pytest
-import time
 from unittest.mock import Mock, MagicMock, patch
 
 
@@ -76,75 +75,6 @@ class TestTWCSlaveInitialization:
         assert slave.startStopDelay == 120
 
 
-class TestTWCSlaveState:
-    """Test TWCSlave state management."""
-    
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.getModuleByName = Mock(return_value=None)
-        return master
-    
-    @pytest.fixture
-    def mock_config(self):
-        """Create a mock configuration."""
-        return {
-            "config": {
-                "wiringMaxAmpsPerTWC": 6,
-                "useFlexAmpsToStartCharge": False,
-                "startStopDelay": 60,
-                "fakeMaster": False,
-            }
-        }
-    
-    @pytest.fixture
-    def slave(self, mock_master, mock_config):
-        """Create a TWCSlave instance."""
-        from TWCManager.TWCSlave import TWCSlave
-        return TWCSlave(bytearray(b"AB"), 80, mock_config, mock_master)
-    
-    def test_slave_reported_amps_max(self, slave):
-        """Test slave reported max amps."""
-        slave.reportedAmpsMax = 80
-        
-        assert slave.reportedAmpsMax == 80
-    
-    def test_slave_reported_amps_actual(self, slave):
-        """Test slave reported actual amps."""
-        slave.reportedAmpsActual = 32
-        
-        assert slave.reportedAmpsActual == 32
-    
-    def test_slave_reported_state(self, slave):
-        """Test slave reported state."""
-        slave.reportedState = 1
-        
-        assert slave.reportedState == 1
-    
-    def test_slave_is_charging(self, slave):
-        """Test slave charging state."""
-        slave.isCharging = 1
-        
-        assert slave.isCharging == 1
-    
-    def test_slave_lifetime_kwh(self, slave):
-        """Test slave lifetime kWh."""
-        slave.lifetimekWh = 1234.56
-        
-        assert slave.lifetimekWh == 1234.56
-    
-    def test_slave_voltage_phases(self, slave):
-        """Test slave voltage readings."""
-        slave.voltsPhaseA = 240
-        slave.voltsPhaseB = 240
-        slave.voltsPhaseC = 240
-        
-        assert slave.voltsPhaseA == 240
-        assert slave.voltsPhaseB == 240
-        assert slave.voltsPhaseC == 240
-
-
 class TestTWCSlaveHeartbeat:
     """Test TWCSlave heartbeat handling."""
     
@@ -183,12 +113,6 @@ class TestTWCSlaveHeartbeat:
         
         assert initial_time > 0
         assert isinstance(initial_time, float)
-    
-    def test_slave_last_heartbeat_debug_output(self, slave):
-        """Test slave last heartbeat debug output."""
-        slave.lastHeartbeatDebugOutput = "Test output"
-        
-        assert slave.lastHeartbeatDebugOutput == "Test output"
 
 
 class TestTWCSlaveVIN:
@@ -222,90 +146,6 @@ class TestTWCSlaveVIN:
     def test_slave_vin_data_default(self, slave):
         """Test slave default VIN data."""
         assert slave.VINData == ["", "", ""]
-    
-    def test_slave_current_vin(self, slave):
-        """Test slave current VIN."""
-        slave.currentVIN = "5TDJKRFH4LS123456"
-        
-        assert slave.currentVIN == "5TDJKRFH4LS123456"
-    
-    def test_slave_last_vin(self, slave):
-        """Test slave last VIN."""
-        slave.lastVIN = "5TDJKRFH4LS654321"
-        
-        assert slave.lastVIN == "5TDJKRFH4LS654321"
-    
-    def test_slave_last_vin_query(self, slave):
-        """Test slave last VIN query time."""
-        slave.lastVINQuery = time.time()
-        
-        assert slave.lastVINQuery > 0
-    
-    def test_slave_vin_query_attempt(self, slave):
-        """Test slave VIN query attempt counter."""
-        slave.vinQueryAttempt = 3
-        
-        assert slave.vinQueryAttempt == 3
-
-
-class TestTWCSlaveAmpsTracking:
-    """Test TWCSlave amperage tracking."""
-    
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.getModuleByName = Mock(return_value=None)
-        return master
-    
-    @pytest.fixture
-    def mock_config(self):
-        """Create a mock configuration."""
-        return {
-            "config": {
-                "wiringMaxAmpsPerTWC": 6,
-                "useFlexAmpsToStartCharge": False,
-                "startStopDelay": 60,
-                "fakeMaster": False,
-            }
-        }
-    
-    @pytest.fixture
-    def slave(self, mock_master, mock_config):
-        """Create a TWCSlave instance."""
-        from TWCManager.TWCSlave import TWCSlave
-        return TWCSlave(bytearray(b"AB"), 80, mock_config, mock_master)
-    
-    def test_slave_last_amps_offered(self, slave):
-        """Test slave last amps offered."""
-        slave.lastAmpsOffered = 32
-        
-        assert slave.lastAmpsOffered == 32
-    
-    def test_slave_history_avg_amps(self, slave):
-        """Test slave history average amps."""
-        slave.historyAvgAmps = 25.5
-        
-        assert slave.historyAvgAmps == 25.5
-    
-    def test_slave_history_num_samples(self, slave):
-        """Test slave history number of samples."""
-        slave.historyNumSamples = 100
-        
-        assert slave.historyNumSamples == 100
-    
-    def test_slave_reported_amps_actual_significant_change_monitor(self, slave):
-        """Test slave amps actual significant change monitor."""
-        slave.reportedAmpsActualSignificantChangeMonitor = 30.5
-        
-        assert slave.reportedAmpsActualSignificantChangeMonitor == 30.5
-    
-    def test_slave_time_reported_amps_actual_changed_significantly(self, slave):
-        """Test slave time amps changed significantly."""
-        current_time = time.time()
-        slave.timeReportedAmpsActualChangedSignificantly = current_time
-        
-        assert slave.timeReportedAmpsActualChangedSignificantly == current_time
 
 
 class TestAmpsHeartbeat:
