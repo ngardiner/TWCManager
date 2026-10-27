@@ -9,6 +9,7 @@ from TWCManager.EVSEController.Gen3TWCs import Gen3TWCs
 from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint, vehicleEndpoints
 from TWCManager.EVSEInstance.ChargingPoint import ChargingPoint, groupEndpoints
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.reconcile_helpers import placeAt
 from tests.unit.test_gen2twc_provider import CONFIG
 from tests.unit.test_gen3twc_provider import vitals
@@ -18,7 +19,7 @@ VIN = "5YJ3E1EA1KF000001"; VIN2 = "5YJ3E1EA1KF000002"
 
 def ep(ID, key=None, local=False, minW=1200, maxW=7680, wants=True, ro=False, occupied=None, amps=0.0):
     e = MagicMock(); e.ID = ID; e.vehicleKey = key; e.isLocal = local; e.minPower = minW; e.maxPower = maxW
-    e.wantsToCharge = wants; e.isReadOnly = ro; e.occupied = occupied; e.currentAmps = amps; e.currentVoltage = [240, 0, 0]
+    e.wantsToCharge = wants; e.isReadOnly = ro; e.occupied = occupied; e.currentAmps = e.reportedAmpsActual = amps; e.heldKey = None; e.currentVoltage = [240, 0, 0]
     e.currentVIN = key if key and not key.startswith("anon:") else ""; e.controllers = ["Gen2TWCs" if local else "VehicleEndpoints"]
     if local: del e.pointAmps                                                      # a local member that does not layer (as a Gen3 unit)
     return e
@@ -48,7 +49,7 @@ def test_target_goes_to_the_local_member_only_when_present():
 def distributor(points, amps):
     # Wiring for 400 A: no budget but the feed binds
     m = TWCMaster.__new__(TWCMaster); m.config = {"config": {"defaultVoltage": 240, "numberOfPhases": 1, "wiringMaxAmpsAllTWCs": 400}}
-    m.getModuleByName = lambda n: None
+    m.getModuleByName = lambda n: None; m.vehicleRegistry = VehicleRegistry(m.config)
     m.chargingPoints = lambda: points; m.getMaxAmpsToDivideAmongSlaves = lambda: amps; return m
 
 def test_stopped_car_stays_one_point():
@@ -161,9 +162,12 @@ def test_stopped_car_and_its_endpoint_form_one_point_with_the_twc_minimum():
     assert pt.ID == "Point-" + VIN and [e.ID for e in pt.endpoints] == ["Gen2TWC-8244", "Vehicle-" + VIN]
     assert pt.minPower == s.minPower == 6 * 240
     m.distributeEVSEPower()
-    # The TWC decides: reporting no demand, it gets its idle offer, 0 (the TWC's hardware minimum)...
-    assert s.pointAmps == 0 and setAmps(m) == []
-    s.reportedAmpsActual = 5.5                                                   # ...the paused car takes it...
+    # The paused car would charge (its battery unknown): admitted, its TWC carries the full share
+    assert s.pointAmps == 32 and setAmps(m) == []
+    m.vehicleRegistry.get(VIN).observe("chargingState", "Complete", "OwnerAPI")
+    m.distributeEVSEPower()
+    assert s.pointAmps == 0 and setAmps(m) == []                          # finished: the idle offer, 0 (the TWC's minimum)
+    s.reportedAmpsActual = 5.5                                                   # it draws all the same...
     m.distributeEVSEPower()
     assert s.pointAmps == 32 and setAmps(m) == []                         # ...and the full share follows
 
@@ -297,10 +301,15 @@ def test_a_named_plugged_car_refused_by_its_point_is_logged_once(caplog):
     assert refusalsLogged(caplog, wiring=5) == []                                  # the wiring's budget refuses, not the members
     assert refusalsLogged(caplog, carMax=5, amps=5) == []                          # too little power is not a refusal
 
-def test_a_car_asleep_after_charging_is_given_no_rate():
+def test_a_car_asleep_after_charging_keeps_its_seat_while_it_would_charge():
+    # Asleep, it draws nothing, but with its battery unknown it would charge: admitted, its rate
+    # waits for it; at its limit it has no seat and no rate
     m = real(mode=2); v = car(m, VIN, "Charging"); v.observe("pluggedIn", True, "OwnerAPI"); budget(m, 20)
     m.distributeEVSEPower()
     assert setAmps(m) == [{"vin": VIN, "amps": 20}]
     v.observe("state", "asleep", "OwnerAPI")
+    m.distributeEVSEPower()
+    assert setAmps(m) == [{"vin": VIN, "amps": 20}]
+    v.observe("batteryLevel", 80, "OwnerAPI"); v.observe("chargeLimit", 80, "OwnerAPI")
     m.distributeEVSEPower()
     assert setAmps(m) == []

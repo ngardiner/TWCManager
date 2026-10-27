@@ -1,68 +1,170 @@
-"""distributeEVSEPower visits every EVSE and water-fills in ascending maxPower."""
+"""distributeEVSEPower admits points while their minimums fit, drawing
+points first, then shares the power among them at one water level."""
 
-from unittest.mock import MagicMock
-
+from TWCManager import TWCMaster as T
+from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+
+V = 240
 
 
-def _evse(max_power, min_power=1200):
-    e = MagicMock()
-    e.wantsToCharge = True
-    e.isReadOnly = False
-    e.maxPower = max_power
-    e.minPower = min_power
-    e.controllers = ["Gen2TWCs"]
-    return e
+class Point(EVSEInstance):
+    # A charging point at V volts, its limits in amps
+    isReadOnly = False
+
+    def __init__(self, key, low, high, drawing=True, controllers=("Gen2TWCs",)):
+        self.vehicleKey = self.ID = key
+        # Its own member, a TWC drawing 10 A or none
+        self.wantsToCharge, self.localEndpoints = drawing, [self]
+        self.reportedAmpsActual = 10 if drawing else 0
+        self.minPower, self.maxPower = low * V, high * V
+        self.controllers, self.currentVoltage = list(controllers), [V, 0, 0]
+        self.target = None
+
+    def setTargetPower(self, watts):
+        self.target = watts
 
 
-def _master(evses, amps):
+def _master(points, amps, gen3=None, willing=(), monkeypatch=None):
+    # willing: the keys of the cars that would charge if started
     m = TWCMaster.__new__(TWCMaster)
     # Wiring for 400 A: no budget but the feed binds
     m.config = {
         "config": {
-            "defaultVoltage": 240,
+            "defaultVoltage": V,
             "numberOfPhases": 1,
             "wiringMaxAmpsAllTWCs": 400,
         }
     }
-    m.getModuleByName = lambda n: None
-    m.chargingPoints = lambda: evses
+    m.vehicleRegistry = VehicleRegistry(m.config)
+    for key in willing:
+        m.vehicleRegistry.getOrCreate(key, "t")
+    if monkeypatch:
+        monkeypatch.setattr(T, "wouldCharge", lambda m, v: v.key in willing)
+    m.getModuleByName = lambda n: gen3 if n == "Gen3TWCs" else None
+    m.getVoltageMeasurement = lambda: (V, 1)
+    m.chargingPoints = lambda: points
     m.getMaxAmpsToDivideAmongSlaves = lambda: amps
+    m.distributeEVSEPower()
     return m
 
 
-def _targets(evses):
-    for e in evses:
-        e.setTargetPower.assert_called_once()
-    return [e.setTargetPower.call_args.args[0] for e in evses]
+def amps(points):
+    return [round(p.target / V, 6) for p in points]
 
 
 def test_distributor_visits_every_evse():
-    evses = [_evse(7000 + i) for i in range(3)]
-    _master(evses, 100).distributeEVSEPower()
-    for e in evses:
-        e.setTargetPower.assert_called_once()
+    points = [Point("p%d" % i, 5, 29 + i) for i in range(3)]
+    _master(points, 100)
+    assert all(p.target is not None for p in points)
 
 
-def test_water_fill_enough_for_all():
-    # 24000 W: 3000 (cap), then 21000/2 -> 5000 (cap), then 16000 -> 7000 (cap)
-    evses = [_evse(7000), _evse(3000), _evse(5000)]
-    _master(evses, 100).distributeEVSEPower()
-    assert _targets(evses) == [7000, 3000, 5000]
+def test_each_point_at_its_maximum_when_the_total_is_more_than_enough():
+    points = [Point("a", 5, 30), Point("b", 5, 12), Point("c", 5, 20)]
+    _master(points, 100)
+    assert amps(points) == [30, 12, 20]
 
 
-def test_water_fill_shares_split_when_scarce():
-    # 12000 W: 3000 (cap), then 9000/2 = 4500 (< 5000 cap), then 4500
-    evses = [_evse(3000), _evse(5000), _evse(7000)]
-    _master(evses, 50).distributeEVSEPower()
-    assert _targets(evses) == [3000, 4500, 4500]
+def test_a_gen3_and_a_car_share_at_one_level():
+    gen3, car = Point("g", 16, 48), Point("v", 5, 32)
+    _master([gen3, car], 30)
+    assert amps([gen3, car]) == [16, 14]
 
 
-def test_below_minimums_small_evses_get_zero_last_gets_rest():
-    # 2000 W: 666 and 1000 are below the 1500 W minimum -> 0; the last gets 2000
-    evses = [_evse(3000, 1500), _evse(3001, 1500), _evse(3002, 1500)]
-    m = _master(evses, 2000 / 240)
-    m.distributeEVSEPower()
-    t = _targets(evses)
-    assert t[0] == 0 and t[1] == 0
-    assert abs(t[2] - 2000) < 1e-6
+def test_a_gen3_and_two_cars_share_at_one_level():
+    points = [Point("g", 16, 48), Point("v", 5, 32), Point("w", 5, 32)]
+    _master(points, 40)
+    assert amps(points) == [16, 12, 12]
+
+
+def test_a_capped_point_leaves_the_rest_to_the_other():
+    a, b = Point("a", 6, 16), Point("b", 6, 48)
+    _master([a, b], 48)
+    assert amps([a, b]) == [16, 32]
+
+
+A, B = "5YJ3E1EA1KF00000A", "5YJ3E1EA1KF00000B"
+
+
+def test_a_minimum_that_does_not_fit_wastes_no_share(monkeypatch):
+    # EVSE A (6-32) and EVSE B (20-32) at 25 A, each with a car that would
+    # charge: one is admitted and takes it all. Neither drawing, point
+    # order decides
+    for first in (A, B):
+        a, b = Point(A, 6, 32, False), Point(B, 20, 32, False)
+        points = [a, b] if first == A else [b, a]
+        m = _master(points, 25, willing=(A, B), monkeypatch=monkeypatch)
+        assert amps(points) == [25, 0] and m.admission == {first}
+
+
+def test_with_no_car_that_would_charge_nothing_is_admitted(monkeypatch):
+    a, b = Point(A, 6, 32, False), Point(B, 20, 32, False)
+    m = _master([a, b], 25, monkeypatch=monkeypatch)
+    assert amps([a, b]) == [0, 0]
+    # Either minimum fits, not both: the first takes the room
+    assert m.admission == {A}
+
+
+def test_the_drawing_point_keeps_its_seat(monkeypatch):
+    for drawing in (A, B):
+        a, b = Point(A, 6, 32, drawing == A), Point(B, 20, 32, drawing == B)
+        m = _master([a, b], 25, willing=(A, B), monkeypatch=monkeypatch)
+        assert amps([a, b]) == ([25, 0] if drawing == A else [0, 25])
+        assert m.admission == {drawing}
+
+
+def test_a_gen3_budget_binds_its_units_as_a_group():
+    # Two Gen3 units on a 32 A circuit and a car, at 60 A: the units share
+    # their 32, and the car takes the rest up to its maximum
+    class Gen3:
+        maxPower = 32 * V
+
+    g = [Point("g%d" % i, 6, 48, controllers=["Gen3TWCs"]) for i in range(2)]
+    car = Point("v", 5, 32, controllers=["VehicleEndpoints"])
+    _master(g + [car], 60, Gen3())
+    assert amps(g + [car]) == [16, 16, 28]
+
+
+def test_a_budget_that_fits_only_one_minimum_admits_one():
+    class Gen3:
+        maxPower = 10 * V
+
+    g = [Point("g%d" % i, 6, 48, controllers=["Gen3TWCs"]) for i in range(2)]
+    g[1].reportedAmpsActual = 0
+    _master(g, 60, Gen3())
+    assert amps(g) == [10, 0]
+    # Both drawing: the second is held at its minimum, counted in the budget,
+    # while the hold decides
+    g[1].reportedAmpsActual = 10
+    _master(g, 60, Gen3())
+    assert amps(g) == [6, 6]
+
+
+def test_a_car_side_arrival_never_evicts_a_drawing_gen2_car(monkeypatch):
+    # A Gen2 car drawing (6 A minimum), a car-side arrival that would
+    # charge (5 A), later in point order and earlier: at 11 A both fit,
+    # 6 / 5; at 10 A the arrival waits and the Gen2 car keeps all 10
+    for arrivalFirst in (False, True):
+        gen2 = Point(A, 6, 32)
+        car = Point(B, 5, 32, False, controllers=["VehicleEndpoints"])
+        points = [car, gen2] if arrivalFirst else [gen2, car]
+        m = _master(points, 11, willing=(B,), monkeypatch=monkeypatch)
+        assert amps([gen2, car]) == [6, 5] and m.admission == {A, B}
+        m = _master(points, 10, willing=(B,), monkeypatch=monkeypatch)
+        assert amps([gen2, car]) == [10, 0] and m.admission == {A}
+
+
+def test_the_drawing_car_keeps_its_seat_as_power_wavers_at_the_edge(monkeypatch):
+    # Two cars of 6 A minimum, either of which fits, never both: the power
+    # wavers under 12 A. Each pass sees what the last one offered: B,
+    # drawing, keeps its seat though A comes first in point order
+    a, b = Point(A, 6, 32, False), Point(B, 6, 32, True)
+    seats = []
+    for n in range(20):
+        power = (11, 6, 9.5, 7)[n % 4]
+        _master([a, b], power, willing=(A, B), monkeypatch=monkeypatch)
+        for p in (a, b):
+            p.reportedAmpsActual = 10 if p.target else 0
+        seats.append(tuple(bool(p.target) for p in (a, b)))
+    assert seats == [(False, True)] * 20

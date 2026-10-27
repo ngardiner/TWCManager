@@ -2,7 +2,7 @@
 
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC as TWCSlave
 from TWCManager.EVSEInstance.ChargingPoint import groupEndpoints
-from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
+from TWCManager.EVSEInstance.VehicleEndpoint import VehicleEndpoint, vehicleEndpoints
 from TWCManager.TWCSlave import Offer, OfferContext
 from collections import deque
 from datetime import datetime, timedelta
@@ -25,7 +25,8 @@ from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
-from TWCManager.Vehicle.Reconcile.Belief import admissible, known, newerReading
+from TWCManager.Vehicle.Reconcile.Belief import POWER_FLOWING_AMPS, known
+from TWCManager.Vehicle.Reconcile.Belief import newerReading, wouldCharge
 from TWCManager.Vehicle.Reconcile.Rules import satisfied
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, targetsFor
@@ -54,6 +55,50 @@ DEFAULT_SETTINGS = {
     "scheduledAmpsStartHour": -1,
     "sendServerTime": 0,
 }
+
+
+def _carsAt(point) -> set:
+    # The cars a point serves: the one it names, and any its TWC still holds
+    return {point.vehicleKey, *(e.heldKey for e in point.localEndpoints)} - {None}
+
+
+def _drawing(point) -> bool:
+    # Current flows there now, by its TWC's report or else its car's state
+    amps = [
+        getattr(e, "reportedAmpsActual", getattr(e, "currentAmps", 0))
+        for e in point.localEndpoints
+    ]
+    if amps:
+        return max(amps) >= POWER_FLOWING_AMPS
+    states = [e.vehicle.value("chargingState") for e in point.vehicleEndpoints]
+    return point.wantsToCharge and "Charging" in states
+
+
+def _draws(point, budgets) -> set:
+    return budgets.keys() & {"all", *point.controllers}
+
+
+def waterLevel(points, watts) -> dict:
+    # Each point at clamp(L, min, max) amps at its own voltage, L such that
+    # the watts sum to watts, or all at maximum: one pass up the sorted
+    # limits, the sum climbing at the slope of the points between theirs
+    span = {
+        p: [p.convertWattsToAmps(w) for w in (p.minPower, p.maxPower)] for p in points
+    }
+    marks = sorted(
+        (a, p.convertAmpsToWatts(sign))
+        for p in points
+        for a, sign in zip(span[p], (1, -1))
+    )
+    level, used, slope = marks[0][0], sum(p.minPower for p in points), 0
+    for amps, change in marks:
+        if used + slope * (amps - level) >= watts:
+            level += (watts - used) / slope if slope else 0
+            break
+        used, level, slope = used + slope * (amps - level), amps, slope + change
+    return {
+        p: p.convertAmpsToWatts(min(max(level, lo), hi)) for p, (lo, hi) in span.items()
+    }
 
 
 class TWCMaster:
@@ -146,6 +191,9 @@ class TWCMaster:
         self.desired = DesiredStore()
         self.vehicleRegistry.removed = self._vehicleRemoved
         self.reconciler = VehicleReconciler(self)
+        # The control tick's admission (the cars with room), the cars that
+        # would charge, and each car's (room, state, draw, roomSince, since)
+        self.admission, self._willing, self._held = frozenset(), set(), {}
         # The policy's charge limit: None while it sets none, UNDECIDED before
         # its first pass
         self.policyLimit = UNDECIDED
@@ -187,12 +235,6 @@ class TWCMaster:
             cleared += self.desired.clearIf(v.key, CHARGING, False)
             self.reconciler.cancel(v.key)
         return cleared
-
-    def withdrawStartCharging(self, vin):
-        # A start not wanted any more (too little on offer): its desire goes;
-        # its record stays for the next start
-        for v in self._chargeTargets(vin, C.START_CHARGING):
-            self.desired.clearIf(v.key, CHARGING, True)
 
     def _chargeTargets(self, vin, capability):
         # A named car; for an anonymous point, a mode-1 start or
@@ -562,45 +604,79 @@ class TWCMaster:
             if key is not None and slave.offer.amps > 0:
                 # Power is on offer: a stop not yet delivered is moot
                 self.cancelStopCarsCharging(key)
-            gate = slave.chargeGate(now, key)
-            v = self.vehicleRegistry.get(key) if gate == "withdraw" else None
-            if v is not None and admissible(self, v):
-                # Its idle TWC is offered nothing until the car draws
-                gate = None
-            if gate == "cancelStop":
-                logger.debug(
-                    "Don't stop charging TWC: %s yet because: offer changed "
-                    "%ds ago (< 60) or actual amps changed %ds ago (< %d)",
-                    self.hex_str(slave.TWCID),
-                    now - slave.timeLastAmpsOfferedChanged,
-                    now - slave.timeReportedAmpsActualChangedSignificantly,
-                    slave.startStopDelay,
-                )
-            if gate:
-                {
-                    "stop": self.stopCarsCharging,
-                    "cancelStop": self.cancelStopCarsCharging,
-                    "start": self.startCarsCharging,
-                    "withdraw": self.withdrawStartCharging,
-                }[gate](key)
-        for v in self.vehicleRegistry.vehicles():
-            # The split serves only drawing points, so an admissible car is
-            # started here; a stop or start already wanted stands
+            if slave.chargeGate(key):
+                self.startCarsCharging(key)
+        for point in points:
+            self._followAdmission(_carsAt(point), point, now)
+        # A car on no point with room on what is left is started; once it
+        # draws, its point is allocated like any other
+        placed = set().union(*map(_carsAt, points))
+        self._followAdmission(self.admission - placed, None, now)
+        # A car no point serves has gone: it comes back with no hold or cut
+        self._cut &= placed
+        for key in self._held.keys() - placed - self.admission:
+            del self._held[key]
+
+    def _followAdmission(self, keys, point, now) -> None:
+        # Wanted charging follows admission, each change once it has held
+        # startStopDelay with the draw steady: the EMS may read low once, a
+        # cut mid-negotiation could strand a car, and power at the edge must
+        # not toggle a command each pass. A fixed policy has no such noise,
+        # so it waits for nothing. Only a first start, or a Gen2's (its offer
+        # drops our stop), goes at once. At a Gen2 only protocol 2 stops, and
+        # only a draw over 4 A (one ramping or finishing is left alone); an
+        # anonymous car is left to its Gen2, as elsewhere it would fan out
+        policy = self.getModuleByName("Policy")
+        green = policy is None or policy.policyIsGreen()
+        hold = self.config["config"].get("startStopDelay", 60) if green else -1
+        ends = getattr(point, "localEndpoints", ())
+        gen2 = [e for e in ends if hasattr(e, "pointAmps")]
+        drawing = point is not None and _drawing(point)
+        for v in filter(None, map(self.vehicleRegistry.get, keys)):
+            if not (v.vin or gen2):
+                continue
+            # The car's own readings, the same at each point it may be on
+            room = v.key in self.admission
+            seen = (room, v.value("chargingState"), v.value("actualCurrent") or 0)
+            last = self._held.get(v.key)
+            if not last or last[:2] != seen[:2] or abs(last[2] - seen[2]) > 0.8:
+                begun = last[3] if last and last[0] == room else now
+                last = self._held[v.key] = (*seen, begun, now)
+            held = now - last[4] > hold
+            if room and now - last[3] > hold:
+                # Its cut ends on room alone: a draw at the minimum may wander
+                self._cut -= {v.key}
+            want = getattr(self.desired.get(v.key, CHARGING), "value", None)
             if (
-                self.desired.get(v.key, CHARGING) is None
-                and v.vin
-                and Presence.pluggedHere(self, v)
-                and not satisfied(CHARGING, True, known(v, CHARGING, True))
-                and admissible(self, v)
+                room
+                and v.key in self._willing
+                and (want is None or want is False and held)
             ):
-                self._wantCharging(v.key, True)
+                if not satisfied(CHARGING, True, known(v, CHARGING, True)):
+                    self.cancelStopCarsCharging(v.key)
+                    self._wantCharging(v.key, True)
+            elif (
+                not room
+                and drawing
+                and all(
+                    e.protocolVersion == 2 and e.reportedAmpsActual > 4 for e in gen2
+                )
+            ):
+                # Each pass: in mode 1 a stop that has not taken lowers the
+                # limit. Until then the stop waits, and one undelivered is moot
+                sent = self.desired.record(v.key, CHARGING).lastSentAt
+                if held:
+                    self.stopCarsCharging(v.key)
+                elif want is not False or sent < self.desired.get(v.key, CHARGING).at:
+                    self.cancelStopCarsCharging(v.key)
 
     def withdrawOffers(self) -> None:
         # The control pass keeps failing, so stop offering power: a Gen2 TWC
         # gets a 0 offer (its idle minimum) and a Gen3 unit a 0 target. A car
         # that carries its own rate keeps its last commanded rate; only the
         # AMPS desire is cleared. Slaves first, so a failing chargingPoints()
-        # cannot leave them on a stale offer
+        # cannot leave them on a stale offer. Nor is a car woken or started
+        self.admission = frozenset()
         for slave in self.getSlaveTWCs():
             if slave.heardFrom:
                 slave.offer = Offer(0, 0)
@@ -613,6 +689,8 @@ class TWCMaster:
 
         The one distributor for every install. It allocates per charging
         point: a TWC and the car it serves are one point, budgeted once.
+        Points are admitted while their minimums fit (_admit), then the
+        admitted share the power at one water level.
         After this method runs:
         - Gen2TWC.pointAmps is set; controlPass makes the offer from it and
           the RS485 heartbeat sends that. ChargingPoint splits the rate by
@@ -623,84 +701,98 @@ class TWCMaster:
 
         Returns the charging points it built.
         """
-        points = self.chargingPoints()
-        wants_power = [p for p in points if p.wantsToCharge and not p.isReadOnly]
-
-        # Total watts available from EMS/policy. Convert with the voltage the
-        # TWCs measure (defaultVoltage only when none report it): the policy
-        # derived these amps from watts with it, and Gen2TWC.setTargetPower()
-        # converts back with it, so the TWC is offered the amps the policy chose.
-        available_watts = self.convertAmpsToWatts(self.getMaxAmpsToDivideAmongSlaves())
-        remaining_watts = available_watts
-        offers = []
-
-        if wants_power:
-            # Per-controller remaining power budgets and point counts
-            controller_budgets = self._budgets()
-            controller_counts: dict = {}
-            for name in controller_budgets:
-                controller_counts[name] = sum(
-                    1 for p in wants_power if name in p.controllers
-                )
-
-            # Fair-share distribution — sort ascending by maxPower so the most
-            # constrained points are served first, reducing wasted capacity.
-            pending = sorted(wants_power, key=lambda p: p.maxPower)
-
-            # Iterate a copy: pending.remove() below would otherwise make the
-            # loop skip every other point, leaving it with no target at all.
-            for point in list(pending):
-                fair_share = remaining_watts / len(pending)
-
-                # Constrain by point capacity
-                offer = min(fair_share, point.maxPower)
-
-                # Constrain by controller budgets
-                for ctrl_name in point.controllers:
-                    count = controller_counts.get(ctrl_name, 0)
-                    if count > 0 and ctrl_name in controller_budgets:
-                        offer = min(offer, controller_budgets[ctrl_name] / count)
-
-                # Enforce minimum: offer nothing rather than an unusably small
-                # amount
-                if 0 < offer < point.minPower:
-                    offer = 0
-                if point.maxPower < point.minPower <= fair_share:
-                    self._noteRefusedPoint(point, fair_share)
-
-                point.setTargetPower(offer)
-                offers.append((point, offer))
-
-                # Update accounting
-                remaining_watts -= offer
-                for ctrl_name in point.controllers:
-                    if ctrl_name in controller_budgets:
-                        controller_budgets[ctrl_name] -= offer
-                    if ctrl_name in controller_counts:
-                        controller_counts[ctrl_name] = max(
-                            0, controller_counts[ctrl_name] - 1
-                        )
-                pending.remove(point)
-
-        # Points that don't want power get a target of 0. For an idle Gen2 TWC
-        # that 0 goes out as its hardware minimum (the TWC treats an offer of 0
-        # as its minimum), which it needs to see a car plug in. The minimum is
-        # deliberately never counted against or gated on any budget: the
-        # configured limits are already derated, and the next cycle rebalances.
-        for point in points:
-            if point in wants_power or point.isReadOnly:
-                continue
-            point.setTargetPower(0)
-            offers.append((point, 0))
-
+        try:
+            points = self.chargingPoints()
+            pool, given, left, budgets = self._admit(points)
+            # The admitted points share what the held ones leave at one water
+            # level. Where a budget would be exceeded, its points share it
+            # alone, the rest what remains
+            while pool:
+                share = waterLevel(pool, left["all"])
+                spent = {
+                    c: sum(w for p, w in share.items() if c in _draws(p, left))
+                    for c in left
+                }
+                over = next((c for c in left if spent[c] > left[c]), None)
+                group = [p for p in pool if over in _draws(p, left)] if over else pool
+                share = waterLevel(group, left[over]) if over else share
+                for p in group:
+                    given[p] = share[p]
+                    for c in _draws(p, left):
+                        left[c] -= share[p]
+                pool = [p for p in pool if p not in group]
+            # Points neither admitted nor held get a target of 0. For an idle Gen2 TWC that
+            # 0 goes out as its hardware minimum (the TWC treats an offer of 0
+            # as its minimum), which it needs to see a car plug in. The
+            # minimum is deliberately never counted against or gated on any
+            # budget: the configured limits are already derated, and the next
+            # cycle rebalances.
+            offers = [(p, given.get(p, 0)) for p in points if not p.isReadOnly]
+            for point, watts in offers:
+                point.setTargetPower(watts)
+        except Exception:
+            # Nothing is woken or started on an admission not acted on
+            self.admission = frozenset()
+            raise
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "distributeEVSEPower: %d W over %s",
-                available_watts,
+                budgets["all"],
                 ", ".join("%s=%d W" % (p.ID, watts) for p, watts in offers)
                 or "no points",
             )
         return points
+
+    def _admit(self, points) -> tuple:
+        # Drawing points first, so a charging car keeps its seat; then, in
+        # point order, those that want power or whose car would charge, each
+        # while its minimum fits what is left in every budget it draws from.
+        # self.admission names their cars, then in turn those at other points
+        # whose minimum fits what is left (two never share it): the room a
+        # start would find. The policy's amps convert at the voltage the TWCs
+        # measure, as they convert back. A point drawing without a seat is
+        # held at its minimum, counted, while the hold decides whether the
+        # want of room lasts (a Gen2's 0 offer is its minimum already)
+        available = self.convertAmpsToWatts(self.getMaxAmpsToDivideAmongSlaves())
+        budgets = dict(self._budgets(), all=available)
+        cars = self.vehicleRegistry.vehicles()
+        willing = {v.key for v in cars if v.vin and wouldCharge(self, v)}
+        left, seated, room, self._willing = dict(budgets), [], [], willing
+        held, shared = {}, dict(budgets)
+
+        def wanted(p):
+            return p.wantsToCharge or _carsAt(p) & willing
+
+        for p in sorted(points, key=lambda p: (not wanted(p), not _drawing(p))):
+            if p.isReadOnly:
+                continue
+            need = p.minPower
+            if p.maxPower < need <= left["all"] and wanted(p):
+                self._noteRefusedPoint(p, left["all"])
+            elif need <= p.maxPower and all(need <= left[c] for c in _draws(p, left)):
+                # One cut to its minimum stays there until room has held, or
+                # power at the edge would re-rate it each pass
+                cut = _carsAt(p) & self._cut
+                (seated if wanted(p) and not cut else room).append(p)
+                held.update({p: need} if cut else {})
+                for c in _draws(p, left):
+                    left[c] -= need
+                    shared[c] -= need if cut else 0
+            elif need <= p.maxPower and _drawing(p) and "Gen2TWCs" not in p.controllers:
+                # An anonymous car is never stopped, so never held back
+                held[p] = need
+                self._cut |= {k for k in _carsAt(p) if not isAnonKey(k)}
+                for c in _draws(p, left):
+                    left[c], shared[c] = left[c] - need, shared[c] - need
+        admission = set().union(*map(_carsAt, room + seated))
+        if left["all"] >= self.convertAmpsToWatts(VehicleEndpoint.MIN_AMPS):
+            # A car on no point of ours may start on what is left
+            admission |= {v.key for v in cars}.difference(*map(_carsAt, points))
+        self.admission = frozenset(admission)
+        return seated, held, shared, budgets
+
+    # The cars cut to their minimum for want of room, swapped whole
+    _cut = frozenset()
 
     # When each refused point was last logged
     _refusedPointLogged = {}

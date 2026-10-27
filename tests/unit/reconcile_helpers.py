@@ -313,6 +313,20 @@ def inline(reconciler, kind=InlineQueue):
         )
         for q in (reconciler.ble, reconciler.cloud)
     )
+    plan = reconciler.pass_
+
+    def ticked(now=None):
+        # Live, the control tick admits once a second: each pass sees an
+        # admission no older than the master's state. A test master the
+        # admission cannot run on admits nothing
+        m = reconciler.master
+        try:
+            m._admit(m.chargingPoints())
+        except Exception:
+            m.admission = frozenset()
+        return plan(now)
+
+    reconciler.pass_ = ticked
     return reconciler
 
 

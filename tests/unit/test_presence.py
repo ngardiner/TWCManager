@@ -1110,8 +1110,13 @@ def test_a_car_its_twc_still_holds_at_00_needs_the_twcs_minimum(monkeypatch):
     s, beat = onGen2(monkeypatch, m, v, c)
     beat(120, 0x00, 0.0)  # checked: no answer, so the car stays
     m.setMaxAmpsToDivideAmongSlaves(s.minAmps - 1)
+    m.controlPass()  # the tick's admission is what the wake check reads
     assert s.vehicleKey is None and s.heldKey == VIN
     assert Belief.whyQuiet(m, v) == "no room to start"
+    m.setMaxAmpsToDivideAmongSlaves(s.minAmps)
+    assert Belief.whyQuiet(m, v) == "no room to start"  # until the next tick
+    m.controlPass()
+    assert Belief.whyQuiet(m, v) is None
 
 
 @pytest.mark.parametrize("move", ["driveStart", "outside"])
@@ -1291,9 +1296,9 @@ def test_restart_steady_00_with_telemetry_plugged_is_home_and_restores_nothing(
         m.setPolicyLimit(50, transition=False)
         m.reconciler.pass_()
     assert P.presence(m, v) == P.HOME and v.markAt("unplug") == P.NEVER
-    assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
-    # Its battery unknown, it would charge, and with room it is started once
+    # Plugged in, on no point and with room: started, never restored
     assert [x[0] for x in p.calls] == ["wake", "startCharging"]
+    assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
 
 
 def test_a_charging_point_s_own_start_always_applies():

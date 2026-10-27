@@ -49,24 +49,14 @@ class TWCSlave:
     # Set by the first reply: a slave not yet heard from is offered nothing
     heardFrom = False
 
-    # reportedAmpsActual frequently changes by small amounts, like 5.14A may
-    # frequently change to 5.23A and back.
-    # reportedAmpsActualSignificantChangeMonitor is set to reportedAmpsActual
-    # whenever reportedAmpsActual is at least 0.8A different than
-    # reportedAmpsActualSignificantChangeMonitor. Whenever
-    # reportedAmpsActualSignificantChangeMonitor is changed,
-    # timeReportedAmpsActualChangedSignificantly is set to the time of the
-    # change. The value of reportedAmpsActualSignificantChangeMonitor should not
-    # be used for any other purpose. timeReportedAmpsActualChangedSignificantly
-    # is used for things like preventing start and stop charge on a car more
-    # than once per minute.
+    # reportedAmpsActual as last changed by over 0.8A: it wanders by small
+    # amounts (5.14A to 5.23A and back), and power starting or stopping
+    # fires the policy's webhooks
     reportedAmpsActualSignificantChangeMonitor = -1
-    timeReportedAmpsActualChangedSignificantly = time.time()
 
     lastAmpsOffered = -1
     timeLastAmpsOfferedChanged = 0
     lastHeartbeatDebugOutput = ""
-    startStopDelay = 0
     timeLastHeartbeatDebugOutput = 0
     wiringMaxAmps = 0
     lifetimekWh = 0
@@ -113,7 +103,6 @@ class TWCSlave:
         self.maxAmps = maxAmps
 
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
-        self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
     def plugCheckDue(self, now) -> Optional[float]:
         # Serial thread: an edge's time once its check is due. The codes are
@@ -225,32 +214,16 @@ class TWCSlave:
             amps = self.wiringMaxAmps
         return amps
 
-    def chargeGate(self, now, key) -> Optional[str]:
-        # The tick's start/stop for key, this protocol-2 TWC's car, once
-        # offered. A drawing car offered 0 stops once the offer is 60 s old
-        # and its draw startStopDelay steady: a cut mid-negotiation could
-        # strand it, the offer may rise meanwhile, and fewer cycles spare
-        # the relay
+    def chargeGate(self, key) -> bool:
+        # Whether the tick starts key, this protocol-2 TWC's car: offered its
+        # minimum and drawing nothing (its stop is the master's, by admission)
         if self.protocolVersion != 2 or key is None or self.offer is None:
-            return None
-        offered, actual = self.offer.amps, self.reportedAmpsActual
-        if offered == 0 and actual > 4.0:
-            hold = (
-                now - self.timeLastAmpsOfferedChanged < 60
-                or now - self.timeReportedAmpsActualChangedSignificantly
-                < self.startStopDelay
-            )
-            return "cancelStop" if hold else "stop"
-        if (
-            offered >= self.minAmpsToOffer()
-            and actual < 1.0
+            return False
+        return (
+            self.offer.amps >= self.minAmpsToOffer()
+            and self.reportedAmpsActual < 1.0
             and self.reportedState != 0x02
-        ):
-            return "start"
-        if offered < self.minAmpsToOffer() and actual < 1.0:
-            # A start not yet sent is moot, and never wakes the car
-            return "withdraw"
-        return None
+        )
 
     def print_status(self, heartbeatData):
         try:
@@ -680,10 +653,6 @@ class TWCSlave:
         ):
             self.master.getModuleByName("Policy").fireWebhook("stop")
 
-        # Keep track of the amps the slave is actually using and the last time it
-        # changed by more than 0.8A.
-        # Also update self.reportedAmpsActualSignificantChangeMonitor if it's
-        # still set to its initial value of -1.
         if (
             self.reportedAmpsActualSignificantChangeMonitor < 0
             or abs(
@@ -692,7 +661,6 @@ class TWCSlave:
             )
             > 0.8
         ):
-            self.timeReportedAmpsActualChangedSignificantly = now
             self.reportedAmpsActualSignificantChangeMonitor = self.reportedAmpsActual
 
         # Charging sessions start and end here, on the serial thread. The

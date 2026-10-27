@@ -11,22 +11,28 @@ offered 1.67x the surplus.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
+from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 THREE_PHASE_400 = {"defaultVoltage": 400, "numberOfPhases": 3}
 
 
+class _Point(EVSEInstance):
+    # A point drawing at three phases of 240 V, with the TWC's voltage
+    wantsToCharge, isReadOnly, vehicleKey, ID = True, False, "p", "p"
+    maxPower, minPower, controllers = 100000, 1200, ["Gen2TWCs"]
+    currentVoltage, reportedAmpsActual = [240] * 3, 10
+
+    def __init__(self):
+        self.setTargetPower, self.localEndpoints = Mock(), [self]
+
+
 def _evse():
-    e = MagicMock()
-    e.wantsToCharge = True
-    e.isReadOnly = False
-    e.maxPower = 100000
-    e.minPower = 1200
-    e.controllers = ["Gen2TWCs"]
-    return e
+    return _Point()
 
 
 def _twc(volts):
@@ -36,6 +42,7 @@ def _twc(volts):
 def _master(evses, amps, slaves, config):
     m = TWCMaster.__new__(TWCMaster)
     m.config = {"config": dict({"wiringMaxAmpsAllTWCs": 80}, **config)}
+    m.vehicleRegistry = VehicleRegistry(m.config)
     ctrl = MagicMock()
     ctrl.maxPower = 100000
     # A non-Gen2 controller makes the distributor run.

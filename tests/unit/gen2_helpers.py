@@ -35,8 +35,9 @@ def _beat(master, slave, state, amps_max, amps_actual, tick):
         master.TWCID = b"\x77\x77"
     stubs = getattr(master, "_driveStubs", None)
     if stubs is None:
+        # A green policy: a stop for want of room holds startStopDelay
         policy = Mock()
-        policy.policyIsGreen.return_value = False
+        policy.policyIsGreen.return_value = True
         iface = Mock()
         stubs = {"Policy": policy, "Dummy": iface}
         master._driveStubs = stubs
