@@ -22,9 +22,10 @@ def located(master, vehicle) -> Optional[bool]:
     # unknown
     if vehicle.value("twcVin"):
         return True
-    if vehicle.attachment("TeslaAPI") is None:
+    api = master.getModuleByName("TeslaAPI")
+    if api is None or vehicle.attachment("TeslaAPI") is None:
         return None
-    return master.getModuleByName("TeslaAPI").locate(vehicle)
+    return api.locate(vehicle)
 
 
 def _present(master, vehicle) -> bool:
@@ -134,8 +135,9 @@ def _restoreDeparted(master, read) -> None:
             continue
         api = vehicle.attachment("TeslaAPI")
         if read and api is not None and not vehicle.value("twcVin"):
-            if vehicle.syncSource == "TeslaAPI":
-                master.getModuleByName("TeslaAPI").update_location(vehicle, 0)
+            module = master.getModuleByName("TeslaAPI")
+            if vehicle.syncSource == "TeslaAPI" and module is not None:
+                module.update_location(vehicle, 0)
         fix, write = vehicle.latest("lat"), vehicle.lastWrite("chargeLimit")
         # <= on purpose: a retained MQTT position redelivered after our write
         # is stamped with that write's time, and is not a new fix

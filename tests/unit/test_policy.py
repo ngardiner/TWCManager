@@ -359,6 +359,18 @@ class TestPolicySelection:
             for c in master.queue_background_task.call_args_list
         )
 
+    def test_a_disabled_tesla_api_leaves_the_policy_limit_alone(self, policy):
+        """vehicle.teslaAPI disabled: no battery level to lower the limit
+        below, so the override sets nothing and nothing raises."""
+        master = policy.master
+        master.getModuleByName = Mock(return_value=None)
+        master.getMaxAmpsToDivideAmongSlaves = Mock(return_value=0)
+        master.vehicleRegistry.attached = Mock(return_value=[])
+        policy.active_policy = "Charge Now"  # a change of policy clears it
+        policy.limitOverride = True
+        policy.enforcePolicy({"name": "Charge Now", "charge_limit": 90})
+        master.setPolicyLimit.assert_called_with(90, transition=False)
+
 
 class TestPolicyInitialization:
     """Test policy initialization and configuration."""
