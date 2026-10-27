@@ -1,18 +1,10 @@
 # Serializes state-changing vehicle commands onto one worker thread.
 #
-# Vehicle commands (especially over BLE) can take minutes when they retry.
-# The main loop must keep servicing the TWC serial link, so callers put()
-# commands here and return immediately. The worker runs one entry at a time.
-#
-# Pending entries coalesce per key: a later entry with the same key replaces
-# the pending one. High entries (stops) run before anything else. remove()
-# lets a caller drop pending entries that a newer decision has made moot. At
-# shutdown, close() drops the rest and waitDrained() lets the stops finish.
-#
-# The reconciler's ble and cloud attempt queues (Vehicle/Reconcile/
-# Reconciler.py) pass their own run, key, isHigh, report and lost. Every
-# entry a queue accepts is reported exactly once, through report or lost.
-# Neither runs under _cond.
+# Vehicle commands (especially over BLE) can take minutes when they retry,
+# and the main loop must keep servicing the TWC serial link, so callers put()
+# and return at once. Pending entries coalesce per key, and high entries
+# (stops) run first. Every entry a queue accepts is reported exactly once,
+# through report or lost, and neither runs under _cond.
 import collections
 import threading
 import time

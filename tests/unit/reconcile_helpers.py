@@ -2,6 +2,7 @@
 # command methods return scripted outcomes, and a provider order on a Mock
 # master.
 import time
+from types import SimpleNamespace
 from typing import List
 from unittest.mock import Mock
 
@@ -9,15 +10,30 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Provider import Provider
 from TWCManager.Vehicle.Reconcile.Outcome import ERROR, Outcome
+from TWCManager.Vehicle.Reconcile.Run import Job
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.VehicleCommandQueue import VehicleCommandQueue
 
+
+def settled(store, key, aspect) -> bool:
+    # The desire's attempt record settled at or after the desire
+    state = store.peek(key)
+    desired = state and state.desired.get(aspect)
+    record = state and state.records.get(aspect)
+    return bool(
+        desired
+        and record
+        and record.settledAt is not None
+        and record.settledAt >= desired.at
+    )
+
+
 # Every command at the local tier; pass tier= to declare them at another cost
-COMMAND_CAPS = {capability: C.Declaration(C.LOCAL) for capability in C.COMMANDS}
+COMMAND_CAPS = {capability: C.LOCAL for capability in C.COMMANDS}
 
 
-# Presence from position, as live: home is set and TeslaMate's free
-# position lands in the registry; nothing sets atHome by hand
+# Presence from events, as live: home is set and TeslaMate's free
+# position lands in the registry
 HOME, AWAY = (40.0, -75.0), (40.922592, -76.606221)
 
 
@@ -25,6 +41,16 @@ def placeAt(master, vehicle, at=HOME):
     master.settings.update(homeLat=HOME[0], homeLon=HOME[1])
     vehicle.observe("lat", at[0], "TeslaMateVehicle")
     vehicle.observe("lon", at[1], "TeslaMateVehicle")
+
+
+def bleAnswers(master, ok=True):
+    # A scripted TeslaBLE's ping: an answer is contact and no answer is
+    # absence, as TeslaBLE.ping observes them
+    def ping(vin):
+        master.vehicleRegistry.get(vin).observe("bleReach", ok, "TeslaBLE", seen=ok)
+        return ok
+
+    master.providerOrder.provider("TeslaBLE").module = SimpleNamespace(ping=ping)
 
 
 class Clock:
@@ -48,7 +74,8 @@ class ScriptedProvider(Provider):
         caps=COMMAND_CAPS,
         amps=(1, 32),
         tier=None,
-        module=object(),
+        # A radio whose sleep-safe ping answers, with no sleep status
+        module=SimpleNamespace(ping=lambda vin: True),
         readyFor=None,
         worker=None,
     ):
@@ -60,10 +87,7 @@ class ScriptedProvider(Provider):
             "TeslaBLE": "ble",
         }.get(name, "cloud")
         if tier is not None:
-            caps = {
-                capability: declaration._replace(cost=tier)
-                for capability, declaration in caps.items()
-            }
+            caps = dict.fromkeys(caps, tier)
         self._caps = dict(caps)
         self._amps = amps
         self.module = module
@@ -87,7 +111,7 @@ class ScriptedProvider(Provider):
         # Makes the provider fetch field as value (READ_CHARGE, at its own
         # locality's free tier unless cost says otherwise), counting fetches
         cost = cost or (C.LOCAL if self.local else C.CLOUD_FREE)
-        self._caps = dict(self._caps, **{C.READ_CHARGE: C.Declaration(cost)})
+        self._caps = dict(self._caps, **{C.READ_CHARGE: cost})
         self.FIELDS, self.readValue, self.fetched = frozenset({field}), value, 0
         return self
 
@@ -135,12 +159,16 @@ def make_order(settings=None, *providers):
 
 
 class InlineQueue(VehicleCommandQueue):
-    # Test-only: runs each attempt at once on the caller's thread, reporting
-    # it as a started queue would. Closed, it takes stops only
+    # Test-only: runs each attempt, plug check and online check at once on
+    # the caller's thread, reporting it as a started queue would. Closed, it
+    # takes stops only. Another job waits until the test runs it
+    # (runPending), as a busy worker would leave it
     def start(self):
         pass
 
     def put(self, entry) -> bool:
+        if isinstance(entry, Job) and entry.kind not in ("plugCheck", "onlineCheck"):
+            return super().put(entry)
         if self._draining and not self._isHigh(entry):
             self._lose([(entry, "dropped")])
             return False
@@ -167,6 +195,12 @@ def inline(reconciler):
         for q in (reconciler.ble, reconciler.cloud)
     )
     return reconciler
+
+
+def runPending(q):
+    # A worker's loop on the caller's thread, until nothing is pending
+    while entries(q):
+        q._runOne(q._next())
 
 
 def entries(q):

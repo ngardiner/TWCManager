@@ -93,7 +93,7 @@ Set the following in the `config` section of `config.json`:
 | `teslaApiClientSecret` | No | Only to force the client-secret exchange instead of PKCE (advanced) |
 | `teslaApiRegion` | No | Only used with `teslaApiClientSecret`: `NA` (default), `EU` or `CN` |
 | `teslaApiScope` | No | Override the requested OAuth scopes |
-| `wakeDelayMins` | No | Minutes to wait before sending a Fleet API wake command (default: 3). During the delay the car may self-start from the TWC power offer. Set to 0 to wake immediately. |
+| `wakeDelayMins` | No | Minutes to wait before sending a Fleet API wake command (default: 3). During the delay the car may self-start from the TWC power offer. Set to 0 to wake immediately. After a wake that answers asleep, offline or waking, the free online check looks every 5 s for up to 45 s; a car still not online then waits 30 minutes for the next wake. |
 
 If you do set `teslaApiClientSecret`, keep `config.json` readable only by the
 `twcmanager` user.

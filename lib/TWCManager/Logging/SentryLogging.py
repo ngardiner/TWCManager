@@ -22,14 +22,8 @@ class SentryLogging:
         # raise ImportError
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configLogging = master.config["logging"]["Sentry"]
-        except KeyError:
-            self.configLogging = {}
+        self.configConfig = master.config.get("config", {})
+        self.configLogging = master.config.get("logging", {}).get("Sentry", {})
         self.status = self.configLogging.get("enabled", False)
         self.dsn = self.configLogging.get("DSN", False)
 

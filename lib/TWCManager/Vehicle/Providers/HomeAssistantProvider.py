@@ -4,25 +4,8 @@
 from typing import Optional, Tuple
 
 from ..Reconcile.Outcome import UNSUPPORTED, Outcome
-from .Capability import (
-    HA_BILLED,
-    READ_CHARGE,
-    SET_AMPS,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-    Declaration,
-)
-from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
-
-CAPABILITIES = (
-    READ_CHARGE,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-    SET_AMPS,
-)
-
+from . import Capability as C
+from .Provider import CLOUD_SUPPRESSED, Provider, carAmpsRange
 
 # What Home Assistant's entities can report
 HA_FIELDS = frozenset(
@@ -34,13 +17,7 @@ class HomeAssistantProvider(Provider):
     name = "HomeAssistant"
     rank = 6
     local = False
-    DECLARATIONS = {
-        READ_CHARGE: Declaration(HA_BILLED),
-        SET_CHARGE_LIMIT: Declaration(HA_BILLED),
-        START_CHARGING: Declaration(HA_BILLED),
-        STOP_CHARGING: Declaration(HA_BILLED),
-        SET_AMPS: Declaration(HA_BILLED),
-    }
+    DECLARATIONS = dict.fromkeys((C.COMMANDS - {C.WAKE}) | {C.READ_CHARGE}, C.HA_BILLED)
     SUPPRESSED = CLOUD_SUPPRESSED
     FIELDS = HA_FIELDS
 
@@ -54,18 +31,18 @@ class HomeAssistantProvider(Provider):
 
     def ready(self, vehicle, capability) -> bool:
         # Entity flags only: no I/O
-        if vehicle is None or capability not in CAPABILITIES:
+        if vehicle is None or not self.declares(capability):
             return False
         if not self.ha.enabled():
             return False
         hv = vehicle.attachment("HomeAssistant")
         if hv is None:
             return False
-        if capability == SET_AMPS:
+        if capability == C.SET_AMPS:
             return bool(hv.has_charge_current_number)
-        if capability in (START_CHARGING, STOP_CHARGING):
+        if capability in (C.START_CHARGING, C.STOP_CHARGING):
             return bool(hv.has_charge_switch)
-        if capability == SET_CHARGE_LIMIT:
+        if capability == C.SET_CHARGE_LIMIT:
             return bool(hv.has_charge_limit_number)
         return True
 
@@ -82,10 +59,7 @@ class HomeAssistantProvider(Provider):
         return field in (seen or {})
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
-        if vehicle is None:
-            return None
-        configConfig = (getattr(self.ha.master, "config", None) or {}).get("config")
-        return (1, vehicleMaxAmps(vehicle, configConfig or {}))
+        return carAmpsRange(vehicle, self.ha.master)
 
     # Command methods: one service call each through HomeAssistant's
     # _post_service, which classifies it

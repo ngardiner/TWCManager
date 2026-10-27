@@ -13,7 +13,7 @@ class Clock:
     def __call__(self): return self.t
 
 def make(ips=(IP1,), clock=None):
-    m = Mock(); m.vehicleRegistry = VehicleRegistry({}, clock=clock or Clock())
+    m = Mock(); m.vehicleRegistry = VehicleRegistry({}, clock=clock or Clock()); m.getSlaveTWCs.return_value = []
     m.config = {"config": {"defaultVoltage": 240}, "controller.Gen3TWCs": {"enabled": True, "devices": [{"ip": ip, "fuseAmps": 48, "phases": 1} for ip in ips]}}
     with patch.object(Gen3TWCs, "_start_server"):
         ctl = Gen3TWCs(m)
@@ -99,13 +99,12 @@ def test_zero_target_beside_a_charging_sibling_declares_no_individual_stop():   
 
 def test_provider_commands_go_to_the_unit():
     m, ctl, p = make(); (u,) = ctl.devices(); vitals(u, True); anon = m.vehicleRegistry.get("anon:" + u.ID)
-    assert p.setAmps(anon.key, 16).kind == O.DONE; ctl.setHouseWatts.assert_called_with(watts=11520 - 3840, phases=1, voltage=240)
     assert p.stopCharging(anon.key).kind == O.DONE; ctl.setHouseWatts.assert_called_with(watts=11520, phases=1, voltage=240)
 
 def test_gen3_commands_return_outcomes():
     m, ctl, p = make(); (u,) = ctl.devices(); vitals(u, True); anon = m.vehicleRegistry.get("anon:" + u.ID)
-    assert p.stopCharging(anon.key).kind == O.DONE and p.startCharging(anon.key).kind == O.DONE and p.setAmps(anon.key, 10).kind == O.DONE
-    for call in (p.stopCharging, p.startCharging, lambda key: p.setAmps(key, 10)):
+    assert p.stopCharging(anon.key).kind == O.DONE and p.startCharging(anon.key).kind == O.DONE
+    for call in (p.stopCharging, p.startCharging):
         assert call("anon:nobody") == O.Outcome(O.UNSUPPORTED, "no unit")
 
 def test_amps_range_is_never_none_while_set_amps_is_ready():                       # Task 2 constraint
@@ -190,3 +189,16 @@ def test_a_failed_registry_update_retries_the_plug_edge():                      
         vitals(u, True)
     assert reg.get("anon:" + u.ID) is None
     vitals(u, True); assert u.vehicleKey == "anon:" + u.ID
+
+def test_gen3_single_car_plugged_within_120_s_is_still_guessed_without_home_or_ble():   # F12
+    c = Clock(); m, ctl, p = make(clock=c); (u,) = ctl.devices(); reg = m.vehicleRegistry
+    car = reg.getOrCreate(VIN1, "t"); car.observe("pluggedIn", True, "TeslaMateVehicle"); reg.getOrCreate(VIN2, "t")   # no home, no BLE, no fix
+    c.t += 120; vitals(u, True)
+    assert u.vehicleKey == VIN1 and car.value("twcVin") == u.ID and reg.get("anon:" + u.ID) is None
+
+def test_gen3_cloud_vin_still_corrects_a_guess():
+    c = Clock(); m, ctl, p = make(clock=c); (u,) = ctl.devices(); reg = m.vehicleRegistry
+    guess = reg.getOrCreate(VIN1, "t"); guess.observe("pluggedIn", True, "TeslaMateVehicle"); reg.getOrCreate(VIN2, "t")
+    vitals(u, True); assert u.vehicleKey == VIN1
+    c.t += 1; u.cloudVin = VIN2; u._correlate()
+    assert u.vehicleKey == VIN2 and guess.value("twcVin") is None and guess.value("pluggedIn") is False and reg.get(VIN2).value("twcVin") == u.ID

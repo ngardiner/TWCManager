@@ -60,6 +60,8 @@ class VehicleRegistry:
         # Called with a key, outside the lock, whenever a vehicle leaves:
         # state kept elsewhere per key (desired state) follows the removals
         self.removed: Optional[Callable[[str], None]] = None
+        # (vehicle, field, obs, the source's prior obs), after each store
+        self.onObserve: Optional[Callable[..., None]] = None
 
     @classmethod
     def forMaster(cls, master) -> "VehicleRegistry":
@@ -181,6 +183,7 @@ class VehicleRegistry:
             v = self._vehicles.get(key)
             if v is None:
                 v = Vehicle(key, None, self, clock=self._clock)
+                v.mark("plugIn", self.now())
                 self._vehicles[key] = v
             return v
 
@@ -235,8 +238,16 @@ class VehicleRegistry:
             self._removed([key])
             # Older stamps never displace newer ones, so the car's own
             # newer values survive the merge.
-            for field, obs in anon._fields.snapshot().items():
-                v.observe(field, obs.value, obs.source, at=obs.at)
+            for field, obs in anon.snapshot().items():
+                v.observe(field, obs.value, obs.source, at=obs.at, seen=obs.seen)
+        # One car per point: the one it names now
+        source = "Gen3TWC" if pointId.startswith("Gen3TWC-") else "Gen2TWC"
+        for other in self._attributedTo(pointId):
+            if other is not v:
+                other.observe("twcVin", None, "TWC", seen=False)
+                # Nor plugged in there, if it was guessed to be
+                if getattr(other.reported("pluggedIn").get(source), "value", 0):
+                    other.observe("pluggedIn", False, source, seen=False)
         v.observe("twcVin", pointId, "TWC")
         return "confirmed"
 
@@ -346,6 +357,3 @@ class VehicleRegistry:
         name = entry.get("name")
         if isinstance(name, str) and name:
             v.observe("name", name, "persisted", at=last, seen=False)
-
-    def summaries(self) -> List[dict]:
-        return [v.summary() for v in self.vehicles()]

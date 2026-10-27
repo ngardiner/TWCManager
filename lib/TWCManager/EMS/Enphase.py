@@ -33,14 +33,8 @@ class Enphase:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configEnphase = master.config.get("sources", {})["Enphase"]
-        except KeyError:
-            self.configEnphase = {}
+        self.configConfig = master.config.get("config", {})
+        self.configEnphase = master.config.get("sources", {}).get("Enphase", {})
         self.apiKey = self.configEnphase.get("apiKey", None)
         self.serverIP = self.configEnphase.get("serverIP", None)
         self.serverPort = self.configEnphase.get("serverPort", 80)

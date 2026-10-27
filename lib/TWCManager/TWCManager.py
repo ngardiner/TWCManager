@@ -42,7 +42,6 @@ import threading
 from TWCManager.ControlTick import ControlTick
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
-from TWCManager.Vehicle.Reconcile.Targets import onArrival, onDeparture
 from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
 import requests
 from enum import Enum
@@ -310,6 +309,9 @@ def refreshTokens(master):
                 # A list load that failed (at boot, say) or held limits
                 # still waiting on it retry here: free calls only
                 carapi.loadList()
+            fleetTLM = master.getModuleByName("FleetTelemetryMQTT")
+            if fleetTLM:
+                fleetTLM.checkConfigs(carapi)
     finally:
         master.queue_background_task({"cmd": "refreshTokens"}, delay=300)
 
@@ -320,17 +322,10 @@ def background_tasks_thread(master):
             task = master.getBackgroundTask()
 
             if "cmd" in task:
-                if task["cmd"] == "checkArrival":
-                    onArrival(master)
-                    # A free vehicle list load; refreshes cars at home, as
-                    # an arrival does
-                    master.updateChargeAtHome()
-                elif task["cmd"] == "checkCharge":
+                if task["cmd"] == "checkCharge":
                     master.updateChargeAtHome()
                 elif task["cmd"] == "refreshTokens":
                     refreshTokens(master)
-                elif task["cmd"] == "checkDeparture":
-                    onDeparture(master)
                 elif task["cmd"] == "checkGreenEnergy":
                     check_green_energy()
                 elif task["cmd"] == "checkVINEntitlement":
@@ -376,15 +371,8 @@ def background_tasks_thread(master):
                         requests.post(task["url"], json=body)
                 elif task["cmd"] == "saveSettings":
                     master.saveSettings()
-                elif task["cmd"] == "bleScan":
-                    # Range scans take seconds: here, never on the serial loop.
-                    ble = master.getModuleByName("TeslaBLE")
-                    if ble:
-                        ble.runPendingScans()
                 elif task["cmd"] == "expireVehicles":
                     master.expireVehicles()
-                elif task["cmd"] == "vehicleIsDefinitelyHome":
-                    master.vehicleIsDefinitelyHome(task["vin"])
                 elif task["cmd"] == "sunrise":
                     update_sunrise_sunset()
                 elif task["cmd"] == "gen3Vitals":
@@ -403,16 +391,6 @@ def background_tasks_thread(master):
         # backgroundTasksQueue.join() can then be used to block until all tasks
         # in the queue are done.
         master.doneBackgroundTask(task)
-
-        if task.get("cmd") == "bleScan":
-            # A scan request made between the drain's last check and
-            # doneBackgroundTask was coalesced into this task; queue it now.
-            try:
-                ble = master.getModuleByName("TeslaBLE")
-                if ble:
-                    ble.requeueIfRequested()
-            except Exception as e:
-                logger.error(f"bleScan requeue failed: {type(e).__name__}")
 
 
 def check_green_energy():

@@ -223,14 +223,8 @@ class MySQLLogging:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configLogging = master.config["logging"]["MySQL"]
-        except KeyError:
-            self.configLogging = {}
+        self.configConfig = master.config.get("config", {})
+        self.configLogging = master.config.get("logging", {}).get("MySQL", {})
         self.status = self.configLogging.get("enabled", False)
 
         logger.info("MySQLLogging: Initializing (enabled=%s)", self.status)
@@ -247,8 +241,7 @@ class MySQLLogging:
             return None
 
         # Initialize the mute config tree if it is not already
-        if not self.configLogging.get("mute", None):
-            self.configLogging["mute"] = {}
+        self.configLogging["mute"] = self.configLogging.get("mute") or {}
 
         # Import MySQL module if module is not released
         global pymysql

@@ -85,22 +85,6 @@ class TestCommandValidation:
         })
         # Should ignore extra fields
         assert response.status_code in [200, 201, 202, 204]
-    
-    def test_check_arrival_extra_fields(self, api_post):
-        """Test checkArrival with extra fields."""
-        response = api_post('/checkArrival', json={
-            'extraField': 'should be ignored'
-        })
-        # Should ignore extra fields
-        assert response.status_code in [200, 201, 202, 204]
-    
-    def test_check_departure_extra_fields(self, api_post):
-        """Test checkDeparture with extra fields."""
-        response = api_post('/checkDeparture', json={
-            'extraField': 'should be ignored'
-        })
-        # Should ignore extra fields
-        assert response.status_code in [200, 201, 202, 204]
 
 
 class TestOffsetDeletionValidation:

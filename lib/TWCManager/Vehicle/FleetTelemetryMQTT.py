@@ -11,6 +11,14 @@ from TWCManager.Vehicle.Telemetry import TelmetryBase
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("FleetTLM", "Vehicle")
+_DOC = "docs/modules/Vehicle_FleetTelemetryMQTT.md"
+
+
+def _fastCharger(a):
+    # "FastChargerSupercharger" -> "Supercharger"; an unknown type is not a
+    # charger the car is at
+    name = a[11:]
+    return "" if name in ("Unknown", "SNA") else name
 
 
 class FleetTelemetryMQTT(TelmetryBase):
@@ -30,7 +38,49 @@ class FleetTelemetryMQTT(TelmetryBase):
         "ChargerPhases": ["phases", lambda a: int(a) if a else 0],
         "ChargerVoltage": ["voltage", lambda a: float(a)],
         "DetailedChargeState": ["chargingState", lambda a: a[19:]],
+        "FastChargerPresent": ["fastChargerPresent", lambda a: a in (True, "true")],
+        "FastChargerType": ["fastChargerType", _fastCharger],
+        "ChargingCableType": ["connChargeCable", lambda a: a[9:]],
+        "ACChargingPower": ["chargerPower", lambda a: float(a)],
+        "ChargeCurrentRequestMax": ["chargeCurrentRequestMax", lambda a: int(a)],
     }
+    # Config fields that only narrow a plug-in to a home charger or fill the
+    # display; checkConfigs warns of a car whose config lacks any other field
+    # read here (Location gives latitude/longitude; syncState is connectivity)
+    OPTIONAL = {"FastChargerPresent", "FastChargerType", "ChargingCableType"}
+    OPTIONAL |= {"ACChargingPower", "ChargeCurrentRequestMax"}
+    OPTIONAL |= {"TimeToFullCharge", "VehicleName"}
+    REQUIRED = (set(events) | {"Location", "Gear"}) - OPTIONAL
+    REQUIRED -= {"latitude", "longitude", "syncState"}
+    configCheckDue = 0.0
+
+    def configProblem(self, answer) -> str:
+        # "" for a config with every required field, applied by the car
+        config = answer.get("config") if isinstance(answer, dict) else None
+        if not isinstance(config, dict):
+            return "no Fleet Telemetry config"
+        missing = sorted(self.REQUIRED - set(config.get("fields") or {}))
+        if missing:
+            return "Fleet Telemetry config lacks " + ", ".join(missing)
+        return "" if answer.get("synced") else "Fleet Telemetry config not applied yet"
+
+    def checkConfigs(self, carapi):
+        # A free read that never wakes the car. The claim holds the shown
+        # problem, so each one is warned of once
+        now, cars = time.time(), [v for v, _ in self.registry.attached("TeslaAPI")]
+        if now < self.configCheckDue or not cars or not carapi.fleetSlot.usable("read"):
+            return
+        self.configCheckDue = now + 24 * 60 * 60
+        for vehicle in cars:
+            answer = carapi.telemetryConfig(vehicle.vin)
+            if answer is None:
+                continue
+            status = self.configProblem(answer) or "reports"
+            claim = vehicle.claims.get(type(self).__name__)
+            if status != getattr(claim, "status", "reports"):
+                if status != "reports":
+                    logger.warning("%s: %s; see %s", vehicle.vin, status, _DOC)
+                vehicle.claim(type(self).__name__, False, status, keepsAlive=False)
 
     def vinFor(self, vehicle_id) -> Optional[str]:
         # The topic id is the VIN. Anything else under the prefix (another
@@ -65,7 +115,7 @@ class FleetTelemetryMQTT(TelmetryBase):
             return
 
         obs = (
-            self.vehicles[topic[1]].latest("state")
+            self.vehicles[topic[1]].reported("state").get("FleetTelemetryMQTT")
             if self.vehicles.get(topic[1])
             else None
         )
@@ -74,14 +124,7 @@ class FleetTelemetryMQTT(TelmetryBase):
         if len(topic) > 3 and topic[2] == "v":
             newSyncState = "online"
             if topic[3] == "Gear":
-                if payload in (
-                    "R",
-                    "N",
-                    "D",
-                    "ShiftStateR",
-                    "ShiftStateN",
-                    "ShiftStateD",
-                ):
+                if payload in ("ShiftStateR", "ShiftStateN", "ShiftStateD"):
                     newSyncState = "driving"
                 elif syncState == "driving":
                     syncState = None

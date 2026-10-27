@@ -28,14 +28,8 @@ class Fronius:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configFronius = master.config.get("sources", {})["Fronius"]
-        except KeyError:
-            self.configFronius = {}
+        self.configConfig = master.config.get("config", {})
+        self.configFronius = master.config.get("sources", {}).get("Fronius", {})
         self.status = self.configFronius.get("enabled", False)
         self.serverIP = self.configFronius.get("serverIP", None)
         self.serverPort = self.configFronius.get("serverPort", "80")

@@ -1,47 +1,30 @@
 # Run: one vehicle attempt (read before write, wake first, the command, the
-# own-write stamp). The reconciler's ble and cloud queues run attempts on
-# their own threads; a local provider (Gen2TWC, Gen3TWC) only publishes a
-# request that the serial thread's heartbeat sends, so its attempts run
-# inline on the submitter's thread. runAttempt is the one place a vehicle
-# command is issued, and it calls the reconciler's beforeWrite and
-# afterWrite around it.
-#
-# One clock domain: attempts carry time.time stamps (the registry's). No
-# lock is held while running an attempt.
+# own-write stamp). runAttempt is the one place a vehicle command is issued.
+# A local provider (Gen2TWC, Gen3TWC) only publishes a request that the
+# serial thread's heartbeat sends, so its attempts run inline on the
+# submitter's thread. Attempts carry the registry's time.time stamps, and no
+# lock is held while one runs.
+import collections
 import itertools
 import logging
 import threading
 
-from ..Providers.Capability import (
-    SET_AMPS,
-    SET_CHARGE_LIMIT,
-    STOP_CHARGING,
-    TIER_DISRUPTIVE,
-    WAKE,
-)
+from ..Presence import NOT_HOME, PRESUMED, REACH_WINDOW, asleep, drivingNow, presence
+from ..Providers import Capability as C
 from .Desired import AMPS, CHARGE_LIMIT, CHARGING, FIELD_FOR
-from .Outcome import (
-    DONE,
-    ERROR,
-    REFUSED,
-    SATISFIED,
-    UNSUPPORTED,
-    Outcome,
-    isNotSent,
-    isOutcome,
-)
+from . import Outcome as O
 from .Belief import uncompleted
 from .Rules import VEHICLE_SOURCES_EXCLUDED, satisfied
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
 # Commands that take the attempt's value after the vin
-_VALUE_COMMANDS = frozenset({SET_CHARGE_LIMIT, SET_AMPS})
+_VALUE_COMMANDS = frozenset({C.SET_CHARGE_LIMIT, C.SET_AMPS})
 # A provider's SATISFIED is stamped for these only: a SATISFIED start/stop
 # leaves the state the read gave
 _STAMP_SATISFIED = frozenset({CHARGE_LIMIT, AMPS})
 # The wake outcomes after which a non-local provider's command goes out
-_WAKE_PROCEEDS = frozenset({DONE, SATISFIED, UNSUPPORTED})
+_WAKE_PROCEEDS = frozenset({O.DONE, O.SATISFIED, O.UNSUPPORTED})
 
 
 # One-shot entry keys: a fresh number per one-shot, so none replaces another
@@ -53,14 +36,21 @@ _badReturns = set()
 _badLock = threading.Lock()
 
 
+# Work that is no command (a scan, an attribution, an online check): one
+# pending per (key, kind), in turn on its worker
+Job = collections.namedtuple("Job", "key kind run")
+
+
 def entryKey(attempt) -> tuple:
+    if isinstance(attempt, Job):
+        return (attempt.key, attempt.kind)
     if attempt.aspect is not None:
         return (attempt.key, attempt.aspect)
     return (attempt.key, "debug", next(_sequence))
 
 
 def isStop(attempt) -> bool:
-    return attempt.capability == STOP_CHARGING
+    return getattr(attempt, "capability", None) == C.STOP_CHARGING
 
 
 def writtenValue(aspect, value):
@@ -70,9 +60,9 @@ def writtenValue(aspect, value):
     return value
 
 
-def checked(provider, method, result) -> Outcome:
+def checked(provider, method, result) -> O.Outcome:
     # The provider return contract
-    if isOutcome(result):
+    if O.isOutcome(result):
         return result
     kind = type(result).__name__
     with _badLock:
@@ -82,20 +72,19 @@ def checked(provider, method, result) -> Outcome:
         logger.warning(
             "%s %s: bad return %s, not an Outcome", provider.name, method, kind
         )
-    return Outcome(ERROR, "bad return " + kind)
+    return O.Outcome(O.ERROR, "bad return " + kind)
 
 
-def _tagged(outcome, prefix) -> Outcome:
+def _tagged(outcome, prefix) -> O.Outcome:
     # An outcome that sent no request keeps its NOT_SENT detail
-    if isNotSent(outcome) or outcome.detail.startswith(prefix.strip()):
+    if O.isNotSent(outcome) or outcome.detail.startswith(prefix.strip()):
         return outcome
     return outcome._replace(detail=(prefix + outcome.detail).rstrip())
 
 
-def workerOf(master, providerName) -> str:
-    # An unregistered provider counts as cloud
-    provider = master.providerOrder.provider(providerName)
-    return "cloud" if provider is None else getattr(provider, "worker", "cloud")
+def workerOf(provider) -> str:
+    # An unregistered provider (None) counts as cloud
+    return getattr(provider, "worker", "cloud")
 
 
 def _call(provider, capability, vin, value):
@@ -106,9 +95,12 @@ def _call(provider, capability, vin, value):
     return method(vin)
 
 
-def _wake(provider, vin, capability):
+def _wake(provider, vehicle, capability):
     # The outcome that ends the attempt, or None to send the command
-    woke = checked(provider, WAKE, provider.wake(vin))
+    vin = vehicle.key
+    woke = checked(provider, C.WAKE, provider.wake(vin))
+    if woke.kind == O.DONE:
+        vehicle.observe("state", "online", provider.name)
     logger.info(
         "%s wake for %s before %s: %s",
         provider.name,
@@ -116,7 +108,7 @@ def _wake(provider, vin, capability):
         capability,
         (woke.kind + " " + woke.detail).strip(),
     )
-    if woke.kind == REFUSED:
+    if woke.kind == O.REFUSED:
         return _tagged(woke, "wake ")
     if woke.kind not in _WAKE_PROCEEDS:
         if not provider.local:
@@ -133,7 +125,7 @@ def _wake(provider, vin, capability):
     return None
 
 
-def runAttempt(reconciler, attempt) -> Outcome:
+def runAttempt(reconciler, attempt) -> O.Outcome:
     master = reconciler.master
     vin = attempt.key
     aspect = attempt.aspect
@@ -142,33 +134,48 @@ def runAttempt(reconciler, attempt) -> Outcome:
         # waited: a loser, with no read and no request
         want = reconciler.desired.get(vin, aspect)
         if want is None or want.value != attempt.value:
-            return Outcome(ERROR, "cancelled")
+            return O.Outcome(O.ERROR, "cancelled")
     vehicle = master.vehicleRegistry.get(vin)
     if vehicle is None:
-        return Outcome(ERROR, "no vehicle")
+        return O.Outcome(O.ERROR, "no vehicle")
     provider = master.providerOrder.provider(attempt.provider)
     if provider is None:
-        return Outcome(ERROR, "no provider")
+        return O.Outcome(O.ERROR, "no provider")
     # A cloud provider wakes before its read: an asleep car's value stays
     # unknown, and a billed write never goes blind
-    wakeFirst = attempt.wake and not provider.local and provider.declares(WAKE)
+    wakeFirst = attempt.wake and not provider.local and provider.declares(C.WAKE)
     try:
+        ble = provider.name == "TeslaBLE" and aspect and not isStop(attempt)
+        state = presence(master, vehicle)
+        if provider.module is not None and (state == NOT_HOME or drivingNow(vehicle)):
+            early = reconciler.inapplicable(vehicle, attempt)
+            if early is not None:
+                return early
+        # A message that may not wake leaves a sleeping car alone. The
+        # sleep-safe ping first for a car that may be away, or asleep and not
+        # seen awake lately
+        quiet = ble and not attempt.wake and state != NOT_HOME
+        known = asleep(vehicle, master.vehicleRegistry.now() - REACH_WINDOW)
+        check = state == PRESUMED or quiet and known is None
+        if ble and check and not (quiet and known):
+            if not provider.module.ping(vin):
+                return O.Outcome(O.UNREACHABLE, "no BLE answer")
+        if quiet and asleep(vehicle):
+            return O.ASLEEP
         if wakeFirst:
-            early = _wake(provider, vin, attempt.capability)
+            early = _wake(provider, vehicle, attempt.capability)
             if early is not None:
                 return early
         field = FIELD_FOR[aspect] if aspect is not None else None
         read = field is not None and attempt.maxAge is not None
         if read:
             # Only the providers on this provider's own worker
-            worker = getattr(provider, "worker", "cloud")
+            worker = workerOf(provider)
             vehicle.read(
                 field,
                 attempt.maxAge,
                 providers=[
-                    p
-                    for p in master.providerOrder.providers()
-                    if getattr(p, "worker", "cloud") == worker
+                    p for p in master.providerOrder.providers() if workerOf(p) == worker
                 ],
                 force=attempt.force,
             )
@@ -178,17 +185,23 @@ def runAttempt(reconciler, attempt) -> Outcome:
         if aspect == CHARGING:
             believed = uncompleted(vehicle, believed)
         if read and satisfied(aspect, attempt.value, believed):
-            return Outcome(SATISFIED, "read")
+            return O.Outcome(O.SATISFIED, "read")
+        if not (provider.local or attempt.wake or isStop(attempt)):
+            # Asleep by its free online check, or known asleep without one:
+            # the command cannot reach it
+            awake = provider.online(vehicle)
+            if awake is False or awake is None and asleep(vehicle):
+                return O.ASLEEP
         value, early = reconciler.beforeWrite(vehicle, attempt, provider, believed)
         if early is not None:
             return _tagged(early, "rules: ")
-        if attempt.wake and not wakeFirst and provider.declares(WAKE):
-            early = _wake(provider, vin, attempt.capability)
+        if attempt.wake and not wakeFirst and provider.declares(C.WAKE):
+            early = _wake(provider, vehicle, attempt.capability)
             if early is not None:
                 return early
         elif (
             attempt.wakeSkipped
-            and provider.declares(WAKE)
+            and provider.declares(C.WAKE)
             and not (isStop(attempt) or attempt.restore)
         ):
             logger.info(
@@ -211,16 +224,16 @@ def runAttempt(reconciler, attempt) -> Outcome:
             vin,
             type(e).__name__,
         )
-        return Outcome(ERROR, type(e).__name__)
+        return O.Outcome(O.ERROR, type(e).__name__)
     # The command has run: whatever fails from here on, its outcome stands. A
     # paid command that took effect must never come back as a retryable ERROR
     try:
         if aspect is not None and (
-            outcome.kind == DONE
-            or (outcome.kind == SATISFIED and aspect in _STAMP_SATISFIED)
+            outcome.kind == O.DONE
+            or (outcome.kind == O.SATISFIED and aspect in _STAMP_SATISFIED)
         ):
             cost = provider.cost(attempt.capability)
-            if cost is None or cost.tier != TIER_DISRUPTIVE:
+            if cost is None or cost.tier != C.TIER_DISRUPTIVE:
                 vehicle.noteWrite(field, writtenValue(aspect, value), provider.name)
     except Exception as e:
         logger.warning(

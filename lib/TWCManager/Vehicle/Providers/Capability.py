@@ -63,7 +63,3 @@ DISRUPTIVE = Cost(TIER_DISRUPTIVE, 0.0)
 # A limitation a provider may declare per vehicle: a stop through this
 # provider also affects other endpoints (Gen3 units on one bus).
 NO_INDIVIDUAL_STOP = "noIndividualStop"
-
-
-class Declaration(NamedTuple):
-    cost: Cost

@@ -192,7 +192,7 @@ class TestCheckChargeRefreshesEachModuleOnce:
             SUPPRESSED = {"api_only": C.ALL}
 
             def declarations(self):
-                return {C.READ_CHARGE: C.Declaration(C.LOCAL)}
+                return {C.READ_CHARGE: C.LOCAL}
 
         master = Mock()
         master.config = {}
@@ -790,7 +790,9 @@ class TestThroughTheWalk:
             add_home_vehicle(
                 api, command_signing=signing, vin=vins[i], name="Car%d" % i, id=i + 1
             )
-            m.vehicleRegistry.get(vins[i]).observe("chargeLimit", 90, "OwnerAPI")
+            car = m.vehicleRegistry.get(vins[i])
+            car.observe("chargeLimit", 90, "OwnerAPI")
+            car.observe("pluggedIn", True, "Gen3TWC")  # plugged in at home
         return m, r, api, last
 
     def limit(self, m, r, *vins, passes=3):
@@ -809,7 +811,10 @@ class TestThroughTheWalk:
         sent = [q.url for q in posts(requests_mock)]
         assert sent == [OWNER_URL + "/" + VIN + "/command/set_charge_limit"]
         # The "required" car got no request from TeslaAPI and fell through
-        assert last.calls == [("setChargeLimit", VIN2, 50)]
+        assert last.calls == [
+            ("wake", VIN2, None),
+            ("setChargeLimit", VIN2, 50),
+        ]  # unknown battery: expected to charge, so it wakes
         assert no_error_recorded(api)
 
     def test_403_falls_through(self, no_threads, requests_mock):

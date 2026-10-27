@@ -187,14 +187,8 @@ class SQLiteLogging:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configLogging = master.config["logging"]["SQLite"]
-        except KeyError:
-            self.configLogging = {}
+        self.configConfig = master.config.get("config", {})
+        self.configLogging = master.config.get("logging", {}).get("SQLite", {})
         self.status = self.configLogging.get("enabled", False)
 
         # Unload if this module is disabled or misconfigured
@@ -203,8 +197,7 @@ class SQLiteLogging:
             return None
 
         # Initialize the mute config tree if it is not already
-        if not self.configLogging.get("mute", None):
-            self.configLogging["mute"] = {}
+        self.configLogging["mute"] = self.configLogging.get("mute") or {}
 
         global sqlite3
         import sqlite3

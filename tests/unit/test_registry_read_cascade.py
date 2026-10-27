@@ -24,7 +24,7 @@ class Reader(Provider):
     def __init__(self, name, cost, result, fields=("chargeLimit", "batteryLevel"), rank=50):
         self.name, self.rank, self.FIELDS = name, rank, frozenset(fields)
         self.local = cost.tier == C.TIER_LOCAL
-        self.DECLARATIONS = {C.READ_CHARGE: C.Declaration(cost)}
+        self.DECLARATIONS = {C.READ_CHARGE: cost}
         self.result, self.calls, self.lockHeld, self.isReady = result, [], False, True
 
     def ready(self, vehicle, capability):
@@ -32,7 +32,7 @@ class Reader(Provider):
 
     def fetch(self, vehicle, field, allowWake=False):
         self.calls.append((field, allowWake))
-        if vehicle._fields._lock.locked() or vehicle._lock.locked():
+        if vehicle._fieldLock.locked() or vehicle._lock.locked():
             self.lockHeld = True
         if self.result is None:
             return False

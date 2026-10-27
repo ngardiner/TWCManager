@@ -1,7 +1,7 @@
 from typing import Dict, FrozenSet, Optional, Tuple
 
 from ..Reconcile.Outcome import UNSUPPORTED, Outcome
-from .Capability import COMMANDS, START_CHARGING, STOP_CHARGING, Cost, Declaration
+from .Capability import COMMANDS, START_CHARGING, STOP_CHARGING, Cost
 
 # What a cloud provider may not do under each suppression condition: no
 # command under ble_only, no stop when the user chose a disruptive local
@@ -27,7 +27,7 @@ class Provider:
     module = None
 
     # What the provider can do, at what cost and how often
-    DECLARATIONS: Dict[str, Declaration] = {}
+    DECLARATIONS: Dict[str, Cost] = {}
     # Suppression condition ("ble_only", "api_only", "localStops") to the
     # capabilities it suppresses here; None for the locality rule
     SUPPRESSED: Optional[Dict[str, FrozenSet[str]]] = None
@@ -38,15 +38,14 @@ class Provider:
     # The vin argument of the command methods is the vehicle's registry key: a
     # VIN, or an anon:... key that only local providers can serve.
 
-    def declarations(self) -> Dict[str, Declaration]:
+    def declarations(self) -> Dict[str, Cost]:
         return self.DECLARATIONS
 
     def declares(self, capability) -> bool:
         return capability in self.declarations()
 
     def cost(self, capability) -> Optional[Cost]:
-        declaration = self.declarations().get(capability)
-        return declaration.cost if declaration else None
+        return self.declarations().get(capability)
 
     def ready(self, vehicle, capability) -> bool:
         # Per vehicle; never does I/O
@@ -60,6 +59,10 @@ class Provider:
         # when the provider now vouches for vehicle.latest(field). Does I/O:
         # called with no lock held. Never wakes the car unless allowWake.
         return False
+
+    def online(self, vehicle) -> Optional[bool]:
+        # A free check that the car is awake to take a command; None: unknown
+        return None
 
     def covers(self, vehicle, amps) -> bool:
         span = self.ampsRange(vehicle)
@@ -110,3 +113,12 @@ def vehicleMaxAmps(vehicle, configConfig: dict) -> float:
     return vehicle.value("chargeCurrentRequestMax") or configConfig.get(
         "wiringMaxAmpsPerTWC", 32
     )
+
+
+def carAmpsRange(vehicle, master) -> Optional[Tuple[float, float]]:
+    # What a provider that commands the car itself offers: amps run 1..max,
+    # never 0 (a 0 would stop the charge)
+    if vehicle is None:
+        return None
+    config = (getattr(master, "config", None) or {}).get("config")
+    return (1, vehicleMaxAmps(vehicle, config or {}))

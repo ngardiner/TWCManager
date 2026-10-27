@@ -3,7 +3,7 @@ import pytest
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING, Attempt, DesiredStore
-from tests.unit.reconcile_helpers import Clock
+from tests.unit.reconcile_helpers import Clock, settled
 VIN = "5YJ3E1EA1KF000001"
 VIN2 = "5YJ3E1EA1KF000002"
 
@@ -73,7 +73,7 @@ def test_note_outcome_bookkeeping():
     r.inFlight = b; s.noteOutcome(VIN, CHARGE_LIMIT, b, O.Outcome(O.REFUSED, "key"), 180.0, paid=False)
     assert r.excluded == {"TeslaBLE": O.REFUSED} and s.free(VIN).lastAttemptAt == 180.0 and s.free(VIN).failingSince == 120.0
     r.inFlight = b; s.noteOutcome(VIN, CHARGE_LIMIT, b, O.Outcome(O.DONE), 190.0, paid=False)
-    assert r.settledAt == 190.0 and s.free(VIN).failingSince is None and s.settled(VIN, CHARGE_LIMIT)
+    assert r.settledAt == 190.0 and s.free(VIN).failingSince is None and settled(s, VIN, CHARGE_LIMIT)
 
 def test_a_failed_paid_wake_sets_no_retry():
     s = DesiredStore(); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT); a = attempt("FleetAPI")._replace(since=s.get(VIN, CHARGE_LIMIT).at); r.inFlight = a
@@ -93,7 +93,7 @@ def test_a_superseded_attempt_feeds_the_free_channel_but_never_the_new_desire():
     s = DesiredStore(clock=Clock(1000.0)); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
     a = attempt("FleetAPI"); r.inFlight = a; s.set(VIN, CHARGE_LIMIT, 60, "policy")
     assert s.noteOutcome(VIN, CHARGE_LIMIT, a, O.Outcome(O.DONE), 1001.0, paid=True)
-    assert r.inFlight is None and (r.settledAt, r.paidAt, r.paidSends, r.lastOutcome) == (None, None, 0, None) and not s.settled(VIN, CHARGE_LIMIT)
+    assert r.inFlight is None and (r.settledAt, r.paidAt, r.paidSends, r.lastOutcome) == (None, None, 0, None) and not settled(s, VIN, CHARGE_LIMIT)
     assert r.lastSentAt == 1001.0                                                            # it was sent: the gap still spaces the next (I5)
     b = attempt("TeslaBLE"); r.inFlight = b
     s.noteOutcome(VIN, CHARGE_LIMIT, b, O.Outcome(O.UNREACHABLE, "no reply"), 1002.0, paid=False)

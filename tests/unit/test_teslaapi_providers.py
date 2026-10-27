@@ -30,7 +30,7 @@ def test_two_providers_with_honest_costs():
     assert owner.cost(C.SET_AMPS) == C.OWNER_COMMAND and C.OWNER_COMMAND.price == 0.0
     assert fleet.cost(C.READ_CHARGE) == C.FLEET_DATA
     assert fleet.cost(C.SET_AMPS) == C.FLEET_COMMAND and fleet.cost(C.WAKE) == C.FLEET_WAKE
-    assert fleet.declarations()[C.SET_AMPS] == C.Declaration(C.FLEET_COMMAND)   # pacing is the reconciler's MIN_SEND_GAP
+    assert fleet.declarations()[C.SET_AMPS] == C.FLEET_COMMAND   # pacing is the reconciler's MIN_SEND_GAP
     # no tokens yet
     assert fleet.available(C.SET_AMPS) is False and owner.available(C.READ_CHARGE) is True
     assert owner.available(C.SET_AMPS) is False
@@ -165,21 +165,21 @@ def test_owner_reads_cost_nothing_with_a_fleet_token_held(requests_mock, case):
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
     car.lastAPIAccessTime = 0
-    api.is_location_home = Mock(return_value=True)
     api.is_far_from_home = Mock(return_value=False)
     fleet = requests_mock.register_uri(ANY, FLEET_ANY, json=VEHICLE_DATA)
     online = requests_mock.get(
         OWNER_VEHICLE, json={"response": {"state": state, "vin": VIN}}
     )
     data = requests_mock.get(OWNER_VEHICLE + "/vehicle_data", json=payload)
-    ok = api.update_charge(reg.get(VIN))
+    api.update_charge(reg.get(VIN))
     assert fleet.call_count == 0
     assert online.call_count == 1
     if case == "lands":
-        assert ok is True and reg.get(VIN).value("batteryLevel") == 61 and data.call_count == 1
+        assert reg.get(VIN).value("batteryLevel") == 61 and data.call_count == 1
         assert reg.get(VIN).latest("batteryLevel").source == "OwnerAPI"
     else:
-        assert ok is False and data.call_count == (0 if case == "asleep" else 1)
+        assert reg.get(VIN).latest("batteryLevel") is None
+        assert data.call_count == (0 if case == "asleep" else 1)
 
 
 def test_fleet_reads_when_owner_holds_no_token(requests_mock):
@@ -190,12 +190,12 @@ def test_fleet_reads_when_owner_holds_no_token(requests_mock):
     api.storeToken(fleet_token())
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
-    api.is_location_home = Mock(return_value=True)
     api.is_far_from_home = Mock(return_value=False)
     base = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
     online = requests_mock.get(base, json={"response": {"state": "online"}})
     data = requests_mock.get(base + "/vehicle_data", json=VEHICLE_DATA)
-    assert api.update_charge(reg.get(VIN)) is True and reg.get(VIN).value("batteryLevel") == 61
+    api.update_charge(reg.get(VIN))
+    assert reg.get(VIN).value("batteryLevel") == 61
     assert (online.call_count, data.call_count) == (1, 1)
 
 
@@ -214,7 +214,6 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     car.statusDeferral = 0
     car.onlineCheckedAt = 0
     car.lastAPIAccessTime = 0
-    api.is_location_home = Mock(return_value=True)
     api.is_far_from_home = Mock(return_value=False)
     api.master.queue_background_task = Mock()
     base = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
@@ -226,12 +225,13 @@ def test_a_refused_owner_read_hands_reads_to_fleet(requests_mock):
     ownerData = requests_mock.get(
         OWNER_VEHICLE + "/vehicle_data", status_code=403, text="refused"
     )
-    assert api.update_charge(reg.get(VIN)) is True and reg.get(VIN).value("batteryLevel") == 61
+    api.update_charge(reg.get(VIN))
+    assert reg.get(VIN).value("batteryLevel") == 61
     assert (ownerOnline.call_count, ownerData.call_count) == (1, 1)
     assert (fleetOnline.call_count, fleetData.call_count) == (0, 1)
     assert not api.ownerSlot.usable("read")
     # Next poll that must read (maxAge 0): Fleet alone reads
     car.statusDeferral = 0
-    assert api.update_location(reg.get(VIN), 0) is True
+    assert reg.get(VIN).read("lat", 0) is not None
     assert (ownerOnline.call_count, ownerData.call_count) == (1, 1)
     assert fleetData.call_count == 2

@@ -43,10 +43,7 @@ class Victron:
         self.consumedW = 0
         self.generatedW = 0
 
-        try:
-            self.configVictron = master.config.get("sources", {})["Victron"]
-        except KeyError:
-            self.configVictron = {}
+        self.configVictron = master.config.get("sources", {}).get("Victron", {})
 
         self.enabled = self.configVictron.get("enabled", False)
         self.serverIP = self.configVictron.get("serverIP", None)

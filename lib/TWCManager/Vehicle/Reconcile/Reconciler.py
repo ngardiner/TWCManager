@@ -1,65 +1,31 @@
 # The vehicle reconciler: one thread that converges each car on its desired
 # state through the provider order, one attempt per aspect at a time.
 #
-# The one fallback rule: free providers first. A paid (billed or disruptive)
-# provider is used only when the car has no ready free candidate, or when the
-# car's free channel has failed for the aspect's PAID_AFTER window and was
-# tried recently (a channel nobody has tried for PROBE_AFTER gets the real
-# command over it first). Each desire gets one paid request, plus one blind
-# retry after a failure that actually sent and never with a wake, or, after a
-# wake the car did not answer, one follow-up through the same provider
-# (WAKE_CHECK); after that only a reading that reached the car (or a failed
-# wake) or a new desired value sends again, and such a reading re-arms a
-# desire once at most. No aspect is sent to a car twice inside MIN_SEND_GAP,
-# whichever providers carried it.
+# Free providers go first: a paid provider is used only when the car has no
+# ready free candidate, or its free channel has failed for the aspect's
+# PAID_AFTER window. Each desire gets one paid request, a blind retry after
+# a failure that sent, or one WAKE_CHECK follow-up after an unanswered wake;
+# after that only a reading that reached the car or a new desired value
+# sends again. No aspect goes to a car twice inside MIN_SEND_GAP.
 #
-# It owns the ble and cloud attempt queues. Each accepted attempt is reported
-# once: on its queue's thread when it runs, else on the caller's (a local
-# provider's always). So no lock is held across a submit or cancel, and
-# planning and submitting are kept apart.
-#
-# One clock domain: every stamp is the registry's time.time.
+# Each accepted attempt is reported once, on its queue's thread when it
+# runs, else on the caller's. No lock is held across a submit or cancel, so
+# planning and submitting are kept apart. Every stamp is the registry's
+# time.time.
 import logging
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
 from ...VehicleCommandQueue import VehicleCommandQueue
+from .. import Presence
 from ..Registry.Fields import READ_MAX_AGE
-from ..Providers.Capability import (
-    NO_INDIVIDUAL_STOP,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-    TIER_BILLED,
-    WAKE,
-)
+from ..Providers import Capability as C
 from . import Run
 from .Desired import AMPS, CAPABILITY_FOR, CHARGE_LIMIT, CHARGING, FIELD_FOR, Attempt
-from .Outcome import (
-    ERROR,
-    EXCLUDING,
-    QUEUE_DETAILS,
-    SATISFIED,
-    SETTLED,
-    UNREACHABLE,
-    Outcome,
-    isNotSent,
-)
-from .Belief import (
-    _newer,
-    allowWake,
-    handsOff,
-    known,
-    newerReading,
-    reachedCar,
-)
-from .Rules import (
-    VEHICLE_SOURCES_EXCLUDED,
-    decideChargeLimit,
-    needsLiveRead,
-    satisfied,
-)
+from . import Outcome as O
+from . import Belief as B
+from . import Rules as R
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
@@ -84,6 +50,8 @@ LIMIT_THEN_START_GAP = 5.0
 # The least time between two sends of one aspect to one car, whichever
 # providers carry them: it spaces start/stop toggles and rate changes
 MIN_SEND_GAP = {CHARGE_LIMIT: 10.0, CHARGING: 10.0, AMPS: 15.0}
+# The most paid sends, and wakes and reads for held attempts, per desire
+PAID_BUDGET = 4
 # A limit held unsent for one of these (both NOT_SENT) cannot be delivered
 _REFUSALS = frozenset({"wake refused", "no command token"})
 
@@ -97,7 +65,7 @@ _ORDER, _STOP_ORDER = (CHARGE_LIMIT, AMPS, CHARGING), (CHARGE_LIMIT, CHARGING, A
 def _tier(provider, capability) -> int:
     # An unknown provider or cost counts as paid: it fails closed
     cost = provider.cost(capability) if provider is not None else None
-    return TIER_BILLED if cost is None else cost.tier
+    return C.TIER_BILLED if cost is None else cost.tier
 
 
 class VehicleReconciler(threading.Thread):
@@ -119,7 +87,7 @@ class VehicleReconciler(threading.Thread):
                 isHigh=Run.isStop,
                 # Late-bound, so a replaced report is the one called
                 report=lambda a, outcome: self.report(a, outcome),
-                lost=lambda a, detail: self.report(a, Outcome(ERROR, detail)),
+                lost=lambda a, detail: self.report(a, O.Outcome(O.ERROR, detail)),
             )
             for name in ("ble", "cloud")
         )
@@ -146,12 +114,15 @@ class VehicleReconciler(threading.Thread):
         return all([q.waitDrained(deadline) for q in (self.cloud, self.ble)])
 
     def submit(self, attempt) -> bool:
-        worker = Run.workerOf(self.master, attempt.provider)
+        worker = Run.workerOf(self.master.providerOrder.provider(attempt.provider))
         if worker == "local":
             # No I/O: only a request the heartbeat sends
             self.report(attempt, self._run(attempt))
             return True
         return (self.ble if worker == "ble" else self.cloud).put(attempt)
+
+    def submitJob(self, key, kind, run, worker="ble") -> bool:
+        return getattr(self, worker).put(Run.Job(key, kind, run))
 
     def cancel(self, key) -> int:
         # Pending stops for key only; a running attempt is left alone
@@ -160,12 +131,15 @@ class VehicleReconciler(threading.Thread):
             for q in (self.ble, self.cloud)
         )
 
-    def _run(self, attempt) -> Outcome:
+    def _run(self, attempt) -> O.Outcome:
+        if isinstance(attempt, Run.Job):
+            # The queue logs a job that raises
+            return attempt.run()
         try:
             return Run.runAttempt(self, attempt)
         except Exception as e:
             # Never kills a queue's thread: the entry is still reported
-            return Outcome(ERROR, type(e).__name__)
+            return O.Outcome(O.ERROR, type(e).__name__)
 
     def run(self) -> None:
         while not self._stopping:
@@ -182,6 +156,9 @@ class VehicleReconciler(threading.Thread):
         if self._said.get((key, aspect)) != message:
             self._said[(key, aspect)] = message
             logger.log(level, "%s %s: %s", key, aspect, message)
+
+    def said(self, key, aspect) -> Optional[str]:
+        return self._said.get((key, aspect))
 
     def pass_(self, now=None) -> int:
         now = self._clock() if now is None else now
@@ -223,7 +200,7 @@ class VehicleReconciler(threading.Thread):
                     attempt.key,
                     attempt.aspect,
                     attempt,
-                    Outcome(ERROR, "dropped"),
+                    O.Outcome(O.ERROR, "dropped"),
                     now,
                     paid=False,
                 )
@@ -233,11 +210,11 @@ class VehicleReconciler(threading.Thread):
         # A vehicle read newer than our write and the desire, disagreeing
         # with what we wrote, is the user's change: the value, else None
         field = FIELD_FOR[CHARGE_LIMIT]
-        latest = vehicle.latestFrom(field, exclude=VEHICLE_SOURCES_EXCLUDED)
+        latest = vehicle.latestFrom(field, exclude=R.VEHICLE_SOURCES_EXCLUDED)
         write = vehicle.lastWrite(field)
         if latest is None or write is None or latest.at <= max(write.at, d.at):
             return None
-        if vehicle.trusted(field, exclude=VEHICLE_SOURCES_EXCLUDED) != latest:
+        if vehicle.trusted(field, exclude=R.VEHICLE_SOURCES_EXCLUDED) != latest:
             return None
         return latest.value if latest.value != write.value else None
 
@@ -247,8 +224,23 @@ class VehicleReconciler(threading.Thread):
         rec = self.desired.record(key, aspect)
         if d is None or rec.inFlight is not None:
             return None
-        k = known(vehicle, aspect)
-        if d.lift and (rec.settledAt is not None or satisfied(AMPS, d.value, k)):
+        # A drive's hold can change only once the car stops
+        driving = rec.lastOutcome == (O.SATISFIED, O.HELD + "driving")
+        driving = driving and Presence.decide(self.master, vehicle)[1] == "driving"
+        if self._asleepCheckDue(vehicle, rec, now):
+            # The free online check alone: its answer is an observation, so
+            # an awake car is a sign of life that plans this again, and an
+            # asleep one is no news
+            p = self.master.providerOrder.provider(rec.lastProvider)
+            rec.checkedAt = now
+            self.submitJob(key, "onlineCheck", lambda: p.online(vehicle), "cloud")
+            return None
+        waiting = rec.heldAt is not None
+        if waiting and (vehicle.lastObservedAt <= rec.heldAt or driving):
+            # Held: only newer evidence (or a new desire) plans it again
+            return None
+        k = B.known(vehicle, aspect, d.value)
+        if d.lift and (rec.settledAt is not None or R.satisfied(AMPS, d.value, k)):
             # A lift is a one-shot desire: done once it settles
             self.desired.clearIf(key, AMPS, d.value)
             return None
@@ -257,9 +249,10 @@ class VehicleReconciler(threading.Thread):
         last = rec.lastOutcome
         if (
             last is not None
-            and isNotSent(last)
-            and last.detail not in QUEUE_DETAILS
-            and last.kind not in EXCLUDING
+            and rec.heldAt is None
+            and O.isNotSent(last)
+            and last.detail not in O.QUEUE_DETAILS
+            and last.kind not in O.EXCLUDING
             and now - rec.lastOutcomeAt
             < (WAKE_CHECK if rec.wakeCheckBy else RETRY[aspect])
         ):
@@ -276,7 +269,7 @@ class VehicleReconciler(threading.Thread):
                 )
                 return None
         held = self._held(vehicle)
-        if satisfied(aspect, d.value, k):
+        if R.satisfied(aspect, d.value, k):
             if d.restore and held is not None and held.held is not None:
                 # Already back at the outside limit: nothing is held
                 self.master.heldLimits.remove(vehicle.vin)
@@ -287,12 +280,12 @@ class VehicleReconciler(threading.Thread):
             self.desired.clear(key, aspect)
             return None
         config = (getattr(self.master, "config", None) or {}).get("config")
-        reason = handsOff(vehicle, aspect, d.value, k, config)
+        reason = B.handsOff(vehicle, aspect, d.value, k, config)
         if reason is not None:
             self._sayOnce(key, aspect, "hands off: " + reason, logging.INFO)
             return None
         if rec.settledAt is not None and not (
-            newerReading(vehicle, aspect, rec.settledAt)
+            B.newerReading(vehicle, aspect, rec.settledAt)
             and now - rec.lastSentAt >= RETRY[aspect]
         ):
             # Settled without a stamp: wait for a newer reading
@@ -310,20 +303,23 @@ class VehicleReconciler(threading.Thread):
             # The TWC target is the distributor's
             and not (aspect == AMPS and p.module is None)
             and not (
-                capability == STOP_CHARGING
-                and NO_INDIVIDUAL_STOP in p.limitations(vehicle)
+                capability == C.STOP_CHARGING
+                and C.NO_INDIVIDUAL_STOP in p.limitations(vehicle)
             )
         ]
         if not cands:
             self._sayOnce(key, aspect, "no provider can deliver", logging.DEBUG)
             return None
         self._said.pop((key, aspect), None)
-        free = [p for p in cands if _tier(p, capability) < TIER_BILLED]
-        paid = [p for p in cands if _tier(p, capability) >= TIER_BILLED]
+        free = [p for p in cands if _tier(p, capability) < C.TIER_BILLED]
+        paid = [p for p in cands if _tier(p, capability) >= C.TIER_BILLED]
         ch = self.desired.free(key)
+        # Free failures from before the car came back say nothing of it here
+        back = Presence.returned(vehicle)
         freeFailed = not free or (
             ch.failingSince is not None
-            and now - ch.failingSince >= PAID_AFTER[aspect]
+            and ch.lastAttemptAt >= back
+            and now - max(ch.failingSince, back) >= PAID_AFTER[aspect]
             and now - ch.lastAttemptAt < PROBE_AFTER
         )
         # At most two paid sends per arm, and two arms per desire: one send,
@@ -331,8 +327,20 @@ class VehicleReconciler(threading.Thread):
         # A start goes with the limit first: its wake carries the limit
         ride = aspect == CHARGE_LIMIT and self._startWanted(vehicle, config)
         field = FIELD_FOR[aspect]
-        wakes = allowWake(aspect, d, k) or ride and not d.restore
-        reached = rec.paidSends and reachedCar(vehicle, field, rec.paidAt, rec.paidSaw)
+        # Only a car expected to charge is woken; a restore or stop never is
+        quiet = B.whyQuiet(self.master, vehicle)
+        wakes = quiet is None and not d.restore and d.value is not False
+        asleep = Presence.asleep(vehicle, rec.heldAt or 0) is not False
+        # A billed provider never wakes for amps
+        holder = self.master.providerOrder.provider(rec.lastProvider)
+        mayWake = wakes and (aspect != AMPS or getattr(holder, "local", False))
+        if not mayWake and last == O.ASLEEP and asleep:
+            # Asleep (or offline): only a sign of life since the hold (the
+            # cloud's next check may find one), or a message that may wake
+            return None
+        reached = rec.paidSends and B.reachedCar(
+            vehicle, field, rec.paidAt, rec.paidSaw
+        )
         if (
             rec.paidSends
             and not rec.paidReached
@@ -350,9 +358,8 @@ class VehicleReconciler(threading.Thread):
             # No paid send reached the car: a reading shows it awake, a start
             # will wake it, or the arm ended on a failed wake. At most two
             # more sends, once per desire, each with the normal wake and read.
-            # Written without the store's lock: a newDesire()
-            # racing it can inherit rearmed and lose a retry, never gain a
-            # paid send
+            # Written without the store's lock: a racing newDesire() can
+            # inherit rearmed and lose a retry, never gain a paid send
             rec.paidSends = 0
             rec.rearmed = True
             rec.paidRetryDue = False
@@ -369,10 +376,14 @@ class VehicleReconciler(threading.Thread):
             )
         )
         freeGap = RESTORE_RETRY if d.restore and rec.lastFreeAt else RETRY[aspect]
-        if paid and freeFailed and paidAgain:
+        # Spent only while the message would still not go
+        spent = rec.paidSends + rec.paidSpent >= PAID_BUDGET and (
+            Presence.applicable(self.master, vehicle, capability)[0] != Presence.SEND
+        )
+        if paid and freeFailed and paidAgain and not spent:
             p = paid[0]
             rec.paidSaw = k.value if k is not None else None
-        elif free and now - rec.lastFreeAt >= freeGap:
+        elif free and (now - rec.lastFreeAt >= freeGap or rec.lastFreeAt < back):
             p = free[0]
         else:
             return None
@@ -386,7 +397,9 @@ class VehicleReconciler(threading.Thread):
                 # Tried, unsettled and not spent
                 or dl is not None
                 and limit.lastOutcome is not None
-                and not satisfied(CHARGE_LIMIT, dl.value, known(vehicle, CHARGE_LIMIT))
+                and not R.satisfied(
+                    CHARGE_LIMIT, dl.value, B.known(vehicle, CHARGE_LIMIT)
+                )
                 and not self._limitSpent(vehicle, limit)
             ):
                 # A limit always goes first, and settles before a start
@@ -412,34 +425,33 @@ class VehicleReconciler(threading.Thread):
             # A desire set after this pass began is still this attempt's
             since=max(now, d.at),
             force=aspect == CHARGE_LIMIT
-            and needsLiveRead(d.restore, k.value if k else None, held),
-            wakeSkipped=None if wake else self._whyNoWake(aspect, p, k, blind),
+            and R.needsLiveRead(R.releases(d), k.value if k else None, held),
+            wakeSkipped=None if wake else self._whyNoWake(d, p, quiet, blind),
+            paidBefore=vehicle.paidRequests,
         )
         rec.inFlight = attempt
         return attempt
 
     @staticmethod
-    def _whyNoWake(aspect, p, k, blind) -> str:
+    def _whyNoWake(d, p, quiet, blind) -> str:
         if blind:
             return "blind paid retry"
-        if aspect == AMPS and not p.local:
-            return "billed provider never wakes for amps"
-        if aspect == CHARGE_LIMIT and k is None:
-            return "current limit unknown"
-        return "lower never wakes"
+        if d.restore or d.value is False:
+            return "restore or stop never wakes"
+        return quiet or "billed provider never wakes for amps"
 
     def _startWanted(self, vehicle, config) -> bool:
         start = self.desired.get(vehicle.key, CHARGING)
-        k = known(vehicle, CHARGING)
+        k = B.known(vehicle, CHARGING, True)
         return (
             start is not None
             and start.value is True
-            and not satisfied(CHARGING, True, k)
-            and handsOff(vehicle, CHARGING, True, k, config) is None
+            and not R.satisfied(CHARGING, True, k)
+            and B.handsOff(vehicle, CHARGING, True, k, config) is None
             # A start that would itself spend a cloud wake (not mode 2's)
             and any(
-                not p.local and p.declares(WAKE)
-                for p in self.master.providerOrder.candidates(vehicle, START_CHARGING)
+                not p.local and p.declares(C.WAKE)
+                for p in self.master.providerOrder.candidates(vehicle, C.START_CHARGING)
             )
         )
 
@@ -448,7 +460,8 @@ class VehicleReconciler(threading.Thread):
         # A car drawing power is awake: a lowered limit gets one more send.
         # Not "Complete": a finished car may be asleep
         return aspect == CHARGE_LIMIT and any(
-            obs.value in _DRAWING for obs in _newer(vehicle, FIELD_FOR[CHARGING], since)
+            obs.value in _DRAWING
+            for obs in B._newer(vehicle, FIELD_FOR[CHARGING], since)
         )
 
     def _limitSpent(self, vehicle, limit) -> bool:
@@ -458,7 +471,7 @@ class VehicleReconciler(threading.Thread):
         # both paid sends went to a car that answered; its one re-arm is
         # used with no blind retry left; a refusal holds it unsent; or the
         # car's limit could not be read twice, RETRY apart
-        able = self.master.providerOrder.candidates(vehicle, SET_CHARGE_LIMIT)
+        able = self.master.providerOrder.candidates(vehicle, C.SET_CHARGE_LIMIT)
         last = limit.lastOutcome
         return (
             all(p.name in limit.excluded for p in able)
@@ -472,6 +485,17 @@ class VehicleReconciler(threading.Thread):
             or limit.unread >= 2
         )
 
+    def _asleepCheckDue(self, vehicle, rec, now) -> bool:
+        # A cloud hold's free online check runs again on the asleep cadence,
+        # unless a live feed will report the car waking
+        p = self.master.providerOrder.provider(rec.lastProvider)
+        if rec.lastOutcome != O.ASLEEP or getattr(p, "local", True):
+            return False
+        home = Presence.presence(self.master, vehicle) == Presence.HOME
+        gap = Presence.HOME_ASLEEP_SECS if home else Presence.AWAY_ASLEEP_SECS
+        due = now - max(rec.lastOutcomeAt, rec.checkedAt) >= gap
+        return due and not Presence.covered(self.master, vehicle)
+
     def _held(self, vehicle):
         return self.master.heldLimits.get(vehicle.vin) if vehicle.vin else None
 
@@ -482,10 +506,27 @@ class VehicleReconciler(threading.Thread):
 
     # Hooks: runAttempt calls these on the queue's thread, around the command
 
+    def inapplicable(self, vehicle, attempt) -> Optional[O.Outcome]:
+        # The one applicability rule, after the attempt's read: None sends
+        if attempt.aspect is None or Run.isStop(attempt) or attempt.restore:
+            return None
+        verdict, why = Presence.applicable(self.master, vehicle, attempt.capability)
+        if verdict == Presence.SEND:
+            return None
+        rec = self.desired.record(attempt.key, attempt.aspect)
+        if verdict != Presence.HOLD or rec.heldAt is None:
+            logger.info("%s %s: %s (%s)", vehicle.key, attempt.aspect, verdict, why)
+        if verdict == Presence.HOLD:
+            return O.Outcome(O.SATISFIED, O.HELD + why)
+        self.desired.clearIf(attempt.key, attempt.aspect, attempt.value)
+        return O.Outcome(O.SATISFIED, O.RULES + verdict)
+
     def beforeWrite(self, vehicle, attempt, provider, believed):
-        if attempt.aspect != CHARGE_LIMIT:
-            return attempt.value, None
-        decision = decideChargeLimit(
+        # A charging point's own command acts on the point, which is here
+        early = None if provider.module is None else self.inapplicable(vehicle, attempt)
+        if early is not None or attempt.aspect != CHARGE_LIMIT:
+            return attempt.value, early
+        decision = R.decideChargeLimit(
             attempt.value,
             attempt.restore,
             believed.value if believed is not None else None,
@@ -497,9 +538,9 @@ class VehicleReconciler(threading.Thread):
             if attempt.restore:
                 # Nothing left to restore: the desire is done
                 self.desired.clearIf(attempt.key, CHARGE_LIMIT, attempt.value)
-            return None, Outcome(SATISFIED, decision.reason)
+            return None, O.Outcome(O.SATISFIED, decision.reason)
         if decision.send is None:
-            return None, Outcome(UNREACHABLE, decision.reason)
+            return None, O.Outcome(O.UNREACHABLE, decision.reason)
         # Only this worker touches it while the attempt is in flight
         self.desired.record(attempt.key, CHARGE_LIMIT).pendingSave = (
             decision.saveOnSuccess
@@ -510,23 +551,24 @@ class VehicleReconciler(threading.Thread):
         if attempt.aspect == CHARGE_LIMIT:
             rec = self.desired.record(attempt.key, CHARGE_LIMIT)
             save, rec.pendingSave = rec.pendingSave, None
-            if save is not None and outcome.kind in SETTLED:
+            if save is not None and outcome.kind in O.SETTLED:
                 self._save(vehicle, *save)
         elif (
             attempt.aspect == CHARGING
             and attempt.value is False
-            and outcome.kind in SETTLED
+            and outcome.kind in O.SETTLED
         ):
             # A start goes back through the provider that stopped the car
             self.desired.state(attempt.key).lastStopProvider = attempt.provider
 
     def report(self, attempt, outcome) -> None:
         # On a queue's or the submitter's thread. Never submits or cancels
+        if isinstance(attempt, Run.Job):
+            return
         if isinstance(outcome, BaseException):
             # A queue's run raised past _run (SystemExit)
-            outcome = Outcome(ERROR, type(outcome).__name__)
-        logger.log(
-            logging.INFO if attempt.aspect is None else logging.DEBUG,
+            outcome = O.Outcome(O.ERROR, type(outcome).__name__)
+        logger.info(
             "%s %s for %s via %s: %s %s",
             attempt.aspect or "Debug",
             attempt.capability,
@@ -539,12 +581,14 @@ class VehicleReconciler(threading.Thread):
             # A debug one-shot changes no record
             return
         provider = self.master.providerOrder.provider(attempt.provider)
+        vehicle = self.master.vehicleRegistry.get(attempt.key)
         self.desired.noteOutcome(
             attempt.key,
             attempt.aspect,
             attempt,
             outcome,
             self._clock(),
-            paid=_tier(provider, attempt.capability) >= TIER_BILLED,
+            paid=_tier(provider, attempt.capability) >= C.TIER_BILLED,
+            spent=vehicle.paidRequests - attempt.paidBefore if vehicle else 0,
         )
         self.wake()

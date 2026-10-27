@@ -20,15 +20,9 @@ class aWATTarPricing:
 
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
+        self.configConfig = master.config.get("config", {})
 
-        try:
-            self.configAwattar = master.config["pricing"]["aWATTar"]
-        except KeyError:
-            self.configAwattar = {}
+        self.configAwattar = master.config.get("pricing", {}).get("aWATTar", {})
 
         self.status = self.configAwattar.get("enabled", self.status)
         self.debugLevel = self.configConfig.get("debugLevel", 0)

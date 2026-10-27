@@ -667,7 +667,7 @@ class TestHTTPControlPostWithoutBody:
         master = Mock()
         handler = CreateHTTPHandlerClass(master)
         request = Mock()
-        request.path = "/api/checkArrival"
+        request.path = "/api/saveSettings"
         request.fields = {}
         request.headers = {}
         request.rfile.read.return_value = b""
@@ -676,5 +676,5 @@ class TestHTTPControlPostWithoutBody:
         handler.do_POST(request)
 
         request.rfile.read.assert_called_with(0)
-        master.queue_background_task.assert_called_with({"cmd": "checkArrival"})
-        request.send_response.assert_called_with(202)
+        master.queue_background_task.assert_called_with({"cmd": "saveSettings"})
+        request.send_response.assert_called_with(204)

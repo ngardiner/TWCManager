@@ -5,13 +5,18 @@ from unittest.mock import Mock
 
 import jinja2
 
+from TWCManager.Vehicle.Presence import presence
+from TWCManager.Vehicle.Reconcile.Desired import DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
+from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Control.HTTPControl import (
     ageText,
     addVehicleByVIN,
     canForgetVehicle,
     heldLimitText,
+    PRESENCE_TEXT,
+    pendingCommands,
     providerLines,
     sourceName,
 )
@@ -29,6 +34,8 @@ def env(master):
         heldLimitText=lambda v: heldLimitText(master, v),
         sourceName=sourceName,
         providerLines=lambda v: providerLines(master, v),
+        presence=lambda v: PRESENCE_TEXT[presence(master, v)],
+        pendingCommands=lambda v: pendingCommands(master, v),
         registry=master.vehicleRegistry,
         vehicles=master.vehicleRegistry.vehicles,
         canForget=lambda vin: canForgetVehicle(master, vin),
@@ -56,6 +63,8 @@ def master():
     )
     m.heldLimits = HeldLimits(m)
     m.heldLimits.set(VIN, 90, 80)
+    m.desired = DesiredStore()
+    m.reconciler = VehicleReconciler(m)
     return m
 
 
@@ -80,8 +89,8 @@ def test_held_limit_reads_the_vin_store_after_adoption():
     # a legacy numeric-ID entry shows once a vehicle list resolves it
     assert heldLimitText(m, v2) == "—"
     m.heldLimits.resolveLegacyIds({42: vin2})
-    assert heldLimitText(m, v2) == "60% (car's own limit: 85%, restored when released)"
-    assert "80% (car's own limit: 90%" in heldLimitText(m, m.vehicleRegistry.get(VIN))
+    assert heldLimitText(m, v2) == "60% (85%)"
+    assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "80% (90%)"
     m.heldLimits.remove(VIN)
     assert heldLimitText(m, m.vehicleRegistry.get(VIN)) == "—"
 
@@ -91,8 +100,8 @@ def test_list_renders_registry_rows():
     html = render(m)
     assert f"/vehicleDetail/{VIN}" in html and "TestCar" in html
     assert "BLE: paired" in html and "TeslaBLE" not in html
-    assert "80% (car&#39;s own limit: 90%, restored when released)" in html
-    assert "Charge limit set by TWCManager" in html and "Held limit" not in html
+    assert "<td>80% (90%)</td>" in html
+    assert "Charge limit (car's own)" in html and "set by TWCManager" not in html
     assert "Unknown car on TWC 8244" in html and "Charge history" in html
     assert 'action="/vehicle/add"' in html
 
@@ -165,9 +174,14 @@ def test_providers_one_per_line_with_source_names_and_no_tier():
     v.claim("Gen3TWC", True, "")
     v.observe("chargeLimit", 1, "FleetTelemetryMQTT")
     html = render(m)
-    assert "BLE: paired<br>TeslaMate: reports, read-only<br>Gen3 Wall Connector: commands" in html
+    assert (
+        "BLE: paired<br>TeslaMate: reports, read-only<br>Gen3 Wall Connector: commands"
+        in html
+    )
     assert "via Fleet Telemetry" in html
-    assert "Tier" not in html and "Gen3TWC" not in html and "TeslaMateVehicle" not in html
+    assert (
+        "Tier" not in html and "Gen3TWC" not in html and "TeslaMateVehicle" not in html
+    )
     assert sourceName("SomethingNew") == "SomethingNew"
     assert sourceName("Gen2TWC") == "TWC" and sourceName("TeslaBLE") == "BLE"
 
@@ -198,3 +212,23 @@ def test_provider_capability_text_for_tesla_cloud_and_ble():
         "Fleet API: commands",
         "Home Assistant: entities, commands",
     ] and "Owner API: commands" in providerLines(m, v)
+
+
+def presenceCell(html):
+    # The Presence column is the fifth cell after the VIN link
+    row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
+    return row.split("<td>")[4].split("</td>")[0].strip()
+
+
+def test_presence_column_shows_each_state():
+    m = master()
+    v = m.vehicleRegistry.get(VIN)
+    assert "<th>Presence</th>" in render(m)
+    assert presenceCell(render(m)) == "Probably home"  # no evidence either way
+    v.mark("plugIn", 100.0)
+    assert presenceCell(render(m)) == "Home"
+    v.mark("unplug", 200.0)
+    assert presenceCell(render(m)) == "Away"
+    # an unknown car on a TWC is here by definition
+    anon = m.vehicleRegistry.get("anon:8244")
+    assert PRESENCE_TEXT[presence(m, anon)] == "Home"

@@ -76,7 +76,7 @@ def test_ha_outcomes():
     assert p.stopCharging(VIN).kind == O.DONE and ha._post_service.call_args.args == ("switch", "turn_off", {"entity_id": "switch.c"})
     assert p.setChargeLimit(VIN, 80) == O.Outcome(O.UNSUPPORTED, "no charge_limit_number entity")
     assert p.setAmps(VIN, 40).kind == O.DONE and ha._post_service.call_args.args[2]["value"] == 32.0
-    assert p.declarations()[C.STOP_CHARGING] == C.Declaration(C.HA_BILLED) and not p.declares(C.WAKE)   # the reconciler's MIN_SEND_GAP spaces it
+    assert p.declarations()[C.STOP_CHARGING] == C.HA_BILLED and not p.declares(C.WAKE)   # the reconciler's MIN_SEND_GAP spaces it
     ha._post_service = ha.__class__._post_service.__get__(ha); import requests
     ha._session.post = Mock(side_effect=requests.exceptions.Timeout()); assert p.startCharging(VIN).kind == O.UNREACHABLE
     resp = Mock(status_code=403, text="secret-token"); ha._session.post = Mock(return_value=resp); resp.raise_for_status = Mock(side_effect=requests.exceptions.HTTPError(response=resp))

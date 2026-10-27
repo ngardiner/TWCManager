@@ -1,26 +1,19 @@
 """
 A registry vehicle whose charge rate a vehicle provider sets, as a charging
-endpoint.
-
-The endpoint reads only the registry's latest values and never calls a
-provider: the distributor runs on the control tick, which must not wait on
-a car, so a rate is desired state, which the reconciler delivers through the
-provider order (the local path first; a paid provider only where no local
-one covers the rate). The endpoint holds no state of its own.
+endpoint. It reads only the registry's latest values and never calls a
+provider: the distributor runs on the control tick, which must not wait on a
+car, so a rate is desired state that the reconciler delivers.
 """
 
 from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.Vehicle.Presence import pluggedHere, telemetryPlug
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
-from TWCManager.Vehicle.Reconcile.Belief import known
+from TWCManager.Vehicle.Reconcile.Belief import POWER_FLOWING_AMPS, known
 from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
-
-# A TWC drawing at least this is charging a car: the threshold at which
-# TWCSlave flags isCharging and queries the VIN
-POWER_FLOWING_AMPS = 1.0
 
 
 class VehicleEndpoint(EVSEInstance):
@@ -125,16 +118,11 @@ def _unknownKey(key) -> bool:
 def _blindTWCs(master) -> Tuple[bool, bool]:
     """How far an unnamed car on a local charging point may reach.
 
-    Returns (blind, unknown). A slave names its car when its vehicleKey
-    is a VIN (currentVIN, or lastVIN while it reports a plugged state),
-    so a stopped car does not hide the others. unknown is True when some
-    slave's key is None or anonymous; blind when such a slave reports a
-    plugged state (non-00) or draws power, so it might be serving any
-    car. An occupied Gen3 that can't name its car (anonymous, or no
-    key at all) could be serving any account car, so it blinds too. So
-    does an open Gen2 link with no slave linked (at startup, or after a
-    slave times out); a closed link controls no TWC. A failed scan fails
-    closed.
+    Returns (blind, unknown). A slave names its car when its vehicleKey is a
+    VIN, so a stopped car does not hide the others. unknown is True when
+    some slave's key is None or anonymous; blind when such a slave reports a
+    plug or draws power, when an occupied Gen3 can't name its car, or when a
+    Gen2 link is open with no slave linked. A failed scan fails closed.
     """
     blind = False
     unknown = False
@@ -161,38 +149,26 @@ def _blindTWCs(master) -> Tuple[bool, bool]:
     return blind, unknown
 
 
-def _telemetryPluggedIn(vehicle):
-    # A live telemetry feed (TeslaMate) says the cable is plugged in.
-    # Live is the telemetryChargeLimit criterion: syncSource is the
-    # telemetry module, which reverts to "TeslaAPI" after SYNC_TIMEOUT.
-    return vehicle.syncSource != "TeslaAPI" and vehicle.value("pluggedIn") is True
-
-
 def vehicleEndpoints(master) -> List[VehicleEndpoint]:
-    """A VehicleEndpoint for each registry car an enabled TeslaAPI places
-    at home.
+    """A VehicleEndpoint for each car plugged in here with a provider that
+    can set its rate, whichever module knows it.
 
     While a charging point that can't name its car is plugged in or draws
-    power, it might be serving any of them, so none is listed: an
-    endpoint would get its own power share and its own rate commands. A
-    Gen2 idle at 00 may still hide a plugged-in car, so while any point
-    can't name its car, a car live telemetry says is plugged in is not
-    listed either. A car on a named point is listed; the distributor
-    merges it with that point. Read-only endpoints are listed too (the
-    distributor skips them). Dropping an endpoint strands nothing: stops
-    go to master.stopCarsCharging by VIN.
+    power, it might be serving any of them, so none is listed: an endpoint
+    would get its own power share and rate commands. Likewise a car live
+    telemetry says is plugged in is not listed while any point can't name
+    its car, since a Gen2 idle at 00 may hide one. Dropping an endpoint
+    strands nothing: stops go to master.stopCarsCharging by VIN.
     """
-    carapi = master.getModuleByName("TeslaAPI")
-    try:
-        if carapi is None or not carapi.enabled():
-            return []
-    except Exception:
-        return []
     blind, unknown = _blindTWCs(master)
     if blind:
         return []
+    order = master.providerOrder
     return [
-        VehicleEndpoint(vehicle, master.providerOrder, master)
-        for vehicle, car in master.vehicleRegistry.attached("TeslaAPI")
-        if car.atHome and not (unknown and _telemetryPluggedIn(vehicle))
+        VehicleEndpoint(v, order, master)
+        for v in master.vehicleRegistry.vehicles()
+        if not v.isAnonymous
+        and pluggedHere(master, v)
+        and order.candidates(v, SET_AMPS)
+        and not (unknown and telemetryPlug(v))
     ]

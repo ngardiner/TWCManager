@@ -6,14 +6,7 @@
 from typing import Optional, Tuple
 
 from ..Reconcile.Outcome import DONE, UNSUPPORTED, Outcome
-from .Capability import (
-    LOCAL,
-    NO_INDIVIDUAL_STOP,
-    SET_AMPS,
-    START_CHARGING,
-    STOP_CHARGING,
-    Declaration,
-)
+from . import Capability as C
 from .Provider import Provider
 
 
@@ -24,9 +17,9 @@ class Gen3TWCProvider(Provider):
     worker = "local"
     module = None
     DECLARATIONS = {
-        SET_AMPS: Declaration(LOCAL),
-        START_CHARGING: Declaration(LOCAL),
-        STOP_CHARGING: Declaration(LOCAL),
+        C.SET_AMPS: C.LOCAL,
+        C.START_CHARGING: C.LOCAL,
+        C.STOP_CHARGING: C.LOCAL,
     }
     SUPPRESSED = {}
 
@@ -55,7 +48,7 @@ class Gen3TWCProvider(Provider):
     def limitations(self, vehicle):
         occupied = [u for u in self.controller.devices() if u.occupied is True]
         if len(occupied) > 1:
-            return frozenset({NO_INDIVIDUAL_STOP})
+            return frozenset({C.NO_INDIVIDUAL_STOP})
         return frozenset()
 
     def _onUnit(self, vin, act) -> Outcome:
@@ -64,9 +57,6 @@ class Gen3TWCProvider(Provider):
             return Outcome(UNSUPPORTED, "no unit")
         act(unit)
         return Outcome(DONE)
-
-    def setAmps(self, vin: str, amps: int) -> Outcome:
-        return self._onUnit(vin, lambda u: u.setTargetPower(u.convertAmpsToWatts(amps)))
 
     def stopCharging(self, vin: str) -> Outcome:
         # A zero headroom: a normal local stop (unverified on hardware). The

@@ -4,7 +4,7 @@
 # held; a save with held None removes the record.
 from typing import NamedTuple, Optional
 
-from .Desired import CHARGE_LIMIT, CHARGING
+from .Desired import CHARGE_LIMIT, CHARGING, RELEASE
 from .HeldLimits import MAX_LIMIT, MIN_LIMIT, HeldLimit
 
 # Observations that never adopt and never stand for the car's own state
@@ -53,20 +53,16 @@ def decideChargeLimit(
     """Decide how to apply `desired` (50-100), or with restore=True how to
     put back the normal limit.
 
-    current: the car's limit now, from any source, or None if no source
-        knows it: then nothing is sent, by any provider, and nothing is
-        decided (the reconciler retries).
+    current: the car's limit now, or None if no source knows it: then
+        nothing is decided or sent (the reconciler retries).
     held: the HeldLimit saved for the car, or None.
 
-    The rules, with the current limit known:
-    - We hold no limit (nothing saved, or held None): the car's limit is
-      its normal limit.
-    - We hold one, but the car is not at it: it was set by hand, and that is
-      the new normal limit.
-    - A restore sends the normal limit only while ours is still set;
-      otherwise the car's limit stands and becomes the normal limit.
-    - A car already at the target gets no command.
+    With the current limit known, a limit we don't hold is the car's normal
+    one, and a held limit the car is no longer at was set by hand and is the
+    new normal one.
     """
+    # A release puts back the outside limit as a restore does
+    restore = restore or desired == RELEASE
     outside = _clamped(held.outside) if held is not None else None
     ours = held.held if held is not None else None
     target = None if restore else _clamped(desired)
@@ -110,14 +106,15 @@ def decideChargeLimit(
     return ChargeLimitDecision(target, None, HeldLimit(normal, target), False, reason)
 
 
-def needsLiveRead(restore: bool, telemetryCurrent, held: Optional[HeldLimit]) -> bool:
-    """True when a telemetry current limit can't be trusted for this
-    decision and the worker must read the car live.
+def releases(desired) -> bool:
+    # A departure's restore or a policy release: the outside limit goes back
+    return desired.restore or desired.value == RELEASE
 
-    Only a restore that would hinge on it: while we hold a limit, telemetry
-    equal to the held limit confirms ours is still set (the restore is
-    sent), but any other value may be a hand-set limit or a stale one, and
-    telemetry can't tell those apart. Applies keep the telemetry value."""
+
+def needsLiveRead(restore: bool, telemetryCurrent, held: Optional[HeldLimit]) -> bool:
+    """True when a restore hinges on a telemetry limit that can't be
+    trusted: any value other than the held one may be hand-set or stale, and
+    telemetry can't tell which. Applies keep the telemetry value."""
     return (
         restore
         and telemetryCurrent is not None

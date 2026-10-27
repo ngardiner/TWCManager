@@ -6,12 +6,16 @@ The following settings (outside of the configuration file) are available via the
 
 Allows you to select which theme you'd like to use for the TWCManager interface.
 
+## Home Location
+
+Home is set or moved only from a fresh position read of a car: a position under 10 minutes old, by the fix's own GPS time. That happens when a TWC reads the car's VIN, or when the car's position arrives over BLE. When no home is set yet, a fresh position that arrives while a TWC is naming the car sets it too. A position not read over BLE must also have been read after the car reached its TWC (its plug-in or the VIN read), so a read from before the drive home never moves home, and once home is set, only a BLE position (or the Settings page) moves it. Home is never set from a car's first position otherwise. A car-only install with no TWC and no BLE must set home on the Settings page (use the vehicle location button), or with `homeLat` and `homeLon` through the [setSetting API](modules/control_HTTP_API/setSetting.md). Until then TWCManager logs a warning once, and a car known only through vehicle APIs is never treated as home and gets no limit. `atHomeRadius` defaults to 1,000 feet.
+
 ## Stop Charging Method
 
 This option, which defaults to a vehicle command, allows you to specify how you would like TWCManager to stop a car from charging. The following options exist, and each has some information to help you decide on which approach to use:
 
    * Vehicle command (BLE or API)
-      * This method sends a stop charging command to vehicles which are detected as being "at home", over BLE where available and the Tesla API otherwise (see Vehicle Command Policy below).
+      * This method sends a stop charging command to vehicles which are detected as being "at home" (see Charge Limits in Policy Customization for how that is decided), over BLE where available and the Tesla API otherwise (see Vehicle Command Policy below).
       * This method is only effective for Tesla vehicles. Any non-Tesla vehicles are not visible via the Tesla API and will not be stopped, even if the available power falls below the minimum power per TWC.
       * For those vehicles, they will continue to charge, but at the minimum power per TWC rate.
    * Stop Responding to Slaves
@@ -56,7 +60,7 @@ This setting specifies that any vehicle which requests to start charging will be
 
 ### Vehicle Command Policy
 
-Vehicle commands (start and stop charging, set the charge rate, set the charge limit, wake) go to the first ready provider in a fixed order: the TWC itself, then BLE, then the cloud, with billed providers (the Owner API, which Tesla does not bill but which is paced like a billed provider, for a car Tesla lists with `command_signing: off`; then the Fleet API, then Home Assistant) last. Free providers are always tried first. A billed provider is used only when no free one can serve the car, or after the free ones have failed for 5 minutes (charge limit) or 60 seconds (start/stop, amps), and sends each desired value at most four times. The Vehicle Command Policy suppresses providers in that order:
+Vehicle commands (start and stop charging, set the charge rate, set the charge limit, wake) go to the first ready provider in a fixed order: the TWC itself, then BLE, then the cloud, with billed providers (the Owner API, which Tesla does not bill but which is paced like a billed provider, for a car Tesla lists with `command_signing: off`; then the Fleet API, then Home Assistant) last. Free providers are always tried first. A billed provider is used only when no free one can serve the car, or after the free ones have failed for 5 minutes (charge limit) or 60 seconds (start/stop, amps), and sends each desired value at most four times. A start is done while the TWC the car is plugged into measures at least 1 A, in the last 30 seconds and since the car last reported, so no start or retry goes to a car already charging. The Vehicle Command Policy suppresses providers in that order:
 
    * `prefer_ble` - Prefer local (BLE), fall back to cloud after a delay. Nothing is suppressed. This is the default.
    * `ble_only` - Local only - never send billed cloud commands. Every non-local provider (the Fleet API and Home Assistant) is suppressed for commands; cloud reads still run.

@@ -20,17 +20,11 @@ class WebIPCControl:
 
     def __init__(self, master):
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
+        self.configConfig = master.config.get("config", {})
         self.debugLevel = self.configConfig.get("debugLevel", 0)
         self.master = master
 
-        try:
-            self.configIPC = master.config["control"]["IPC"]
-        except KeyError:
-            self.configIPC = {}
+        self.configIPC = master.config.get("control", {}).get("IPC", {})
         self.status = self.configIPC.get("enabled", False)
 
         # Unload if this module is disabled or misconfigured
@@ -336,8 +330,8 @@ class WebIPCControl:
                         + "\n"
                     )
 
-                    for s in self.master.vehicleRegistry.summaries():
-                        webResponseMsg += str(s) + "\n"
+                    for v in self.master.vehicleRegistry.vehicles():
+                        webResponseMsg += str(v.summary()) + "\n"
 
                     webResponseMsg += "slaveTWCRoundRobin:\n"
                     for slaveTWC in self.master.getSlaveTWCs():

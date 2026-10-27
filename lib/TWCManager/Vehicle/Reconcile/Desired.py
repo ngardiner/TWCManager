@@ -1,32 +1,15 @@
-# Desired state per car and aspect, the attempt record the reconciler keeps
-# for each and one free-channel record per car. Decision-makers write here;
-# the reconciler converges the car on it. Only the charge limit is adopted
-# from the car; charging and amps are stateless. Every stamp is the
-# registry's clock domain (time.time). The store's lock is a leaf: it is
-# never held while calling a provider, the registry, settings, a queue or
-# changed.
+# Desired state per car and aspect, with the attempt record the reconciler
+# keeps for each and one free-channel record per car. Only the charge limit
+# is adopted from the car; charging and amps are stateless. The store's lock
+# is a leaf: never held while calling a provider, the registry, settings, a
+# queue or changed.
 import logging
 import threading
 import time
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-from ..Providers.Capability import (
-    SET_AMPS,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-)
-from .Outcome import (
-    EXCLUDING,
-    QUEUE_DETAILS,
-    REFUSED,
-    RETRYABLE,
-    SETTLED,
-    UNREACHABLE,
-    UNSUPPORTED,
-    Outcome,
-    isNotSent,
-)
+from ..Providers import Capability as C
+from . import Outcome as O
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
@@ -34,7 +17,8 @@ logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 CHARGE_LIMIT = "chargeLimit"
 CHARGING = "charging"
 AMPS = "amps"
-ASPECTS = frozenset({CHARGE_LIMIT, CHARGING, AMPS})
+# The charge limit of a policy with none: the car's own (outside) limit
+RELEASE = -1
 
 # The registry field each aspect is observed in. AMPS is the car's own
 # current request, never availableCurrent (the charger's pilot)
@@ -47,17 +31,12 @@ FIELD_FOR = {
 
 def CAPABILITY_FOR(aspect, value) -> str:
     if aspect == CHARGE_LIMIT:
-        return SET_CHARGE_LIMIT
+        return C.SET_CHARGE_LIMIT
     if aspect == CHARGING:
-        return START_CHARGING if value is True else STOP_CHARGING
+        return C.START_CHARGING if value is True else C.STOP_CHARGING
     if aspect == AMPS:
-        return SET_AMPS
+        return C.SET_AMPS
     raise ValueError("unknown aspect %r" % (aspect,))
-
-
-def _checkAspect(aspect) -> None:
-    if aspect not in ASPECTS:
-        raise ValueError("unknown aspect %r" % (aspect,))
 
 
 class Desired(NamedTuple):
@@ -88,59 +67,56 @@ class Attempt(NamedTuple):
     force: bool = False
     # Why a command goes without a wake (logged by runAttempt)
     wakeSkipped: Optional[str] = None
+    # The car's paid request count when planned (Vehicle.paidRequests)
+    paidBefore: int = 0
 
 
 class AttemptRecord:
     # Mutated after submit only through DesiredStore.noteOutcome
+
+    # What a new desire resets (all immutable, so shared). The NOT_SENT hold
+    # (lastOutcome) belongs to the desire it came from
+    _FRESH = dict(
+        lastOutcome=None,
+        lastOutcomeAt=0,
+        lastFreeAt=0,  # the last request a free provider sent
+        # The paid or disruptive requests for the current desire, the last
+        # one's stamp and the value believed when it was planned
+        paidSends=0,
+        paidReached=False,  # one of them got an answer other than UNREACHABLE
+        paidAt=None,
+        paidSaw=None,
+        paidRetryDue=False,  # that request failed and its one blind retry is unused
+        rearmed=False,  # the desire's one re-arm of its paid sends is used
+        # The provider whose wake the car did not answer on the last paid
+        # send: the command never went (Reconciler's WAKE_CHECK)
+        wakeCheckBy=None,
+        settledAt=None,
+        heldAt=None,  # a hold: when, and the paid requests attempts that held made
+        checkedAt=0,  # a cloud hold's last free online check
+        paidSpent=0,
+        unread=0,  # sends that found the current value unreadable (a limit's backstop)
+        clearedValue=None,  # the value a clearIf withdrew; set() may take the record back
+    )
+
     def __init__(self):
+        # What spans desires: the send gap and the attempt in flight
         self.inFlight: Optional[Attempt] = None
-        self.lastOutcome: Optional[Outcome] = None
-        self.lastOutcomeAt: float = 0
         self.lastProvider: str = ""
         # Provider -> the EXCLUDING kind that excluded it
         self.excluded: Dict[str, str] = {}
-        # The last request any provider sent, and the last a free one sent
+        # The last request any provider sent
         self.lastSentAt: float = 0
-        self.lastFreeAt: float = 0
-        # The paid or disruptive requests for the current desire, the last
-        # one's stamp and the value believed when it was planned
-        self.paidSends = 0
-        # One of them got an answer other than UNREACHABLE
-        self.paidReached = False
-        self.paidAt: Optional[float] = None
-        self.paidSaw: Any = None
-        # That request failed and its one blind retry is unused
-        self.paidRetryDue: bool = False
-        # The desire's one re-arm of its paid sends is used
-        self.rearmed = False
-        # The provider whose wake the car did not answer on the last paid
-        # send: the command never went (Reconciler's WAKE_CHECK)
-        self.wakeCheckBy: Optional[str] = None
-        self.settledAt: Optional[float] = None
         self.pendingSave: Any = None
-        # Sends that found the current value unreadable (a limit's backstop)
-        self.unread = 0
-        # The value a clearIf withdrew; set() may take the record back
-        self.clearedValue: Any = None
+        self.__dict__.update(self._FRESH)
 
     def newDesire(self) -> None:
+        # Not inFlight, lastProvider, lastSentAt or pendingSave: plan reads
+        # inFlight without the lock, and the send gap spans desires
+        self.__dict__.update(self._FRESH)
         # UNSUPPORTED can depend on the value (amps outside a range); a
         # refusal does not
-        self.excluded = {p: k for p, k in self.excluded.items() if k != UNSUPPORTED}
-        self.lastFreeAt = 0
-        # The NOT_SENT hold belongs to the desire it came from
-        self.lastOutcome = None
-        self.lastOutcomeAt = 0
-        self.paidSends = 0
-        self.paidReached = False
-        self.paidAt = None
-        self.paidSaw = None
-        self.paidRetryDue = False
-        self.rearmed = False
-        self.wakeCheckBy = None
-        self.settledAt = None
-        self.unread = 0
-        self.clearedValue = None
+        self.excluded = {p: k for p, k in self.excluded.items() if k != O.UNSUPPORTED}
 
     def exclude(self, provider: str, kind: str) -> None:
         self.excluded[provider] = kind
@@ -175,9 +151,8 @@ class ControlState:
 
 class DesiredStore:
     # Keys are registry keys (a VIN or an anon:... key), so the per-key maps
-    # are bounded by the registry; per-key maps are bounded by ASPECTS and
-    # the registered provider names. Never submit or cancel while holding
-    # the lock (Reconciler.py's header).
+    # are bounded by the registry and the three aspects. Never submit or
+    # cancel while holding the lock (Reconciler.py's header).
     def __init__(self, clock=time.time):
         self._clock = clock
         self._lock = threading.Lock()
@@ -200,13 +175,6 @@ class DesiredStore:
             record = AttemptRecord()
             state.records[aspect] = record
         return record
-
-    def _settled(self, state, aspect) -> bool:
-        desired = state.desired.get(aspect)
-        record = state.records.get(aspect)
-        if desired is None or record is None or record.settledAt is None:
-            return False
-        return record.settledAt >= desired.at
 
     def _notify(self, key, aspect) -> None:
         # Outside the lock
@@ -231,7 +199,6 @@ class DesiredStore:
     ) -> bool:
         # keep: a value clearIf withdrew comes back on its old record, so
         # its paid budget is not spent again
-        _checkAspect(aspect)
         ignored = False
         changed = False
         with self._lock:
@@ -271,7 +238,6 @@ class DesiredStore:
         return changed
 
     def clear(self, key, aspect) -> bool:
-        _checkAspect(aspect)
         with self._lock:
             state = self._states.get(key)
             removed = state is not None and state.desired.pop(aspect, None) is not None
@@ -282,7 +248,6 @@ class DesiredStore:
     def clearIf(self, key, aspect, value) -> bool:
         # Clears only a desire for this value (a pending stop cancelled, a
         # start no longer offered)
-        _checkAspect(aspect)
         with self._lock:
             state = self._states.get(key)
             existing = state.desired.get(aspect) if state else None
@@ -317,19 +282,19 @@ class DesiredStore:
         outcome,
         now,
         paid: bool,
+        spent: int = 0,
     ) -> bool:
         # The only change to a record after submit. A report for anything
         # but the attempt in flight is stale and changes nothing; so is a
         # debug one-shot's (no aspect)
         if aspect is None:
             return False
-        _checkAspect(aspect)
         with self._lock:
             state = self._states.get(key)
             record = state.records.get(aspect) if state else None
             if record is None or record.inFlight is not attempt:
                 return False
-            if outcome.detail in QUEUE_DETAILS:
+            if outcome.detail in O.QUEUE_DETAILS:
                 # The attempt never ran
                 record.inFlight = None
                 return True
@@ -341,13 +306,18 @@ class DesiredStore:
                 and want.value == attempt.value
                 and attempt.since >= want.at
             )
+            held = outcome.detail.startswith(O.HELD)
             if current:
+                # A hold sent nothing: the desire waits for newer evidence
+                record.heldAt = now if held else None
+                # The paid requests an attempt that held made (wake, read)
+                record.paidSpent += spent if held else 0
                 record.lastOutcome = outcome
                 record.lastOutcomeAt = now
                 record.lastProvider = attempt.provider
                 record.unread += outcome.detail.startswith("rules: could not read")
-            sent = not isNotSent(outcome)
-            if sent and outcome.kind not in EXCLUDING:
+            sent = not O.isNotSent(outcome)
+            if sent and outcome.kind not in O.EXCLUDING:
                 # Even for a replaced desire: a start still in flight when
                 # the desire flips spaces the stop. An excluding outcome
                 # changed nothing on the car: the fallback need not wait
@@ -358,7 +328,7 @@ class DesiredStore:
                 else:
                     # One blind retry, after the desire's first paid request
                     # failed; never after a failed wake
-                    retry = outcome.kind in RETRYABLE
+                    retry = outcome.kind in O.RETRYABLE
                     failedWake = retry and outcome.detail.startswith("wake ")
                     record.paidRetryDue = (
                         record.paidSends == 0 and retry and not failedWake
@@ -366,24 +336,26 @@ class DesiredStore:
                     record.wakeCheckBy = attempt.provider if failedWake else None
                     record.paidSends += 1
                     # A failed wake (an HTTP error too) never reached the car
-                    record.paidReached |= outcome.kind != UNREACHABLE and not failedWake
+                    record.paidReached |= (
+                        outcome.kind != O.UNREACHABLE and not failedWake
+                    )
                     record.paidAt = now
-            if current and outcome.kind in SETTLED:
+            if current and outcome.kind in O.SETTLED and not held:
                 record.settledAt = now
-            if paid:
+            if paid or held:
                 pass
-            elif outcome.kind in SETTLED or outcome.detail == "pairing":
+            elif outcome.kind in O.SETTLED or outcome.detail == "pairing":
                 # Inside the pairing window the car answers, refusing the key
                 # until the card is tapped: the channel works, and the paid
                 # fallback waits
                 state.free.success(now)
             elif sent and (
                 # A failure of the free channel needs a request to it
-                outcome.kind in RETRYABLE
-                or outcome.kind == REFUSED
+                outcome.kind in O.RETRYABLE
+                or outcome.kind == O.REFUSED
             ):
                 state.free.failure(now)
-            if outcome.kind == REFUSED or (current and outcome.kind in EXCLUDING):
+            if outcome.kind == O.REFUSED or (current and outcome.kind in O.EXCLUDING):
                 # UNSUPPORTED can depend on the value: a superseded one's not
                 record.exclude(attempt.provider, outcome.kind)
             # Last: plan reads the record without the lock once this is None
@@ -395,26 +367,14 @@ class DesiredStore:
         with self._lock:
             return self._states.pop(key, None) is not None
 
-    def decision(self, key) -> None:
-        # A new decision: the next set applies over adopted values
-        with self._lock:
-            state = self._states.get(key)
-            if state is None:
-                return
-            for aspect, desired in list(state.desired.items()):
-                if desired.adopted:
-                    state.desired[aspect] = desired._replace(adopted=False)
-
     # --- reads ---
 
     def get(self, key, aspect) -> Optional[Desired]:
-        _checkAspect(aspect)
         with self._lock:
             state = self._states.get(key)
             return state.desired.get(aspect) if state else None
 
     def record(self, key, aspect) -> AttemptRecord:
-        _checkAspect(aspect)
         with self._lock:
             return self._record(self._state(key), aspect)
 
@@ -430,12 +390,6 @@ class DesiredStore:
         # A read that never creates an entry (readiness, summaries)
         with self._lock:
             return self._states.get(key)
-
-    def settled(self, key, aspect) -> bool:
-        _checkAspect(aspect)
-        with self._lock:
-            state = self._states.get(key)
-            return state is not None and self._settled(state, aspect)
 
     def keys(self) -> List[str]:
         with self._lock:

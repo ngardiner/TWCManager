@@ -29,14 +29,8 @@ class Efergy:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configEfergy = master.config.get("sources", {})["Efergy"]
-        except KeyError:
-            self.configEfergy = {}
+        self.configConfig = master.config.get("config", {})
+        self.configEfergy = master.config.get("sources", {}).get("Efergy", {})
         self.debugLevel = self.configConfig.get("debugLevel", 0)
         self.status = self.configEfergy.get("enabled", False)
         self.token = self.configEfergy.get("token", None)

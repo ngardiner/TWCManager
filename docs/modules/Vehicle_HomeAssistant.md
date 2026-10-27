@@ -85,12 +85,12 @@ The module uses this data to:
 
 * report each vehicle's battery level, charge limit, charge current setting,
   charging state and location to TWCManager's vehicle registry
-* keep each vehicle's `battery_level`, `lat`, `lon` and `at_home`
+* keep each vehicle's `battery_level`
 * expose aggregate properties to TWCManager such as:
   * `numCarsAtHome`
   * `minBatteryLevelAtHome`
 
-Home location and "at home radius" are taken from the main TWCManager configuration, using the same heuristic as the original Tesla API module (with the `atHomeRadius` setting in feet).
+Where a car is comes from TWCManager's presence rules (see Charge Limits in [Policy Customization](../PolicyCustomization.md)), using the car's Home Assistant location along with its other evidence. Home is set or moved only from a fresh position read of a car (under 10 minutes old, by the fix's own GPS time): when a TWC reads the car's VIN, or when the position arrives over BLE, or, with no home set yet, when a fresh position arrives while a TWC is naming the car. A position not read over BLE counts only if it was read after the car reached its TWC, so once home is set, only a BLE position (or the Settings page) moves it. It is never set from a car's first position otherwise. A car-only install with no TWC and no BLE must set home on the Settings page. A zone state of `home` with no coordinates no longer places a car at home. `atHomeRadius` (in feet) defaults to 1,000.
 
 ### Charging Control
 

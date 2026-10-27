@@ -15,6 +15,28 @@ def isWellFormedVIN(vin: str) -> bool:
     )
 
 
+def vehicleRecordKey(vehicles, vin):
+    # settings["Vehicles"] keys may be in any case (older releases stored form
+    # VINs as typed). The stored key for vin, else None. The caller holds
+    # settingsLock.
+    if vin in vehicles:
+        return vin
+    upper = vin.upper()
+    return next(
+        (k for k in vehicles if isinstance(k, str) and k.upper() == upper), None
+    )
+
+
+def storedBleStatus(vehicles, vin):
+    # The persisted pairing state of vin's record: {"status", "since"}, status
+    # "unpaired" when none is stored. The caller holds settingsLock.
+    rec = vehicles.get(vehicleRecordKey(vehicles, vin))
+    ble = rec.get("ble") if isinstance(rec, dict) else None
+    if isinstance(ble, dict) and ble.get("status"):
+        return {"status": ble["status"], "since": ble.get("since")}
+    return {"status": "unpaired", "since": None}
+
+
 # ISO 3779: letters transliterate to digits (no I, O or Q), each position has
 # a weight, and position 9 is the weighted sum mod 11 (X for 10)
 _TRANSLIT = str.maketrans("ABCDEFGHJKLMNPRSTUVWXYZ", "12345678123457923456789")

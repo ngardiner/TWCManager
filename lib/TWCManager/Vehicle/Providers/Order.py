@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Collection, List, Optional
 
+from ..Reconcile.Desired import Attempt
 from .Capability import READ_CHARGE, SET_AMPS, TIER_BILLED, WAKE
 from .Provider import Provider
 from .Suppressions import Suppressions
@@ -51,8 +52,7 @@ class ProviderOrder:
     def ordered(self, capability) -> List[Provider]:
         found = []
         for index, p in self._indexed():
-            declaration = p.declarations().get(capability)
-            if declaration is None:
+            if capability not in p.declarations():
                 continue
             if self.suppressions.suppressed(p, capability):
                 continue
@@ -177,9 +177,6 @@ class ProviderOrder:
         )
         if provider is None:
             return False
-        # Lazy: Reconcile imports this package's Capability
-        from ..Reconcile.Desired import Attempt
-
         attempt = Attempt(
             key=vin,
             aspect=None,

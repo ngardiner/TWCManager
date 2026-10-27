@@ -25,14 +25,8 @@ class MQTT:
     def __init__(self, master):
         self.master = master
         self.__config = master.config
-        try:
-            self.__configConfig = master.config["config"]
-        except KeyError:
-            self.__configConfig = {}
-        try:
-            self.__configMQTT = master.config.get("sources", {})["MQTT"]
-        except KeyError:
-            self.__configMQTT = {}
+        self.__configConfig = master.config.get("config", {})
+        self.__configMQTT = master.config.get("sources", {}).get("MQTT", {})
 
         self.status = self.__configMQTT.get("enabled", False)
         self.brokerIP = self.__configMQTT.get("brokerIP", None)

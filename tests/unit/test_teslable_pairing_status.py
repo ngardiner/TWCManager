@@ -3,7 +3,10 @@ from unittest.mock import Mock, patch
 import threading
 import pytest
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
+from TWCManager.Vehicle.Reconcile.Run import entryKey
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
+from tests.unit.reconcile_helpers import entries, runPending
 from tests.unit.vehicle_helpers import commands
 
 VIN = "5YJ3E1EA1KF000001"
@@ -529,6 +532,8 @@ def test_pairing_failure_keeps_an_unproven_claim():
 def scanner(**kw):
     ble, reg, master = make()
     ble.isDockerCached = False
+    # A BLE worker that runs only when a test drains or starts it
+    master.reconciler = VehicleReconciler(master)
     return ble, reg, master
 
 
@@ -560,6 +565,24 @@ def test_scan_parses_bluetoothctl_output_under_ble_lock():
         )
         assert ble.scanForVehicleInRange(VIN) is False
         assert ble.bleStatus(VIN)["label"] == "Not in range"
+
+
+def test_one_scan_answers_for_several_cars():
+    ble, reg, master = scanner()
+    TWO = "5YJ3E1EA1KF000002"
+    name = ble.bleLocalName(TWO).encode()
+    ble._run_command_with_timeout = Mock(
+        return_value=(b"[NEW] Device AA:BB:CC:DD:EE:FF " + name + b"\n", b"", 0)
+    )
+    ble._bluezAddresses = Mock(return_value=set())
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.shutil.which",
+        return_value="/usr/bin/bluetoothctl",
+    ):
+        assert ble.scanForVehicleInRange([VIN, TWO]) is True
+    assert ble._run_command_with_timeout.call_count == 1
+    assert ble.rangeStatus(TWO)["inRange"] is True
+    assert ble.rangeStatus(VIN)["inRange"] is False
 
 
 def test_scan_unavailable_without_bluetoothctl():
@@ -596,14 +619,19 @@ def test_never_scanned_is_range_unknown():
     assert st["lastScanAge"] is None and st["scannedAt"] is None
 
 
-def test_request_scan_queues_one_task_and_runs_every_pending_vin():  # P17
+def jobs(master):
+    # The scans waiting on the BLE worker, as (vin, kind)
+    return [entryKey(j) for j in entries(master.reconciler.ble)]
+
+
+def test_request_scan_queues_one_job_per_vin_and_runs_every_pending_vin():  # P17
     ble, reg, master = scanner()
     ble.requestRangeScan(VIN)
     ble.requestRangeScan("5YJ3E1EA1KF000002")
-    master.queue_background_task.assert_called_with({"cmd": "bleScan"})
+    assert jobs(master) == [(VIN, "scan"), ("5YJ3E1EA1KF000002", "scan")]
     assert ble.bleStatus(VIN)["scanPending"] is True
     ble.scanForVehicleInRange = Mock(return_value=False)
-    ble.runPendingScans()
+    runPending(master.reconciler.ble)
     assert sorted(c.args[0] for c in ble.scanForVehicleInRange.call_args_list) == [
         VIN,
         "5YJ3E1EA1KF000002",
@@ -611,7 +639,7 @@ def test_request_scan_queues_one_task_and_runs_every_pending_vin():  # P17
     assert ble.bleStatus(VIN)["scanPending"] is False
 
 
-def test_request_during_a_scan_is_served_by_the_same_task():
+def test_request_during_a_scan_queues_behind_it():
     ble, reg, master = scanner()
     ble.requestRangeScan(VIN)
     seen = []
@@ -619,20 +647,19 @@ def test_request_during_a_scan_is_served_by_the_same_task():
     def scan(vin):
         seen.append(vin)
         if len(seen) == 1:
-            # Arrives while the task runs; the queue coalesces it away.
+            # Arrives while the worker scans
             ble.requestRangeScan("5YJ3E1EA1KF000002")
 
     ble.scanForVehicleInRange = scan
-    ble.runPendingScans()
+    runPending(master.reconciler.ble)
     assert seen == [VIN, "5YJ3E1EA1KF000002"]
 
 
 def test_request_rejects_malformed_vin():
     ble, reg, master = scanner()
-    master.queue_background_task.reset_mock()
     ble.requestRangeScan("not-a-vin")
     ble.requestRangeScan(None)
-    master.queue_background_task.assert_not_called()
+    assert jobs(master) == []
 
 
 def test_scan_observes_ble_reach_on_registry_vehicle():
@@ -754,8 +781,8 @@ def test_scan_ignores_bluez_forgetting_the_car():
 
 
 class Runaway(BaseException):
-    """Escapes runPendingScans' per-VIN except Exception, so a drain that
-    never empties fails the test instead of looping."""
+    """Escapes the worker's except Exception, so a scan that keeps queueing
+    itself fails the test instead of looping."""
 
 
 def scan_with(ble, scan_out, devices_out=b""):
@@ -845,7 +872,7 @@ def test_scan_is_pending_while_it_runs():
     ble._run_command_with_timeout = run
     ble.requestRangeScan(VIN)
     with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
-        ble.runPendingScans()
+        runPending(master.reconciler.ble)
         assert seen == [True]
         assert ble.rangeStatus(VIN)["pending"] is False
 
@@ -854,7 +881,7 @@ def test_pending_cleared_when_a_scan_raises():
     ble, reg, master = scanner()
     ble.scanForVehicleInRange = Mock(side_effect=RuntimeError("boom"))
     ble.requestRangeScan(VIN)
-    ble.runPendingScans()
+    runPending(master.reconciler.ble)
     assert ble.rangeStatus(VIN)["pending"] is False
 
 
@@ -863,13 +890,12 @@ def test_request_within_ten_seconds_of_a_scan_is_ignored():
     scan_with(ble, (CAR, b"", 0))
     with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
         ble.scanForVehicleInRange(VIN)
-    master.queue_background_task.reset_mock()
     ble.requestRangeScan(VIN)
-    master.queue_background_task.assert_not_called()
+    assert jobs(master) == []
     assert ble.rangeStatus(VIN)["pending"] is False
     ble._rangeScan[VIN]["at"] -= 11
     ble.requestRangeScan(VIN)
-    master.queue_background_task.assert_called_with({"cmd": "bleScan"})
+    assert jobs(master) == [(VIN, "scan")]
     assert ble.rangeStatus(VIN)["pending"] is True
 
 
@@ -881,41 +907,17 @@ def test_request_while_the_vin_is_being_scanned_is_ignored():
         # Hard cap: a broken debounce must fail, not loop forever.
         if len(queued) >= 3:
             raise Runaway("drain kept rescanning the same VIN")
-        master.queue_background_task.reset_mock()
         ble.requestRangeScan(VIN)
-        queued.append(master.queue_background_task.called)
+        queued.append(bool(jobs(master)))
 
     ble.scanForVehicleInRange = scan
     ble.requestRangeScan(VIN)
-    ble.runPendingScans()
+    runPending(master.reconciler.ble)
     assert queued == [False]
     assert ble.rangeStatus(VIN)["pending"] is False
 
 
-def test_drain_is_bounded_and_leaves_one_follow_up():
-    # A request arriving during every scan: the drain stops after
-    # SCAN_DRAIN_PASSES and the post-task check queues exactly one follow-up.
-    ble, reg, master = scanner()
-    vins = ["5YJ3E1EA1KF%06d" % n for n in range(1, 50)]
-    seen = []
-
-    def scan(vin):
-        if len(seen) >= 40:
-            raise Runaway("drain did not stop")
-        seen.append(vin)
-        ble.requestRangeScan(vins[len(seen)])
-
-    ble.scanForVehicleInRange = scan
-    ble.requestRangeScan(vins[0])
-    master.queue_background_task.reset_mock()
-    ble.runPendingScans()
-    assert len(seen) == ble.SCAN_DRAIN_PASSES
-    master.queue_background_task.reset_mock()
-    ble.requeueIfRequested()
-    master.queue_background_task.assert_called_once_with({"cmd": "bleScan"})
-
-
-def test_mid_scan_request_is_served_without_a_follow_up():
+def test_mid_scan_request_is_served_by_the_worker_once():
     ble, reg, master = scanner()
     seen = []
 
@@ -928,22 +930,9 @@ def test_mid_scan_request_is_served_without_a_follow_up():
 
     ble.scanForVehicleInRange = scan
     ble.requestRangeScan(VIN)
-    ble.runPendingScans()
+    runPending(master.reconciler.ble)
     assert seen == [VIN, "5YJ3E1EA1KF000002"]
-    master.queue_background_task.reset_mock()
-    ble.requeueIfRequested()
-    master.queue_background_task.assert_not_called()
-
-
-def test_requeue_after_the_task_when_requests_remain():
-    ble, reg, master = scanner()
-    master.queue_background_task.reset_mock()
-    ble.requeueIfRequested()
-    master.queue_background_task.assert_not_called()
-    with ble._scanLock:
-        ble._scanRequests[VIN] = __import__("time").time()
-    ble.requeueIfRequested()
-    master.queue_background_task.assert_called_once_with({"cmd": "bleScan"})
+    assert jobs(master) == []
 
 
 @pytest.mark.parametrize(
@@ -1006,6 +995,56 @@ def test_pairing_that_could_not_start_creates_no_vehicle_record():  # M7
     # A known car still records the failure.
     assert ble.peerWithVehicle(VIN) is False
     assert ble.bleStatus(VIN)["status"] == "pairing_failed"
+
+
+def test_a_scan_hit_is_a_sighting_and_a_miss_is_not():
+    ble, reg, master = scanner()
+    v = reg.getOrCreate(VIN, "TeslaBLE")
+    seen = v.lastSeen
+
+    def scan(out):
+        ble._run_command_with_timeout = lambda *a, **k: (out, b"", 0)
+        with patch(
+            "TWCManager.Vehicle.TeslaBLE.shutil.which",
+            return_value="/usr/bin/bluetoothctl",
+        ):
+            return ble.scanForVehicleInRange(VIN)
+
+    assert scan(b"[NEW] Device 11:22:33:44:55:66 Other\n") is False
+    assert v.lastSeen == seen
+    assert scan(b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n") is True
+    assert v.lastSeen > seen and v.lastSeenSource == "TeslaBLE"
+
+
+def test_the_last_scan_survives_a_restart():
+    ble, reg, master = scanner()
+    ble._run_command_with_timeout = lambda *a, **k: (b"", b"", 0)
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.shutil.which",
+        return_value="/usr/bin/bluetoothctl",
+    ):
+        assert ble.scanForVehicleInRange(VIN) is False
+    master.queue_background_task.assert_any_call({"cmd": "saveSettings"})
+    saved = master.settings["Vehicles"][VIN]["ble"]["scan"]
+    assert saved["inRange"] is False
+
+    # A new module over the same settings
+    with patch.object(TeslaBLE, "_start_dbus_session"), patch.object(
+        TeslaBLE, "_cleanup_stale_pipe"
+    ):
+        again = TeslaBLE(master)
+    assert again.rangeStatus(VIN) == {**saved, "pending": False}
+    # Pairing writes the status beside it without dropping it
+    again._setBleStatus(VIN, "paired")
+    assert master.settings["Vehicles"][VIN]["ble"]["scan"] == saved
+
+
+def test_a_scan_of_a_car_with_no_record_is_kept_in_memory_only():
+    ble, reg, master = scanner()
+    master.settings["Vehicles"] = {}
+    ble._noteScan(VIN, True)
+    assert ble.rangeStatus(VIN)["inRange"] is True
+    assert master.settings["Vehicles"] == {}
 
 
 def test_failed_device_lookup_is_range_unknown():  # M3

@@ -30,14 +30,8 @@ class OpenHab:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configOpenHab = master.config.get("sources", {})["openHAB"]
-        except KeyError:
-            self.configOpenHab = {}
+        self.configConfig = master.config.get("config", {})
+        self.configOpenHab = master.config.get("sources", {}).get("openHAB", {})
         self.status = self.configOpenHab.get("enabled", False)
         self.serverIP = self.configOpenHab.get("serverIP", None)
         self.serverPort = self.configOpenHab.get("serverPort", 8080)

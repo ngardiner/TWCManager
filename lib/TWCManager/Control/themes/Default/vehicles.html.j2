@@ -12,9 +12,10 @@
       <tr>
         <th>VIN</th><td>&nbsp;</td>
         <th>Name</th><td>&nbsp;</td>
+        <th>Presence</th><td>&nbsp;</td>
         <th>Providers</th><td>&nbsp;</td>
         <th>Last seen</th><td>&nbsp;</td>
-        <th>Charge limit set by TWCManager</th>
+        <th>Charge limit (car's own)</th>
       </tr>
       {% for v in registry.vehicles() %}
         {% set row = v.summary() %}
@@ -25,6 +26,8 @@
           </td>
           <td>&nbsp;</td>
           <td>{{ row.name }}</td>
+          <td>&nbsp;</td>
+          <td>{{ presence(v) }}</td>
           <td>&nbsp;</td>
           <td>{% for line in providerLines(v) %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
           <td>&nbsp;</td>

@@ -10,42 +10,22 @@ from typing import Dict, Optional, Tuple
 
 from ..Reconcile.Outcome import SATISFIED, SETTLED, UNSUPPORTED, Outcome
 
-from .Capability import (
-    CHARGE_FIELDS,
-    CLOUD_FREE,
-    COMMANDS,
-    FLEET_COMMAND,
-    FLEET_DATA,
-    FLEET_WAKE,
-    LOCATION_FIELDS,
-    OWNER_COMMAND,
-    READ_CHARGE,
-    READ_WALL_CONNECTOR_VINS,
-    SET_AMPS,
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-    WAKE,
-    Declaration,
-)
-from .Provider import CLOUD_SUPPRESSED, Provider, vehicleMaxAmps
+from . import Capability as C
+from .Provider import CLOUD_SUPPRESSED, Provider, carAmpsRange
 
 # The Tesla command each capability sends, for the read-only line
 TESLA_COMMAND = {
-    SET_CHARGE_LIMIT: "set_charge_limit",
-    START_CHARGING: "charge_start",
-    STOP_CHARGING: "charge_stop",
-    SET_AMPS: "set_charging_amps",
-    WAKE: "wake_up",
+    C.SET_CHARGE_LIMIT: "set_charge_limit",
+    C.START_CHARGING: "charge_start",
+    C.STOP_CHARGING: "charge_stop",
+    C.SET_AMPS: "set_charging_amps",
+    C.WAKE: "wake_up",
 }
-
-# The reader paces it: a connect edge, then one poll a minute
-WALL_CONNECTOR_VINS = Declaration(CLOUD_FREE)
 
 
 class _TeslaAPIProvider(Provider):
     # One token slot of the TeslaAPI module
-    FIELDS = CHARGE_FIELDS | LOCATION_FIELDS
+    FIELDS = C.CHARGE_FIELDS | C.LOCATION_FIELDS
     slotName = "ownerSlot"
 
     def __init__(self, carapi):
@@ -70,9 +50,7 @@ class _TeslaAPIProvider(Provider):
         )
 
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
-        if vehicle is None:
-            return None
-        return (1, vehicleMaxAmps(vehicle, self.carapi.master.config["config"]))
+        return carAmpsRange(vehicle, self.carapi.master)
 
     # Command methods: one request each (set_charging_amps below 5 A
     # excepted, as TeslaPy #42), classified by TeslaAPI.command. Each sends
@@ -106,13 +84,15 @@ class _TeslaAPIProvider(Provider):
             return Outcome(UNSUPPORTED, "disconnected")
         return outcome
 
+    def online(self, vehicle) -> Optional[bool]:
+        # The free online check (cached), for a car this slot commands
+        slot = getattr(self.carapi, self.slotName)
+        if vehicle is None or not self.carapi.canCommand(vehicle, slot):
+            return None
+        return self.carapi.onlineState(vehicle, now=self.clock())
+
     def stopCharging(self, vin: str) -> Outcome:
-        vehicle = self._listed(vin)
-        if (
-            vehicle is not None
-            and self.carapi.canCommand(vehicle, getattr(self.carapi, self.slotName))
-            and self.carapi.onlineState(vehicle, now=self.clock()) is False
-        ):
+        if self.online(self._listed(vin)) is False:
             # An asleep car is not charging: settled, never sent
             return Outcome(SATISFIED, "asleep, not charging")
         return self._command(vin, "charge_stop")
@@ -142,26 +122,28 @@ class OwnerAPIProvider(_TeslaAPIProvider):
     name = "OwnerAPI"
     rank = 4
     local = False
+    # The site read is paced by its reader: a connect edge, then one poll a
+    # minute
     DECLARATIONS = {
-        READ_CHARGE: Declaration(CLOUD_FREE),
-        SET_CHARGE_LIMIT: Declaration(OWNER_COMMAND),
-        START_CHARGING: Declaration(OWNER_COMMAND),
-        STOP_CHARGING: Declaration(OWNER_COMMAND),
-        SET_AMPS: Declaration(OWNER_COMMAND),
-        WAKE: Declaration(OWNER_COMMAND),
-        READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
+        C.READ_CHARGE: C.CLOUD_FREE,
+        C.SET_CHARGE_LIMIT: C.OWNER_COMMAND,
+        C.START_CHARGING: C.OWNER_COMMAND,
+        C.STOP_CHARGING: C.OWNER_COMMAND,
+        C.SET_AMPS: C.OWNER_COMMAND,
+        C.WAKE: C.OWNER_COMMAND,
+        C.READ_WALL_CONNECTOR_VINS: C.CLOUD_FREE,
     }
     SUPPRESSED = CLOUD_SUPPRESSED
 
     def ready(self, vehicle, capability) -> bool:
-        if capability == READ_WALL_CONNECTOR_VINS:
+        if capability == C.READ_WALL_CONNECTOR_VINS:
             # A site read: no vehicle needed
             return self.carapi.wallConnectorVinsReady(self.carapi.ownerSlot)
         if vehicle is None or capability not in self.declarations():
             return False
         if vehicle.attachment("TeslaAPI") is None:
             return False
-        if capability in COMMANDS:
+        if capability in C.COMMANDS:
             # Says once why a car is read-only
             if self.carapi.refuseCommandFor(vehicle, TESLA_COMMAND[capability]):
                 return False
@@ -171,7 +153,7 @@ class OwnerAPIProvider(_TeslaAPIProvider):
     def available(self, capability) -> bool:
         # The broadcast gate for commands: an Owner token that may command
         # some car
-        if capability in COMMANDS:
+        if capability in C.COMMANDS:
             return (
                 self.carapi.ownerTokenHeld()
                 and "command" not in self.carapi.ownerSlot.refusedPurposes
@@ -188,18 +170,18 @@ class FleetAPIProvider(_TeslaAPIProvider):
     rank = 5
     local = False
     DECLARATIONS = {
-        READ_CHARGE: Declaration(FLEET_DATA),
-        SET_CHARGE_LIMIT: Declaration(FLEET_COMMAND),
-        START_CHARGING: Declaration(FLEET_COMMAND),
-        STOP_CHARGING: Declaration(FLEET_COMMAND),
-        SET_AMPS: Declaration(FLEET_COMMAND),
-        WAKE: Declaration(FLEET_WAKE),
-        READ_WALL_CONNECTOR_VINS: WALL_CONNECTOR_VINS,
+        C.READ_CHARGE: C.FLEET_DATA,
+        C.SET_CHARGE_LIMIT: C.FLEET_COMMAND,
+        C.START_CHARGING: C.FLEET_COMMAND,
+        C.STOP_CHARGING: C.FLEET_COMMAND,
+        C.SET_AMPS: C.FLEET_COMMAND,
+        C.WAKE: C.FLEET_WAKE,
+        C.READ_WALL_CONNECTOR_VINS: C.CLOUD_FREE,
     }
     SUPPRESSED = CLOUD_SUPPRESSED
 
     def ready(self, vehicle, capability) -> bool:
-        if capability == READ_WALL_CONNECTOR_VINS:
+        if capability == C.READ_WALL_CONNECTOR_VINS:
             # The read-slot rule: Fleet only when the Owner slot cannot
             return self.carapi.wallConnectorVinsReady(
                 self.carapi.fleetSlot
@@ -209,19 +191,19 @@ class FleetAPIProvider(_TeslaAPIProvider):
         if vehicle.attachment("TeslaAPI") is None:
             return False
         return self.available(capability) and (
-            capability in COMMANDS or not self.carapi.ownerSlot.usable("read")
+            capability in C.COMMANDS or not self.carapi.ownerSlot.usable("read")
         )
 
     def available(self, capability) -> bool:
         # The broadcast gate: without a Fleet command token no vehicle-less
         # command comes here (an Owner token's commands go per car, through
         # the OwnerAPI provider)
-        if capability in COMMANDS:
+        if capability in C.COMMANDS:
             usable = self.carapi.fleetSlot.usable("command")
             if not usable:
                 self.carapi.noteReadOnly()
             return usable
-        if capability == READ_WALL_CONNECTOR_VINS:
+        if capability == C.READ_WALL_CONNECTOR_VINS:
             return self.carapi.wallConnectorVinsReady(self.carapi.fleetSlot)
         return self.carapi.fleetSlot.usable("read")
 

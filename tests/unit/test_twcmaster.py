@@ -739,7 +739,9 @@ class TestChargeStartStopCancelRules:
             },
         )
         # Policy.clearOverride()/overrideLimit() are called; a Mock is enough.
-        m.getModuleByName = Mock(return_value=Mock())
+        # No Gen3 units: the cars' point is checked for a plug
+        policy = Mock()
+        m.getModuleByName = Mock(side_effect=lambda n: None if n == "Gen3TWCs" else policy)
         m.settings["chargeStopMode"] = "1"
         for vin in (self.V1, self.V2):
             m.vehicleRegistry.getOrCreate(vin, "t").observe("twcVin", "8244", "TWC")

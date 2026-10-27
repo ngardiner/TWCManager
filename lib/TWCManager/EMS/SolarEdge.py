@@ -41,14 +41,8 @@ class SolarEdge:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configSolarEdge = master.config.get("sources", {})["SolarEdge"]
-        except KeyError:
-            self.configSolarEdge = {}
+        self.configConfig = master.config.get("config", {})
+        self.configSolarEdge = master.config.get("sources", {}).get("SolarEdge", {})
         self.apiKey = self.configSolarEdge.get("apiKey", None)
         self.debugFile = self.configConfig.get("debugFile", self.debugFile)
         self.debugMode = self.configSolarEdge.get("debugMode", self.debugMode)

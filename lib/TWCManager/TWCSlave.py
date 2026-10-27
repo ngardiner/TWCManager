@@ -4,16 +4,8 @@ import re
 import time
 from typing import Dict, NamedTuple, Optional
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Vehicle.Providers.Capability import SET_AMPS
-from TWCManager.Vehicle.Reconcile.Rules import VEHICLE_SOURCES_EXCLUDED
-from TWCManager.Vehicle.Reconcile.Targets import broadcastVehicles, located
 
 logger = LoggerFactory.get_logger("Slave", "Slave")
-
-
-# Charging states only a plugged-in car reports ("Unknown", TeslaMate's "None"
-# and "Disconnected" are not)
-_PLUGGED = frozenset({"Charging", "Starting", "Stopped", "Complete", "NoPower"})
 
 # The tick's offer to one TWC: what goes on the wire, and the target it
 # came from (published as amps_desired). Immutable: the tick replaces it
@@ -103,6 +95,15 @@ class TWCSlave:
     # end, the tick records the session it lifted
     plugSessions = 0
     liftedSession: Optional[int] = None
+    # The last heartbeat's (state, max amps); the first edge not yet checked,
+    # waiting for a live feed's report; armed: until 03 or 00 at 0 A, one
+    # edge with the max above 0 is checked per event
+    CHECK_WAIT = 20
+    status, edgeAt, armed = None, None, True
+    # An edge no check could answer is checked once more: an unplug wakes
+    # the car, and the cloud's online answer can lag that wake by a minute
+    RECHECK_WAIT = 120
+    recheck, rechecked = None, None
     # The car keys the charging point last rated (tick)
     _lastKeys = ()
     # The last all-TWC wiring cap logged, so a held cap logs once
@@ -118,27 +119,33 @@ class TWCSlave:
         self.wiringMaxAmps = self.configConfig.get("wiringMaxAmpsPerTWC", 6)
         self.startStopDelay = self.configConfig.get("startStopDelay", 60)
 
-    def pluggedCars(self):
-        # The unnamed cars a vehicle source shows plugged in or charging,
-        # and not placed away; with every unnamed car the fan-out reaches
-        named = {s.vehicleKey for s in self.master.getSlaveTWCs()}
-        cars = [
-            v for v in broadcastVehicles(self.master, SET_AMPS) if v.key not in named
-        ]
-        plugged = []
-        for v in cars:
-            if located(self.master, v) is False:
-                continue
-            obs = v.latestFrom("chargingState", VEHICLE_SOURCES_EXCLUDED)
-            if obs is None:
-                continue
-            if obs.source == "HomeAssistant":
-                # HA reports "Stopped" for an unplugged car too
-                if obs.value == "Charging":
-                    plugged.append(v)
-            elif obs.value in _PLUGGED:
-                plugged.append(v)
-        return plugged, cars
+    def plugCheckDue(self, now) -> Optional[float]:
+        # Serial thread: an edge's time once its check is due. The codes are
+        # the car's talk with the TWC, not the plug: a 00, a max dropping to 0
+        # in one, or a plug state change only says to ask the car. A car awake
+        # at its limit flickers 00/09 at its max; an unplug leaves 00 at 0 A
+        was, self.status = self.status, (self.reportedState, self.reportedAmpsMax)
+        (state, amps), plugged = self.status, self.PLUGGED_STATES
+        empty = not state and not amps
+        edge = was is not None and (
+            not state
+            and (was[0] or was[1] and not amps)
+            or (state in plugged) != (was[0] in plugged)
+        )
+        # A car drawing current is plugged in
+        ask = edge and (self.armed or empty) and self.reportedAmpsActual < 1
+        v = ask and self.master.vehicleRegistry.vehicleAt(self.twcid)
+        if v:
+            text = "TWC %s: %02X → %02X, max %.2f → %.2f A: checking %s"
+            logger.info(text, self.twcid, was[0], state, was[1], amps, v.key)
+            self.edgeAt = self.edgeAt or now
+        self.armed = state == 0x03 or empty or self.armed and not v
+        if self.edgeAt and now >= self.edgeAt + self.CHECK_WAIT:
+            since, self.edgeAt = self.edgeAt, None
+            return since
+        if self.recheck and now >= self.recheck + self.RECHECK_WAIT:
+            since, self.recheck = self.recheck, None
+            return since
 
     def minAmpsToOffer(self):
         # The lowest offer this TWC makes: the configured minAmpsPerTWC, or
@@ -669,23 +676,20 @@ class TWCSlave:
         self.historyNumSamples += 1
         self.master.queue_background_task({"cmd": "snapHistoryData"})
 
-        # If power starts flowing, check whether a car has arrived
+        # If power starts flowing, refresh the cars at home
         if (
             self.reportedAmpsActualSignificantChangeMonitor < 3
             and self.reportedAmpsActual > 3
         ):
             self.master.getModuleByName("Policy").fireWebhook("start")
-            self.master.queue_background_task({"cmd": "checkArrival"})
+            self.master.queue_background_task({"cmd": "checkCharge"})
 
-        # If power drops off, check whether a car leaves in the next little while
+        # If power drops off, tell the policy's webhook
         if (
             self.reportedAmpsActualSignificantChangeMonitor > 2
             and self.reportedAmpsActual < 2
         ):
             self.master.getModuleByName("Policy").fireWebhook("stop")
-            self.master.queue_background_task({"cmd": "checkDeparture"}, 5 * 60)
-            self.master.queue_background_task({"cmd": "checkDeparture"}, 20 * 60)
-            self.master.queue_background_task({"cmd": "checkDeparture"}, 45 * 60)
 
         # Keep track of the amps the slave is actually using and the last time it
         # changed by more than 0.8A.

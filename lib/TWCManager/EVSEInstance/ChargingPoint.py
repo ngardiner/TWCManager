@@ -1,17 +1,16 @@
 """
-A charging point: the endpoints that serve one car, grouped by vehicle key.
-
-A TWC and the car it serves are one point however many endpoints can see the
-car, so the distributor budgets the car once. A point without a local member
-sends the target to its vehicle endpoints. A Gen2 TWC splits the rate with
-its car by chargeRateControl (carriers): with car members, or the car the
-TWC names; any other local member (a Gen3 unit, whose target feeds one
-shared headroom) carries the whole target.
+A charging point: the endpoints that serve one car, grouped by vehicle key,
+so the distributor budgets the car once however many endpoints see it. A
+Gen2 TWC splits the rate with its car by chargeRateControl; any other local
+member (a Gen3 unit, whose target feeds one shared headroom) carries the
+whole target.
 """
 
 from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.Vehicle.Presence import candidates, pluggedHere
+from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Reconcile.Belief import known
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Reconcile.Rules import satisfied
@@ -19,6 +18,9 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import canonicalKey, isAnonKey
 
 
 class ChargingPoint(EVSEInstance):
+    # The cars setTargetPower rated this pass; finding them may scan them all
+    carKeys = None
+
     def __init__(self, master, key: str, endpoints: List[EVSEInstance]):
         self.master = master
         self.key = key
@@ -95,19 +97,20 @@ class ChargingPoint(EVSEInstance):
 
     def _carKeys(self) -> List[str]:
         # The cars this point rates: its car members; else the Gen2 TWC's
-        # named car, or the unnamed cars its anonymous session fans out to
+        # named car, or for an anonymous session the cars plugged in here
         cars = [e.vehicleKey for e in self.vehicleEndpoints if not e.isReadOnly]
         local = self.localEndpoints[0] if self.localEndpoints else None
         key = getattr(local, "vehicleKey", None)
         if cars or key is None:
             return cars
         if isAnonKey(key):
-            return [v.key for v in anonymousCars(self.master, local)]
+            cars = candidates(self.master, SET_AMPS)
+            return [v.key for v in cars if pluggedHere(self.master, v)]
         return [key]
 
     def confirmed(self) -> bool:
         # Every car carrying our rate believes it: a read, or a delivered write
-        keys = self._carKeys()
+        keys = self._carKeys() if self.carKeys is None else self.carKeys
         reg, desired = self.master.vehicleRegistry, self.master.desired
         for k in keys:
             d, v = desired.get(k, AMPS), reg.get(k)
@@ -116,6 +119,7 @@ class ChargingPoint(EVSEInstance):
         return bool(keys)
 
     def setTargetPower(self, watts: float) -> None:
+        self.carKeys = self._carKeys()
         local = self.localEndpoints[0] if self.localEndpoints else None
         cars = [e for e in self.vehicleEndpoints if not e.isReadOnly]
         if not hasattr(local, "pointAmps"):
@@ -127,7 +131,7 @@ class ChargingPoint(EVSEInstance):
         # A car member's rate goes through its endpoint; a car only the TWC
         # names gets the "heartbeat" rate
         desired, members = self.master.desired, {e.vehicleKey for e in cars}
-        mine = [k for k in self._carKeys() if k not in members]
+        mine = [k for k in self.carKeys if k not in members]
 
         def withdraw(keys):
             # Only our own rate: never a lift, nor a car endpoint's
@@ -190,17 +194,6 @@ class ChargingPoint(EVSEInstance):
         return k is not None and k < int(amps)
 
 
-def anonymousCars(master, slave) -> list:
-    # The cars an anonymous session rates, paid once: the plugged-in
-    # cars, else vehicles[0]
-    plugged, cars = slave.pluggedCars()
-    if plugged:
-        return plugged
-    # The first car the Tesla API listed (registry (sorted VIN) order)
-    listed = [v for v, _ in master.vehicleRegistry.attached("TeslaAPI")]
-    return listed[:1] if listed and listed[0] in cars else []
-
-
 def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]:
     """Group endpoints that serve the same car into one charging point.
 
@@ -209,7 +202,7 @@ def groupEndpoints(master, endpoints: List[EVSEInstance]) -> List[ChargingPoint]
     order of their first endpoint.
 
     A point holds at most one local endpoint: every local member gets the
-    whole target, so a second TWC claiming the same car (a stale lastVIN)
+    whole target, so a second TWC claiming the same car (a stale VIN read)
     is its own point keyed by its ID and budgeted separately.
     """
     groups = {}

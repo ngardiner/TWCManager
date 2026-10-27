@@ -1,50 +1,15 @@
 # Which cars a decision applies to, and the charge-limit decisions that
 # write desired state: the policy's limit, a plug-in and a departure.
-#
-# Presence: a car on a charging point; else the Tesla API's home check on
-# the latest known position (free, any source); with none, a car we hold a
-# limit on; else Home Assistant's at_home; else, for a car only BLE knows,
-# its BLE key. A car with no provider able to carry the capability gets no
-# desired state.
+# Presence is Presence's; a car with no provider able to carry the
+# capability gets no desired state.
 from typing import List, Optional
 
-from ..Providers.Capability import (
-    SET_CHARGE_LIMIT,
-    START_CHARGING,
-    STOP_CHARGING,
-)
-from .Desired import CHARGE_LIMIT
+from .. import Presence
+from ..Providers import Capability as C
+from .Desired import CHARGE_LIMIT, RELEASE
 
-
-def located(master, vehicle) -> Optional[bool]:
-    # On a point: home (atHome stays as vehicleIsDefinitelyHome set it).
-    # Else the Tesla API's home check on the latest position (free); None if
-    # unknown
-    if vehicle.value("twcVin"):
-        return True
-    api = master.getModuleByName("TeslaAPI")
-    if api is None or vehicle.attachment("TeslaAPI") is None:
-        return None
-    return api.locate(vehicle)
-
-
-def _present(master, vehicle) -> bool:
-    if vehicle.isAnonymous:
-        # Only on a point, and only while plugged in
-        return True
-    if vehicle.value("twcVin"):
-        return True
-    api = vehicle.attachment("TeslaAPI")
-    if api is not None:
-        home = located(master, vehicle)
-        if home is not None:
-            return home
-        if api.atHome or vehicle.vin in master.heldLimits.holding():
-            return True
-    ha = vehicle.attachment("HomeAssistant")
-    if ha is not None:
-        return bool(ha.at_home)
-    return "TeslaBLE" in vehicle.claims
+# The policy's limit before its first pass, which decides for every car
+UNDECIDED = object()
 
 
 def presentVehicles(master, capability) -> List:
@@ -52,34 +17,13 @@ def presentVehicles(master, capability) -> List:
     return [
         v
         for v in master.vehicleRegistry.vehicles()
-        if (not v.isAnonymous or capability in (START_CHARGING, STOP_CHARGING))
-        and _present(master, v)
+        if (not v.isAnonymous or capability in (C.START_CHARGING, C.STOP_CHARGING))
+        and Presence.presence(master, v) != Presence.NOT_HOME
         and order.candidates(v, capability)
     ]
 
 
-def broadcastVehicles(master, capability) -> List:
-    # An unaddressed decision reaches every car on the Tesla API's list at
-    # home (or not yet located), every VIN BLE knows, and every Home
-    # Assistant car at home that a TWC reports by VIN
-    def reached(v):
-        api = v.attachment("TeslaAPI")
-        home = api is not None and (
-            located(master, v) or api.atHome or v.value("lat", 10000) == 10000
-        )
-        ha = v.attachment("HomeAssistant")
-        haHome = ha is not None and ha.at_home and master.getTWCbyVIN(v.vin)
-        return home or bool(haHome) or "TeslaBLE" in v.claims
-
-    order = master.providerOrder
-    return [
-        v
-        for v in master.vehicleRegistry.vehicles()
-        if not v.isAnonymous and reached(v) and order.candidates(v, capability)
-    ]
-
-
-def targetsFor(master, vin: Optional[str], capability=STOP_CHARGING) -> List:
+def targetsFor(master, vin: Optional[str], capability=C.STOP_CHARGING) -> List:
     # A targeted command names its car, present or not
     if vin:
         vehicle = master.vehicleRegistry.get(vin)
@@ -87,61 +31,54 @@ def targetsFor(master, vin: Optional[str], capability=STOP_CHARGING) -> List:
     return presentVehicles(master, capability)
 
 
-def _restore(master, vehicle, decision) -> bool:
-    # Put back the outside limit while we hold one; else want nothing
-    held = master.heldLimits.get(vehicle.vin)
-    if held is None or held.held is None:
+def _apply(master, vehicle, limit, decision, restore=False) -> None:
+    # The policy's limit, or RELEASE; a departure's restore of the outside
+    # limit. Either wants nothing once we hold no limit
+    if limit is None and vehicle.vin not in master.heldLimits.holding():
         master.desired.clear(vehicle.key, CHARGE_LIMIT)
-        return False
-    master.desired.set(
-        vehicle.key, CHARGE_LIMIT, held.outside, "restore", decision, restore=True
-    )
-    return True
+    elif restore:
+        held = master.heldLimits.get(vehicle.vin)
+        master.desired.set(
+            vehicle.key, CHARGE_LIMIT, held.outside, "restore", decision, restore=True
+        )
+    else:
+        value = RELEASE if limit is None else limit
+        master.desired.set(vehicle.key, CHARGE_LIMIT, value, "policy", decision)
 
 
 def applyPolicyLimit(master, limit: Optional[int], decision: bool) -> int:
+    # Every car that may be here; applicable decides at send. A car seen
+    # leaving gets its restore instead
     touched = 0
-    for vehicle in presentVehicles(master, SET_CHARGE_LIMIT):
-        if not vehicle.vin:
-            continue
-        if limit is None:
-            _restore(master, vehicle, decision)
-        else:
-            master.desired.set(vehicle.key, CHARGE_LIMIT, limit, "policy", decision)
-        touched += 1
-    # Departure with no edge
-    _restoreDeparted(master, read=False)
+    for vehicle in presentVehicles(master, C.SET_CHARGE_LIMIT):
+        if vehicle.vin and Presence.departed(master, vehicle) is None:
+            _apply(master, vehicle, limit, decision)
+            touched += 1
+    _restoreDeparted(master)
     return touched
 
 
-def onArrival(master) -> None:
-    # A plug-in is a decision: it ends an adopted value
-    applyPolicyLimit(master, master.policyLimit, decision=True)
+def onArrival(master, vehicle) -> None:
+    # A plug-in here is a decision for this car alone: it ends an adopted
+    # value. The plug is checked now, not taken from the event
+    if master.policyLimit is UNDECIDED:
+        return
+    if vehicle.vin and Presence.pluggedHere(master, vehicle):
+        if master.providerOrder.candidates(vehicle, C.SET_CHARGE_LIMIT):
+            _apply(master, vehicle, master.policyLimit, decision=True)
 
 
-def onDeparture(master) -> None:
-    # Background thread only: an unplug alone is not a departure
-    _restoreDeparted(master, read=True)
-
-
-def _restoreDeparted(master, read) -> None:
-    # A held car no longer present gets its normal limit back. read: a car
-    # off its point that the Tesla API knows is located first, unless live
-    # telemetry already has (a paid vehicle_data that never wakes). A fix
-    # older than our last limit write cannot show a departure
+def _restoreDeparted(master) -> None:
+    # A held car gone or leaving gets its normal limit back. Evidence older
+    # than our last limit write cannot show a departure
     for vin in master.heldLimits.holding():
         vehicle = master.vehicleRegistry.get(vin)
         if vehicle is None:
             continue
-        api = vehicle.attachment("TeslaAPI")
-        if read and api is not None and not vehicle.value("twcVin"):
-            module = master.getModuleByName("TeslaAPI")
-            if vehicle.syncSource == "TeslaAPI" and module is not None:
-                module.update_location(vehicle, 0)
-        fix, write = vehicle.latest("lat"), vehicle.lastWrite("chargeLimit")
+        at = Presence.departed(master, vehicle)
+        write = vehicle.lastWrite("chargeLimit")
         # <= on purpose: a retained MQTT position redelivered after our write
         # is stamped with that write's time, and is not a new fix
-        stale = fix is not None and write is not None and fix.at <= write.at
-        if stale or _present(master, vehicle):
+        if at is None or write is not None and at <= write.at:
             continue
-        _restore(master, vehicle, decision=True)
+        _apply(master, vehicle, None, True, restore=True)

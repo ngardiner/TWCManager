@@ -19,24 +19,17 @@ import requests
 import bisect
 import itertools
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Vehicle.Registry import VehicleRegistry
-from TWCManager.Vehicle.Registry.VehicleRegistry import isAnonKey
-from TWCManager.Vehicle.Providers import ProviderOrder
+from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry, isAnonKey
+from TWCManager.Vehicle.Providers.Order import ProviderOrder
 from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
-from TWCManager.Vehicle.Providers.Capability import (
-    READ_CHARGE,
-    START_CHARGING,
-    STOP_CHARGING,
-)
+from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile.Belief import newerReading
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
-from TWCManager.Vehicle.Reconcile.Targets import (
-    applyPolicyLimit,
-    broadcastVehicles,
-    targetsFor,
-)
+from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, targetsFor
+from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED
+from TWCManager.Vehicle import Presence
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -136,13 +129,15 @@ class TWCMaster:
         self.providerOrder = ProviderOrder(self)
         self.providerOrder.register(Gen2TWCProvider(self))
         self.vehicleRegistry.providerOrder = self.providerOrder
+        self.vehicleRegistry.onObserve = lambda *a: Presence.noteObservation(self, *a)
         # Desired vehicle state, and the reconciler that converges cars on
         # it; all on the registry's time.time clock
         self.desired = DesiredStore()
         self.vehicleRegistry.removed = self._vehicleRemoved
         self.reconciler = VehicleReconciler(self)
-        # The policy's charge limit; None while it sets none
-        self.policyLimit = None
+        # The policy's charge limit: None while it sets none, UNDECIDED before
+        # its first pass
+        self.policyLimit = UNDECIDED
         # Start of the forgetting interval: the first expiry pass runs an
         # hour after startup, once providers have reclaimed their cars, so a
         # persisted car Fleet still lists is not expired and re-created.
@@ -177,7 +172,7 @@ class TWCMaster:
         # Drops a stop not yet delivered: the desire and any queued attempt.
         # A start is never cancelled. Returns how many desires were cleared
         cleared = 0
-        for v in self._chargeTargets(vin, STOP_CHARGING):
+        for v in self._chargeTargets(vin, C.STOP_CHARGING):
             cleared += self.desired.clearIf(v.key, CHARGING, False)
             self.reconciler.cancel(v.key)
         return cleared
@@ -185,25 +180,25 @@ class TWCMaster:
     def withdrawStartCharging(self, vin):
         # A start not wanted any more (too little on offer): its desire goes;
         # its record stays for the next start
-        for v in self._chargeTargets(vin, START_CHARGING):
+        for v in self._chargeTargets(vin, C.START_CHARGING):
             self.desired.clearIf(v.key, CHARGING, True)
 
     def _chargeTargets(self, vin, capability):
         # A named car; for an anonymous point, a mode-1 start or
-        # stop and a mode-3 start went unaddressed (broadcastVehicles)
+        # stop and a mode-3 start went unaddressed (Presence.candidates)
         targets = targetsFor(self, vin or None, capability)
         mode = int(self.settings.get("chargeStopMode", 1))
         if (
             len(targets) == 1
             and targets[0].isAnonymous
-            and (mode == 1 or mode == 3 and capability == START_CHARGING)
+            and (mode == 1 or mode == 3 and capability == C.START_CHARGING)
         ):
             # The anonymous car itself has no candidate in these modes
-            targets = broadcastVehicles(self, capability)
+            targets = Presence.candidates(self, capability)
         return targets
 
     def _wantCharging(self, vin, value):
-        capability = START_CHARGING if value else STOP_CHARGING
+        capability = C.START_CHARGING if value else C.STOP_CHARGING
         for v in self._chargeTargets(vin, capability):
             # The same value withdrawn earlier keeps its record inside the
             # 60 s gate, unless the car has reported since its last send
@@ -357,13 +352,9 @@ class TWCMaster:
 
     @staticmethod
     def _taskKey(task):
-        # Tasks dedupe per cmd, except VIN queries, which dedupe per TWC so
-        # one TWC's query never replaces another's, and home checks, per VIN.
+        # Per cmd; a TWC's VIN query dedupes per TWC
         if task["cmd"] == "getVehicleVIN":
-            return ("getVehicleVIN", bytes(task.get("slaveTWC") or b""))
-        if task["cmd"] == "vehicleIsDefinitelyHome":
-            # Per VIN, so two TWCs' cars are both checked.
-            return ("vehicleIsDefinitelyHome", task.get("vin"))
+            return (task["cmd"], bytes(task.get("slaveTWC") or b""))
         return task["cmd"]
 
     def doneBackgroundTask(self, task):
@@ -478,8 +469,8 @@ class TWCMaster:
             if (
                 module is None
                 or id(module) in seen
-                or order.suppressions.suppressed(p, READ_CHARGE)
-                or not p.available(READ_CHARGE)
+                or order.suppressions.suppressed(p, C.READ_CHARGE)
+                or not p.available(C.READ_CHARGE)
             ):
                 continue
             seen.add(id(module))
@@ -580,7 +571,8 @@ class TWCMaster:
         # gets a 0 offer (its idle minimum) and a Gen3 unit a 0 target. A car
         # that carries its own rate keeps its last commanded rate; only the
         # AMPS desire is cleared. Slaves first, so a failing chargingPoints()
-        # cannot leave them on a stale offer
+        # cannot leave them on a stale offer. A car offered 0 is not woken
+        self.offered = dict.fromkeys(self.offered, 0)
         for slave in self.getSlaveTWCs():
             if slave.heardFrom:
                 slave.offer = Offer(0, 0)
@@ -649,7 +641,7 @@ class TWCMaster:
                     self._noteRefusedPoint(point, fair_share)
 
                 point.setTargetPower(offer)
-                offers.append((point.ID, offer))
+                offers.append((point, offer))
 
                 # Update accounting
                 remaining_watts -= offer
@@ -671,13 +663,24 @@ class TWCMaster:
             if point in wants_power or point.isReadOnly:
                 continue
             point.setTargetPower(0)
-            offers.append((point.ID, 0))
+            offers.append((point, 0))
+        # The targets just set, by each car a point serves or fans out to, or
+        # a TWC still holds (offered power, or none was left for it)
+        held = {
+            e.heldKey: w
+            for p, w in offers
+            for e in p.localEndpoints
+            if w or remaining_watts < p.minPower
+        }
+        held.update({k: w for p, w in offers for k in (p.vehicleKey, *p.carKeys)})
+        held.pop(None, None)
+        self.offered = held
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "distributeEVSEPower: %d W over %s",
                 available_watts,
-                ", ".join("%s=%d W" % (pid, watts) for pid, watts in offers)
+                ", ".join("%s=%d W" % (p.ID, watts) for p, watts in offers)
                 or "no points",
             )
         return points
@@ -1262,8 +1265,7 @@ class TWCMaster:
 
         # If particular details are missing from the Settings dict, create them
         with self.settingsLock:
-            if not self.settings.get("VehicleGroups", None):
-                self.settings["VehicleGroups"] = {}
+            self.settings["VehicleGroups"] = self.settings.get("VehicleGroups") or {}
             if not self.settings["VehicleGroups"].get("Allow Charging", None):
                 self.settings["VehicleGroups"]["Allow Charging"] = {
                     "Description": "Built-in Group - Vehicles in this Group can charge on managed TWCs",
@@ -1299,10 +1301,7 @@ class TWCMaster:
 
     def newSlave(self, newSlaveID, maxAmps):
         try:
-            slaveTWC = self.slaveTWCs[newSlaveID]
-            # We didn't get KeyError exception, so this slave is already in
-            # slaveTWCs and we can simply return it.
-            return slaveTWC
+            return self.slaveTWCs[newSlaveID]
         except KeyError:
             pass
 
@@ -1327,8 +1326,12 @@ class TWCMaster:
     def observeChargingSessions(self):
         # Serial thread only: starts and ends charging sessions from what
         # the slaves report
-        carsCharging = 0
+        carsCharging, now = 0, self.vehicleRegistry.now()
         for slaveTWC in self.getSlaveTWCs():
+            since = slaveTWC.plugCheckDue(now)
+            if since is not None:
+                check = lambda s=slaveTWC, t=since: self._plugSession(s, False, t)
+                self.reconciler.submitJob(slaveTWC.twcid, "plugCheck", check)
             if slaveTWC.reportedAmpsActual >= 1.0:
                 # Amps are flowing — cancel any pending session-end debounce
                 slaveTWC.chargingDroppedBelowThresholdTime = 0
@@ -1379,23 +1382,15 @@ class TWCMaster:
 
                         # Close off the current charging session
                         self.recordVehicleSessionEnd(slaveTWC)
-                        self._plugSession(slaveTWC, False)
                         # The next session lifts the car's own rate again
                         slaveTWC.plugSessions += 1
                         slaveTWC.isCharging = 0
                         slaveTWC.lastChargingStart = 0
-                elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES or (
-                    slaveTWC.reportedState == 0 and slaveTWC.pluggedCars()[0]
-                ):
+                elif slaveTWC.reportedState in slaveTWC.PLUGGED_STATES:
                     # A car drawing nothing (asleep after a restart) is still
-                    # plugged in: unidentified, it is an anonymous session.
-                    # At 00 (an empty TWC says it too) only if a free source
-                    # shows an at-home car plugged in
+                    # plugged in: unnamed, it opens a session to attribute
                     if slaveTWC.vehicleKey is None:
                         self._plugSession(slaveTWC, True)
-                elif slaveTWC.reportedState == 0 and isAnonKey(slaveTWC.vehicleKey):
-                    # 00 and no car known plugged in
-                    self._plugSession(slaveTWC, False)
             carsCharging += slaveTWC.isCharging
             for module in self.getModulesByType("Status"):
                 module["ref"].setStatus(
@@ -1483,8 +1478,7 @@ class TWCMaster:
         # This function is called when a vehicle charge session ends.
         # If we have a last vehicle VIN set, close off the charging session
         # for this vehicle and save the settings.
-        if not self.settings.get("Vehicles", None):
-            self.settings["Vehicles"] = {}
+        self.settings["Vehicles"] = self.settings.get("Vehicles") or {}
         if self.settings["Vehicles"].get(slaveTWC.lastVIN, None):
             if self.settings["Vehicles"][slaveTWC.lastVIN].get("startkWh", 0) > 0:
                 # End current session
@@ -1527,17 +1521,55 @@ class TWCMaster:
             },
         )
 
-    def _plugSession(self, slaveTWC, begin):
-        # Serial thread: registry calls are short dict work; never let one
-        # raise into the RS-485 loop.
+    def _plugSession(self, slaveTWC, begin, since=None):
+        # Begun on the serial thread; ended on the BLE worker only when a check
+        # after a status edge at since finds no car plugged in. A registry
+        # call must not raise into either loop
         try:
             twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
             if begin:
                 self.vehicleRegistry.beginPlugSession(twcid)
-            else:
-                self.vehicleRegistry.endPlugSession(twcid)
+                self.attributePlugs([slaveTWC])
+                return
+            at = self.vehicleRegistry.vehicleAt(twcid)
+            if at is None or at.isAnonymous and slaveTWC.reportedState:
+                # An unnamed plug the TWC still shows is a car no check names
+                return
+            if slaveTWC.reportedAmpsActual >= 1:
+                return  # a car drawing current is plugged in
+            cars = Presence.candidates(self) if at.isAnonymous else [at]
+            plugged = {v.key: Presence.checkPlug(self, v, since) for v in cars}
+            logger.info("TWC %s: plugged in: %s", twcid, plugged)
+            unknown = None in plugged.values() and True not in plugged.values()
+            if unknown and slaveTWC.rechecked != since:
+                slaveTWC.recheck = slaveTWC.rechecked = since
+            if any(p is not False for p in plugged.values()):
+                return
+            if len(cars) == 1:
+                v = cars[0]
+                logger.info("TWC %s: unplugged, %s departs", twcid, v.key)
+                v.observe("pluggedIn", False, "Gen2TWC", at=Presence.unpluggedAt(v))
+            self.vehicleRegistry.endPlugSession(twcid)
         except Exception as e:
             logger.warning("Vehicle registry plug session update failed: %s", e)
+
+    def attributePlugs(self, slaves=None):
+        # Each plug unnamed since just now or drawing current, on the BLE
+        # worker
+        reg = self.vehicleRegistry
+        recent = reg.now() - Presence.PLUGGED_JUST_NOW
+        for s in slaves or self.getSlaveTWCs():
+            anon = reg.vehicleAt(s.twcid)
+            new = getattr(anon, "isAnonymous", 0) and anon.markAt("plugIn") >= recent
+            if new or getattr(anon, "isAnonymous", 0) and s.reportedAmpsActual >= 1:
+                attribute = lambda s=s: Presence.attribute(
+                    self,
+                    s.twcid,
+                    "Gen2TWC",
+                    lambda: s.reportedAmpsMax,
+                    s.reportedAmpsActual,
+                )
+                self.reconciler.submitJob(s.twcid, "attribute", attribute)
 
     def recordVehicleVIN(self, slaveTWC):
         twcid = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
@@ -1565,16 +1597,13 @@ class TWCMaster:
         with self.settingsLock:
             # Record Slave TWC ID as being capable of reporting VINs, if it is
             # not already.
-            if not self.settings.get("SlaveTWCs", None):
-                self.settings["SlaveTWCs"] = {}
-            if not self.settings["SlaveTWCs"].get(twcid, None):
-                self.settings["SlaveTWCs"][twcid] = {}
-            if not self.settings["SlaveTWCs"][twcid].get("supportsVINQuery", 0):
-                self.settings["SlaveTWCs"][twcid]["supportsVINQuery"] = 1
+            slaves = self.settings["SlaveTWCs"] = self.settings.get("SlaveTWCs") or {}
+            slaves[twcid] = slaves.get(twcid) or {}
+            if not slaves[twcid].get("supportsVINQuery", 0):
+                slaves[twcid]["supportsVINQuery"] = 1
 
             # Increment sessions counter for this VIN in persistent settings file
-            if not self.settings.get("Vehicles", None):
-                self.settings["Vehicles"] = {}
+            self.settings["Vehicles"] = self.settings.get("Vehicles") or {}
             if not self.settings["Vehicles"].get(vin, None):
                 self.settings["Vehicles"][vin] = {
                     "chargeSessions": 1,
@@ -1601,17 +1630,12 @@ class TWCMaster:
                 "vehicleVIN": slaveTWC.currentVIN,
             },
         )
-
-        # If vehicle is charging, it's at home no matter what we previously
-        # thought. The check reads the vehicle (BLE, HTTP), so it runs on the
-        # background thread, not this (serial) one.
-        self.queue_background_task({"cmd": "vehicleIsDefinitelyHome", "vin": vin})
-
-    def vehicleIsDefinitelyHome(self, vin):
-        # Background thread: may do vehicle I/O.
-        tesla_api = self.getModuleByName("TeslaAPI")
-        if tesla_api:
-            tesla_api.vehicleIsDefinitelyHome(vin)
+        vehicle = self.vehicleRegistry.get(vin)
+        if vehicle is not None:
+            Presence.learnHome(
+                self, vehicle, vehicle.latest("lat"), vehicle.latest("lon")
+            )
+            onArrival(self, vehicle)
 
     def releaseBackgroundTasksLock(self):
         self.backgroundTasksLock.release()
@@ -2038,8 +2062,7 @@ class TWCMaster:
             periodTimestamp = snaptime - timedelta(minutes=5)
 
             with self.settingsLock:
-                if not "history" in self.settings:
-                    self.settings["history"] = []
+                self.settings.setdefault("history", [])
 
                 self.settings["history"].append(
                     (

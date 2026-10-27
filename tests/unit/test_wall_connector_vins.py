@@ -215,7 +215,7 @@ def test_fleet_waits_while_the_owner_slot_can_read_energy(requests_mock):
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token())
     owner, fleet = api.providers()
     assert owner.ready(None, C.READ_WALL_CONNECTOR_VINS) and not fleet.ready(None, C.READ_WALL_CONNECTOR_VINS)
-    assert owner.declarations()[C.READ_WALL_CONNECTOR_VINS] == fleet.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.Declaration(C.CLOUD_FREE)
+    assert owner.declarations()[C.READ_WALL_CONNECTOR_VINS] == fleet.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.CLOUD_FREE
 
 def test_ready_without_a_vehicle_is_only_relaxed_for_wall_connector_vins(requests_mock):   # carry 1
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token())
@@ -321,7 +321,7 @@ def test_a_configured_din_skips_the_version_fetch(requests_mock):
     vitals(u, True); assert u._version is None and u.din == DIN
 
 def test_query_asks_the_first_candidate_directly():
-    p = Mock(); p.name = "X"; p.declarations.return_value = {C.READ_WALL_CONNECTOR_VINS: C.Declaration(C.CLOUD_FREE)}
+    p = Mock(); p.name = "X"; p.declarations.return_value = {C.READ_WALL_CONNECTOR_VINS: C.CLOUD_FREE}
     p.wallConnectorVins.return_value = {DIN: VIN}
     order = Mock(); order.candidates.return_value = [p]
     assert WallConnectorVinReader(Mock(), order, clock=Clock()).query([]) == {DIN: VIN}

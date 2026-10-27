@@ -139,9 +139,9 @@ def test_restart_with_a_car_charging_never_offers_zero():
     s.protocolVersion = 2
     s.send_master_heartbeat()
     m.controlPass()  # not heard from yet: no offer
-    assert not s.heardFrom and s.offer is None
+    assert s.heardFrom is False and s.offer is None
     iface = tickThenBeat(m, s, 0x01, 40, 32)  # the first reply: charging at 32 A
-    assert s.offer.amps == 32
+    assert s.offer.amps == 32 and s.heardFrom is True
     for _ in range(2):
         hb = iface.send.call_args.args[0][6:15]
         assert hb[0] == 0x09 and ((hb[1] << 8) + hb[2]) / 100 == 32  # never 0 A
@@ -356,6 +356,16 @@ def test_a_withdrawal_targets_gen3_units_and_cars_zero():
     assert setAmps(m) == []
 
 
+def test_a_withdrawal_leaves_no_car_offered_power():
+    m = real()
+    car(m, VIN, "Charging")
+    m.getMaxAmpsToDivideAmongSlaves = lambda: 20
+    m.controlPass()
+    assert m.offered[VIN] > 0
+    m.withdrawOffers()
+    assert m.offered[VIN] == 0 and not any(m.offered.values())
+
+
 def test_a_withdrawal_zeroes_the_slaves_even_if_points_cannot_be_built():
     m = pureGen2(feed=40)
     m.controlPass()
@@ -414,9 +424,10 @@ def test_the_lift_survives_a_session_end_racing_the_tick():
     # session it lifted, so a session end between passes is never lost
     m = real()
     m.getMaxAmpsToDivideAmongSlaves = lambda: 20
-    m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
+    v = m.vehicleRegistry.getOrCreate(VIN, "OwnerAPI")
     s = charging(m, actual=10.0)
     s.currentVIN, s.plugSessions, s.liftedSession = VIN, 3, 3
+    v.observe("twcVin", s.twcid, "TWC")  # confirmed here
     assert s.vehicleRateRaised
     m.controlPass()
     assert m.desired.get(VIN, AMPS) is None  # lifted this session already

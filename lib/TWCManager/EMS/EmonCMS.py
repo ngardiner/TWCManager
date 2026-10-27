@@ -33,14 +33,8 @@ class EmonCMS:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configEmonCMS = master.config.get("sources", {})["EmonCMS"]
-        except KeyError:
-            self.configEmonCMS = {}
+        self.configConfig = master.config.get("config", {})
+        self.configEmonCMS = master.config.get("sources", {}).get("EmonCMS", {})
         self.status = self.configEmonCMS.get("enabled", False)
         self.serverIP = self.configEmonCMS.get("serverIP", None)
         self.serverPort = self.configEmonCMS.get("serverPort", 80)

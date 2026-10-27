@@ -19,7 +19,15 @@ import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Control.APIValidator import APIValidator
-from TWCManager.Vehicle.Registry.VIN import isWellFormedVIN
+from TWCManager.Vehicle.Registry.VIN import (
+    isWellFormedVIN,
+    storedBleStatus,
+    vehicleRecordKey,
+)
+from TWCManager.Vehicle.Presence import HOME, NOT_HOME, PRESUMED, presence
+from TWCManager.Vehicle.Reconcile.Belief import known, newerReading
+from TWCManager.Vehicle.Reconcile.Outcome import RULES
+from TWCManager.Vehicle.Reconcile.Rules import satisfied
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
 
@@ -82,16 +90,47 @@ def heldLimitText(master, vehicle):
     limit = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
     if limit is None:
         return "\u2014"
-    return "%s%% (car's own limit: %s%%, restored when released)" % (
-        limit.held,
-        limit.outside,
-    )
+    # The held limit, then the car's own one a release puts back
+    return "%s%% (%s%%)" % (limit.held, limit.outside)
+
+
+PRESENCE_TEXT = {HOME: "Home", PRESUMED: "Probably home", NOT_HOME: "Away"}
+
+
+def pendingCommands(master, vehicle):
+    """Each desire the car has not reached: in flight, or why it is not."""
+    state, now, rows = master.desired.peek(vehicle.key), time.time(), []
+    for aspect, d in list(state.desired.items()) if state else []:
+        rec = state.records.get(aspect)
+        if rec is None:
+            continue
+        sent, last = rec.inFlight, rec.lastOutcome
+        why = master.reconciler.said(vehicle.key, aspect)
+        if sent:
+            why = "sending via %s, started %s" % (
+                sourceName(sent.provider),
+                ageText(now - sent.since),
+            )
+        elif satisfied(aspect, d.value, known(vehicle, aspect, d.value)) or (
+            # Settled, the reconciler waits for a reading saying otherwise
+            rec.settledAt is not None
+            and not newerReading(vehicle, aspect, rec.settledAt)
+        ):
+            continue
+        elif last and not why:
+            why = "%s via %s, %s" % (
+                last.detail.replace(RULES, "") or last.kind,
+                sourceName(rec.lastProvider),
+                ageText(now - rec.lastOutcomeAt),
+            )
+        rows.append({"aspect": aspect, "value": d.value, "why": why or "not tried yet"})
+    return rows
 
 
 def vehicleLocalMgmt(master, op, vin):
     """BLE actions from the vehicle page; returns the redirect location.
 
-    "scan" only queues a request: the scan runs on the background thread."""
+    "scan" only queues a request: the scan runs on the BLE worker."""
     vin = str(vin or "").strip()
     if not isWellFormedVIN(vin):
         return "/vehicles"
@@ -111,7 +150,7 @@ def addVehicleByVIN(master, vin):
     vin = vehicle.vin
     with master.settingsLock:
         known = master.settings.setdefault("Vehicles", {})
-        if not any(k.upper() == vin for k in known):
+        if vehicleRecordKey(known, vin) is None:
             # addedByVIN: Forget may remove this record (and its key).
             known[vin] = {
                 "chargeSessions": 0,
@@ -127,14 +166,6 @@ def addVehicleByVIN(master, vin):
     return "/vehicleDetail/" + vin
 
 
-def _vehicleRecordKey(vehicles, vin):
-    # settings["Vehicles"] keys may be in any case (as _settingsKey).
-    for key in list(vehicles):
-        if isinstance(key, str) and key.upper() == vin:
-            return key
-    return None
-
-
 def canForgetVehicle(master, vin):
     """Forget is narrow: a car the user added by VIN that no provider has
     attached to and whose BLE key was never proven (a mistyped VIN). A
@@ -146,9 +177,7 @@ def canForgetVehicle(master, vin):
         return False
     with master.settingsLock:
         vehicles = master.settings.get("Vehicles") or {}
-        rec = vehicles.get(_vehicleRecordKey(vehicles, vehicle.vin))
-        ble = rec.get("ble") if isinstance(rec, dict) else None
-        return not (isinstance(ble, dict) and ble.get("status") == "paired")
+        return storedBleStatus(vehicles, vehicle.vin)["status"] != "paired"
 
 
 def forgetVehicle(master, vin):
@@ -163,7 +192,7 @@ def forgetVehicle(master, vin):
         return "/vehicleDetail/" + vin
     with master.settingsLock:
         vehicles = master.settings.get("Vehicles") or {}
-        key = _vehicleRecordKey(vehicles, vin)
+        key = vehicleRecordKey(vehicles, vin)
         rec = vehicles.get(key)
         # Only a record Add-by-VIN made, and only while it holds no charge
         # history: history is not ours to drop. The record holds the
@@ -209,14 +238,8 @@ class HTTPControl:
 
     def __init__(self, master):
         self.master = master
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configHTTP = master.config["control"]["HTTP"]
-        except KeyError:
-            self.configHTTP = {}
+        self.configConfig = master.config.get("config", {})
+        self.configHTTP = master.config.get("control", {}).get("HTTP", {})
         self.httpPort = self.configHTTP.get("listenPort", 8080)
         self.status = self.configHTTP.get("enabled", False)
 
@@ -388,6 +411,10 @@ def CreateHTTPHandlerClass(master):
             )
             self.templateEnv.globals.update(sourceName=sourceName)
             self.templateEnv.globals.update(
+                presence=lambda v: PRESENCE_TEXT[presence(master, v)],
+                pendingCommands=lambda v: pendingCommands(master, v),
+            )
+            self.templateEnv.globals.update(
                 providerLines=lambda v: providerLines(master, v)
             )
             self.templateEnv.globals.update(registry=master.vehicleRegistry)
@@ -510,8 +537,9 @@ def CreateHTTPHandlerClass(master):
                 self.end_headers()
 
                 with master.settingsLock:
-                    if not master.settings.get("consumptionOffset", None):
-                        master.settings["consumptionOffset"] = {}
+                    master.settings["consumptionOffset"] = (
+                        master.settings.get("consumptionOffset") or {}
+                    )
 
                 json_data = json.dumps(master.settings["consumptionOffset"])
                 self.wfile.write(json_data.encode("utf-8"))
@@ -573,7 +601,7 @@ def CreateHTTPHandlerClass(master):
                     vehicle = slaveTWC.getLastVehicle()
                     if vehicle is not None:
                         row = data[TWCID]
-                        row["lastAtHome"] = vehicle.attachment("TeslaAPI").atHome
+                        row["lastAtHome"] = presence(master, vehicle) == HOME
                         row["lastBatterySOC"] = vehicle.value("batteryLevel", 10000)
                         row["lastChargeLimit"] = vehicle.value("chargeLimit", -1)
                         row["lastTimeToFullCharge"] = vehicle.value(
@@ -711,8 +739,9 @@ def CreateHTTPHandlerClass(master):
                     and not self.checkForUnsafeCharactters(name)
                 ):
                     with master.settingsLock:
-                        if not master.settings.get("consumptionOffset", None):
-                            master.settings["consumptionOffset"] = {}
+                        master.settings["consumptionOffset"] = (
+                            master.settings.get("consumptionOffset") or {}
+                        )
                         master.settings["consumptionOffset"][name] = {}
                         master.settings["consumptionOffset"][name]["value"] = value
                         master.settings["consumptionOffset"][name]["unit"] = unit
@@ -789,18 +818,6 @@ def CreateHTTPHandlerClass(master):
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode("utf-8"))
-
-            elif self.url.path == "/api/checkArrival":
-                master.queue_background_task({"cmd": "checkArrival"})
-                self.send_response(202)
-                self.end_headers()
-                self.wfile.write("".encode("utf-8"))
-
-            elif self.url.path == "/api/checkDeparture":
-                master.queue_background_task({"cmd": "checkDeparture"})
-                self.send_response(202)
-                self.end_headers()
-                self.wfile.write("".encode("utf-8"))
 
             elif self.url.path == "/api/deleteConsumptionOffset":
                 success, data, error_msg = APIValidator.validate_json(self.post_data)
@@ -1871,8 +1888,7 @@ def CreateHTTPHandlerClass(master):
             # If not, this would indicate that this is the first time
             # we have saved the new schedule settings
             with master.settingsLock:
-                if master.settings.get("Schedule", None) == None:
-                    master.settings["Schedule"] = {}
+                master.settings["Schedule"] = master.settings.get("Schedule") or {}
 
                 # Slight issue with checkboxes, you have to default them all to
                 # false, otherwise if one is unticked it is just not sent via form data
@@ -1886,8 +1902,9 @@ def CreateHTTPHandlerClass(master):
                     "Saturday",
                 ]
                 for day in days:
-                    if master.settings["Schedule"].get(day, None) == None:
-                        master.settings["Schedule"][day] = {}
+                    master.settings["Schedule"][day] = (
+                        master.settings["Schedule"].get(day) or {}
+                    )
                     master.settings["Schedule"][day]["enabled"] = ""
                     master.settings["Schedule"][day]["flex"] = ""
 
@@ -1904,21 +1921,20 @@ def CreateHTTPHandlerClass(master):
                         # Rewrite it into the settings array and delete it
                         # from the input
 
-                        if (
-                            master.settings["Schedule"].get(match.group(2), None)
-                            == None
-                        ):
-                            # Create dictionary key for this day
-                            master.settings["Schedule"][match.group(2)] = {}
+                        day = match.group(2)
+                        master.settings["Schedule"][day] = (
+                            master.settings["Schedule"].get(day) or {}
+                        )
 
                         # Set per-day settings
-                        master.settings["Schedule"][match.group(2)][match.group(1)] = (
+                        master.settings["Schedule"][day][match.group(1)] = (
                             self.getFieldValue(key)
                         )
 
                     else:
-                        if master.settings["Schedule"].get("Settings", None) == None:
-                            master.settings["Schedule"]["Settings"] = {}
+                        master.settings["Schedule"]["Settings"] = (
+                            master.settings["Schedule"].get("Settings") or {}
+                        )
                         master.settings["Schedule"]["Settings"][key] = (
                             self.getFieldValue(key)
                         )
@@ -2032,8 +2048,7 @@ def CreateHTTPHandlerClass(master):
             # If not, this would indicate that this is the first time
             # we have saved it
             with master.settingsLock:
-                if master.settings.get("Graphs", None) == None:
-                    master.settings["Graphs"] = {}
+                master.settings["Graphs"] = master.settings.get("Graphs") or {}
                 master.settings["Graphs"]["Initial"] = initial
                 master.settings["Graphs"]["End"] = end
 

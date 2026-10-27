@@ -3,8 +3,10 @@
 # layer reads known() from here without the reconciler thread.
 from typing import Optional
 
+from ..Registry.Fields import FEED_LAG
+from ..Presence import NOT_HOME, pluggedNow, presence
 from .Desired import AMPS, CHARGE_LIMIT, CHARGING, FIELD_FOR
-from .Rules import VEHICLE_SOURCES_EXCLUDED
+from .Rules import releases, VEHICLE_SOURCES_EXCLUDED
 
 # Sources whose every reading came from the car itself. Exact source
 # names; Fleet Telemetry always counts
@@ -48,14 +50,21 @@ def uncompleted(vehicle, obs):
     return obs._replace(value="Stopped") if raised else obs
 
 
-def known(vehicle, aspect):
+def known(vehicle, aspect, desired=None):
     obs = vehicle.believed(FIELD_FOR[aspect], exclude=VEHICLE_SOURCES_EXCLUDED)
-    if aspect == CHARGING:
-        obs = uncompleted(vehicle, obs)
-    if obs is None and aspect == CHARGING:
+    if aspect != CHARGING:
+        return obs
+    obs, twc = uncompleted(vehicle, obs), _standIn(vehicle)
+    if obs is None:
         # A car no vehicle source describes (anonymous, non-Tesla): the TWC
         # current stands in. It never adopts
-        return _standIn(vehicle)
+        return twc
+    # For a start, current at the car's TWC now (a heartbeat within
+    # FEED_LAG) and since its last reading is the car charging: without a
+    # live feed that reading may be stale
+    fresh = twc and twc.at > max(obs.at, vehicle._clock() - FEED_LAG)
+    if desired is True and fresh and twc.value == "Charging":
+        return twc
     return obs
 
 
@@ -104,14 +113,28 @@ def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
     return None
 
 
-def allowWake(aspect, desired, known) -> bool:
-    # A raise or a start; never a lower, a stop or a restore. A billed
-    # provider never wakes for amps (the caller's rule)
-    if desired.restore:
-        return False
-    if aspect == CHARGE_LIMIT:
-        try:
-            return known is not None and desired.value > known.value
-        except TypeError:
-            return False
-    return desired.value is True if aspect == CHARGING else aspect == AMPS
+def whyQuiet(master, vehicle) -> Optional[str]:
+    # Why the car is expected to quiesce once every pending desire is applied,
+    # or None when it will charge (unknown limit or battery: it will)
+    key, desired = vehicle.key, master.desired
+    stop, pending = desired.get(key, CHARGING), desired.get(key, CHARGE_LIMIT)
+    held = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
+    limit, battery = known(vehicle, CHARGE_LIMIT), vehicle.value("batteryLevel")
+    limit = limit and limit.value
+    if pending is not None and not (releases(pending) and not held):
+        limit = held.outside if releases(pending) else pending.value
+    # Unplugged is known only by a reading
+    plugged = pluggedNow(master, vehicle, None)
+    if presence(master, vehicle) == NOT_HOME or plugged is False:
+        return "not plugged in here"
+    if stop is not None and stop.value is False:
+        return "stop desired"
+    if plugged is not False and getattr(master, "offered", {}).get(key) == 0:
+        return "nothing offered"
+    if limit and battery and limit <= battery:
+        return "car won't charge: limit at or below battery"
+    feeds = map(master.getModuleByName, ("TeslaMateVehicle", "FleetTelemetryMQTT"))
+    if any(f and f.registry.now() < f.settleUntil for f in feeds):
+        # Its first readings may show a full car
+        return "waiting for telemetry after start"
+    return None

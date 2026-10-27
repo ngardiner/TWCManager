@@ -1,4 +1,5 @@
 import base64
+from contextlib import closing
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 from hashlib import sha256
@@ -79,6 +80,8 @@ class TeslaMateVehicle(TelmetryBase):
         "charger_voltage": ["voltage", lambda a: int(a)],
         "charging_state": ["chargingState", lambda a: str(a)],
         "plugged_in": ["pluggedIn", parse_bool],
+        "shift_state": ["shiftState", lambda a: a or None],
+        "charger_power": ["chargerPower", _optNum],
         "charge_current_request_max": ["chargeCurrentRequestMax", _optNum],
     }
 
@@ -118,13 +121,17 @@ class TeslaMateVehicle(TelmetryBase):
         ):
             return {}
         try:
-            conn = psycopg2.connect(
-                host=self.__db_host,
-                database=self.__db_name,
-                user=self.__db_user,
-                password=self.__db_pass,
-                connect_timeout=5,
-            )
+            with closing(
+                psycopg2.connect(
+                    host=self.__db_host,
+                    database=self.__db_name,
+                    user=self.__db_user,
+                    password=self.__db_pass,
+                    connect_timeout=5,
+                )
+            ) as conn, closing(conn.cursor()) as cur:
+                cur.execute("SELECT id, vin FROM cars")
+                rows = cur.fetchall()
         except Exception as e:
             # The error type only: a driver message can name the host or user.
             logger.info(
@@ -132,21 +139,6 @@ class TeslaMateVehicle(TelmetryBase):
                 type(e).__name__,
             )
             return {}
-        try:
-            cur = conn.cursor()
-            try:
-                cur.execute("SELECT id, vin FROM cars")
-                rows = cur.fetchall()
-            finally:
-                cur.close()
-        except Exception as e:
-            logger.info(
-                "TeslaMate car VINs not loaded (%s); matching cars by name",
-                type(e).__name__,
-            )
-            return {}
-        finally:
-            conn.close()
         return {str(car_id): vin for car_id, vin in rows if car_id is not None and vin}
 
     def refreshIdentities(self):
@@ -393,7 +385,7 @@ class TeslaMateVehicle(TelmetryBase):
         if self.mqtt_prefix:
             subscription += self.mqtt_prefix + "/"
         subscription += "cars/+/"
-        for topic in list(self.events.keys()) + ["healthy"]:
+        for topic in list(self.events.keys()) + ["geofence", "healthy"]:
             topic = subscription + topic
             logger.log(logging.INFO5, "Subscribe to " + topic)
             res = client.subscribe(topic, qos=1)
@@ -412,6 +404,14 @@ class TeslaMateVehicle(TelmetryBase):
         if topic[0] == "teslamate" and topic[1] == "cars":
             if topic[3] == "healthy":
                 self.noteHealthy(topic[2], payload)
+            elif topic[3] == "geofence":
+                # Logged only: no decision reads it
+                self.logChange(
+                    topic[2],
+                    self.vehicleNames.get(topic[2], topic[2]),
+                    "geofence",
+                    payload,
+                )
             else:
                 self.applyDataToVehicle(
                     topic[2],

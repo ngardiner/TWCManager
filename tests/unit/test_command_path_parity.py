@@ -16,6 +16,7 @@ import pytest
 import requests
 from requests_mock import ANY
 
+from TWCManager.Vehicle import Presence
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
@@ -23,7 +24,7 @@ from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimit
 from TWCManager.Vehicle.Reconcile.Reconciler import PAID_AFTER, RESTORE_RETRY, RETRY
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
 from tests.unit.gen2_helpers import drive as heartbeat, offersThenBeat
-from tests.unit.reconcile_helpers import AWAY, HOME, placeAt
+from tests.unit.reconcile_helpers import AWAY, HOME, placeAt, runPending
 from tests.unit.teslatokens import fleet_token, new_api, owner_token
 from tests.unit.test_limit_reconciler import VIN, setup
 
@@ -106,6 +107,7 @@ class FleetCar:
             "scheduled_charging_pending": False,
         }
         self.at, self.script = at, list(script or [(200, True, "")])
+        self.shift = None
         base = api + vin
         requests_mock.get(
             base, json=lambda req, ctx: {"response": {"state": self.state, "vin": vin}}
@@ -130,7 +132,7 @@ class FleetCar:
                 "drive_state": {
                     "latitude": self.at[0],
                     "longitude": self.at[1],
-                    "shift_state": None,
+                    "shift_state": self.shift,
                 },
                 "charge_state": dict(self.charge),
                 "vehicle_state": {},
@@ -184,7 +186,7 @@ def install(
     # A real master, store and reconciler on a test clock; a real TeslaAPI
     # with the given token slots, the car listed and placed by TeslaMate's
     # free position
-    m, r, v, c = setup()
+    m, r, v, c = setup(here=False)
     if policy:
         m.settings["commandPolicy"] = policy
     api = None
@@ -209,10 +211,12 @@ def install(
     return m, r, v, c, api
 
 
-def realBle(m, answers="ok", vins=(VIN,)):
+def realBle(m, answers="ok", vins=(VIN,), ping=True):
     # The real TeslaBLE module; only the tesla-control run is replaced.
     # answers: an output string, None (the radio does not answer: a timeout,
-    # which the module retries once), or a callable(command, args)
+    # which the module retries once), or a callable(command, args). ping:
+    # the body-controller-state answer (True: VCSEC answered awake; False;
+    # or a callable(vin)), recorded in b.pings
     m.settings.setdefault("Vehicles", {}).update(
         {vin: {"privKey": "x"} for vin in vins}
     )
@@ -233,6 +237,15 @@ def realBle(m, answers="ok", vins=(VIN,)):
 
     b._sendCommand_internal = run
     b._fetch_state_json = lambda vin, kind: None
+    b.pings = []
+
+    def _ping(vin):
+        b.pings.append(vin)
+        if ping is True:
+            m.vehicleRegistry.get(vin).observe("state", "online", "TeslaBLE")
+        return ping(vin) if callable(ping) else ping
+
+    b._runPing = _ping
     for p in b.providers():
         m.providerOrder.register(p)
     for vin in vins:
@@ -339,6 +352,36 @@ def test_fleet_only_car_online_after_an_offline_wake_gets_the_limit(requests_moc
     assert m.desired.record(VIN, CHARGE_LIMIT).paidSends == 2  # the wake, the send
 
 
+def test_fleet_only_car_online_seconds_after_an_offline_wake_gets_the_limit(
+    requests_mock, monkeypatch
+):
+    # wake_up answers offline and the car connects seconds later: the polls
+    # after the wake find it, and the limit goes out in the same pass
+    import TWCManager.Vehicle.TeslaAPI as teslaapi
+
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c() - 600)
+    m.setPolicyLimit(80, transition=True)
+    car = FleetCar(requests_mock, limit=50)
+    requests_mock.post(
+        FLEET + VIN + "/wake_up", json={"response": {"state": "offline"}}
+    )
+    sleeps = []
+
+    def sleep(secs):
+        sleeps.append(secs)
+        if len(sleeps) == 2:
+            car.state = "online"
+
+    monkeypatch.setattr(teslaapi.time, "sleep", sleep)
+    r.pass_()
+    assert wakeUps(requests_mock) == 1
+    assert commands(requests_mock) == ["set_charge_limit"]
+    passes(r, c, 3600)
+    assert paid(requests_mock) == (0, 1, 1)  # one wake, no second
+    assert car.charge["charge_limit_soc"] == 80
+
+
 def wakeTimes(requests_mock, c, also=lambda: None):
     # A want() for offlineWake that records when each wake_up went out
     times = []
@@ -418,8 +461,9 @@ def test_fleet_only_car_never_online_after_an_offline_wake(requests_mock, start,
     assert paid(requests_mock) == (0, wakes, 0) and counts(requests_mock)["other"] == 0
     assert all(b - a > 1800 for a, b in zip(times, times[1:]))
     # Only free checks between: one per WAKE_CHECK while a follow-up is due
-    # (47 and 94 measured)
-    assert counts(requests_mock)["free"] <= (50 if not start else 100)
+    # (47 and 94 measured), and the polls after each wake
+    free = counts(requests_mock)["free"]
+    assert free <= (50 if not start else 100) + wakes * api.WAKE_POLLS
 
 
 def test_every_billed_wake_holds_the_next(requests_mock):
@@ -515,9 +559,12 @@ def test_ble_only_limits_never_wake_to_lower(requests_mock):
     passes(r, c, 600)
     m.setPolicyLimit(60, transition=True)
     passes(r, c, 600)
-    assert bleCommands(b) == ["charging-set-limit", "charging-set-limit"]
+    # The car is expected to charge (battery unknown): each lower wakes first
+    assert bleCommands(b) == ["wake", "charging-set-limit"] * 2
     assert [args for vin, cmd, args in b.runs] == [
+        None,
         70,
+        None,
         60,
     ] and requests_mock.call_count == 0
     assert m.heldLimits.get(VIN) == HeldLimit(90, 60)
@@ -601,11 +648,15 @@ def off_car_run(requests_mock, scenario, base, **tokens):
 def test_owner_only_off_car_matches_fleet_only(requests_mock, scenario):
     fleet = off_car_run(requests_mock, scenario, FLEET, fleet=True)
     owner = off_car_run(requests_mock, scenario, OWNER, owner=True)
-    # A lower limit is sent without a wake; the 500 and the 408 are retried once
-    limit = ["set_charge_limit"] * (1 if scenario == "raise" else 2)
+    # The lower wakes a car that will charge: a car that stays asleep gets no
+    # command; the 500 is retried once
+    limit = ["set_charge_limit"] * {"raise": 1, "asleep": 0}.get(scenario, 2)
     assert fleet[0] == (["charge_stop"] if scenario == "stop" else limit)
     # Same requests, and the same paid records after every pass
-    assert any(rec and rec[0] for rec in fleet[2][-1])
+    if scenario == "asleep":  # the wake is held: no paid send
+        assert fleet[2][-1][0][4].detail == "wake held"
+    else:
+        assert any(rec and rec[0] for rec in fleet[2][-1])
     assert owner == fleet
 
 
@@ -669,13 +720,13 @@ def test_ble_plus_fleet_waits_five_minutes(requests_mock):
     passes(r, c, PAID_AFTER[CHARGE_LIMIT] - 10)
     assert (
         paid(requests_mock) == (0, 0, 0)
-        and bleCommands(b) == ["charging-set-limit"] * 2
-    )  # one try plus its quick retry
+        and bleCommands(b) == ["wake"] * 2 + ["charging-set-limit"] * 2
+    )  # the wake and its quick retry, then the send and its retry
     passes(r, c, 3600)
     assert paid(requests_mock) == (0, 0, 1) and commands(requests_mock) == [
         "set_charge_limit"
     ]
-    assert len(b.runs) == 2 and dollars(requests_mock) == 0.001
+    assert len(b.runs) == 4 and dollars(requests_mock) == 0.001
 
 
 def test_ble_plus_fleet_stop_waits_a_minute(requests_mock):
@@ -702,12 +753,12 @@ def test_telemetry_limit_change_is_adopted(requests_mock):
     v.observe("chargeLimit", 90, "TeslaMateVehicle")
     m.setPolicyLimit(50, transition=True)
     passes(r, c, 60)
-    assert [args for vin, cmd, args in b.runs] == [50]
+    assert [args for vin, cmd, args in b.runs] == [None, 50]
     v.observe("chargeLimit", 80, "TeslaMateVehicle")  # the app
     passes(
         r, c, 3600, step=30, each=lambda: m.setPolicyLimit(50, transition=False)
     )  # the policy re-enforces every pass
-    assert len(b.runs) == 1 and m.desired.get(VIN, CHARGE_LIMIT).value == 80
+    assert len(b.runs) == 2 and m.desired.get(VIN, CHARGE_LIMIT).value == 80
     # adopted: nothing held, so no entry
     assert m.heldLimits.get(VIN) is None and requests_mock.call_count == 0
 
@@ -769,7 +820,7 @@ def gen3(m, *cars):
     from tests.unit.test_gen3twc_provider import IP1, IP2, make as make_gen3, vitals
 
     g, ctl, gp = make_gen3((IP1, IP2))
-    g.vehicleRegistry = m.vehicleRegistry
+    g.vehicleRegistry, g.getSlaveTWCs = m.vehicleRegistry, m.getSlaveTWCs
     m.providerOrder.register(gp)
     units = ctl.devices()
     for unit, vin in zip(units, cars):
@@ -872,6 +923,7 @@ def fleetPoint(requests_mock, mode, **car):
     m, r, v, c, api = install(fleet=True)
     FleetCar(requests_mock, state="online", charging="Charging", **car)
     pt, s = point(m, v, mode)
+    v.observe("chargingState", "Charging", "FleetAPI")  # plugged in here
     return m, r, v, c, pt, s
 
 
@@ -979,10 +1031,8 @@ def test_vanished_car_restore_with_fleet_is_bounded(requests_mock):
     placeAt(m, v, AWAY)
     m.setPolicyLimit(50, transition=False)
     passes(r, c, 3 * 3600, step=60)
-    assert (
-        paid(requests_mock)[1] == 0 and paid(requests_mock)[2] <= 2
-    )  # never a wake; at most 2 commands for the desire
-    assert commands(requests_mock) == ["set_charge_limit"] * 2
+    # The free online check finds it asleep and holds the restore
+    assert commands(requests_mock) == [] and paid(requests_mock) == (0, 0, 0)
 
 
 # Row 18 is test_reconciler_queues.py::test_drain_runs_pending_stops_only (no HTTP)
@@ -1071,6 +1121,56 @@ def test_telemetry_rearm_on_a_start_is_once_per_desire(requests_mock):  # Task 1
     )  # within the cap of 4
 
 
+def staleStopped(requests_mock, **car):
+    # Fleet-only, no feed: the car's last chargingState is a 10-minute-old
+    # "Stopped"
+    m, r, v, c, api = install(fleet=True)
+    FleetCar(requests_mock, state="online", **car)
+    for field, value in (
+        ("chargingState", "Stopped"),
+        ("chargeLimit", 80),
+        ("batteryLevel", 40),
+    ):
+        v.observe(field, value, "FleetAPI", at=c() - 600)
+    return m, r, v, c
+
+
+@pytest.mark.parametrize("drawing", ["live", "stale", None])
+def test_fleet_only_start_no_retry_while_the_twc_draws(requests_mock, drawing):
+    # The start is not accepted (the car started itself when its limit
+    # rose), and the car's TWC then measures 48 A: that is the car charging,
+    # so no retry goes out. A TWC reading that stops coming goes stale and
+    # the retry goes, as it does with no current at all
+    m, r, v, c = staleStopped(requests_mock, script=[(200, False, "")])
+    seen = []
+
+    def each():
+        m.startCarsCharging(VIN)
+        if drawing and commands(requests_mock) and not (drawing == "stale" and seen):
+            seen.append(v.observe("actualCurrent", 48, "Gen2TWC", seen=False))
+
+    m.startCarsCharging(VIN)
+    passes(r, c, 3600, step=5, each=each)
+    starts = commands(requests_mock).count("charge_start")
+    want = 1 if drawing == "live" else 2
+    assert starts == want and paid(requests_mock) == (1, 0, starts)
+
+
+@pytest.mark.parametrize("drawing", [True, False])
+def test_fleet_only_stop_is_the_same_while_the_twc_draws(requests_mock, drawing):
+    # A stop plans on the car's own reading: current at its TWC changes nothing
+    m, r, v, c = staleStopped(requests_mock, charging="Charging")
+
+    def each():
+        m.stopCarsCharging(VIN)
+        if drawing:
+            v.observe("actualCurrent", 48, "Gen2TWC", seen=False)
+
+    passes(r, c, 600, step=5, each=each)
+    # The stale "Stopped" settles it either way
+    assert commands(requests_mock) == [] and paid(requests_mock) == (0, 0, 0)
+
+
 # Row 21 (slim Task 12b M3): chargeRateControl 2, a rate Fleet cannot deliver
 
 
@@ -1113,7 +1213,7 @@ def test_mode_2_twc_holds_the_target_until_the_car_rate_lands(requests_mock):
 # Row 23 (slim Task 10 M2): a spent re-arm lets the start go without the limit
 
 
-def test_a_spent_rearm_lets_the_start_go_without_the_limit(requests_mock):
+def test_a_lower_that_wakes_a_refusing_car_rides_the_start_once_it_wakes(requests_mock):
     m, r, v, c, api = install(fleet=True)
     car = FleetCar(requests_mock, state="asleep", limit=90, wakes=False)
     for field, value in (
@@ -1122,24 +1222,23 @@ def test_a_spent_rearm_lets_the_start_go_without_the_limit(requests_mock):
         ("batteryLevel", 40),
     ):
         v.observe(field, value, "TeslaMateVehicle")
-    m.setPolicyLimit(50, transition=True)  # a lower: never a wake; asleep, so 408
+    m.setPolicyLimit(50, transition=True)  # a lower on a car that will charge: it wakes
     passes(r, c, 600)
     c.t += 1
     v.observe(
         "chargeLimit", 90, "FleetTelemetryMQTT"
     )  # a reading that reached the car: the one re-arm
     passes(r, c, 1200)
-    assert (
-        commands(requests_mock) == ["set_charge_limit"] * 4
-    )  # one send, its blind retry, then the re-arm's two: all 408
+    # The lower wakes the car (it charges once limited): the wake fails, and
+    # Fleet's wake hold keeps every later send from the car
+    assert commands(requests_mock) == [] and paid(requests_mock) == (0, 1, 0)
     assert m.desired.record(VIN, CHARGE_LIMIT).rearmed
     car.wakes = True
     m.startCarsCharging(VIN)
     passes(r, c, 600, each=lambda: m.startCarsCharging(VIN))
-    assert commands(requests_mock) == ["set_charge_limit"] * 4 + [
-        "charge_start"
-    ]  # no fifth limit send rides the start's wake
-    assert paid(requests_mock) == (1, 1, 5) and car.charge["charge_limit_soc"] == 90
+    assert commands(requests_mock) == ["set_charge_limit", "charge_start"]
+    # The woken car takes the limit, then the start
+    assert paid(requests_mock) == (1, 2, 2) and car.charge["charge_limit_soc"] == 50
 
 
 # Row 24 (slim Task 12a I1): an anonymous Gen2 point in mode 1 stops
@@ -1303,7 +1402,8 @@ def vehicleOnly(requests_mock, **kw):
     m, r, v, c, api = install(**kw)
     m.deleteSlaveTWC(m.getSlaveTWCs()[0].TWCID)
     v.observe("chargingState", "Charging", "TeslaMateVehicle")
-    assert api.locate(v) is True  # free: TeslaMate's position is home
+    # Free: TeslaMate's position is home
+    assert Presence.presence(m, v) == Presence.HOME
     m.setMaxAmpsToDivideAmongSlaves(16)
     return m, r, v, c
 
@@ -1322,3 +1422,1370 @@ def test_ble_only_vehicle_install_gets_its_rate_with_nothing_paid(requests_mock)
     passes(r, c, 3600, each=m.controlPass)
     assert ("charging-set-amps", 16) in [(cmd, a) for vin, cmd, a in b.runs]
     assert paid(requests_mock) == (0, 0, 0)
+
+
+# Presence rows: one applicability rule per message. Each states its paid
+# tuple (vehicle_data, wake_up, command)
+
+TM = "TeslaMateVehicle"
+
+
+def push(v, c, gap=1, **fields):
+    # Pushed telemetry, each batch at its own time
+    c.t += gap
+    for field, value in fields.items():
+        v.observe(field, value, TM)
+
+
+def cycles(m, limit):
+    # The policy thread's pass
+    return lambda: m.setPolicyLimit(limit, transition=False)
+
+
+def unplugAtHome(v, c):
+    push(v, c, chargingState="Charging")
+    push(v, c, chargingState="Disconnected")
+
+
+def test_box_2026_10_18_arrival_while_driving_sends_nothing_until_parked_then_ble_free(
+    requests_mock,
+):
+    # NOT_HOME; 15:18 TeslaMate fix inside + state driving -> PRESUMED/HOLD
+    # (no ping, no command, no HTTP); 15:21 state online + shift P ->
+    # HOME, A > L -> BLE charging-set-limit; paid == (0, 0, 0)
+    m, r, v, c, api = install(at=AWAY)
+    b = realBle(m)
+    v.observe("chargeLimit", 50, TM)
+    policy = cycles(m, 80)
+    passes(r, c, 60, each=policy)
+    assert m.desired.get(VIN, CHARGE_LIMIT) is None and b.pings == []
+    push(v, c, state="driving")
+    placeAt(m, v, HOME)
+    passes(r, c, 170, each=policy)
+    assert bleCommands(b) == [] == b.pings and Presence.drivingNow(v)
+    push(v, c, state="online", shiftState="P")
+    passes(r, c, 10, each=policy)  # the next pass, inside the 300 s retry gap
+    assert bleCommands(b) == ["wake", "charging-set-limit"]
+    assert requests_mock.call_count == 0 and paid(requests_mock) == (0, 0, 0)
+
+
+def test_ble_contact_while_driving_still_holds(requests_mock):
+    # Contact proves presence, not parked; paid == (0, 0, 0)
+    m, r, v, c, api = install()
+    b = realBle(m)
+    v.observe("chargeLimit", 50, TM)
+    push(v, c, state="driving")
+    v.observe("bleReach", True, "TeslaBLE")
+    policy = cycles(m, 80)
+    passes(r, c, 600, each=lambda: (policy(), v.observe("state", "driving", TM)))
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert b.pings == [] and v.markAt("contact") > Presence.NEVER
+    assert bleCommands(b) == [] and rec.heldAt is not None
+    assert requests_mock.call_count == 0
+
+
+def test_arrive_park_ble_sets_the_limit_before_the_plug(requests_mock):
+    # Arriving newer than leaving, no plug: the policy limit over BLE;
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, at=AWAY)
+    b = realBle(m)
+    FleetCar(requests_mock, state="online", limit=50)
+    v.observe("chargeLimit", 50, TM)
+    c.t += 1
+    placeAt(m, v, HOME)
+    push(v, c, shiftState="D")
+    push(v, c, 20, shiftState="P")
+    passes(r, c, 30, each=cycles(m, 80))
+    assert bleCommands(b) == ["wake", "charging-set-limit"]
+    assert not Presence.pluggedNow(m, v) and paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_20_s_drive_inside_the_radius_between_policy_passes_is_seen(
+    requests_mock,
+):
+    # HOME unplugged after an unplug at t0; pushed shift D at t+5, P at t+25
+    # (inside); policy pass at t+30: driveEnd t+25 > leaving -> apply over
+    # BLE; paid == (0, 0, 0)
+    m, r, v, c, api = install()
+    b = realBle(m)
+    v.observe("chargeLimit", 90, TM)
+    unplugAtHome(v, c)
+    t0 = c.t
+    c.t += 1
+    v.observe("bleReach", True, "TeslaBLE")
+    assert Presence.presence(m, v) == Presence.HOME
+    push(v, c, t0 + 5 - c.t, shiftState="D")
+    push(v, c, 20, shiftState="P")
+    c.t = t0 + 30
+    m.setPolicyLimit(50, transition=False)
+    r.pass_()
+    assert Presence.arriving(v) == t0 + 25 > Presence.leaving(v) == t0 + 5
+    assert bleCommands(b) == ["charging-set-limit"] and b.runs[-1][2] == 50
+    assert requests_mock.call_count == 0
+
+
+def test_arrive_limit_set_then_shift_to_d_in_the_driveway_restores_over_ble(
+    requests_mock,
+):
+    # The limit set at arrival; shift D in the driveway is the departure:
+    # the restore goes over BLE at once, inside the radius. No Fleet
+    # request; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, at=AWAY)
+    b = realBle(m)
+    FleetCar(requests_mock, state="online", limit=90)
+    v.observe("chargeLimit", 90, TM)
+    c.t += 1
+    placeAt(m, v, HOME)
+    push(v, c, shiftState="D")
+    push(v, c, 20, shiftState="P")
+    policy = cycles(m, 50)
+    passes(r, c, 60, each=policy)
+    assert bleCommands(b) == ["wake", "charging-set-limit"]
+    assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
+    push(v, c, shiftState="D")
+    r.pass_()
+    assert [args for vin, cmd, args in b.runs] == [None, 50, 90]  # no wake to restore
+    assert m.heldLimits.get(VIN) is None and Presence.inside(m, v)
+    c.t += 1
+    placeAt(m, v, AWAY)
+    passes(r, c, 60, each=policy)
+    assert [args for vin, cmd, args in b.runs] == [None, 50, 90]
+    assert requests_mock.call_count == 0
+
+
+def test_a_car_that_never_left_unplugged_for_hours_is_not_re_applied(
+    requests_mock,
+):
+    # The unplug restores it once; hours of BLE contact and policy passes
+    # apply nothing; paid == (0, 0, 0)
+    m, r, v, c, api = install(held=(90, 50))
+    b = realBle(m)
+    v.observe("chargeLimit", 50, TM)
+    unplugAtHome(v, c)
+    policy, beats = cycles(m, 50), []
+
+    def each():
+        policy()
+        beats.append(c.t)
+        if len(beats) % 10 == 0:
+            v.observe("bleReach", True, "TeslaBLE")  # still in range
+
+    passes(r, c, 4 * 3600, step=60, each=each)
+    assert Presence.presence(m, v) == Presence.HOME
+    assert [args for vin, cmd, args in b.runs] == [90]
+    assert m.heldLimits.get(VIN) is None and requests_mock.call_count == 0
+
+
+def test_leave_without_plugging_is_restored_by_fleet_once_the_fix_is_outside(
+    requests_mock,
+):
+    # 1 command, no wake: paid == (0, 0, 1)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    car = FleetCar(requests_mock, state="online", limit=50, at=AWAY)
+    v.observe("chargeLimit", 50, TM)
+    policy = cycles(m, 50)
+    passes(r, c, 600, each=policy)
+    assert paid(requests_mock) == (0, 0, 0)  # parked, never plugged: no change
+    push(v, c, chargeLimit=50)
+    placeAt(m, v, AWAY)
+    passes(r, c, 3600, each=policy)
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert paid(requests_mock) == (0, 0, 1) and car.charge["charge_limit_soc"] == 90
+
+
+def presumedFleet(requests_mock, at):
+    # Fleet-only, home set, no position known: presumed
+    m, r, v, c, api = install(fleet=True, located=False)
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
+    car = FleetCar(requests_mock, limit=50, at=at)
+    v.observe("chargeLimit", 50, "OwnerAPI", at=c.t - 3600)
+    assert Presence.presence(m, v) == Presence.PRESUMED
+    return m, r, v, c, car
+
+
+def test_presumed_fleet_only_car_gets_the_limit_through_the_paid_sequence(
+    requests_mock,
+):
+    # Woken, read (the read places it home), sent: paid == (1, 1, 1)
+    m, r, v, c, car = presumedFleet(requests_mock, HOME)
+    m.setPolicyLimit(80, transition=True)
+    passes(r, c, 3600)
+    assert paid(requests_mock) == (1, 1, 1) and car.charge["charge_limit_soc"] == 80
+
+
+def test_presumed_fleet_only_car_read_outside_is_sent_nothing(requests_mock):
+    # Woken and read; the read places it away: paid == (1, 1, 0)
+    m, r, v, c, car = presumedFleet(requests_mock, AWAY)
+    policy = cycles(m, 80)
+    m.setPolicyLimit(80, transition=True)
+    passes(r, c, 3600, each=policy)
+    assert paid(requests_mock) == (1, 1, 0) and commands(requests_mock) == []
+    assert Presence.presence(m, v) == Presence.NOT_HOME
+    assert m.desired.get(VIN, CHARGE_LIMIT) is None
+
+
+def test_unplug_restores_over_ble_at_once(requests_mock):
+    # Scenario 7; paid == (0, 0, 0)
+    m, r, v, c, api = install(held=(90, 50))
+    b = realBle(m)
+    v.observe("chargeLimit", 50, TM)
+    unplugAtHome(v, c)
+    m.setPolicyLimit(50, transition=False)
+    r.pass_()
+    assert [args for vin, cmd, args in b.runs] == [90] and b.pings == []
+    assert m.heldLimits.get(VIN) is None and requests_mock.call_count == 0
+
+
+def test_ble_gone_five_minutes_then_one_remote_restore(requests_mock):
+    # A restore never wakes: paid == (0, 0, 1)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    b = realBle(m, answers=None)
+    FleetCar(requests_mock, state="online", limit=50)
+    v.observe("chargeLimit", 50, TM)
+    unplugAtHome(v, c)
+    policy = cycles(m, 50)
+    passes(r, c, PAID_AFTER[CHARGE_LIMIT] - 10, each=policy)
+    assert paid(requests_mock) == (0, 0, 0)
+    assert bleCommands(b) == ["charging-set-limit"] * 2
+    passes(r, c, 3600, each=policy)
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert paid(requests_mock) == (0, 0, 1)
+
+
+def test_ble_only_departure_never_pays(requests_mock):
+    # ble_only: the restore retries hourly over BLE; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, policy="ble_only", held=(90, 50))
+    b = realBle(m, answers=None)
+    FleetCar(requests_mock, state="online", limit=50)
+    v.observe("chargeLimit", 50, TM)
+    unplugAtHome(v, c)
+    passes(r, c, 2 * RESTORE_RETRY + 120, step=60, each=cycles(m, 50))
+    assert bleCommands(b) == ["charging-set-limit"] * 6
+    assert requests_mock.call_count == 0
+
+
+def test_replug_before_the_remote_restore_sends_none(requests_mock):
+    # Scenario 8: the plug-in is an arrival, at the limit already held;
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    b = realBle(m, answers=None)
+    FleetCar(requests_mock, state="online", limit=50)
+    v.observe("chargeLimit", 50, TM)
+    unplugAtHome(v, c)
+    policy = cycles(m, 50)
+    passes(r, c, 120, each=policy)
+    push(v, c, chargingState="Charging")
+    passes(r, c, 3600, each=policy)
+    assert paid(requests_mock) == (0, 0, 0)
+    assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
+    assert bleCommands(b) == ["charging-set-limit"] * 2  # the one failed restore
+
+
+def test_fleet_only_unplug_one_remote_restore_plug_one_remote_apply(
+    requests_mock,
+):
+    # Scenario 17: the apply reads the limit first, its last write being
+    # stale by then: paid == (1, 0, 2)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    car = FleetCar(requests_mock, state="online", limit=50)
+    v.observe("chargeLimit", 50, TM)
+    policy = cycles(m, 50)
+    unplugAtHome(v, c)
+    passes(r, c, 600, each=policy)
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert car.charge["charge_limit_soc"] == 90
+    push(v, c, chargingState="Charging")
+    passes(r, c, 600, each=policy)
+    assert commands(requests_mock) == ["set_charge_limit"] * 2
+    assert car.charge["charge_limit_soc"] == 50 and paid(requests_mock) == (1, 0, 2)
+
+
+def test_fleet_only_restore_to_a_car_found_asleep_is_held(requests_mock):
+    # Scenario 18: asleep, never woken for a restore; its free online check
+    # holds it: paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    FleetCar(requests_mock, state="asleep", limit=50)
+    v.observe("chargeLimit", 50, TM)
+    unplugAtHome(v, c)
+    passes(r, c, 3 * RESTORE_RETRY, step=60, each=cycles(m, 50))
+    assert commands(requests_mock) == []
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_2026_10_11_unplug_ble_silence_inside_radius_policy_cycles_send_nothing(
+    requests_mock,
+):
+    # Scenario 1: the unplug departs it; policy cycles never re-apply, and
+    # the restore is the hourly BLE retry only; paid == (0, 0, 0)
+    m, r, v, c, api = install(owner=True, fleet=True, policy="ble_only", held=(90, 50))
+    b = realBle(m, answers=None)
+    v.observe("chargeLimit", 50, TM)
+    unplugAtHome(v, c)
+    passes(r, c, RESTORE_RETRY + 120, step=60, each=cycles(m, 50))
+    assert [args for vin, cmd, args in b.runs] == [90] * 4
+    assert requests_mock.call_count == 0
+
+
+def test_departing_car_is_never_presumed_present(requests_mock):
+    # Scenario 19: unplugged and driving off, the policy limit is never sent;
+    # the restore goes at the drive start; paid == (0, 0, 0)
+    m, r, v, c, api = install(held=(90, 50))
+    b = realBle(m)
+    v.observe("chargeLimit", 50, TM)
+    policy = cycles(m, 80)
+    unplugAtHome(v, c)
+    push(v, c, 5, shiftState="D")
+    r.pass_()
+    assert [args for vin, cmd, args in b.runs] == [90]
+    passes(r, c, 120, each=policy)
+    assert Presence.presence(m, v) == Presence.PRESUMED
+    c.t += 1
+    placeAt(m, v, AWAY)
+    passes(r, c, 60, each=policy)
+    assert [args for vin, cmd, args in b.runs] == [90]
+    assert requests_mock.call_count == 0
+
+
+def startup(requests_mock, charging):
+    # After a restart: Fleet-only, asleep, home set, no position; held
+    m, r, v, c, api = install(fleet=True, located=False, held=(90, 50))
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
+    car = FleetCar(requests_mock, limit=50, charging=charging)
+    v.observe("chargeLimit", 50, TM)
+    passes(r, c, 3600, each=cycles(m, 50))
+    assert Presence.presence(m, v) == Presence.PRESUMED
+    assert paid(requests_mock) == (0, 0, 0)  # nothing wakes it to learn presence
+    m.startCarsCharging(VIN)
+    passes(r, c, 600)
+    return m, v, car
+
+
+def test_startup_asleep_car_is_presumed_and_not_woken_until_charging_needs_it(
+    requests_mock,
+):
+    # Scenario 9: the start wakes it; paid == (1, 1, 1)
+    m, v, car = startup(requests_mock, "Stopped")
+    assert commands(requests_mock) == ["charge_start"]
+    assert paid(requests_mock) == (1, 1, 1)
+
+
+def test_startup_wake_finds_the_car_unplugged_and_sends_nothing(requests_mock):
+    # Scenario 10: paid == (1, 1, 0)
+    m, v, car = startup(requests_mock, "Disconnected")
+    assert commands(requests_mock) == [] and paid(requests_mock) == (1, 1, 0)
+    assert m.desired.get(VIN, CHARGING) is None
+
+
+def test_startup_wake_finds_the_car_plugged_and_starts_charging(requests_mock):
+    # Scenario 11: paid == (1, 1, 1)
+    m, v, car = startup(requests_mock, "Stopped")
+    assert car.charge["charging_state"] == "Charging"
+    assert Presence.pluggedHere(m, v) and paid(requests_mock) == (1, 1, 1)
+
+
+def test_ble_silent_umc_car_with_telemetry_inside_radius_is_home(requests_mock):
+    # Scenario 13: no TWC; TeslaMate says charging inside; BLE silent: the
+    # lower goes by Fleet after the free wait; paid == (0, 0, 1)
+    m, r, v, c, api = install(fleet=True)
+    b = realBle(m, answers=None)
+    FleetCar(requests_mock, state="online", limit=90)
+    push(v, c, chargeLimit=90, chargingState="Charging")
+    assert Presence.pluggedHere(m, v)
+    passes(r, c, 3600, each=cycles(m, 50))
+    assert b.pings == [] and commands(requests_mock) == ["set_charge_limit"]
+    assert paid(requests_mock) == (0, 0, 1)
+
+
+def test_ble_plus_fleet_car_leaving_a_umc_is_not_watched(requests_mock):
+    # No telemetry and no TWC: nothing watches a car charging on a UMC for
+    # its departure, so nothing reads it, and it keeps the held limit;
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    b = realBle(m, answers=None)
+    car = FleetCar(requests_mock, state="online", limit=50, at=AWAY)
+    v.observe("chargeLimit", 50, "FleetAPI", at=c.t - 600)
+    v.observe("chargingState", "Charging", "FleetAPI", at=c.t - 600)
+    car.charge["charging_state"] = "Disconnected"
+    passes(r, c, 3600, each=cycles(m, 50))
+    assert Presence.presence(m, v) == Presence.HOME and commands(requests_mock) == []
+    assert paid(requests_mock) == (0, 0, 0) and car.charge["charge_limit_soc"] == 50
+
+
+def test_2026_10_12_return_plugged_in_keeps_the_policy_limit(requests_mock):
+    # Restored while away; back and plugged in: the policy limit again over
+    # BLE; paid == (0, 0, 0)
+    m, r, v, c, api = install(held=(90, 50))
+    b = realBle(m)
+    v.observe("chargeLimit", 50, TM)
+    policy = cycles(m, 50)
+    c.t += 1
+    placeAt(m, v, AWAY)
+    passes(r, c, 600, each=policy)
+    c.t += 1
+    placeAt(m, v, HOME)
+    push(v, c, chargingState="Charging")
+    passes(r, c, 600, each=policy)
+    assert [args for vin, cmd, args in b.runs] == [90, None, 50]
+    assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
+
+
+def test_2026_10_12_arrival_during_a_running_restore_ends_at_the_policy_limit(
+    requests_mock,
+):
+    # The plug-in lands while the restore runs; paid == (0, 0, 0)
+    m, r, v, c, api = install(held=(90, 50))
+    v.observe("chargeLimit", 50, TM)
+    c.t += 1
+    placeAt(m, v, AWAY)
+
+    def answer(command, args):
+        if args == 90:
+            c.t += 1
+            placeAt(m, v, HOME)
+            push(v, c, chargingState="Charging")
+        return "ok"
+
+    b = realBle(m, answers=answer)
+    passes(r, c, 600, each=cycles(m, 50))
+    assert [args for vin, cmd, args in b.runs] == [90, None, 50]
+    assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
+
+
+@pytest.mark.parametrize("where", ["home", "presumed", "away", "unplugged"])
+def test_wake_only_a_home_car(requests_mock, where):
+    # A start may wake a car that may be here (paid (1, 1, 1)); one known
+    # away is never woken (paid (0, 0, 0))
+    m, r, v, c, api = install(fleet=True, located=where != "presumed")
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
+    FleetCar(requests_mock, charging="Stopped")
+    if where == "away":
+        c.t += 1
+        placeAt(m, v, AWAY)
+    elif where == "unplugged":
+        unplugAtHome(v, c)
+    m.startCarsCharging(VIN)
+    passes(r, c, 600)
+    woken = where in ("home", "presumed")
+    assert paid(requests_mock) == ((1, 1, 1) if woken else (0, 0, 0))
+
+
+def test_a_drive_inside_the_radius_spends_no_budget_and_the_park_applies(
+    requests_mock,
+):
+    # TeslaMate + Fleet, no BLE. Twenty minutes of driving inside the radius,
+    # state pushed every 5 s: each push plans the held raise again, and only
+    # requests that went out count against its budget. Parked, it goes:
+    # paid == (1, 0, 1)
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state="online", limit=50)
+    car.shift = "D"
+    v.observe("chargeLimit", 50, TM)
+    push(v, c, state="driving")
+    policy = cycles(m, 80)
+    passes(
+        r, c, 1200, step=5, each=lambda: (policy(), v.observe("state", "driving", TM))
+    )
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert commands(requests_mock) == [] and rec.heldAt is not None
+    assert rec.paidSpent == paid(requests_mock)[0] + paid(requests_mock)[1]
+    car.shift = "P"
+    push(v, c, state="online", shiftState="P")
+    passes(r, c, 10, each=policy)
+    assert car.charge["charge_limit_soc"] == 80 and paid(requests_mock) == (1, 0, 1)
+
+
+# The Gen2 unplug: a 00 whose first heartbeat drops the slave's max amps
+# from above 0 to 0, held a minute, unless live telemetry says plugged in
+
+
+def gen2(monkeypatch, m, c, vin=VIN, maxA=32.0):
+    # The serial thread's clock is the test's; the TWC links at 03 with the
+    # car's max amps and, given a vin, names the car by its VIN read
+    monkeypatch.setattr(time, "time", c)
+    s = m.getSlaveTWCs()[0]
+    heartbeat(m, s, 0.0, state=0x03, amps_max=maxA)
+    if vin:
+        s.currentVIN = vin
+        m.recordVehicleVIN(s)
+        s.currentVIN = ""
+    return s
+
+
+def followsPlug(s, c):
+    # BLE's charge read of a car in range: plugged in at the TWC's max while
+    # the TWC shows a car (a state, or a max above 0), else Disconnected. A
+    # read takes time: what it finds is newer than the ping before it
+    def fetch(vin, kind):
+        c.t += 0.01
+        plugged = s.reportedState or s.reportedAmpsMax
+        state = "Stopped" if plugged else "Disconnected"
+        return chargeRead(**{vin: (state, s.reportedAmpsMax)})(vin, kind)
+
+    return fetch
+
+
+def beats(m, r, c, s, seconds, state, maxA, policy=None, step=10):
+    # A heartbeat every step, the policy pass every 30 s, a reconcile pass
+    # every 10 s
+    for _ in range(int(seconds / step)):
+        c.t += step
+        heartbeat(m, s, 0.0, state=state, amps_max=maxA)
+        if policy and int(c.t) % 30 == 0:
+            policy()
+        if int(c.t) % 10 == 0:
+            r.pass_()
+
+
+def limits(b, vin=VIN):
+    return [args for v, cmd, args in b.runs if v == vin and cmd == "charging-set-limit"]
+
+
+def test_box_2026_10_18_departure_restores_over_ble_within_a_minute(
+    requests_mock, monkeypatch
+):
+    # 13:08: a VIN TWC at 03 with max 32 A, the limit held, Fleet asleep, no
+    # telemetry; the check's BLE read finds the car Disconnected, and the
+    # next policy pass restores. paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    b = realBle(m, answers=lambda command, args: b.sent.append(c.t) or "ok")
+    b.sent = []
+    FleetCar(requests_mock, state="asleep", limit=50)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    policy = cycles(m, 50)
+    policy()  # the policy in force when the TWC names the car
+    s = gen2(monkeypatch, m, c)
+    b._fetch_state_json = followsPlug(s, c)
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert limits(b) == []
+    onset = c.t + 10
+    beats(m, r, c, s, 600, 0x00, 0.0, policy)
+    assert limits(b) == [90] and "wake" not in bleCommands(b)
+    sent = [t for t, run in zip(b.sent, b.runs) if run[1] == "charging-set-limit"]
+    assert len(sent) == 1 and onset + s.CHECK_WAIT <= sent[0] <= onset + 60
+    assert paid(requests_mock) == (0, 0, 0) and m.heldLimits.get(VIN) is None
+
+
+def test_box_2026_10_18_false_00_at_47_a_with_telemetry_plugged_is_no_departure(
+    requests_mock, monkeypatch
+):
+    # 15:25:58-15:36:27: a waking car's 00 keeps 47 A; TeslaMate said plugged
+    # in before it and nothing since, so BLE's read answers: plugged in.
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    b = realBle(m)
+    FleetCar(requests_mock, state="online", limit=50)
+    push(v, c, state="online", pluggedIn=True, chargeLimit=50)
+    s = gen2(monkeypatch, m, c)
+    b._fetch_state_json = followsPlug(s, c)
+    policy = cycles(m, 50)
+    beats(m, r, c, s, 600, 0x03, 47.0, policy)
+    beats(m, r, c, s, 630, 0x00, 47.0, policy)
+    assert v.markAt("unplug") == Presence.NEVER
+    assert Presence.presence(m, v) == Presence.HOME
+    assert limits(b) == [] and paid(requests_mock) == (0, 0, 0)
+
+
+def test_box_2026_10_17_morning_wake_episodes_declare_no_departure(
+    requests_mock, monkeypatch
+):
+    # 07:58:28-08:39:01: a plugged car waking makes the TWC say 00 between
+    # brief 09/03 replies, its max never 0 at a 00 onset; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    b = realBle(m)
+    FleetCar(requests_mock, state="online", limit=50)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    policy = cycles(m, 50)
+    policy()  # the policy in force when the TWC names the car
+    s = gen2(monkeypatch, m, c)
+    b._fetch_state_json = followsPlug(s, c)
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    runs = [
+        (0x00, 487),
+        (0x09, 13),
+        (0x00, 49),
+        (0x09, 12),
+        (0x00, 370),
+        (0x03, 15),
+        (0x00, 129),
+        (0x03, 14),
+        (0x00, 123),
+        (0x04, 375),
+        (0x00, 598),
+        (0x03, 4),
+        (0x00, 244),
+        (0x01, 600),
+    ]
+    for state, seconds in runs:
+        beats(m, r, c, s, seconds, state, 32.0, policy, step=1)
+    assert v.markAt("unplug") == Presence.NEVER and v.value("twcVin") == "8244"
+    assert limits(b) == [] and "wake" not in bleCommands(b)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_sleeping_car_at_a_gen2_00_is_never_woken_by_a_restore(
+    requests_mock, monkeypatch
+):
+    # Three real unplugs and returns; BLE never answers. An unplug wakes a
+    # car, but Fleet here answers asleep throughout: it stands for a car no
+    # provider can read, so no unplug is declared, and nothing restores or
+    # wakes it: paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, held=(90, 50))
+    b = realBle(m, answers=None, ping=False)
+    FleetCar(requests_mock, state="asleep", limit=50)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    policy = cycles(m, 50)
+    policy()  # the policy in force when the TWC names the car
+    s = gen2(monkeypatch, m, c)
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    for _ in range(3):
+        beats(m, r, c, s, 300, 0x00, 0.0, policy)
+        beats(m, r, c, s, 300, 0x03, 32.0, policy)
+    assert v.markAt("unplug") == Presence.NEVER
+    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+
+
+def test_an_idle_car_at_0_a_never_departs_on_a_twc_00_even_when_the_re_apply_would_be_a_raise(
+    requests_mock, monkeypatch
+):
+    # The car at 03 offers nothing (max 0 A), its limit under the policy's,
+    # no telemetry: no unplug, no arrival, no wake; paid == (0, 0, 0)
+    import TWCManager.TWCMaster as master
+    import TWCManager.Vehicle.Reconcile.Targets as targets
+
+    m, r, v, c, api = install(fleet=True)
+    b = realBle(
+        m, ping=lambda vin: not v.observe("state", "asleep", "TeslaBLE") or True
+    )
+    FleetCar(requests_mock, state="asleep", limit=50)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    s = gen2(monkeypatch, m, c, maxA=0.0)
+    arrivals = []
+    for module in (master, targets):
+        monkeypatch.setattr(module, "onArrival", lambda m, v: arrivals.append(v))
+    policy = cycles(m, 80)
+    beats(m, r, c, s, 600, 0x03, 0.0, policy)
+    for _ in range(3):
+        beats(m, r, c, s, 300, 0x00, 0.0, policy)
+        beats(m, r, c, s, 300, 0x03, 0.0, policy)
+    assert v.markAt("unplug") == Presence.NEVER and arrivals == []
+    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_sleeping_car_at_00_with_power_available_is_woken_for_a_raise(
+    requests_mock, monkeypatch
+):
+    # 32 A to share; the named car asleep at 00 (max 0 A), its limit at its
+    # battery: the policy's raise wakes it over BLE; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    b = realBle(
+        m, ping=lambda vin: not v.observe("state", "asleep", "TeslaBLE") or True
+    )
+    FleetCar(requests_mock, state="asleep", limit=50)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    v.observe("batteryLevel", 50, "TeslaBLE")
+    m.setMaxAmpsToDivideAmongSlaves(32)
+    s = gen2(monkeypatch, m, c, maxA=32.0)
+    beats(m, r, c, s, 300, 0x00, 0.0, cycles(m, 50))
+    beats(m, r, c, s, 1800, 0x00, 0.0, cycles(m, 80))
+    assert bleCommands(b) == ["wake", "charging-set-limit"] and limits(b) == [80]
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_no_gps_source_plug_unplug_cycle_end_to_end(requests_mock, monkeypatch):
+    # BLE and a VIN-less TWC only: no position, no telemetry, no Tesla API.
+    # The unplug departs the only car that may be on it; paid == (0, 0, 0)
+    m, r, v, c, api = install(located=False, held=(80, 50))
+    b = realBle(m)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    v.observe("bleReach", True, "TeslaBLE")
+    s = gen2(monkeypatch, m, c, vin=None)
+    b._fetch_state_json = followsPlug(s, c)
+    policy = cycles(m, 50)
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert Presence.presence(m, v) == Presence.HOME and limits(b) == []
+    beats(m, r, c, s, 120, 0x00, 0.0, policy)
+    assert Presence.presence(m, v) == Presence.NOT_HOME
+    assert limits(b) == [80] and m.heldLimits.get(VIN) is None
+    assert requests_mock.call_count == 0
+
+
+def test_gen2_steady_00_after_link_does_not_block_startup_charging(
+    requests_mock, monkeypatch
+):
+    # Plugged in and asleep across the restart: 03 for two minutes after the
+    # link, then a steady 00 inside the link grace, the max dropping to 0:
+    # no departure, nothing restored or woken, and the start still goes over
+    # BLE once the ping answers; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, located=False, held=(90, 50))
+    b = realBle(m)
+    FleetCar(requests_mock, state="asleep", limit=50)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    policy = cycles(m, 50)
+    s = gen2(monkeypatch, m, c, vin=None, maxA=47.0)
+    beats(m, r, c, s, 120, 0x03, 47.0, policy)
+    beats(m, r, c, s, 900, 0x00, 0.0, policy)
+    assert v.markAt("unplug") == Presence.NEVER
+    assert Presence.presence(m, v) != Presence.NOT_HOME
+    assert limits(b) == [] and b.runs == []
+    m.startCarsCharging(VIN)
+    beats(m, r, c, s, 60, 0x00, 0.0, policy)
+    # The edge's check, and its one follow-up when that check can't tell
+    assert b.pings == [VIN, VIN] and Presence.presence(m, v) == Presence.HOME
+    assert "charging-start" in bleCommands(b) and limits(b) == []
+    assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_plug_in_on_a_vin_twc_comes_home_with_one_apply(requests_mock, monkeypatch):
+    # Away, then plugged in on a TWC that reads its VIN: home, and the policy
+    # limit goes once over BLE; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, at=AWAY)
+    b = realBle(m)
+    FleetCar(requests_mock, state="asleep", limit=80)
+    v.observe("chargeLimit", 80, "TeslaBLE")
+    policy = cycles(m, 50)
+    passes(r, c, 300, each=policy)
+    assert Presence.presence(m, v) == Presence.NOT_HOME and limits(b) == []
+    s = gen2(monkeypatch, m, c)
+    assert Presence.presence(m, v) == Presence.HOME
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert limits(b) == [50] and m.heldLimits.get(VIN) == HeldLimit(80, 50)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+# A VIN-less plug: one attribution names the car, else nobody is rated
+
+
+def attributeQueued(m):
+    # What the BLE worker does with the serial thread's attribution jobs
+    runPending(m.reconciler.ble)
+
+
+def chargeRead(**cars):
+    # BLE's charge state per VIN: (chargingState, pilot amps); None for a
+    # car the radio does not answer
+    def fetch(vin, kind):
+        if kind != "charge" or cars.get(vin) is None:
+            return None
+        state, pilot = cars[vin]
+        cs = {"chargingState": {state: {}}, "chargerPilotCurrent": pilot}
+        return {"chargeState": dict(cs, chargerActualCurrent=0)}
+
+    return fetch
+
+
+def twoCarsHome(requests_mock, **kw):
+    # Two listed cars parked at home since before the plug, limits known,
+    # both paired over BLE
+    m, r, v, c, api = install(fleet=True, **kw)
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Two"})
+    two = m.vehicleRegistry.get(VIN2)
+    placeAt(m, two, HOME)
+    b = realBle(m, vins=(VIN, VIN2))
+    for vin in (VIN, VIN2):
+        FleetCar(requests_mock, vin=vin, state="asleep", limit=80)
+        m.vehicleRegistry.get(vin).observe("chargeLimit", 80, "TeslaBLE")
+    return m, r, v, two, c, b
+
+
+def test_vin_less_single_candidate_plug_one_apply(requests_mock, monkeypatch):
+    # Scenario 3: away, home, then plugged in on a TWC that reads no VIN: the
+    # only candidate is named and the policy limit goes once over BLE;
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, at=AWAY)
+    b = realBle(m)
+    FleetCar(requests_mock, state="asleep", limit=80)
+    v.observe("chargeLimit", 80, "TeslaBLE")
+    policy = cycles(m, 50)
+    passes(r, c, 300, each=policy)
+    c.t += 10
+    placeAt(m, v, HOME)
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and m.vehicleRegistry.get("anon:8244") is None
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert limits(b) == [50] and m.heldLimits.get(VIN) == HeldLimit(80, 50)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_vin_less_two_candidates_ble_pilot_one_apply(requests_mock, monkeypatch):
+    # Scenario 4: two cars at home, each given the policy limit once; BLE
+    # reads one charging at the TWC's 32 A pilot and the other unplugged:
+    # that one is named and it alone is rated; paid == (0, 0, 0)
+    m, r, v, two, c, b = twoCarsHome(requests_mock)
+    b._fetch_state_json = chargeRead(
+        **{VIN: ("Charging", 32), VIN2: ("Disconnected", 0)}
+    )
+    m.settings["chargeRateControl"] = "2"
+    m.setMaxAmpsToDivideAmongSlaves(10)
+    policy = cycles(m, 50)
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and two.value("twcVin") is None
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert limits(b) == [50] and limits(b, VIN2) == [50]
+    rated = {vin for vin, cmd, args in b.runs if cmd == "charging-set-amps"}
+    assert rated == {VIN} and paid(requests_mock) == (0, 0, 0)
+
+
+def test_vinless_ambiguous_plug_rates_nobody_and_logs_once(
+    requests_mock, monkeypatch, caplog
+):
+    # Scenario 5: two cars at home, BLE answers neither: nobody is named or
+    # rated, and the ambiguity logs once for the plug; paid == (0, 0, 0)
+    m, r, v, two, c, b = twoCarsHome(requests_mock)
+    m.settings["chargeRateControl"] = "2"
+    m.setMaxAmpsToDivideAmongSlaves(10)
+    policy = cycles(m, 50)
+    with caplog.at_level("INFO"):
+        s = gen2(monkeypatch, m, c, vin=None)
+        for _ in range(60):
+            beats(m, r, c, s, 10, 0x03, 32.0, policy)
+            attributeQueued(m)
+    assert caplog.text.count("8244: no single car plugged in; left anonymous") == 1
+    assert v.value("twcVin") is None and two.value("twcVin") is None
+    assert s.vehicleKey == "anon:8244"
+    assert {cmd for vin, cmd, args in b.runs} <= {"charging-set-limit", "wake"}
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_vinless_rate_never_falls_back_to_vehicles_0(requests_mock):
+    # (h): row 25 with neither car plugged in: the anonymous point rates
+    # nobody, where main rated vehicles[0]; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    api.addVehicle({"id": 2, "vin": VIN2, "display_name": "Two"})
+    for vin in (VIN, VIN2):
+        FleetCar(requests_mock, vin=vin, state="online", charging="Disconnected")
+        car = m.vehicleRegistry.get(vin)
+        placeAt(m, car, HOME)
+        car.observe("chargingState", "Disconnected", "TeslaMateVehicle")
+    s = m.getSlaveTWCs()[0]
+    s.protocolVersion = 2
+    m.settings["chargeRateControl"] = "2"
+    m.setMaxAmpsToDivideAmongSlaves(10)
+    m.vehicleRegistry.beginPlugSession("8244")
+    rated = []
+
+    def beat():
+        heartbeat(m, s, 10.0, state=0x01)
+        rated.extend(k for k in (VIN, VIN2) if m.desired.get(k, AMPS))
+
+    passes(r, c, 600, each=beat)
+    assert (
+        rated == [] and amps(requests_mock) == [] and paid(requests_mock) == (0, 0, 0)
+    )
+
+
+def test_supercharger_telemetry_plugged_is_not_home(requests_mock, monkeypatch):
+    # Scenario 6: the car charges at a Supercharger, its live feed saying
+    # plugged in, as something plugs in at home on a TWC that reads no VIN:
+    # the car is not home, not named and not applied; paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, at=AWAY)
+    b = realBle(m)
+    FleetCar(requests_mock, state="online", limit=80, charging="Charging")
+    v.observe("chargeLimit", 80, "TeslaBLE")
+    policy = cycles(m, 50)
+    passes(r, c, 300, each=policy)
+    push(v, c, fastChargerPresent=True, pluggedIn=True, chargingState="Charging")
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    beats(m, r, c, s, 600, 0x03, 32.0, policy)
+    assert Presence.presence(m, v) == Presence.NOT_HOME
+    assert v.value("twcVin") is None and limits(b) == []
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_returning_car_on_an_unnamed_gen2_asleep_starts_over_ble(
+    requests_mock, monkeypatch
+):
+    # BLE and a VIN-less TWC only: after the unplug the car returns, BLE
+    # reaches it, and the TWC says 03 asleep at 6 A with no VIN read. The
+    # plug is attributed to it, so a start for the car goes over BLE;
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(located=False)
+    b = realBle(m)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    v.observe("bleReach", True, "TeslaBLE")
+    s = gen2(monkeypatch, m, c, vin=None)
+    b._fetch_state_json = followsPlug(s, c)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244"
+    beats(m, r, c, s, 600, 0x03, 32.0)
+    beats(m, r, c, s, 120, 0x00, 0.0)
+    assert Presence.presence(m, v) == Presence.NOT_HOME
+    c.t += 600
+    v.observe("bleReach", True, "TeslaBLE")
+    beats(m, r, c, s, 10, 0x03, 6.0)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and Presence.pluggedHere(m, v)
+    m.startCarsCharging(VIN)
+    beats(m, r, c, s, 60, 0x03, 6.0)
+    assert "charging-start" in bleCommands(b)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_plug_attributed_before_the_policy_pass_sends_a_held_car_nothing(
+    requests_mock, monkeypatch
+):
+    # The no-GPS plug/unplug cycle with each attribution run as the BLE
+    # worker runs it, at once: the car is named before the policy's first
+    # pass and already reads its held 50, so nothing is restored or applied
+    # while it is plugged; the unplug restores 80 once; paid == (0, 0, 0)
+    m, r, v, c, api = install(located=False, held=(80, 50))
+    b = realBle(m)
+    v.observe("chargeLimit", 50, "TeslaBLE")
+    v.observe("bleReach", True, "TeslaBLE")
+    s = gen2(monkeypatch, m, c, vin=None)
+    b._fetch_state_json = followsPlug(s, c)
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244"
+    policy = cycles(m, 50)
+    for _ in range(60):
+        beats(m, r, c, s, 10, 0x03, 32.0, policy)
+        attributeQueued(m)
+    assert Presence.presence(m, v) == Presence.HOME and limits(b) == []
+    beats(m, r, c, s, 120, 0x00, 0.0, policy)
+    assert Presence.presence(m, v) == Presence.NOT_HOME
+    assert limits(b) == [80] and m.heldLimits.get(VIN) is None
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_box_2026_10_19_return_and_leave_unplugged_goes_over_ble(requests_mock, caplog):
+    # TeslaMate + BLE + Fleet, never plugged in. Away, BLE fails and Fleet
+    # finds the car away; it drives back into the radius still out of BLE
+    # range (a position a second, held with no ping); parks: the policy
+    # limit over BLE; drives off: the restore over BLE in the same second.
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True, located=False)
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
+    car = FleetCar(requests_mock, state="online", limit=100, soc=60, at=AWAY)
+    near = []
+    b = realBle(
+        m,
+        answers=lambda command, args: "ok" if near else None,
+        ping=lambda vin: bool(near),
+    )
+    v.observe("chargeLimit", 100, TM)
+    policy = cycles(m, 50)
+    passes(r, c, 30, step=1, each=policy)  # after a restart, nothing known
+    assert b.pings and b.runs == [] and v.markAt("absent") > Presence.NEVER
+    push(v, c, state="driving", shiftState="D", batteryLevel=60)
+    placeAt(m, v, AWAY)
+    passes(r, c, 900, step=30, each=lambda: (policy(), placeAt(m, v, AWAY)))
+    assert m.desired.get(VIN, CHARGE_LIMIT) is None
+    pings = len(b.pings)
+    car.at = HOME
+    push(v, c, chargeLimit=100)
+    placeAt(m, v, HOME)
+
+    def driving():
+        if c.t % 30 == 0:
+            policy()
+        placeAt(m, v, HOME)
+
+    with caplog.at_level("INFO"):
+        passes(r, c, 60, step=1, each=driving)
+    held = [x for x in caplog.records if "held: driving" in x.getMessage()]
+    assert len(held) == 1 and commands(requests_mock) == []
+    assert len(b.pings) == pings and b.runs == []  # held before any ping
+    near.append(True)
+    push(v, c, shiftState="P", state="online")
+    passes(r, c, 3, step=1, each=driving)
+    assert limits(b) == [50] and paid(requests_mock) == (0, 0, 0)
+    assert m.heldLimits.get(VIN) == HeldLimit(100, 50)
+    passes(r, c, 75, step=1, each=driving)
+    # Shift D in the driveway is the departure: restored at once, with the
+    # car still inside the radius and in BLE range
+    push(v, c, shiftState="D", state="driving")
+    r.pass_()
+    assert limits(b) == [50, 100] and m.heldLimits.get(VIN) is None
+    assert paid(requests_mock) == (0, 0, 0) and Presence.inside(m, v)
+
+
+def test_box_2026_10_19_plug_in_at_the_limit_names_the_only_car(
+    requests_mock, monkeypatch
+):
+    # 15:54: the only car, parked at home with BLE contact seconds ago and its
+    # limit 50 under its battery 60, plugs in on a Gen2 that reads VINs but
+    # reads none. TeslaMate still says unplugged (from before the plug), and
+    # BLE reads Complete at the 47 A the offer rose to from 6 A during the
+    # read: it is still the car. paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    FleetCar(requests_mock, state="online", limit=50, soc=60)
+    b = realBle(m)
+    read = chargeRead(**{VIN: ("Complete", 47)})
+    m.settings["SlaveTWCs"] = {"8244": {"supportsVINQuery": 1}}
+    m.heldLimits.set(VIN, 100, 50)
+    held = m.heldLimits.get(VIN)
+    push(v, c, pluggedIn=False, chargingState="Disconnected")
+    c.t += 9000
+    push(v, c, state="online", shiftState="P", chargeLimit=50, batteryLevel=60)
+    v.observe("bleReach", True, "TeslaBLE")
+    policy = cycles(m, 50)
+    policy()
+    c.t += 90
+    s = gen2(monkeypatch, m, c, vin=None, maxA=6.0)
+    b._fetch_state_json = lambda vin, kind: setattr(s, "reportedAmpsMax", 47.0) or (
+        read(vin, kind)
+    )
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and s.vehicleKey == VIN
+    push(v, c, gap=8, pluggedIn=True, chargingState="Complete")
+    beats(m, r, c, s, 10, 0x03, 47.0, policy)
+    beats(m, r, c, s, 600, 0x00, 47.0, policy)  # idle at its limit
+    assert v.value("twcVin") == "8244" and Presence.pluggedHere(m, v)
+    assert limits(b) == [] and m.heldLimits.get(VIN) == held
+    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_plug_left_anonymous_is_named_by_the_feed_s_plug_in(
+    requests_mock, monkeypatch
+):
+    # Two cars at home, neither answering BLE: the plug is left anonymous
+    # until TeslaMate reports one of them plugged in. paid == (0, 0, 0)
+    m, r, v, two, c, b = twoCarsHome(requests_mock)
+    b._fetch_state_json = chargeRead()
+    policy = cycles(m, 50)
+    passes(r, c, 60, each=policy)
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    assert s.vehicleKey == "anon:8244"
+    push(v, c, gap=8, pluggedIn=True, chargingState="Stopped")
+    attributeQueued(m)
+    assert s.vehicleKey == VIN and two.value("twcVin") is None
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_box_2026_10_20_a_waking_00_keeps_the_plug_for_the_feed_to_name(
+    requests_mock, monkeypatch
+):
+    # 10:13:59: the only car plugs in at 0 A offered, and BLE reads it at a
+    # 47 A pilot, so the plug is left unnamed; 6 A, then 47 A; at 10:14:16
+    # the TWC says 00 with its max still 47 A while the car rests; TeslaMate
+    # reports the plug-in at 10:14:30 and names it. paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    FleetCar(requests_mock, state="online", limit=50, soc=60)
+    b = realBle(m)
+    b._fetch_state_json = chargeRead(**{VIN: ("Complete", 47)})
+    push(v, c, pluggedIn=False, chargingState="Disconnected")
+    c.t += 9000
+    push(v, c, state="online", shiftState="P", chargeLimit=50, batteryLevel=60)
+    policy = cycles(m, 50)
+    policy()
+    s = gen2(monkeypatch, m, c, vin=None, maxA=0.0)
+    attributeQueued(m)
+    assert s.vehicleKey == "anon:8244"
+    beats(m, r, c, s, 2, 0x09, 6.0, step=2)
+    beats(m, r, c, s, 2, 0x09, 47.0, step=2)
+    beats(m, r, c, s, 13, 0x03, 47.0, step=13)
+    beats(m, r, c, s, 14, 0x00, 47.0, step=1)
+    assert m.vehicleRegistry.vehicleAt("8244").isAnonymous
+    push(v, c, pluggedIn=True, chargingState="Complete")
+    attributeQueued(m)
+    assert v.value("twcVin") == "8244" and Presence.pluggedHere(m, v)
+    c.t += (30 - c.t % 30) % 30
+    s.protocolVersion = 2
+    beats(
+        m,
+        r,
+        c,
+        s,
+        600,
+        0x00,
+        47.0,
+        lambda: m.setMaxAmpsToDivideAmongSlaves(32) or policy(),
+    )
+    assert v.value("twcVin") == "8244" and Presence.pluggedHere(m, v)
+    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+
+
+def unnamedAt00(requests_mock, monkeypatch):
+    # Two cars at home, neither answering BLE, so the plug stays unnamed;
+    # car 1 reads Stopped (plugged in, here by elimination), limit 80 over
+    # battery 50; the TWC says 00 with its max still 32 A, so the session
+    # stays open
+    m, r, v, two, c, b = twoCarsHome(requests_mock)
+    b._fetch_state_json = chargeRead()
+    s = gen2(monkeypatch, m, c, vin=None)
+    s.protocolVersion = 2
+    attributeQueued(m)
+    assert s.vehicleKey == "anon:8244"
+    v.observe("batteryLevel", 50, "FleetAPI")
+    v.observe("chargingState", "Stopped", "FleetAPI")
+    beats(m, r, c, s, 400, 0x03, 32.0)
+    assert s.vehicleKey == "anon:8244"
+    c.t += (30 - c.t % 30) % 30
+    beats(m, r, c, s, 30, 0x00, 32.0)
+    assert m.vehicleRegistry.vehicleAt("8244").isAnonymous
+    assert s.vehicleKey is None and m.offered.get(VIN) == 0
+    return m, r, v, c, s, b
+
+
+def test_an_unnamed_plug_at_00_wakes_no_candidate_for_a_raise(
+    requests_mock, monkeypatch
+):
+    # The policy raises the limit to 90 while the unnamed TWC rests at 00:
+    # nothing is offered there, so the raise waits for a free channel.
+    # paid == (0, 0, 0)
+    m, r, v, c, s, b = unnamedAt00(requests_mock, monkeypatch)
+    beats(m, r, c, s, 600, 0x00, 32.0, cycles(m, 90))
+    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+
+
+def test_an_unnamed_plug_at_00_starts_no_candidate_as_the_offer_rises(
+    requests_mock, monkeypatch
+):
+    # The offer rises while the unnamed TWC rests at 00 with a car not full:
+    # the TWC reports no car there, so no start fans out. The car's own
+    # endpoint still rates it over BLE. paid == (0, 0, 0)
+    m, r, v, c, s, b = unnamedAt00(requests_mock, monkeypatch)
+    starts = []
+    monkeypatch.setattr(m, "startCarsCharging", starts.append)
+    for amps in (6, 12, 24, 32):
+        m.setMaxAmpsToDivideAmongSlaves(amps)
+        beats(m, r, c, s, 60, 0x00, 32.0)
+    assert starts == [] and m.desired.get(VIN, CHARGING) is None
+    assert "charging-start" not in bleCommands(b)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_car_just_unplugged_is_not_the_next_plug_s(requests_mock, monkeypatch):
+    # A swap: car 1 unplugs (its feed says so) and car 2, with no feed and
+    # no BLE answer, plugs in. Both are inside and only car 1 answered BLE:
+    # car 2 is the match. paid == (0, 0, 0)
+    m, r, v, two, c, b = twoCarsHome(requests_mock)
+    b._fetch_state_json = chargeRead()
+    push(v, c, pluggedIn=True, chargingState="Stopped")
+    push(v, c, gap=60, pluggedIn=False, chargingState="Disconnected")
+    v.observe("bleReach", True, "TeslaBLE")
+    b._runPing = lambda vin: vin == VIN
+    c.t += 30
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    assert v.value("twcVin") is None and s.vehicleKey == two.vin
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_plug_unnamed_for_long_does_not_take_a_car_plugged_in_elsewhere(
+    requests_mock, monkeypatch
+):
+    # The TWC has been anonymous for an hour; the feed's plug-in now is
+    # another charger's. paid == (0, 0, 0)
+    m, r, v, two, c, b = twoCarsHome(requests_mock)
+    b._fetch_state_json = chargeRead()
+    s = gen2(monkeypatch, m, c, vin=None)
+    attributeQueued(m)
+    c.t += 3600
+    push(v, c, pluggedIn=True, chargingState="Stopped")
+    attributeQueued(m)
+    assert s.vehicleKey == "anon:8244" and v.value("twcVin") is None
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_box_2026_10_19_no_ble_run_for_a_car_driving_or_away(requests_mock):
+    # 15:49:52: the car drives inside the radius, out of BLE range, when the
+    # policy pass gives it the limit: held for driving before any ping or
+    # read, each of which ties up the BLE worker for 25 s. A desire set while
+    # the car was home and run once it is seen away is cleared the same way.
+    # paid == (0, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    FleetCar(requests_mock, state="online", limit=100)
+    b = realBle(m, answers=None, ping=False)
+    b.fetched = []
+    b._fetch_state_json = lambda vin, kind: b.fetched.append(kind)
+    v.observe("chargeLimit", 100, TM)
+    push(v, c, state="driving", shiftState="D")
+    placeAt(m, v, HOME)
+    policy = cycles(m, 50)
+    passes(r, c, 60, step=1, each=lambda: c.t % 30 or policy())
+    assert (b.pings, b.runs, b.fetched) == ([], [], [])
+    assert m.desired.record(VIN, CHARGE_LIMIT).heldAt is not None
+    push(v, c, state="online", shiftState="P")
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy", True)
+    placeAt(m, v, AWAY)
+    r.pass_()
+    runPending(m.reconciler.ble)
+    assert m.desired.get(VIN, CHARGE_LIMIT) is None
+    assert (b.pings, b.runs, b.fetched) == ([], [], [])
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+# A Gen2 status edge checks the car: the feed, else BLE (asleep is still
+# plugged in), else the read cascade; nothing that can check means no unplug
+
+
+def checkedCar(requests_mock, monkeypatch, fleet="online", ping="online"):
+    # The box, 2026-10-20 12:44: the car named on TWC 8244 at 03 with 47 A,
+    # BLE in range answering its sleep status, Fleet with the car's state;
+    # BLE's charge read follows the plug, each read's time in b.reads
+    m, r, v, c, api = install(fleet=True)
+    FleetCar(requests_mock, state=fleet, limit=50, soc=60)
+    b = realBle(m, ping=lambda vin: not v.observe("state", ping, "TeslaBLE") or True)
+    s = gen2(monkeypatch, m, c, maxA=47.0)
+    b.reads, fetch = [], followsPlug(s, c)
+    b._fetch_state_json = lambda vin, kind: b.reads.append(c.t) or fetch(vin, kind)
+    return m, r, v, c, s, b
+
+
+def boxUnplugs(m, r, c, s, v, feed=lambda plugged: None):
+    # 12:45:23 woken by the app, 00 at 47 A; 12:46:12 unplugged, the max
+    # drops to 0; 12:46:48 plugged in again for 27 s, named by its VIN read;
+    # 12:47:15 unplugged, 00 at 0 A. feed(plugged) is the feed's report, 13 s
+    # after each unplug and 8 s after the plug. Returns each unplug's mark
+    beats(m, r, c, s, 49, 0x00, 47.0, step=7)
+    assert v.value("twcVin") == "8244" and v.markAt("unplug") == Presence.NEVER
+    beats(m, r, c, s, 12, 0x00, 0.0, step=2)
+    feed(False)
+    beats(m, r, c, s, 22, 0x00, 0.0, step=2)
+    first = v.markAt("unplug")
+    assert first > Presence.NEVER and v.value("twcVin") is None
+    beats(m, r, c, s, 2, 0x09, 6.0, step=2)
+    s.currentVIN = VIN
+    m.recordVehicleVIN(s)
+    s.currentVIN = ""
+    beats(m, r, c, s, 8, 0x09, 47.0, step=2)
+    feed(True)
+    beats(m, r, c, s, 2, 0x09, 47.0, step=2)
+    beats(m, r, c, s, 16, 0x03, 6.0, step=2)
+    assert v.value("twcVin") == "8244" and v.markAt("unplug") == first
+    beats(m, r, c, s, 12, 0x00, 0.0, step=2)
+    feed(False)
+    beats(m, r, c, s, 48, 0x00, 0.0, step=2)
+    assert v.markAt("unplug") > first and v.value("twcVin") is None
+    return first, v.markAt("unplug")
+
+
+def test_box_2026_10_20_each_unplug_departs_once_ble_reads_it_disconnected(
+    requests_mock, monkeypatch
+):
+    # The wake's check reads the car plugged in; each unplug's reads it
+    # Disconnected. paid == (0, 0, 0)
+    m, r, v, c, s, b = checkedCar(requests_mock, monkeypatch)
+    beats(m, r, c, s, 600, 0x03, 47.0)
+    boxUnplugs(m, r, c, s, v)
+    assert len(b.reads) == 3 and len(b.pings) == 3
+    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+
+
+def test_box_2026_10_20_with_teslamate_live_the_feed_departs_the_car(
+    requests_mock, monkeypatch
+):
+    # The same with TeslaMate reporting each plug change within the wait:
+    # those need no BLE check. The wake's 00, which the feed says nothing
+    # about, falls through to BLE's. paid == (0, 0, 0)
+    m, r, v, c, s, b = checkedCar(requests_mock, monkeypatch)
+    push(v, c, state="online", pluggedIn=True)
+    beats(m, r, c, s, 600, 0x03, 47.0)
+    wake, said = c.t + 7, []
+    first, second = boxUnplugs(
+        m,
+        r,
+        c,
+        s,
+        v,
+        lambda plugged: said.append(c.t) or push(v, c, gap=0, pluggedIn=plugged),
+    )
+    assert [int(t) for t in b.reads] == [wake + 21] and len(b.pings) == 1
+    assert (first, second) == (said[0], said[2])  # at the feed's reports
+    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_sleeping_car_on_a_03_00_flicker_stays_plugged_in(requests_mock, monkeypatch):
+    # The ping says asleep: an unplug would have woken it. No read, no
+    # unplug. paid == (0, 0, 0)
+    m, r, v, c, s, b = checkedCar(requests_mock, monkeypatch, "asleep", "asleep")
+    beats(m, r, c, s, 600, 0x03, 6.0)
+    beats(m, r, c, s, 10, 0x00, 6.0)
+    beats(m, r, c, s, 120, 0x03, 6.0)
+    assert b.pings == [VIN] and b.reads == []
+    assert v.markAt("unplug") == Presence.NEVER and v.value("twcVin") == "8244"
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("state, reads", [("online", 1), ("asleep", 0)])
+def test_fleet_only_checks_a_car_awake_with_one_read(
+    requests_mock, monkeypatch, state, reads
+):
+    # The free online check first; only an awake car is read, and Disconnected
+    # departs it. paid == (reads, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state=state, limit=50, charging="Complete")
+    s = gen2(monkeypatch, m, c)
+    beats(m, r, c, s, 600, 0x03, 32.0)
+    car.charge["charging_state"] = "Disconnected"
+    beats(m, r, c, s, 120, 0x00, 0.0)
+    assert (v.markAt("unplug") > Presence.NEVER) == bool(reads)
+    assert paid(requests_mock) == (reads, 0, 0)
+
+
+def test_an_unnamed_session_ends_when_its_only_candidate_reads_disconnected(
+    requests_mock, monkeypatch
+):
+    # A VIN-less TWC left unnamed; the one car that may be on it reads
+    # Disconnected over BLE after the 00. paid == (0, 0, 0)
+    m, r, v, c, s, b = checkedCar(requests_mock, monkeypatch)
+    m.vehicleRegistry.endPlugSession("8244")
+    beats(m, r, c, s, 60, 0x00, 0.0)
+    beats(m, r, c, s, 400, 0x03, 32.0)
+    assert s.vehicleKey == "anon:8244"
+    beats(m, r, c, s, 60, 0x00, 0.0)
+    assert m.vehicleRegistry.vehicleAt("8244") is None
+    assert v.markAt("unplug") > Presence.NEVER and paid(requests_mock) == (0, 0, 0)
+
+
+def test_fleet_only_checks_past_its_stored_reading(requests_mock, monkeypatch):
+    # The wake's check pays for a read, which defers reads 300 s; the unplug
+    # 49 s later still reads the car and departs it. paid == (2, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state="online", limit=50, charging="Complete")
+    s = gen2(monkeypatch, m, c, maxA=47.0)
+    beats(m, r, c, s, 600, 0x03, 47.0)
+    beats(m, r, c, s, 49, 0x00, 47.0, step=7)
+    assert paid(requests_mock) == (1, 0, 0)
+    car.charge["charging_state"] = "Disconnected"
+    beats(m, r, c, s, 40, 0x00, 0.0, step=2)
+    assert v.markAt("unplug") > Presence.NEVER and v.value("twcVin") is None
+    assert paid(requests_mock) == (2, 0, 0)
+
+
+def test_fleet_only_checks_past_its_cached_asleep(requests_mock, monkeypatch):
+    # The wake's check finds the car asleep (no read); the unplug wakes it,
+    # and the next check, inside the online check's 120 s cache, asks again
+    # and reads it Disconnected. paid == (1, 0, 0)
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state="asleep", limit=50, charging="Complete")
+    s = gen2(monkeypatch, m, c, maxA=47.0)
+    beats(m, r, c, s, 600, 0x03, 47.0)
+    beats(m, r, c, s, 49, 0x00, 47.0, step=7)
+    assert paid(requests_mock) == (0, 0, 0)
+    car.state, car.charge["charging_state"] = "online", "Disconnected"
+    beats(m, r, c, s, 40, 0x00, 0.0, step=2)
+    assert v.markAt("unplug") > Presence.NEVER and paid(requests_mock) == (1, 0, 0)
+
+
+def test_box_2026_10_20_a_late_feed_neither_holds_an_unplug_nor_departs_a_replug(
+    requests_mock, monkeypatch
+):
+    # 07:41:59 unplugged; TeslaMate's false comes 44 s later, after the check,
+    # which reads BLE and departs the car. 10:13:59 plugged in again, named;
+    # 10:14:16 00 at 47 A while the car rests: the old false is no news since
+    # that edge, BLE reads it plugged in, and it stays. paid == (0, 0, 0)
+    m, r, v, c, s, b = checkedCar(requests_mock, monkeypatch)
+    push(v, c, state="online", pluggedIn=True)
+    beats(m, r, c, s, 600, 0x03, 47.0)
+    beats(m, r, c, s, 30, 0x00, 0.0, step=2)
+    assert v.markAt("unplug") > Presence.NEVER and v.value("twcVin") is None
+    beats(m, r, c, s, 14, 0x00, 0.0, step=2)
+    push(v, c, gap=0, pluggedIn=False)
+    left = v.markAt("unplug")
+    c.t += 9000
+    beats(m, r, c, s, 2, 0x03, 6.0, step=2)
+    s.currentVIN = VIN
+    m.recordVehicleVIN(s)
+    s.currentVIN = ""
+    beats(m, r, c, s, 16, 0x03, 47.0, step=2)
+    beats(m, r, c, s, 14, 0x00, 47.0, step=2)
+    push(v, c, gap=0, pluggedIn=True)
+    beats(m, r, c, s, 600, 0x00, 47.0)
+    assert v.value("twcVin") == "8244" and v.markAt("unplug") == left
+    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)

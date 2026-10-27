@@ -28,14 +28,9 @@ from urllib.parse import urlsplit
 import requests
 import websockets
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Vehicle.Presence import homeCars
 from TWCManager.Vehicle.Providers.HomeAssistantProvider import HomeAssistantProvider
-from TWCManager.Vehicle.Reconcile.Outcome import (
-    DONE,
-    ERROR,
-    REFUSED,
-    UNREACHABLE,
-    Outcome,
-)
+from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("V_HASS", "Vehicle")
@@ -65,12 +60,9 @@ class HaVehicle:
         self.slug = _slugify_name(name)
         self.entity_ids = entity_ids  # only the entities we need
 
-        # Cached for the policy's minBatteryLevelAtHome/numCarsAtHome and the
-        # presence check; everything else goes only to the registry
+        # Cached for the policy's minBatteryLevelAtHome; everything else goes
+        # only to the registry
         self.battery_level: Optional[float] = None
-        self.lat: Optional[float] = None
-        self.lon: Optional[float] = None
-        self.at_home: bool = False
 
     # ---- Helpers for entity availability ----
 
@@ -96,12 +88,14 @@ class HaVehicle:
         v = api.registry.get(self.vin)
         if v is not None:
             for field, value in seen.items():
-                v.observe(field, value, "HomeAssistant")
+                # A polled position is Home Assistant's copy, never a fix
+                fix = field in ("lat", "lon")
+                v.observe(field, value, "HomeAssistant", seen=not fix)
         return True
 
     def parse_from_home_assistant(self, api: "HomeAssistant") -> Optional[dict]:
-        """Read the entities and update the cached battery level, position
-        and at_home. Returns the registry
+        """Read the entities and update the cached battery level. Returns
+        the registry
         fields this pass observed, or None if Home Assistant could not be
         reached or no entity answered. Does not touch the registry."""
         answered = False
@@ -144,22 +138,15 @@ class HaVehicle:
             charging = state in ("charging", "starting", "on")
             seen["chargingState"] = "Charging" if charging else "Stopped"
 
-        # Location
+        # Location: coordinates only; a zone name is not a position
         st = get_state("location_tracker")
         if st is not None:
             attrs = st.get("attributes") or {}
             try:
-                self.lat = float(attrs.get("latitude"))
-                self.lon = float(attrs.get("longitude"))
-                seen["lat"] = self.lat
-                seen["lon"] = self.lon
+                seen["lat"] = float(attrs.get("latitude"))
+                seen["lon"] = float(attrs.get("longitude"))
             except (TypeError, ValueError):
-                pass
-
-            if st.get("state") == "home":
-                self.at_home = True
-            elif self.lat is not None and self.lon is not None:
-                self.at_home = api.is_location_home(self.lat, self.lon)
+                seen.pop("lat", None)
 
         if not answered:
             return None
@@ -513,7 +500,7 @@ class HomeAssistant:
                 )
                 return None
 
-    def _post_service(self, domain: str, service: str, data: dict) -> Outcome:
+    def _post_service(self, domain: str, service: str, data: dict) -> O.Outcome:
         # The one place a service call is made. Never logs a response body.
         url = f"{self.rest_base}/services/{domain}/{service}"
         with self._rest_lock:
@@ -522,11 +509,11 @@ class HomeAssistant:
                 resp.raise_for_status()
             except requests.exceptions.Timeout:
                 logger.warning("HA: timeout calling %s.%s (10s)", domain, service)
-                return Outcome(UNREACHABLE, "timeout")
+                return O.Outcome(O.UNREACHABLE, "timeout")
             except requests.exceptions.HTTPError as e:
                 status = getattr(e.response, "status_code", None)
                 if status is None:
-                    return Outcome(ERROR, type(e).__name__)
+                    return O.Outcome(O.ERROR, type(e).__name__)
                 if status in (401, 403):
                     if not self._refusalLogged:
                         self._refusalLogged = True
@@ -535,9 +522,9 @@ class HomeAssistant:
                             "check the long-lived token",
                             status,
                         )
-                    return Outcome(REFUSED, str(status))
+                    return O.Outcome(O.REFUSED, str(status))
                 logger.warning("HA: HTTP %s calling %s.%s", status, domain, service)
-                return Outcome(ERROR, str(status))
+                return O.Outcome(O.ERROR, str(status))
             except Exception as exc:
                 logger.warning(
                     "HA: failed calling %s.%s: %s",
@@ -545,28 +532,10 @@ class HomeAssistant:
                     service,
                     type(exc).__name__,
                 )
-                return Outcome(ERROR, type(exc).__name__)
+                return O.Outcome(O.ERROR, type(exc).__name__)
         self._refusalLogged = False
         logger.debug("HA: service call %s.%s succeeded", domain, service)
-        return Outcome(DONE)
-
-    # ------------------------------------------------------------------
-    # Home/Location helpers
-    # ------------------------------------------------------------------
-
-    def is_location_home(self, lat, lon):
-        home_lat, home_lon = self.master.getHomeLatLon()
-
-        if home_lat == 10000:
-            logger.info("Adopting first seen vehicle location as 'home'.")
-            self.master.setHomeLat(lat)
-            self.master.setHomeLon(lon)
-            self.master.queue_background_task({"cmd": "saveSettings"})
-            return True
-
-        feet = float(self.config.get("config", {}).get("atHomeRadius", 10560))
-        deg = feet / 364488.888
-        return abs(home_lat - lat) <= deg and abs(home_lon - lon) <= deg
+        return O.Outcome(O.DONE)
 
     # ------------------------------------------------------------------
     # Aggregate helpers
@@ -580,14 +549,11 @@ class HomeAssistant:
     @property
     def numCarsAtHome(self):
         self.updateChargeAtHome()
-        return len([v for _, v in self.registry.attached("HomeAssistant") if v.at_home])
+        return len(homeCars(self.master, "HomeAssistant"))
 
     @property
     def minBatteryLevelAtHome(self):
         self.updateChargeAtHome()
-        levels = [
-            v.battery_level
-            for _, v in self.registry.attached("HomeAssistant")
-            if v.at_home and v.battery_level is not None
-        ]
+        cars = homeCars(self.master, "HomeAssistant")
+        levels = [v.battery_level for _, v in cars if v.battery_level is not None]
         return min(levels) if levels else 10000.0

@@ -209,11 +209,11 @@ def test_find_by_name_and_attached():
     assert r.attached("TeslaAPI") == [(v, "obj")] and r.attached("HomeAssistant") == []
 
 
-def test_summaries_sorted_by_key():
+def test_vehicles_sorted_by_key():
     r = VehicleRegistry({})
     r.getOrCreate(VIN2, "x")
     r.getOrCreate(VIN, "x")
-    assert [s["key"] for s in r.summaries()] == [VIN, VIN2]
+    assert [v.summary()["vin"] for v in r.vehicles()] == [VIN, VIN2]
 
 
 def test_get_or_create_rejects_non_ascii_like_load():

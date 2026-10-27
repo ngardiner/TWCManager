@@ -8,6 +8,9 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 
 logger = LoggerFactory.get_logger("Telemetry", "Vehicle")
 
+# Fields whose changes are logged: what the next presence analysis needs
+_LOGGED = {"pluggedIn", "state"}
+
 
 class TelmetryBase:
     client = None
@@ -39,6 +42,8 @@ class TelmetryBase:
     connected = False
     everConnected = False
     lostConnection = False
+    # Until its first report, or 60 s after start: no wake before it
+    settleUntil = 0.0
 
     # Empty default events
     events = {
@@ -55,13 +60,12 @@ class TelmetryBase:
         # load), and those already warned about as unmappable.
         self.orphanedIds = set()
         self.warnedUnmapped = set()
+        # (car, field) -> the last value logged for it
+        self.loggedValues = {}
         self.registry = VehicleRegistry.forMaster(master)
 
         self.config = master.config
-        try:
-            self.configConfig = self.config["config"]
-        except KeyError:
-            self.configConfig = {}
+        self.configConfig = self.config.get("config", {})
         try:
             self.configModule = self.config["vehicle"][self.configName]
             self.status = self.config["vehicle"][self.configName]["enabled"]
@@ -72,6 +76,8 @@ class TelmetryBase:
         if not self.status or self.__class__.__name__ == "TelmetryBase":
             self.master.releaseModule("lib.TWCManager.Vehicle", self.__class__.__name__)
             return None
+
+        self.settleUntil = self.registry.now() + 60
 
         # A report-on-change source: while the feed is live, its silence
         # means its last values still hold.
@@ -231,6 +237,7 @@ class TelmetryBase:
             if vehicle:
                 field, converter = events[event][0], events[event][1]
                 self._observe(vehicle, field, converter(payload), retained)
+                self.settleUntil = 0.0
             else:
                 # If we don't know this vehicle yet, save the data: the
                 # latest per topic, so a car the broker retains but that
@@ -250,9 +257,18 @@ class TelmetryBase:
             del self.vehicles[vehicle_id]
         return True
 
+    def logChange(self, car, label, field, value):
+        # One line per change of a car's value, the first sighting included
+        old = self.loggedValues.get((car, field))
+        if value != old:
+            self.loggedValues[(car, field)] = value
+            logger.info("%s: %s %s -> %s", label, field, old, value)
+
     def _observe(self, vehicle, field, value, retained=False):
         source = self.__class__.__name__
         if not retained:
+            if field in _LOGGED:
+                self.logChange(vehicle.key, vehicle.name, field, value)
             vehicle.observe(field, value, source)
             if source not in vehicle.claims:
                 # Listed on the car's provider list; it commands nothing and
@@ -324,6 +340,15 @@ class TelmetryBase:
         # retry timer thread, never the MQTT thread.
         pass
 
+    def _attach(self, vehicle_id, vehicle, label):
+        self.vehicles[vehicle_id] = vehicle
+        self.orphanedIds.discard(vehicle_id)
+        self.warnedUnmapped.discard(vehicle_id)
+        logger.info(
+            f"Vehicle {label} telemetry being provided by {self.__class__.__name__}"
+        )
+        return True
+
     def updateVehicles(self, vehicle_id, vehicle_name, loadList=True, retained=False):
         # Attaches the telemetry car id to a registry vehicle, by VIN where
         # the feed knows it, else by name. A retained message (or a replay of
@@ -349,13 +374,7 @@ class TelmetryBase:
             if vehicle is not None:
                 if vehicle_name:
                     self._observe(vehicle, "name", vehicle_name, retained)
-                self.vehicles[vehicle_id] = vehicle
-                self.orphanedIds.discard(vehicle_id)
-                self.warnedUnmapped.discard(vehicle_id)
-                logger.info(
-                    f"Vehicle {vehicle_name or vin} telemetry being provided by {source}"
-                )
-                return True
+                return self._attach(vehicle_id, vehicle, vehicle_name or vin)
 
         if not vehicle_name:
             return False
@@ -370,11 +389,7 @@ class TelmetryBase:
                 vehicle = self.registry.findByName(vehicle_name)
 
         if vehicle is not None:
-            self.vehicles[vehicle_id] = vehicle
-            self.orphanedIds.discard(vehicle_id)
-            self.warnedUnmapped.discard(vehicle_id)
-            logger.info(f"Vehicle {vehicle_name} telemetry being provided by {source}")
-            return True
+            return self._attach(vehicle_id, vehicle, vehicle_name)
 
         # Once per car id at WARNING; the retries that follow at DEBUG.
         level = logging.DEBUG if vehicle_id in self.warnedUnmapped else logging.WARNING

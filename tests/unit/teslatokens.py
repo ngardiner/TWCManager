@@ -143,7 +143,6 @@ def add_home_vehicle(
     api.addVehicle(listed)
     vehicle = api.registry.get(vin)
     car = vehicle.attachment("TeslaAPI")
-    car.atHome = True
     car.lastAPIAccessTime = time.time()
     return vehicle
 

@@ -28,16 +28,10 @@ class OpenWeatherMap:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configOpenWeatherMap = master.config.get("sources", {})[
-                "OpenWeatherMap"
-            ]
-        except KeyError:
-            self.configOpenWeatherMap = {}
+        self.configConfig = master.config.get("config", {})
+        self.configOpenWeatherMap = master.config.get("sources", {}).get(
+            "OpenWeatherMap", {}
+        )
 
         self.status = self.configOpenWeatherMap.get("enabled", False)
         self.Latitude = self.configOpenWeatherMap.get("Latitude", 0)

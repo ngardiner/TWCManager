@@ -33,14 +33,8 @@ class TED:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = self.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configTED = self.config["sources"]["TED"]
-        except KeyError:
-            self.configTED = {}
+        self.configConfig = self.config.get("config", {})
+        self.configTED = self.config.get("sources", {}).get("TED", {})
         self.status = self.configTED.get("enabled", False)
         self.serverIP = self.configTED.get("serverIP", None)
         self.serverPort = self.configTED.get("serverPort", "80")

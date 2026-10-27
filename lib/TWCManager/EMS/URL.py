@@ -29,14 +29,8 @@ class URL:
     def __init__(self, master):
         self.master = master
         self.config = master.config
-        try:
-            self.configConfig = master.config["config"]
-        except KeyError:
-            self.configConfig = {}
-        try:
-            self.configURL = master.config.get("sources", {})["URL"]
-        except KeyError:
-            self.configURL = {}
+        self.configConfig = master.config.get("config", {})
+        self.configURL = master.config.get("sources", {}).get("URL", {})
         self.status = self.configURL.get("enabled", False)
         self.URL = self.configURL.get("url", None)
         self.consumptionItem = self.configURL.get("consumptionItem", None)
