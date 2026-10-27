@@ -41,6 +41,16 @@ def test_register_providers_collects_every_vehicle_module_in_rank_order():
     assert registerProviders(m) == ["TeslaBLE", "HomeAssistant"]      # rank order, not module order
 
 
+def test_a_disabled_vehicle_module_registers_no_providers():
+    # A module that says it is disabled (vehicle.teslaAPI.enabled=false) must
+    # stay out of the order, as it stays out of getModuleByName
+    m = Mock(); m.settings = {}; m.config = {}; m.stats = {}; m.vehicleRegistry = VehicleRegistry({}); m.providerOrder = ProviderOrder(m)
+    api = Mock(); api.enabled = lambda: False; api.providers = lambda: [ownerStub(), fleetStub()]
+    ble = Mock(); ble.enabled = lambda: True; ble.providers = lambda: [bleStub()]
+    m.getModulesByType = Mock(return_value=[{"name": "TeslaAPI", "ref": api}, {"name": "TeslaBLE", "ref": ble}])
+    assert registerProviders(m) == ["TeslaBLE"]
+
+
 # HomeAssistant comes last, after the free providers and Fleet, and never
 # commands under ble_only
 
@@ -111,11 +121,12 @@ def test_no_vehicle_modules_registers_only_gen2():
 
 def test_default_boot_registers_unconfigured_modules_that_never_command():
     # A config with no vehicle sections still loads TeslaAPI and HomeAssistant
-    # (the module loop's enabled default); neither may reach a car or a site
+    # (the module loop's enabled default); neither may reach a car or a site.
+    # HomeAssistant is disabled without its section, so it registers nothing
     m = TWCMaster("AB", CONFIG)
     for name, cls in (("TeslaAPI", TeslaAPI), ("HomeAssistant", HomeAssistant)):
         m.registerModule({"name": name, "ref": cls(m), "type": "Vehicle"})
-    assert registerProviders(m) == ["Gen2TWC", "OwnerAPI", "FleetAPI", "HomeAssistant"]
+    assert registerProviders(m) == ["Gen2TWC", "OwnerAPI", "FleetAPI"]
     v = m.vehicleRegistry.getOrCreate(VIN, "test")
     for cap in sorted(C.COMMANDS):
         assert [p.name for p in m.providerOrder.candidates(v, cap) if not p.local] == []
@@ -152,3 +163,16 @@ def test_startup_notice_runs_right_after_load_settings():
     i = body.index("master.loadSettings()")
     assert body[i + 1] == "master.providerOrder.suppressions.noticeOnce()"
     assert sum("noticeOnce" in b for b in body) == 1
+
+
+def test_a_disabled_ble_module_registers_no_provider():
+    # vehicle.teslaBLE.enabled=false must keep BLE out of every path, not just
+    # out of getModuleByName
+    config = dict(CONFIG, config=dict(CONFIG["config"], teslaControlPath="/bin/true"), vehicle={"teslaBLE": {"enabled": False}})
+    m = TWCMaster("AB", config)
+    with patch.object(TeslaBLE, "_start_dbus_session") as dbus:
+        ble = TeslaBLE(m)
+    m.registerModule({"name": "TeslaBLE", "ref": ble, "type": "Vehicle"})
+    assert "TeslaBLE" not in registerProviders(m)
+    assert m.getModuleByName("TeslaBLE") is None and not dbus.called
+    ble.__del__()  # garbage collection must not raise on the half-built module
