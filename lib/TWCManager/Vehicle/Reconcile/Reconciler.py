@@ -18,7 +18,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from ...VehicleCommandQueue import VehicleCommandQueue
-from .. import Presence
+from .. import Presence, Watch
 from ..Registry.Fields import READ_MAX_AGE
 from ..Providers import Capability as C
 from . import Run
@@ -121,8 +121,9 @@ class VehicleReconciler(threading.Thread):
             return True
         return (self.ble if worker == "ble" else self.cloud).put(attempt)
 
-    def submitJob(self, key, kind, run, worker="ble") -> bool:
-        return getattr(self, worker).put(Run.Job(key, kind, run))
+    def submitJob(self, key, kind, run, worker="ble", done=None) -> bool:
+        queue = self.cloud if worker == "cloud" else self.ble
+        return queue.put(Run.Job(key, kind, run, done))
 
     def cancel(self, key) -> int:
         # Pending stops for key only; a running attempt is left alone
@@ -487,9 +488,12 @@ class VehicleReconciler(threading.Thread):
 
     def _asleepCheckDue(self, vehicle, rec, now) -> bool:
         # A cloud hold's free online check runs again on the asleep cadence,
-        # unless a live feed will report the car waking
+        # unless a live feed will report the car waking or the watch's own
+        # cloud status checks refresh its sleep
         p = self.master.providerOrder.provider(rec.lastProvider)
         if rec.lastOutcome != O.ASLEEP or getattr(p, "local", True):
+            return False
+        if self.master.watch and Watch.cloudOnly(self.master, vehicle):
             return False
         home = Presence.presence(self.master, vehicle) == Presence.HOME
         gap = Presence.HOME_ASLEEP_SECS if home else Presence.AWAY_ASLEEP_SECS
@@ -564,6 +568,8 @@ class VehicleReconciler(threading.Thread):
     def report(self, attempt, outcome) -> None:
         # On a queue's or the submitter's thread. Never submits or cancels
         if isinstance(attempt, Run.Job):
+            if attempt.done is not None:
+                attempt.done(outcome)
             return
         if isinstance(outcome, BaseException):
             # A queue's run raised past _run (SystemExit)

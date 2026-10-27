@@ -71,6 +71,7 @@ def _master(reg, teslaapi=None):
     master.config = {"config": {"minAmpsPerTWC": 6, "wiringMaxAmpsPerTWC": 32}}
     master.settings = {"homeLat": 1.0, "homeLon": 2.0}
     master.getModuleByName = Mock(return_value=teslaapi)
+    master.chargingPoints = Mock(return_value=[])
     return master
 
 
@@ -318,3 +319,33 @@ def test_flex_start_reads_the_listed_cars_limit_and_battery():
     v.observe("chargeLimit", 80, "OwnerAPI")
     v.observe("batteryLevel", 40, "OwnerAPI")
     assert m.getScheduledAmpsTimeFlex() == (1.54, 7, 0x7F)
+
+
+def test_the_offered_total_counts_cars_on_chargers_no_twc_reports():
+    # A TWC-less install offers each car its share as the car's own rate
+    from types import SimpleNamespace
+
+    from TWCManager.Vehicle.Reconcile.Desired import AMPS
+
+    reg = _registry()
+    master = _master(reg)
+    master.getSlaveTWCs = Mock(return_value=[])
+    car = SimpleNamespace(vehicle=SimpleNamespace(key="car"))
+    onTWC = SimpleNamespace(vehicle=SimpleNamespace(key="named"))
+    master.chargingPoints = Mock(
+        return_value=[
+            SimpleNamespace(localEndpoints=[], vehicleEndpoints=[car]),
+            SimpleNamespace(localEndpoints=[object()], vehicleEndpoints=[onTWC]),
+        ]
+    )
+    offers = {("car", AMPS): 32, ("named", AMPS): 16}
+    master.desired.get = lambda key, aspect: (
+        SimpleNamespace(value=offers[(key, aspect)])
+        if (key, aspect) in offers
+        else None
+    )
+    request = Mock()
+    request.url = urllib.parse.urlparse("/api/getSlaveTWCs")
+    _handler(master).do_API_GET.__func__(request)
+    body = request.wfile.write.call_args[0][0]
+    assert json.loads(body.decode("utf-8"))["total"]["lastAmpsOffered"] == 32

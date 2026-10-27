@@ -385,7 +385,7 @@ def test_set_refuses_what_is_not_a_finite_number(caplog):
 
 def test_listing_before_load_is_resolved_on_the_next_check(tmp_path, requests_mock):
     # TeslaMate token sync and retained telemetry can list cars before
-    # loadSettings runs: the next checkCharge resolves (free calls only)
+    # loadSettings runs: the next token refresh resolves (free calls only)
     from tests.unit.teslatokens import FLEET_NA_URL, fleet_token
     from tests.unit.test_teslaapi_registry import api_with_registry
 
@@ -401,7 +401,7 @@ def test_listing_before_load_is_resolved_on_the_next_check(tmp_path, requests_mo
     assert api.loadVehicleList() is True and m.heldLimits.get(VIN3) is None
     m.getModuleByName = Mock(side_effect=lambda n: api if n == "TeslaAPI" else None)
     m.loadSettings()
-    api.updateChargeAtHome()
+    api.loadList()
     assert m.heldLimits.get(VIN3) == HeldLimit(75, 60)
     assert m.settings["chargeLimits"] == {VIN3: [75, 60]}
     assert [q.method for q in requests_mock.request_history] == ["GET", "GET"]

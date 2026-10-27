@@ -1,6 +1,7 @@
 # tests/unit/test_teslable_pairing_status.py
 from unittest.mock import Mock, patch
 import threading
+import time
 import pytest
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
@@ -534,6 +535,8 @@ def scanner(**kw):
     ble.isDockerCached = False
     # A BLE worker that runs only when a test drains or starts it
     master.reconciler = VehicleReconciler(master)
+    # The readiness check found a powered adapter
+    ble._scanBlocked, ble._scanCheckAt = None, time.time()
     return ble, reg, master
 
 
@@ -574,7 +577,7 @@ def test_one_scan_answers_for_several_cars():
     ble._run_command_with_timeout = Mock(
         return_value=(b"[NEW] Device AA:BB:CC:DD:EE:FF " + name + b"\n", b"", 0)
     )
-    ble._bluezAddresses = Mock(return_value=set())
+    ble._bluezAddresses = Mock(return_value={})
     with patch(
         "TWCManager.Vehicle.TeslaBLE.shutil.which",
         return_value="/usr/bin/bluetoothctl",
@@ -585,27 +588,172 @@ def test_one_scan_answers_for_several_cars():
     assert ble.rangeStatus(VIN)["inRange"] is False
 
 
-def test_scan_unavailable_without_bluetoothctl():
+BT = "TWCManager.Vehicle.TeslaBLE.shutil.which"
+SHOW_READY = (b"Controller 00:1A:7D:DA:71:13 (public)\n\tPowered: yes\n", b"", 0)
+
+
+def checked(ble, show, which="/usr/bin/bluetoothctl", docker=False):
+    # One readiness check on the BLE worker, as canScan queues it
+    ble._scanCheckAt, ble.isDockerCached = None, docker
+    ble._run_command_with_timeout = Mock(return_value=show)
+    with patch(BT, return_value=which):
+        ble.canScan()  # queues the check; never runs it on the caller
+        ble._run_command_with_timeout.assert_not_called()
+        runPending(ble.master.reconciler.ble)
+        return ble.canScan()
+
+
+def test_docker_scans_through_dbus_without_nsenter():
     ble, reg, master = scanner()
-    ble._run_command_with_timeout = Mock()
-    with patch("TWCManager.Vehicle.TeslaBLE.shutil.which", return_value=None):
+    ble._scanBlocked = ""
+    assert checked(ble, SHOW_READY, docker=True) is True
+    ble._run_command_with_timeout.assert_called_once_with(["bluetoothctl", "show"], 5)
+    run = ble._run_command_with_timeout = Mock(return_value=(b"", b"", 0))
+    with patch(BT, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is False
+    assert run.call_args.args[0][0] == "bluetoothctl"
+
+
+@pytest.mark.parametrize(
+    "which, show, docker, reason",
+    [
+        (None, None, False, "bluetoothctl not installed (install the bluez package)"),
+        (
+            "/usr/bin/bluetoothctl",
+            (b"No default controller available\n", b"", 0),
+            False,
+            "no Bluetooth controller visible to bluetoothd",
+        ),
+        (
+            "/usr/bin/bluetoothctl",
+            (b"Controller 00:1A:7D:DA:71:13\n\tPowered: no\n", b"", 0),
+            True,
+            "Bluetooth adapter is powered off or blocked (rfkill)",
+        ),
+        (
+            "/usr/bin/bluetoothctl",
+            (None, None, None),
+            True,
+            "bluetoothctl cannot reach the host's bluetoothd (mount /run/dbus"
+            " and set DBUS_SYSTEM_BUS_ADDRESS)",
+        ),
+        (
+            "/usr/bin/bluetoothctl",
+            (b"Waiting to connect to bluetoothd...", b"", 1),
+            False,
+            "bluetoothd is not answering",
+        ),
+    ],
+)
+def test_each_reason_no_scan_is_possible(which, show, docker, reason):
+    ble, reg, master = scanner()
+    assert checked(ble, show, which, docker) is False
+    st = ble.bleStatus(VIN)
+    assert st["canScan"] is False and st["scanBlocked"] == reason
+    ble._run_command_with_timeout.reset_mock()
+    with patch(BT, return_value=which):
         assert ble.scanForVehicleInRange(VIN) is None
-        st = ble.bleStatus(VIN)
-        assert st["canScan"] is False and st["label"] == "Range unknown"
     ble._run_command_with_timeout.assert_not_called()
 
 
-def test_scan_unavailable_in_docker():  # ruling 7
+def test_warns_once_per_reason_and_recovers_once(caplog):
+    ble, reg, master = scanner()
+    ble._scanBlocked = ""
+    off = (b"\tPowered: no\n", b"", 0)
+    gone = (b"No default controller available\n", b"", 0)
+    with caplog.at_level("INFO"):
+        for show in (off, off, gone, gone, SHOW_READY, SHOW_READY, off):
+            checked(ble, show)
+    logs = [
+        (r.levelname, r.getMessage().split(";")[0])
+        for r in caplog.records
+        if "range scans" in r.getMessage()
+    ]
+    assert logs == [
+        ("WARNING", "BLE range scans unavailable: " + ble.SCAN_BLOCKERS[2][1]),
+        ("WARNING", "BLE range scans unavailable: " + ble.SCAN_BLOCKERS[0][1]),
+        ("INFO", "BLE range scans available again"),
+        ("WARNING", "BLE range scans unavailable: " + ble.SCAN_BLOCKERS[2][1]),
+    ]
+    assert "cars watched by the Tesla API" in caplog.text
+
+
+def test_a_failed_check_reruns_no_sooner_than_ten_minutes():
+    ble, reg, master = scanner()
+    checked(ble, (b"\tPowered: no\n", b"", 0))
+    submit = master.reconciler.submitJob = Mock(return_value=True)
+    start = ble._scanCheckAt
+    with patch("TWCManager.Vehicle.TeslaBLE.time.time", return_value=start + 599):
+        assert ble.canScan() is False
+    submit.assert_not_called()
+    with patch("TWCManager.Vehicle.TeslaBLE.time.time", return_value=start + 600):
+        assert ble.canScan() is False
+        assert ble.canScan() is False
+    assert submit.call_count == 1  # once per due check, however often asked
+
+
+@pytest.mark.parametrize(
+    "scan",
+    [(b"No default controller available\n", b"", 1), (None, None, None)],
+    ids=["no adapter", "timed out"],
+)
+def test_a_passed_check_is_not_rerun_until_a_scan_fails(scan):
+    ble, reg, master = scanner()
+    submit = master.reconciler.submitJob = Mock(return_value=True)
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.time.time", return_value=time.time() + 9999
+    ):
+        assert ble.canScan() is True
+    submit.assert_not_called()
+    ble._run_command_with_timeout = Mock(return_value=scan)
+    with patch(BT, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is None
+    ble.canScan()
+    submit.assert_called_once()
+
+
+def test_startup_queues_the_check():
+    ble, reg, master = make()
+    master.reconciler.submitJob.assert_called_once_with(
+        "radio", "check", ble._checkScan
+    )
+
+
+def test_a_scan_before_the_check_ran_checks_first():
+    ble, reg, master = scanner()
+    ble._scanBlocked = ""  # queued behind other work, not yet run
+    out = (b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n", b"", 0)
+    run = ble._run_command_with_timeout = Mock(side_effect=[SHOW_READY, out])
+    with patch(BT, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is True
+    assert run.call_args_list[0].args[0] == ["bluetoothctl", "show"]
+
+
+def test_an_unchecked_result_is_retried_after_ten_minutes():
+    # The queued check was dropped (worker stopped, queue overflow, raised)
+    ble, reg, master = scanner()
+    ble._scanBlocked = ""
+    submit = master.reconciler.submitJob = Mock(return_value=True)
+    start = ble._scanCheckAt
+    with patch("TWCManager.Vehicle.TeslaBLE.time.time", return_value=start + 599):
+        assert ble.canScan() is False
+    submit.assert_not_called()
+    with patch("TWCManager.Vehicle.TeslaBLE.time.time", return_value=start + 600):
+        assert ble.canScan() is False
+    submit.assert_called_once()
+
+
+def test_docker_tesla_control_runs_under_nsenter_in_its_own_group():
     ble, reg, master = scanner()
     ble.isDockerCached = True
-    ble._run_command_with_timeout = Mock()
-    with patch(
-        "TWCManager.Vehicle.TeslaBLE.shutil.which",
-        return_value="/usr/bin/bluetoothctl",
-    ):
-        assert ble.scanForVehicleInRange(VIN) is None
-        assert ble.bleStatus(VIN)["canScan"] is False
-    ble._run_command_with_timeout.assert_not_called()
+    with patch("TWCManager.Vehicle.TeslaBLE.subprocess.Popen") as popen:
+        popen.return_value.communicate.return_value = (b"", b"")
+        ble._run_command_with_timeout([ble.binaryPath, "-ble", "x"], 5)
+        ble._run_command_with_timeout(["bluetoothctl", "show"], 5)
+    (tc, _), (bt, _) = [(c.args[0], c) for c in popen.call_args_list]
+    assert tc == ["nsenter", "--net=/rootns/net", ble.binaryPath, "-ble", "x"]
+    assert bt == ["bluetoothctl", "show"]
+    assert all(c.kwargs["preexec_fn"] is not None for c in popen.call_args_list)
 
 
 def test_never_scanned_is_range_unknown():
@@ -624,17 +772,16 @@ def jobs(master):
     return [entryKey(j) for j in entries(master.reconciler.ble)]
 
 
-def test_request_scan_queues_one_job_per_vin_and_runs_every_pending_vin():  # P17
+def test_requests_share_one_scan_of_every_pending_vin():  # P17
     ble, reg, master = scanner()
     ble.requestRangeScan(VIN)
     ble.requestRangeScan("5YJ3E1EA1KF000002")
-    assert jobs(master) == [(VIN, "scan"), ("5YJ3E1EA1KF000002", "scan")]
+    assert jobs(master) == [("radio", "scan")]
     assert ble.bleStatus(VIN)["scanPending"] is True
     ble.scanForVehicleInRange = Mock(return_value=False)
     runPending(master.reconciler.ble)
-    assert sorted(c.args[0] for c in ble.scanForVehicleInRange.call_args_list) == [
-        VIN,
-        "5YJ3E1EA1KF000002",
+    assert [c.args[0] for c in ble.scanForVehicleInRange.call_args_list] == [
+        {VIN, "5YJ3E1EA1KF000002"}
     ]
     assert ble.bleStatus(VIN)["scanPending"] is False
 
@@ -652,7 +799,7 @@ def test_request_during_a_scan_queues_behind_it():
 
     ble.scanForVehicleInRange = scan
     runPending(master.reconciler.ble)
-    assert seen == [VIN, "5YJ3E1EA1KF000002"]
+    assert seen == [{VIN}, {"5YJ3E1EA1KF000002"}]
 
 
 def test_request_rejects_malformed_vin():
@@ -749,6 +896,31 @@ def test_scan_finds_a_car_bluez_already_knows_by_address():
         assert ble.scanForVehicleInRange(VIN) is False
 
 
+def test_a_scan_looks_addresses_up_only_for_an_asked_car_it_missed():
+    # Another registry car out of range is the usual case, not a reason for
+    # a second bluetoothctl run.
+    ble, reg, master = scanner()
+    reg.getOrCreate("5YJ3E1EA1KF000002", "t")
+    calls = []
+
+    def run(cmd, timeout, use_process_group=True):
+        calls.append(cmd[1:])
+        return (
+            b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n"
+            b"[CHG] Device 11:22:33:44:55:66 RSSI: -60\n",
+            b"",
+            0,
+        )
+
+    ble._run_command_with_timeout = run
+    with patch(
+        "TWCManager.Vehicle.TeslaBLE.shutil.which",
+        return_value="/usr/bin/bluetoothctl",
+    ):
+        assert ble.scanForVehicleInRange(VIN) is True
+    assert ["devices"] not in calls
+
+
 def test_scan_ignores_bluez_forgetting_the_car():
     ble, reg, master = scanner()
 
@@ -796,6 +968,22 @@ def scan_with(ble, scan_out, devices_out=b""):
 
 WHICH = "TWCManager.Vehicle.TeslaBLE.shutil.which"
 CAR = b"[NEW] Device AA:BB:CC:DD:EE:FF Sa3b631dfdbc5cf49C\n"
+
+
+def test_a_car_not_asked_for_is_recorded_only_when_heard():
+    ble, reg, master = scanner()
+    other = "5YJ3E1EA1KF000002"
+    reg.getOrCreate(VIN, "t")
+    reg.getOrCreate(other, "t")
+    heard = "[NEW] Device AA:BB:CC:DD:EE:01 %s\n" % TeslaBLE.bleLocalName(other)
+    scan_with(ble, (heard.encode(), b"", 0))
+    with patch(WHICH, return_value="/usr/bin/bluetoothctl"):
+        assert ble.scanForVehicleInRange(VIN) is False
+        assert reg.get(other).latest("bleReach").value is True  # a sighting
+        assert reg.get(VIN).latest("bleReach").value is False
+        scan_with(ble, (CAR, b"", 0))  # hears VIN only
+        assert ble.scanForVehicleInRange(VIN) is True
+    assert reg.get(other).latest("bleReach").value is True  # never a miss
 
 
 def test_timed_out_scan_is_range_unknown(caplog):
@@ -895,7 +1083,7 @@ def test_request_within_ten_seconds_of_a_scan_is_ignored():
     assert ble.rangeStatus(VIN)["pending"] is False
     ble._rangeScan[VIN]["at"] -= 11
     ble.requestRangeScan(VIN)
-    assert jobs(master) == [(VIN, "scan")]
+    assert jobs(master) == [("radio", "scan")]
     assert ble.rangeStatus(VIN)["pending"] is True
 
 
@@ -931,7 +1119,7 @@ def test_mid_scan_request_is_served_by_the_worker_once():
     ble.scanForVehicleInRange = scan
     ble.requestRangeScan(VIN)
     runPending(master.reconciler.ble)
-    assert seen == [VIN, "5YJ3E1EA1KF000002"]
+    assert seen == [{VIN}, {"5YJ3E1EA1KF000002"}]
     assert jobs(master) == []
 
 
@@ -1168,3 +1356,42 @@ def test_the_quick_retry_is_logged_at_info_once(caplog):
         if r.levelno == logging.INFO and "retrying" in r.getMessage()
     ]
     assert len(retries) == 1 and "wake" in retries[0].getMessage()
+
+
+AWAKE_OPEN = b'{"closureStatuses":{"chargePort":"CLOSURESTATE_OPEN"},"vehicleSleepStatus":"VEHICLE_SLEEP_STATUS_AWAKE","userPresence":"VEHICLE_USER_PRESENCE_NOT_PRESENT"}'
+ASLEEP = b'{"vehicleSleepStatus":"VEHICLE_SLEEP_STATUS_ASLEEP","userPresence":"VEHICLE_USER_PRESENCE_NOT_PRESENT"}'
+
+
+def test_ping_records_the_door_while_awake_and_nothing_asleep():
+    ble, reg, master = scanner()
+    v = reg.getOrCreate(VIN, "t")
+    ble._tool = lambda vin, *args: (AWAKE_OPEN, b"", 0)
+    assert ble.ping(VIN) is True
+    assert v.value("state") == "online" and v.value("chargePortOpen") is True
+    ble._tool = lambda vin, *args: (ASLEEP, b"", 0)
+    assert ble.ping(VIN) is True
+    assert v.value("state") == "asleep" and v.latest("chargePortOpen").value is True
+
+
+def test_ping_runs_for_a_vin_with_no_key_and_no_settings_record():
+    ble, reg, master = scanner()
+    master.settings["Vehicles"] = {}
+    v = reg.getOrCreate(VIN, "t")  # no TeslaBLE claim, no settings record
+    assert not master.settings.get("Vehicles", {}).get(VIN)
+    runs = []
+    ble._run_command_with_timeout = lambda cmd, timeout, **k: runs.append(cmd) or (
+        ASLEEP,
+        b"",
+        0,
+    )
+    assert ble.ping(VIN) is True and v.value("state") == "asleep"
+    assert len(runs) == 1 and runs[0][-1] == "body-controller-state"
+    assert "-key-file" not in runs[0]
+
+
+def test_ping_with_scan_false_returns_none_and_observes_nothing_when_unanswered():
+    ble, reg, master = scanner()
+    v = reg.getOrCreate(VIN, "t")
+    ble._tool = lambda vin, *args: (b"", b"timeout", 1)
+    ble.scanForVehicleInRange = lambda vin: pytest.fail("no scan asked")
+    assert ble.ping(VIN, scan=False) is None and v.latest("bleReach") is None

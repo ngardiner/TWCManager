@@ -380,8 +380,7 @@ class TelmetryBase:
             return False
         vehicle = self.registry.findByName(vehicle_name)
         if vehicle is None and loadList:
-            # The API vehicle list may not be loaded yet (checkCharge loads
-            # it at startup and on each arrival). Callers on
+            # The API vehicle list may not be loaded yet. Callers on
             # latency-sensitive threads pass loadList=False.
             carapi = self.master.getModuleByName("TeslaAPI")
             if carapi and not carapi.getCarApiRetryRemaining():

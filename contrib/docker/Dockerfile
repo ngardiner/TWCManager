@@ -1,5 +1,5 @@
 FROM debian:bookworm
-RUN apt-get -y update && apt-get -y install build-essential ca-certificates gfortran git libatlas-base-dev libcap2-bin lsb-release make python3 python3-pip util-linux wget
+RUN apt-get -y update && apt-get -y install build-essential ca-certificates gfortran git libatlas-base-dev bluez libcap2-bin lsb-release make python3 python3-pip util-linux wget
 ARG TWC_REF=main
 RUN cd /usr/src && git clone --branch ${TWC_REF} https://github.com/ngardiner/TWCManager
 

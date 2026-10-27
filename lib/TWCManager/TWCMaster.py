@@ -30,6 +30,8 @@ from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, targetsFor
 from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED
 from TWCManager.Vehicle import Presence
+from TWCManager.Vehicle.Watch import settingsOf
+from TWCManager.Vehicle.WatchBudget import WatchBudget
 
 logger = LoggerFactory.get_logger("Master", "Master")
 
@@ -111,6 +113,8 @@ class TWCMaster:
         )
         # Instance-level mutable state (class-level definitions are defaults only)
         self.modules = {}
+        self.consumptionValues, self.generationValues = {}, {}
+        self.consumptionAmpsValues = {}
         self.slaveTWCRoundRobin = []
         self.slaveTWCs = {}
         # RS-485 messages from any thread, sent by the serial loop between
@@ -125,6 +129,10 @@ class TWCMaster:
         # vehicleListLock while holding settingsLock.
         self.settingsLock = threading.RLock()
         self.vehicleRegistry = VehicleRegistry(config)
+        budget = settingsOf(config)["monthlyBudgetUSD"]
+        self.watchBudget = WatchBudget(float(budget))
+        # The launcher builds it after settings and modules load
+        self.watch = None
         self.heldLimits = HeldLimits(self)
         self.providerOrder = ProviderOrder(self)
         self.providerOrder.register(Gen2TWCProvider(self))
@@ -459,25 +467,28 @@ class TWCMaster:
         # If no enabled() method, assume module is usable
         return ref
 
+    def pollEMS(self):
+        # Poll all loaded EMS modules for consumption and generation values
+        for module in self.getModulesByType("EMS"):
+            self.setConsumption(module["name"], module["ref"].getConsumption())
+            if hasattr(module["ref"], "getConsumptionAmps"):
+                self.setConsumptionAmps(
+                    module["name"], module["ref"].getConsumptionAmps()
+                )
+            self.setGeneration(module["name"], module["ref"].getGeneration())
+        # The watch reads what was just polled; its fault costs nothing else
+        try:
+            if self.watch:
+                self.watch.loadSample()
+        except Exception as e:
+            logger.warning("Watch load sample raised %s", type(e).__name__)
+
     def updateChargeAtHome(self):
-        # checkCharge: each vehicle module with a provider not suppressed
-        # for reads refreshes its cars at home, once (TeslaAPI's also loads
-        # its vehicle list)
-        order, seen = self.providerOrder, set()
-        for p in order.providers():
-            module = p.module
-            if (
-                module is None
-                or id(module) in seen
-                or order.suppressions.suppressed(p, C.READ_CHARGE)
-                or not p.available(C.READ_CHARGE)
-            ):
-                continue
-            seen.add(id(module))
-            try:
-                getattr(module, "updateChargeAtHome", lambda: None)()
-            except Exception as e:
-                logger.warning("%s charge refresh raised %s", p.name, type(e).__name__)
+        # checkCharge, on a power start: every car at home may be the one
+        # drawing, the car its TWC names included
+        for v in self.vehicleRegistry.vehicles() if self.watch else ():
+            if Presence.presence(self, v) == Presence.HOME:
+                self.watch.readNow(v.vin, "power start")
 
     def getModulesByType(self, type):
         matched = []
@@ -951,12 +962,18 @@ class TWCMaster:
             twcid = "%02X%02X" % (deleteSlaveID[0], deleteSlaveID[1])
             self.vehicleRegistry.endPlugSession(twcid)
         except Exception as e:
-            logger.warning("Vehicle registry plug session update failed: %s", e)
+            logger.warning("Plug session update failed: %s", e, exc_info=True)
 
     def getChargerLoad(self):
-        # Calculate in watts the load that the charger is generating so
-        # that we can exclude it from the consumption if necessary
+        # The watts charging draws through the meter, excluded from the
+        # house's consumption under subtractChargerLoad: what the Gen2 slaves
+        # report, what the Gen3 units read, and the watched cars charging at
+        # home on chargers no TWC reports. Leaving any out counts a car's own
+        # draw as house load, and a green policy then shrinks its offer
+        gen3 = self.getModuleByName("Gen3TWCs")
         amps = self.getTotalAmpsInUse()
+        amps += sum(u.currentAmps for u in (gen3.allEVSEs if gen3 else []))
+        amps += self.watch.chargingAmps() if self.watch else 0
         return self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
 
     def getConsumption(self):
@@ -1217,10 +1234,12 @@ class TWCMaster:
                 if key not in self.settings:
                     self.settings[key] = value
             registryBlob = self.settings.get("vehicleRegistry")
+            budgetBlob = self.settings.get("watchBudget")
         # Normalises chargeLimits; dict work under the lock only
         self.heldLimits.load()
         # load() tolerates a missing or corrupt blob
         self.vehicleRegistry.load(registryBlob)
+        self.watchBudget.load(budgetBlob)
 
         # Step 2 - Send settings to other modules
         # Migration and restore run whether or not token sync is on. The
@@ -1551,7 +1570,7 @@ class TWCMaster:
                 v.observe("pluggedIn", False, "Gen2TWC", at=Presence.unpluggedAt(v))
             self.vehicleRegistry.endPlugSession(twcid)
         except Exception as e:
-            logger.warning("Vehicle registry plug session update failed: %s", e)
+            logger.warning("Plug session update failed: %s", e, exc_info=True)
 
     def attributePlugs(self, slaves=None):
         # Each plug unnamed since just now or drawing current, on the BLE
@@ -1735,6 +1754,7 @@ class TWCMaster:
                 self.settings["carApiTokenSource"] = carapi.fleetSlot.source
                 self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
             self.settings["vehicleRegistry"] = self.vehicleRegistry.toJSON()
+            self.settings["watchBudget"] = self.watchBudget.toJSON()
             try:
                 # Keep default arguments (C encoder): adding indent/default/cls
                 # would reintroduce the concurrent-mutation race.

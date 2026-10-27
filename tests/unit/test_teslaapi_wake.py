@@ -122,7 +122,8 @@ def _awake(api):
 
 
 def _teslamate(api, state, stamp):
-    # A TeslaMate state observation stamped at `stamp`.
+    # A TeslaMate state observation stamped at `stamp`, its feed up
+    api.registry.registerLiveness("TeslaMateVehicle", lambda v: stamp)
     api.registry.get(VIN).observe("state", state, "TeslaMateVehicle", at=stamp)
 
 

@@ -11,6 +11,7 @@ from TWCManager.Vehicle import Presence
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT
 from TWCManager.Vehicle.TeslaBLE import TeslaBLE
+from TWCManager.Vehicle.Watch import Watch, notWatched
 from tests.unit.test_command_path_parity import (
     TM,
     VIN,
@@ -24,7 +25,7 @@ from tests.unit.test_command_path_parity import (
     quiet,  # noqa: F401  (autouse: no real sleeps, unanswered URLs counted)
     realBle,
 )
-from tests.unit.reconcile_helpers import AWAY, placeAt
+from tests.unit.reconcile_helpers import AWAY, placeAt, runPending
 from tests.unit.test_limit_reconciler import setup
 
 # body-controller-state's answer, as the live box's tesla-control prints it
@@ -218,6 +219,85 @@ def test_a_live_feed_replaces_the_online_checks_of_a_car_held_asleep(
     v.observe("state", "online", TM)
     passes(r, c, 60)
     assert commands(requests_mock) == ["set_charge_limit"]
+
+
+def test_a_watched_fleet_car_held_asleep_is_checked_only_by_the_watch(
+    requests_mock,
+):
+    # The watch's status checks refresh a watched car's sleep, so the hold
+    # adds no checks of its own: one each homeAsleepSecs, never doubled
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state="asleep", limit=90)
+    v.observe("batteryLevel", 80, TM)  # above the new limit: the car quiesces
+    v.observe("chargeLimit", 90, TM)
+    m.watch = w = Watch(m, clock=c)
+    assert notWatched(m, v) is None
+    start, at = c(), []
+
+    def run(seconds):
+        for _ in range(seconds // 60):
+            c.t += 60
+            v.observe("actualCurrent", 0, "Gen2TWC", seen=False)
+            n = onlineChecks(requests_mock)
+            w.pass_()
+            runPending(r.cloud)  # the watch's job, as its worker would
+            r.pass_()
+            at.extend([c() - start] * (onlineChecks(requests_mock) - n))
+
+    run(420)
+    m.setPolicyLimit(70, transition=True)  # held off the watch's clock
+    run(3600 - 420)
+    rec = m.desired.record(VIN, CHARGE_LIMIT)
+    assert rec.lastOutcome == O.ASLEEP and paid(requests_mock) == (0, 0, 0)
+    assert at == [60, 480, 960, 1860, 2760]
+    car.state = "online"
+    run(900)
+    assert commands(requests_mock) == ["set_charge_limit"]
+    assert at[5:] == [3660, 3900, 4140, 4380]  # then the awake cadence
+
+
+def test_a_ble_install_asks_the_cloud_only_for_a_held_fleet_command(
+    requests_mock,
+):
+    # The radio watches the car (one with no key, so commands go by Fleet);
+    # the cloud is asked only by the hold's own check, on its cadence
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state="asleep", limit=90)
+    sleep = {"asleep": "asleep"}
+    realBle(
+        m,
+        vins=(),
+        ping=lambda vin: v.observe("state", sleep.get(car.state, "online"), "TeslaBLE")
+        or True,
+    )
+    v.observe("batteryLevel", 80, TM)
+    v.observe("chargeLimit", 90, TM)
+    m.watch = w = Watch(m, clock=c)
+    start, at = c(), []
+
+    def run(seconds):
+        for _ in range(seconds // 60):
+            c.t += 60
+            v.observe("actualCurrent", 0, "Gen2TWC", seen=False)
+            n = onlineChecks(requests_mock)
+            w.pass_()
+            runPending(r.ble)
+            runPending(r.cloud)
+            r.pass_()
+            at.extend([c() - start] * (onlineChecks(requests_mock) - n))
+
+    run(1800)
+    assert at == []  # watched over the radio alone
+    m.setPolicyLimit(70, transition=True)
+    run(3600 - 1800)
+    assert m.desired.record(VIN, CHARGE_LIMIT).lastOutcome == O.ASLEEP
+    assert at == [1860, 2760] and paid(requests_mock) == (0, 0, 0)
+    car.state = "online"
+    run(1800)
+    assert commands(requests_mock) == ["set_charge_limit"]
+    n = len(at)
+    run(3600)
+    assert len(at) == n  # nothing held: no more
 
 
 def test_a_cloud_command_with_no_online_check_holds_for_a_car_known_asleep(

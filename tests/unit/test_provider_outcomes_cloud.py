@@ -206,6 +206,7 @@ def test_a_cached_failed_check_stays_unknown(requests_mock):   # L1
     clk = Clock(5000.0); api, reg, p = fleet(requests_mock); v = reg.get(VIN); api.now = clk
     check = requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), status_code=503)
     assert api.is_awake(v, now=clk()) is False and api.onlineState(v, now=clk()) is None
+    reg.registerLiveness("TeslaMateVehicle", lambda v: clk())                                # the feed is up
     v.observe("state", "online", "TeslaMateVehicle"); assert api.onlineState(v, now=clk() + 5) is True   # a telemetry answer
     v._clock = lambda: time.time() + Vehicle.SYNC_TIMEOUT                                   # ... gone stale: the check falls to its cache
     assert api.is_awake(v, now=clk() + 10) is False and api.onlineState(v, now=clk() + 10) is None    # the cache hit keeps its own unknown

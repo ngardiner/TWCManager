@@ -36,9 +36,10 @@ _badReturns = set()
 _badLock = threading.Lock()
 
 
-# Work that is no command (a scan, an attribution, an online check): one
-# pending per (key, kind), in turn on its worker
-Job = collections.namedtuple("Job", "key kind run")
+# Work that is no command (a scan, an attribution, a status or online
+# check): one pending per (key, kind), in turn on its worker. done, if
+# given, has the result or why it never ran, once
+Job = collections.namedtuple("Job", "key kind run done", defaults=(None,))
 
 
 def entryKey(attempt) -> tuple:

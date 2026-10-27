@@ -117,6 +117,10 @@ TWCManager does not require many data points to function. All data is only sent 
 
 The `minimum_delta` values (ChargerVoltage 50, ChargeAmps 1, ChargeCurrentRequest 1, ACChargingPower 0.5, BatteryLevel 1, Location 30 metres) mean the car does not report changes finer than TWCManager uses, which sends fewer messages without losing anything that presence or rating uses. `minimum_delta` applies to numeric fields only and needs firmware 2024.44.32 or later. Cars always send typed values (numbers, booleans, prefixed enum names), so `prefer_typed` is always on.
 
+Tesla charges $1 for every 150,000 values the car sends, taken from the same $10 monthly credit as commands and wakes. While the feed is down, the vehicle watch covers the car (see Vehicle watch in [Settings](../Settings.md)).
+
+Fleet Telemetry is recommended for a car on the Fleet API with no Bluetooth (TeslaBLE) connection, as the cheaper option. Without it, the vehicle watch still sees such a car arrive, leave, plug in and charge, using the free online check and a paid `vehicle_data` read when the car wakes (about $0.01 a day for a car with a few trips).
+
 Save the config below to `fleet-telemetry-config.json`
 
 * Replace `TESLA_VIN1` and `TESLA_VIN2` with the VIN(s) of your car(s)

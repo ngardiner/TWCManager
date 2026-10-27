@@ -138,6 +138,7 @@ class Policy:
                     self.policyCheckInterval = self._parseInterval(
                         policy_engine.get("policyCheckInterval")
                     )
+        self._battery = "minBatteryLevelAtHome" in repr(self.charge_policy)
 
     @staticmethod
     def _parseInterval(value):
@@ -289,7 +290,10 @@ class Policy:
         # If we are not checking green energy already but we need to, queue that
         # as well.
         if bgt != "checkGreenEnergy":
-            alwaysPoll = self.config.get("policy", {}).get("alwaysPollEMS", False)
+            watch = getattr(self.master, "watch", None)
+            alwaysPoll = self.config.get("policy", {}).get("alwaysPollEMS", False) or (
+                watch is not None and watch.wantsEMS()
+            )
             maxAmps = self.config.get("config", {}).get("maxAmpsAllowedFromGrid", None)
             if alwaysPoll or maxAmps or self.policyIsGreen():
                 self.master.queue_background_task({"cmd": "checkGreenEnergy"})
@@ -487,6 +491,11 @@ class Policy:
             if self.doesConditionMatch(match, condition, value, exitOn) == exitOn:
                 return exitOn
         return not exitOn
+
+    def readsBattery(self) -> bool:
+        # A policy names a module's minBatteryLevelAtHome, or the limit
+        # override stands, which reads the Tesla API cars'
+        return self._battery or self.limitOverride
 
     def overrideLimit(self):
         self.limitOverride = True

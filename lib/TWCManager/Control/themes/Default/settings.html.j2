@@ -258,8 +258,8 @@
       {% endfor %}
     </script>
     <ul>
-      <li>Your vehicle's home location has been learned as {{ master.settings.get("homeLon", "0")}}, {{ master.settings.get("homeLat", "0")}} </li>
-      <li>If you reset the Home Location, the location at which your vehicle next parks will be set as the Home Location. Alternatively, you can choose a vehicle from your account, from which the current location will be set as your Home Location.</li>
+      <li>The Home Location is {{ master.settings.get("homeLat", "0")}}, {{ master.settings.get("homeLon", "0")}} (latitude, longitude).</li>
+      <li>If you unset the Home Location, it is learned again from a car's fresh position when a TWC identifies the car plugged in, or when the position arrives over Bluetooth. Without a TWC or Bluetooth, choose a vehicle below to make its current location the Home Location.</li>
     </ul>
     <form method=POST action='/settings/homeLocation'>
       <input class='btn btn-outline-success' type=submit name=unset value='Unset Home Location' />

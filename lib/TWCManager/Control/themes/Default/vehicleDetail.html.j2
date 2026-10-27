@@ -165,6 +165,8 @@
               <input type=submit value="Scan for vehicle">
               {% endif %}
             </form>
+            {% elif status.get("scanBlocked") %}
+            <small>No range scan: {{ status.scanBlocked }}</small>
             {% endif %}
             <form method=POST action=/vehicle/localMgmt>
               <input type=hidden name="operation" value="pair" />

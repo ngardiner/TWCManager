@@ -39,6 +39,8 @@ FIELDS = (
     # Charging power (kW) and the car's own AC current maximum (amps)
     "chargerPower",
     "chargeCurrentRequestMax",
+    # The charge-port door, which VCSEC reports only while the car is awake
+    "chargePortOpen",
 )
 
 # Source names are module class names. A source is report-on-change exactly
@@ -49,8 +51,8 @@ TELEMETRY_SOURCES = frozenset({"TeslaMateVehicle", "FleetTelemetryMQTT"})
 # of our own writes before its silence counts as "the write did not land".
 FEED_LAG = 30.0
 
-# A read (TeslaAPI's update_charge, the reconciler's read before a write)
-# accepts a value this old (seconds)
+# A read before a write accepts a value this old (seconds), and a
+# cloud read answers any other caller for as long
 READ_MAX_AGE = 300.0
 
 # Sentinel for age()/trusted(): the observation's source is polled, not a

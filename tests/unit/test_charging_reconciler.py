@@ -280,7 +280,7 @@ def test_a_fleet_only_car_is_stopped_once_the_list_loads(requests_mock):    # C1
     requests_mock.get(FLEET_CAR + "/vehicle_data", json={"response": {"charge_state": {"charging_state": "Charging"}}})   # the car at home is read, still charging
     v.observe("chargingState", "Charging", "FleetAPI"); m.stopCarsCharging(VIN); r.pass_()
     assert calls(requests_mock, "charge_stop") == [] and m.desired.record(VIN, CHARGING).lastOutcome is None   # not listed: no candidate yet
-    api.updateChargeAtHome(); r.pass_()
+    api.loadList(); r.pass_()
     assert len(calls(requests_mock, "charge_stop")) == 1 and calls(requests_mock, "wake_up") == []
 
 def test_a_queued_start_is_withdrawn_when_the_offer_drops(requests_mock):   # pre-flight M7, threaded, paid counted
@@ -459,8 +459,7 @@ def test_disabled_home_assistant_gets_no_broadcast():                      # del
     m, r, v, c = setup(); ha, anon = haInstall(m, enabled=False); v.observe("chargingState", "Charging", "HomeAssistant")
     m.stopCarsCharging(anon.key); m.desired.set(VIN, CHARGING, False, "test")
     for _ in range(3): r.pass_(); c.t += 61
-    m.updateChargeAtHome()
-    assert ha._post_service.call_count == 0 and not ha.updateChargeAtHome.called
+    assert ha._post_service.call_count == 0
     assert all(p.name != "HomeAssistant" for cap in (C.SET_AMPS, C.STOP_CHARGING) for p in m.providerOrder.candidates(v, cap))
 
 def test_a_fleet_command_for_one_car_sends_nothing_for_another_listed_car(requests_mock, monkeypatch):   # audit rows 28, 29, 31, 32; paid counted

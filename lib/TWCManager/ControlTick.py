@@ -64,6 +64,8 @@ class ControlTick(threading.Thread):
         ipc = self.master.getModuleByName("WebIPCControl")
         if ipc:
             ipc.processIPC()
+        if self.master.watch:
+            self._guarded("watch", self.master.watch.pass_)
         # Hourly, forget vehicles no one has claimed or seen for the window
         if time.time() - self.master.lastVehicleExpiry > 3600:
             self.master.lastVehicleExpiry = time.time()

@@ -40,6 +40,7 @@ import datetime
 import yaml
 import threading
 from TWCManager.ControlTick import ControlTick
+from TWCManager.Vehicle.Watch import Watch
 from TWCManager.TWCMaster import TWCMaster
 from TWCManager.Vehicle.Providers.Order import registerProviders
 from TWCManager.Vehicle.Registry.VIN import vinCheckDigitValid
@@ -396,14 +397,7 @@ def background_tasks_thread(master):
 def check_green_energy():
     global config, master
 
-    # Poll all loaded EMS modules for consumption and generation values
-    for module in master.getModulesByType("EMS"):
-        master.setConsumption(module["name"], module["ref"].getConsumption())
-        if hasattr(module["ref"], "getConsumptionAmps"):
-            master.setConsumptionAmps(
-                module["name"], module["ref"].getConsumptionAmps()
-            )
-        master.setGeneration(module["name"], module["ref"].getGeneration())
+    master.pollEMS()
 
     # Set max amps iff charge_amps isn't specified on the policy.
     if master.getModuleByName("Policy").policyIsGreen():
@@ -795,12 +789,12 @@ backgroundTasksThread.start()
 master.reconciler.start()
 # The control pass and housekeeping run on their own ~1 s tick, so the
 # serial loop only services RS-485
+master.watch = Watch(master)
 master.controlTick = ControlTick(master)
 master.controlTick.start()
-# The Tesla API vehicle list loads here (a free call), so the cloud
-# providers can carry commands before any arrival
-master.queue_background_task({"cmd": "checkCharge"})
-master.queue_background_task({"cmd": "refreshTokens"}, delay=300)
+# The token refresh's first run loads the Tesla API vehicle list (a free
+# call), so the cloud providers can carry commands before any arrival
+master.queue_background_task({"cmd": "refreshTokens"})
 
 # Charging policy is evaluated on its own thread so module I/O done by
 # policy conditions never stalls serial servicing. The first evaluation

@@ -58,6 +58,7 @@ def test_is_awake_trusts_fresh_telemetry_and_asleep_without_api_call():
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     v = reg.get(VIN)
     api.get_car_api = Mock(side_effect=AssertionError("no API call"))
+    reg.registerLiveness("TeslaMateVehicle", lambda v: reg.now())  # the feed is up
     v.observe("state", "asleep", "TeslaMateVehicle")
     assert api.is_awake(v) is False and v.syncSource == "TeslaMateVehicle"
     v.observe("state", "online", "TeslaMateVehicle")
@@ -85,7 +86,6 @@ def test_update_vehicle_data_observes_only_present_keys():  # P15
             },
         )
     )
-    api.is_far_from_home = Mock(return_value=False)
     assert api.update_vehicle_data(reg.get(VIN)) is True
     phases = reg.get(VIN).latest("phases")
     assert reg.get(VIN).value("batteryLevel") == 61
@@ -111,7 +111,6 @@ def test_update_vehicle_data_observes_the_cars_own_current_request():  # slim Ta
             },
         )
     )
-    api.is_far_from_home = Mock(return_value=False)
     assert api.update_vehicle_data(reg.get(VIN)) is True
     obs = reg.get(VIN).latest("chargeCurrentRequest")
     assert (obs.value, obs.source) == (16, "OwnerAPI")
@@ -136,7 +135,6 @@ def test_each_slot_records_its_own_source(kind, source):
             },
         )
     )
-    api.is_far_from_home = Mock(return_value=False)
     assert api.update_vehicle_data(v, slot=slot) is True
     assert api.get_car_api.call_args.kwargs["slot"] is slot
     assert {v.latest(f).source for f in ("lat", "lon", "batteryLevel")} == {source}
@@ -357,11 +355,14 @@ def test_online_state_is_true_false_or_none_and_is_awake_stays_a_bool(
     assert api.onlineState(v, now=1121.0) is None and check.call_count == 2
     online = requests_mock.get(FLEET_CAR, json={"response": {"state": "online"}})
     assert api.onlineState(v, now=1300.0) is True and online.call_count == 1
+    reg.registerLiveness("TeslaMateVehicle", lambda v: reg.now())  # the feed is up
     v.observe("state", "asleep", "TeslaMateVehicle")
     assert (api.onlineState(v), api.is_awake(v)) == (False, False)
     v.observe("state", "online", "TeslaMateVehicle")
     assert (api.onlineState(v), api.is_awake(v)) == (True, True)
     assert online.call_count == 1  # telemetry answered, no GET
+    reg.registerLiveness("TeslaMateVehicle", lambda v: None)  # the feed drops
+    assert api.onlineState(v, now=1500.0) is True and online.call_count == 2
 
 
 def test_update_vehicle_data_has_a_single_caller():
@@ -408,3 +409,15 @@ def test_an_incomplete_vehicle_data_answer_logs_what_is_missing(caplog):
             (r.levelno, r.getMessage()) for r in caplog.records if r.name == logger.name
         ] == [(logging.ERROR, "update_vehicle_data: %s for %s" % (missing, VIN))]
     assert v.value("lat") == 1.0 and v.latest("lon") is None  # lat first
+
+
+def test_min_battery_level_at_home_reads_the_registry_and_queues_nothing():
+    from tests.unit.reconcile_helpers import HOME, placeAt
+    from tests.unit.test_limit_reconciler import setup
+
+    m, r, v, c = setup(here=False); api = new_api(master=m)
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": None}); placeAt(m, v, HOME)
+    v.observe("batteryLevel", 33, "TeslaBLE")
+    m.queue_background_task = lambda *a, **k: pytest.fail("no checkCharge")
+    assert api.minBatteryLevelAtHome == 33 and api.numCarsAtHome == 1
+

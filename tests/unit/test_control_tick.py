@@ -17,6 +17,7 @@ from TWCManager.EVSEInstance.ChargingPoint import ChargingPoint
 from TWCManager.EVSEInstance.VehicleEndpoint import vehicleEndpoints
 from TWCManager.Interface.RS485 import RS485
 from TWCManager.TWCMaster import TWCMaster
+from TWCManager.Vehicle.Watch import Watch, notWatched
 from TWCManager.TWCSlave import Offer, TWCSlave
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from tests.unit.gen2_helpers import tickThenBeat
@@ -598,3 +599,41 @@ def test_retired_settings_keys_load_and_are_ignored(tmp_path):
 
     # One car gets the 10 A, the other a stop: no flex share for either
     assert offers(True) == offers(False) == [(0, 0), (10, 10)]
+
+
+def test_the_tick_runs_the_watch_each_pass_and_a_watch_error_does_not_stop_distribution():
+    m = pureGen2(feed=40)
+    m.watch = Mock()
+    m.watch.pass_.side_effect = RuntimeError("boom")
+    m.controlPass = Mock()
+    tick = ControlTick(m)
+    tick.pass_()
+    tick.pass_()
+    assert m.controlPass.call_count == 2 and m.watch.pass_.call_count == 2
+
+
+def test_the_launcher_creates_the_watch_before_the_tick_starts():
+    src = LAUNCHER.read_text()
+    assert src.index("master.watch = Watch(master)") < src.index(
+        "master.controlTick.start()"
+    )
+
+
+def test_polling_the_meters_samples_the_load_for_the_watch():
+    m = pureGen2(feed=40)
+    m.watch = Mock()
+    m.pollEMS()
+    assert m.watch.loadSample.call_count == 1
+    m.watch.loadSample.side_effect = RuntimeError("boom")
+    m.pollEMS()
+
+
+def test_a_disabled_watch_leaves_every_car_alone():
+    m = pureGen2(feed=40, config={})
+    m.config["watch"] = {"enabled": False}
+    w = Watch(m)
+    w._visit = Mock()
+    m.vehicleRegistry.getOrCreate(VIN, "t")
+    w.pass_()
+    assert not w._visit.called
+    assert notWatched(m, m.vehicleRegistry.get(VIN)) == "disabled"

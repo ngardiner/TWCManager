@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Vehicle.Presence import HOME, homeCars, inside, presence
+from TWCManager.Vehicle.Presence import homeCars
 from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
     FleetAPIProvider,
     OwnerAPIProvider,
@@ -146,8 +146,6 @@ class TeslaAPI:
     # The never-expires expiry earlier releases saved with a synced token.
     # Only compared against, when restoring saved settings.
     LEGACY_SYNCED_EXPIRY = 99999 * 99999 * 99999
-    lastChargeCheck = 0
-    chargeUpdateInterval = 1800
     vehicleListLock = RLock()
     config = None
     master = None
@@ -208,9 +206,6 @@ class TeslaAPI:
             self.redirectURI = self.config["config"].get("teslaApiRedirectUri", "")
             self.region = self.config["config"].get("teslaApiRegion", "NA")
             self.scope = self.config["config"].get("teslaApiScope", self.scope)
-            self.chargeUpdateInterval = self.config["config"].get(
-                "cloudUpdateInterval", 1800
-            )
             self.wakeDelayMins = self.config["config"].get("wakeDelayMins", 3)
         except KeyError:
             pass
@@ -689,11 +684,6 @@ class TeslaAPI:
         except (ValueError, KeyError, TypeError):
             # Not JSON, or no 'response' or 'count' in the answer
             return False
-
-    def is_far_from_home(self, lat, lon):
-        # Further than an hour's drive
-        home = self.master.getHomeLatLon()
-        return abs(home[0] - lat) > 1.4 or abs(home[1] - lon) > 1.4
 
     def getCarApiErrorRetryMins(self, car=None):
         errorCount = self.errorCount
@@ -1672,25 +1662,14 @@ class TeslaAPI:
 
         return True
 
-    def updateChargeAtHome(self):
-        # checkCharge: the vehicle list (free), then each car at home
-        self.loadList()
-        for vehicle, car in self.registry.attached("TeslaAPI"):
-            if presence(self.master, vehicle) == HOME:
-                self.update_charge(vehicle)
-        self.lastChargeCheck = time.time()
-
     @property
     def numCarsAtHome(self):
         return len(homeCars(self.master, "TeslaAPI"))
 
     @property
     def minBatteryLevelAtHome(self):
-        if time.time() - self.lastChargeCheck > self.chargeUpdateInterval:
-            self.master.queue_background_task({"cmd": "checkCharge"})
         cars = homeCars(self.master, "TeslaAPI")
-        levels = [v.value("batteryLevel", 10000) for v, _ in cars]
-        return min(levels or [10000])
+        return min([v.value("batteryLevel", 10000) for v, _ in cars] or [10000])
 
     # One listed car's reads: vehicle is its registry Vehicle, car its
     # CarApiState. Field reads and writes go through the registry.
@@ -1732,8 +1711,9 @@ class TeslaAPI:
         # True or False when an answer (a sync source or the free
         # vehicles/{vin}) says so; None when nothing answered. Free sources
         # only, never vehicle_data. The newest observation wins: telemetry
-        # (any state) is trusted only while fresh and newer than our own last
-        # state GET; otherwise use that GET's cached result or GET again.
+        # (any state) is trusted only while its feed is live, fresh and newer
+        # than our own last state GET; otherwise use that GET's cached result
+        # or GET again. A feed that is down only repeats its last report.
         # Fresh is the registry's age, so a live feed keeps an old reading
         # fresh; it still loses to a state GET made after it. now (default:
         # the module's clock) measures the maxAge-second cache, so a caller
@@ -1745,6 +1725,7 @@ class TeslaAPI:
             age is not None
             and age <= vehicle.SYNC_TIMEOUT / 4
             and obs.at >= max(car.onlineCheckedAt, car.staleBefore)
+            and isinstance(self.registry.sourceLiveAt(obs.source, vehicle), float)
         ):
             return obs.value in ("online", "charging", "updating", "driving")
 
@@ -1882,7 +1863,6 @@ class TeslaAPI:
             except (KeyError, TypeError, AttributeError):
                 logger.error("update_vehicle_data: %s for %s" % (missing, vehicle.vin))
                 return False
-            lat, lon = vehicle.value("lat", 10000), vehicle.value("lon", 10000)
 
             # Only keys present in the response are observed: a default or a
             # carried-over value is not a fresh TeslaAPI reading.
@@ -1919,29 +1899,6 @@ class TeslaAPI:
                 if key in charge:
                     vehicle.observe(field, charge[key], source, at=stamp)
 
-            if inside(self.master, vehicle) is False:
-                if self.is_far_from_home(lat, lon):
-                    # Car is further from home than can be driven in an
-                    # hour; no point re-checking sooner than that.
-                    car.statusDeferral = now + 3600
-                elif (
-                    drive.get("shift_state") == "P" or drive.get("shift_state") is None
-                ):
-                    # Car is not driving, so we can check infrequently. May
-                    # be able to sleep.
-                    car.statusDeferral = now + 1800
-                else:
-                    car.statusDeferral = now + 300
-            else:
-                # Car is at home; need to watch charging
-                car.statusDeferral = now + 300
+            car.statusDeferral = now + READ_MAX_AGE
 
         return result
-
-    def update_charge(self, vehicle):
-        # The registry cascade, never a wake. A new BLE reading (a new
-        # Observation) proves the car awake, as an API reply does
-        before = vehicle.latest("batteryLevel")
-        obs = vehicle.read("batteryLevel", maxAge=READ_MAX_AGE)
-        if obs is not None and obs is not before and obs.source == "TeslaBLE":
-            vehicle.attachment("TeslaAPI").lastAPIAccessTime = time.time()

@@ -8,6 +8,7 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from tests.unit.reconcile_helpers import AWAY, HOME, placeAt
 from tests.unit.test_provider_order import ble, fleet, twc
 from tests.unit.test_teslaapi_registry import api_with_registry
+from tests.unit.test_limit_reconciler import setup
 from tests.unit.teslatokens import fleet_token, owner_token
 VIN1 = "5YJ3E1EA1KF000001"; VIN2 = "5YJ3E1EA1KF000002"
 
@@ -148,3 +149,40 @@ def test_a_hidden_car_is_listed_again_once_visible():
     m.getSlaveTWCs = lambda: [slave(amps=5.0)]; assert vehicleEndpoints(m) == []
     m.getSlaveTWCs = lambda: []; (again,) = vehicleEndpoints(m)
     assert again.currentVIN == first.currentVIN == VIN1
+
+def sleeper():
+    m, r, v, c = setup(here=False); placeAt(m, v, HOME); v.observe("pluggedIn", True, "TeslaBLE")
+    return m, v, VehicleEndpoint(v, m.providerOrder, m)
+
+def test_asleep_after_charging_no_longer_wants_to_charge():
+    m, v, e = sleeper()
+    v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("actualCurrent", 24, "TeslaBLE")
+    assert e.wantsToCharge
+    m.vehicleRegistry._clock.t += 10
+    v.observe("state", "asleep", "TeslaBLE")
+    assert not e.wantsToCharge
+
+def test_asleep_after_stopped_still_wants_to_charge():
+    m, v, e = sleeper()
+    v.observe("chargingState", "Stopped", "TeslaBLE")
+    m.vehicleRegistry._clock.t += 10
+    v.observe("state", "asleep", "TeslaBLE")
+    assert e.wantsToCharge
+
+def test_asleep_changes_nothing_without_a_charging_session():
+    for state in (None, "Complete"):
+        m, v, e = sleeper()
+        if state: v.observe("chargingState", state, "TeslaBLE")
+        awake = e.wantsToCharge
+        m.vehicleRegistry._clock.t += 10
+        v.observe("state", "asleep", "TeslaBLE")
+        assert e.wantsToCharge == awake == False
+
+def test_a_sign_of_life_after_sleep_restores_wanting():
+    m, v, e = sleeper()
+    v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("actualCurrent", 24, "TeslaBLE")
+    m.vehicleRegistry._clock.t += 10
+    v.observe("state", "asleep", "TeslaBLE")
+    m.vehicleRegistry._clock.t += 10
+    v.observe("state", "online", "TeslaBLE")
+    assert e.wantsToCharge

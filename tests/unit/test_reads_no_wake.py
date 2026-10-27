@@ -1,5 +1,6 @@
 import time
 from unittest.mock import Mock
+from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.Providers.TeslaBLEProvider import TeslaBLEProvider
 from tests.unit.teslatokens import FakeMaster, new_api, owner_token, wire_reads
@@ -46,7 +47,7 @@ def test_ble_read_fills_fields_and_api_untouched():
             "phases": None,
         }
     )
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert (reg.get(VIN).value("batteryLevel", 10000), reg.get(VIN).latest("chargeLimit").source) == (
         61,
         "TeslaBLE",
@@ -59,7 +60,7 @@ def test_ble_read_fills_fields_and_api_untouched():
 def test_api_source_checks_free_online_state_before_paid_vehicle_data():
     api, ble, reg = setup(None)
     api.is_awake = Mock(return_value=False)
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).latest("batteryLevel") is None
     api.update_vehicle_data.assert_not_called()
     ble.wakeVehicle.assert_not_called()
@@ -70,7 +71,7 @@ def test_status_deferral_counts_as_success_without_fetch():  # P13
     api.update_vehicle_data = Mock(return_value=True)  # deferral path: no observe
     reg.get(VIN).observe("batteryLevel", 40, "OwnerAPI", at=0.0)
     state(reg).statusDeferral = time.time() + 1800
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel", 10000) == 40
     api.update_vehicle_data.assert_not_called()
     ble.wakeVehicle.assert_not_called()
@@ -92,7 +93,7 @@ def test_a_zero_age_location_read_forces_a_fresh_ble_read():
 
 def test_ble_failure_falls_to_api_without_waking():  # A6
     api, ble, reg = setup(None)
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel", 10000) == 50
     api.update_vehicle_data.assert_called_once()
     ble.wakeVehicle.assert_not_called()
@@ -102,7 +103,7 @@ def test_all_sources_failing_keeps_the_stale_value_and_does_not_wake():
     api, ble, reg = setup(None)
     api.update_vehicle_data = Mock(return_value=False)
     reg.get(VIN).observe("batteryLevel", 40, "OwnerAPI", at=0.0)
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel", 10000) == 40
     api.update_vehicle_data.assert_called_once()
     ble.wakeVehicle.assert_not_called()
@@ -111,7 +112,7 @@ def test_all_sources_failing_keeps_the_stale_value_and_does_not_wake():
 def test_unpaired_vin_skips_ble():
     api, ble, reg = setup({"batteryLevel": 1})
     reg.get(VIN).dropClaim("TeslaBLE")
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     ble.get_charge_state.assert_not_called()
     api.update_vehicle_data.assert_called_once()
 
@@ -119,7 +120,7 @@ def test_unpaired_vin_skips_ble():
 def test_fresh_observation_skips_both():
     api, ble, reg = setup({"batteryLevel": 1})
     reg.get(VIN).observe("batteryLevel", 50, "TeslaMateVehicle")
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     ble.get_charge_state.assert_not_called()
     api.update_vehicle_data.assert_not_called()
 
@@ -148,26 +149,15 @@ def test_status_deferral_skips_the_online_check():
     api, ble, reg = setup(None)
     reg.get(VIN).observe("batteryLevel", 40, "OwnerAPI", at=0.0)
     state(reg).statusDeferral = time.time() + 1800
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel", 10000) == 40
     api.is_awake.assert_not_called()
     api.update_vehicle_data.assert_not_called()
 
 
-def test_ble_read_marks_car_awake_but_cache_hit_does_not():
-    api, ble, reg = setup({"batteryLevel": 61})
-    state(reg).lastAPIAccessTime = 0
-    api.update_charge(reg.get(VIN))
-    assert state(reg).lastAPIAccessTime > 0
-    state(reg).lastAPIAccessTime = 0
-    api.update_charge(reg.get(VIN))
-    assert state(reg).lastAPIAccessTime == 0
-    ble.get_charge_state.assert_called_once()
-
-
 def test_ble_read_observes_actual_current():
     api, ble, reg = setup({"batteryLevel": 61, "actualCurrent": 16})
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("actualCurrent", 0) == 16
     assert reg.get(VIN).latest("actualCurrent").source == "TeslaBLE"
 
@@ -217,6 +207,7 @@ def test_teslable_provider_reads_through_the_module(tmp_path):
 
     master = FakeMaster(teslaControlPath="/fake/tesla-control")
     master.vehicleRegistry = VehicleRegistry({})
+    master.reconciler = Mock()  # takes the startup readiness check
     with patch.object(TeslaBLE, "pipeName", str(tmp_path / "ble_data")), patch(
         "TWCManager.Vehicle.TeslaBLE.os.path.isfile", return_value=True
     ), patch("TWCManager.Vehicle.TeslaBLE.os.access", return_value=True), patch.object(
@@ -241,25 +232,15 @@ def test_ble_reply_with_no_values_falls_through_to_api():
     api.update_vehicle_data.assert_called_once()
 
 
-def test_ble_read_on_an_injected_clock_marks_car_awake():
-    # The registry clock and time.time() must not be compared.
-    api, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
-    state(reg).lastAPIAccessTime = 0
-    api.update_charge(reg.get(VIN))
-    assert state(reg).lastAPIAccessTime > 0
-
-
 def test_read_stamped_like_the_previous_one_still_counts_as_fetched():
     # A coarse clock can stamp a real read equal to the last one.
     api, ble, reg = setup({"batteryLevel": 61}, clock=lambda: 50.0)
     v = reg.get(VIN)
     v.observe("batteryLevel", 40, "TeslaBLE")
     v.noteWrite("batteryLevel", 40, "OwnerAPI")  # equal stamp: not trusted
-    state(reg).lastAPIAccessTime = 0
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel", 10000) == 61
     ble.get_charge_state.assert_called_once()
-    assert state(reg).lastAPIAccessTime > 0
 
 
 def test_a_status_deferral_ends_the_read_walk_before_home_assistant():  # 13b M1
@@ -278,7 +259,7 @@ def test_a_status_deferral_ends_the_read_walk_before_home_assistant():  # 13b M1
     api.update_vehicle_data = Mock(return_value=True)
     reg.get(VIN).observe("batteryLevel", 40, "OwnerAPI", at=0.0)
     state(reg).statusDeferral = time.time() + 1800
-    api.update_charge(reg.get(VIN))
+    reg.get(VIN).read("batteryLevel", maxAge=READ_MAX_AGE)
     assert reg.get(VIN).value("batteryLevel", 10000) == 40
     api.is_awake.assert_not_called()
     api.update_vehicle_data.assert_not_called()
