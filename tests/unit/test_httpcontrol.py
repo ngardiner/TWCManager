@@ -256,7 +256,7 @@ class TestHTTPControlServerStartup:
             mock_master.releaseModule.assert_called_once()
 
 
-class TestHTTPControlConfiguration:
+class TestHTTPControlConfigAttributes:
     """Test HTTPControl configuration attributes."""
     
     @pytest.fixture
