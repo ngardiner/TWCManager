@@ -3,6 +3,8 @@
   <head>
     <title>TWCManager</title>
     {% include 'bootstrap.html.j2' %}
+    <script type="text/javascript" src="/static/js/compositor.js"></script>
+    <script type="text/javascript" src="/static/js/vehicleImage.js"></script>
   </head>
   <body>
     {% include 'navbar.html.j2' %}
@@ -10,6 +12,7 @@
     <h3>Vehicles</h3>
     <table>
       <tr>
+        <th></th>
         <th>VIN</th><td>&nbsp;</td>
         <th>Name</th><td>&nbsp;</td>
         <th>Presence</th><td>&nbsp;</td>
@@ -21,6 +24,12 @@
       {% for v in registry.vehicles() %}
         {% set row = v.summary() %}
         <tr>
+          <td>
+            {% if not row.anonymous %}
+            <a href="/vehicleDetail/{{ row.vin }}"><img class="vehicleImage thumbnail" hidden alt=""
+                 data-vin="{{ row.vin }}" data-appearance="{{ row.appearance|tojson|forceescape }}"></a>
+            {% endif %}
+          </td>
           <td>
             {% if row.anonymous %}Unknown car on TWC {{ row.point }}
             {% else %}<a href="/vehicleDetail/{{ row.vin }}">{{ row.vin }}</a>{% endif %}

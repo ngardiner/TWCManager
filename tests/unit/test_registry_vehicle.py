@@ -69,6 +69,7 @@ def test_attachments_and_summary():
         "point",
         "lastSeenAge",
         "lastSeenSource",
+        "appearance",
     }
     assert s["vin"] == VIN and not s["anonymous"] and s["lastSeenSource"] == "TeslaBLE"
     assert s["lastSeenAge"] == 10.0 and s["point"] is None

@@ -4,3 +4,6 @@
  */
 
 span.VINClick { cursor: pointer; }
+
+img.vehicleImage { width: 400px; }
+img.vehicleImage.thumbnail { width: 160px; }

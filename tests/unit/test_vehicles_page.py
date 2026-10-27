@@ -220,9 +220,10 @@ def test_provider_capability_text_for_tesla_cloud_and_ble():
 
 
 def presenceCell(html):
-    # The Presence column is the fifth cell after the VIN link
+    # The Presence column is the fifth cell after the VIN's (the first
+    # link to the car is its picture's)
     row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
-    return row.split("<td>")[4].split("</td>")[0].strip()
+    return row.split("<td>")[5].split("</td>")[0].strip()
 
 
 def test_presence_column_shows_each_state():
@@ -241,7 +242,7 @@ def test_presence_column_shows_each_state():
 
 def watchCell(html):
     row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
-    return row.split("<td>")[6].split("</td>")[0].strip()
+    return row.split("<td>")[7].split("</td>")[0].strip()
 
 
 def test_the_vehicles_page_shows_the_watch_line_after_presence():

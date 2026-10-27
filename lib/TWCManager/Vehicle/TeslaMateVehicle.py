@@ -58,6 +58,14 @@ def _optNum(a):
     return float(a) if a else None
 
 
+def _carType(a):
+    # TeslaMate's model ("3", "Y", "Cybertruck") as the Tesla API's car_type
+    if not a:
+        return None
+    a = str(a).lower()
+    return a if a == "cybertruck" else "model" + a
+
+
 class TeslaMateVehicle(TelmetryBase):
     __db_host = None
     __db_name = None
@@ -83,6 +91,10 @@ class TeslaMateVehicle(TelmetryBase):
         "shift_state": ["shiftState", lambda a: a or None],
         "charger_power": ["chargerPower", _optNum],
         "charge_current_request_max": ["chargeCurrentRequestMax", _optNum],
+        "model": ["carType", _carType],
+        "exterior_color": ["exteriorColor", lambda a: a or None],
+        "wheel_type": ["wheelType", lambda a: a or None],
+        "trim_badging": ["trimBadging", lambda a: a or None],
     }
 
     def __init__(self, master):

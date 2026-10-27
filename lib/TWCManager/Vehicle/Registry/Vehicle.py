@@ -5,7 +5,14 @@ import threading
 import time
 from typing import Any, Callable, Collection, Dict, List, Optional, Tuple, Union
 
-from .Fields import FEED_LAG, FIELDS, NOT_TRACKED, TELEMETRY_SOURCES, Observation
+from .Fields import (
+    APPEARANCE,
+    FEED_LAG,
+    FIELDS,
+    NOT_TRACKED,
+    TELEMETRY_SOURCES,
+    Observation,
+)
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
 
@@ -345,6 +352,14 @@ class Vehicle:
         obs = self.latest("name")
         return obs.value if obs is not None and obs.value else ""
 
+    def appearance(self) -> dict:
+        # The known appearance fields, keyed as compositor.js reads them
+        return {
+            key: self.value(field)
+            for key, field in APPEARANCE.items()
+            if self.value(field)
+        }
+
     def summary(self) -> dict:
         # What the Vehicles pages and the debug dump read
         with self._lock:
@@ -356,4 +371,5 @@ class Vehicle:
             "point": self.key[5:] if self.isAnonymous else self.value("twcVin"),
             "lastSeenAge": self._clock() - lastSeen,
             "lastSeenSource": lastSeenSource,
+            "appearance": self.appearance(),
         }

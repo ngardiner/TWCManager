@@ -14,13 +14,14 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib3.util.ssl_ import create_urllib3_context
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Vehicle.Presence import homeCars
+from TWCManager.Vehicle.Providers.Capability import FLEET_DATA
 from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
     FleetAPIProvider,
     OwnerAPIProvider,
 )
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
 from TWCManager.Vehicle.Reconcile import Outcome as O
-from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
+from TWCManager.Vehicle.Registry.Fields import APPEARANCE, READ_MAX_AGE
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Vehicle.TeslaTokenSlot import TeslaTokenSlot, decodeToken
 
@@ -1826,13 +1827,41 @@ class TeslaAPI:
         self.updateCarApiLastErrorTime(car)
         return False, None
 
+    def _observeAppearance(self, vehicle, response, source):
+        config = response.get("vehicle_config") or {}
+        config = dict(config, option_codes=response.get("option_codes"))
+        for key, field in APPEARANCE.items():
+            if config.get(key):
+                vehicle.observe(field, config[key], source)
+
+    def readAppearance(self, vehicle) -> bool:
+        # vehicle_config alone, for a car no source has said the looks of.
+        # Never wakes it: get_car_api asks the free online check first
+        slot = self.slotFor("read")
+        if slot is None:
+            return False
+        path = vehicle.vin + "/vehicle_data?endpoints=vehicle_config"
+        result, response = self.get_car_api(vehicle, path, slot=slot)
+        if result:
+            self._observeAppearance(vehicle, response, self.sourceOf(slot))
+        return bool(result)
+
+    def readPrice(self) -> float:
+        return FLEET_DATA.price if self.slotFor("read") is self.fleetSlot else 0.0
+
     def update_vehicle_data(self, vehicle, slot=None):
         car = vehicle.attachment("TeslaAPI")
         path = (
             vehicle.vin
             + "/vehicle_data?endpoints="
             + "%3B".join(
-                ["location_data", "charge_state", "drive_state", "vehicle_state"]
+                [
+                    "location_data",
+                    "charge_state",
+                    "drive_state",
+                    "vehicle_state",
+                    "vehicle_config",
+                ]
             )
         )
 
@@ -1875,6 +1904,8 @@ class TeslaAPI:
                 vehicleName = None
             if vehicleName:
                 vehicle.observe("name", vehicleName, source)
+
+            self._observeAppearance(vehicle, response, source)
 
             # One reading: the charger details carry the charging state's
             # stamp, and come first so it is judged with them

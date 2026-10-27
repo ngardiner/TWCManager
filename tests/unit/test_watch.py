@@ -258,6 +258,7 @@ def test_a_car_of_unknown_sleep_state_is_pinged_before_a_radio_read():
 
 def test_a_covered_car_keeps_no_ask_for_later(requests_mock):
     m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    v.observe("carType", "model3", "TeslaMateVehicle")   # its looks known: no read for its picture
     v.observe("state", "online", "TeslaMateVehicle"); feed = liveFeed(m, "TeslaMateVehicle")
     w = Watch(m, clock=c); w.readNow(VIN, "test"); w.pass_(); runPending(r.cloud)
     feed.down = True; later(m, v, c, 60); w.pass_(); runPending(r.cloud)

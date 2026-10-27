@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .Fields import NOT_TRACKED
+from .Fields import APPEARANCE, NOT_TRACKED
 from .Vehicle import Vehicle
 from .VIN import isWellFormedVIN
 
@@ -315,6 +315,10 @@ class VehicleRegistry:
                 "lastSeenSource": lastSeenSource,
                 "userAsserted": bool(v.userAsserted),
             }
+            # A car seldom reports how it looks, and a sleeping one not at all
+            appearance = v.appearance()
+            if appearance:
+                out[v.vin]["appearance"] = appearance
         return {"version": 1, "vehicles": out}
 
     def load(self, data: Any) -> None:
@@ -357,3 +361,9 @@ class VehicleRegistry:
         name = entry.get("name")
         if isinstance(name, str) and name:
             v.observe("name", name, "persisted", at=last, seen=False)
+        appearance = entry.get("appearance")
+        if isinstance(appearance, dict):
+            for key, field in APPEARANCE.items():
+                value = appearance.get(key)
+                if isinstance(value, str) and value:
+                    v.observe(field, value, "persisted", at=last, seen=False)
