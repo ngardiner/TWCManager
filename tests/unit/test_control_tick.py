@@ -357,16 +357,6 @@ def test_a_withdrawal_targets_gen3_units_and_cars_zero():
     assert setAmps(m) == []
 
 
-def test_a_withdrawal_leaves_no_car_offered_power():
-    m = real()
-    car(m, VIN, "Charging")
-    m.getMaxAmpsToDivideAmongSlaves = lambda: 20
-    m.controlPass()
-    assert m.offered[VIN] > 0
-    m.withdrawOffers()
-    assert m.offered[VIN] == 0 and not any(m.offered.values())
-
-
 def test_a_withdrawal_zeroes_the_slaves_even_if_points_cannot_be_built():
     m = pureGen2(feed=40)
     m.controlPass()

@@ -46,7 +46,7 @@ def test_heartbeat_skips_the_registry_write_for_a_pending_vin():             # S
     s.currentVIN = VIN; drive(m, s, amps_actual=12.0); assert v.latest("actualCurrent").value == 12.0 and v.latest("actualCurrent").source == "Gen2TWC"
 
 def test_heartbeat_readings_are_not_evidence_for_a_car_with_vehicle_reads():   # S4, paid counted
-    m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "not_charging"))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "not_charging"))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); m.setMaxAmpsToDivideAmongSlaves(0)   # no power to give: no rate
     v.observe("chargingState", "Charging", "FleetAPI"); m.stopCarsCharging(VIN); r.pass_(); assert cmds(f) == ["stopCharging"]
     for _ in range(10): c.t += 61; drive(m, s, amps_actual=12.0); r.pass_()                                                # readings every heartbeat, past RETRY each time
     assert cmds(f) == ["stopCharging"]                                                                                    # no vehicle read arrived: not re-sent
@@ -93,7 +93,7 @@ def test_disruptive_stop_waits_for_ble_only_when_ble_is_set_up_for_the_car():
     assert m2.settings["respondToSlaves"] == 0 and m2.providerOrder.provider("TeslaBLE").calls == []           # at once
 
 def test_disruptive_stop_is_sent_once_until_new_evidence_then_reasserted():   # real heartbeat readings
-    m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "2"
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "2"; m.setMaxAmpsToDivideAmongSlaves(0)   # no power to give: no rate
     drive(m, s, amps_actual=12.0); assert anon.latest("actualCurrent").value == 12.0 and anon.latest("actualCurrent").source == "Gen2TWC"   # the heartbeat records current
     m.stopCarsCharging(anon.key); assert r.pass_() == 1 and m.settings["respondToSlaves"] == 0 and anon.lastWrite("chargingState") is None     # never stamped
     m.settings["respondToSlaves"] = 1
@@ -103,7 +103,7 @@ def test_disruptive_stop_is_sent_once_until_new_evidence_then_reasserted():   # 
     m.settings["respondToSlaves"] = 1; c.t += 61; drive(m, s, amps_actual=0.5); assert r.pass_() == 0 and m.settings["respondToSlaves"] == 1   # quiet bus: satisfied
 
 def test_disruptive_stop_on_the_real_clock_is_sent_once():                    # production clock
-    m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"; m.setMaxAmpsToDivideAmongSlaves(0)   # no power to give: no rate
     drive(m, s, amps_actual=12.0); m.stopCarsCharging(anon.key)
     sent = sum(r.pass_() for _ in range(20)); drive(m, s, amps_actual=12.0)
     assert sent == 1 and m.flushRS485() == 1                                                                         # one relay stop, not one per pass

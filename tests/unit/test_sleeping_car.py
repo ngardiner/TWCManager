@@ -94,17 +94,17 @@ def test_a_raise_still_wakes_a_sleeping_car(requests_mock):
     assert b._tool.call_count == 0 and requests_mock.call_count == 0
 
 
-def test_a_raise_held_at_0_a_wakes_once_offered(requests_mock):
+def test_a_raise_held_at_0_a_wakes_once_there_is_room(requests_mock):
     m, r, v, c, api = install()
     b = sleepy(m)
-    m.offered = {VIN: 0}
+    m.setMaxAmpsToDivideAmongSlaves(0)
     v.observe("chargeLimit", 50, TM)
     m.setPolicyLimit(80, transition=True)
     passes(r, c, 10)
     passes(r, c, 600, each=noise(v, c))
     assert b._tool.call_count == 1 and bleCommands(b) == []
     assert m.desired.record(VIN, CHARGE_LIMIT).lastOutcome.detail == O.HELD + "asleep"
-    m.offered = {VIN: 16}
+    m.setMaxAmpsToDivideAmongSlaves(16)
     passes(r, c, 60, each=noise(v, c))
     assert bleCommands(b) == ["wake", "charging-set-limit"]
 

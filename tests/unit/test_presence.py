@@ -1103,15 +1103,15 @@ def test_a_feed_report_after_the_edge_keeps_the_car_through_a_max_drop_in_00(
     assert v.markAt("unplug") == P.NEVER and v.value("twcVin") == "8244"
 
 
-def test_a_car_its_twc_still_holds_at_00_is_offered_the_twcs_nothing(monkeypatch):
+def test_a_car_its_twc_still_holds_at_00_needs_the_twcs_minimum(monkeypatch):
     from TWCManager.Vehicle.Reconcile import Belief
 
     m, v, c = placed()
     s, beat = onGen2(monkeypatch, m, v, c)
     beat(120, 0x00, 0.0)  # checked: no answer, so the car stays
-    m.distributeEVSEPower()
-    assert s.vehicleKey is None and m.offered[VIN] == 0
-    assert Belief.whyQuiet(m, v) == "nothing offered"
+    m.setMaxAmpsToDivideAmongSlaves(s.minAmps - 1)
+    assert s.vehicleKey is None and s.heldKey == VIN
+    assert Belief.whyQuiet(m, v) == "no room to start"
 
 
 @pytest.mark.parametrize("move", ["driveStart", "outside"])
@@ -1291,7 +1291,9 @@ def test_restart_steady_00_with_telemetry_plugged_is_home_and_restores_nothing(
         m.setPolicyLimit(50, transition=False)
         m.reconciler.pass_()
     assert P.presence(m, v) == P.HOME and v.markAt("unplug") == P.NEVER
-    assert p.calls == [] and m.heldLimits.get(VIN) == HeldLimit(90, 50)
+    assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
+    # Its battery unknown, it would charge, and with room it is started once
+    assert [x[0] for x in p.calls] == ["wake", "startCharging"]
 
 
 def test_a_charging_point_s_own_start_always_applies():
@@ -1537,7 +1539,8 @@ def test_an_attributed_gen2_plug_ends_with_the_point_s_00_even_idle(monkeypatch)
     assert vehicleEndpoints(m) == []
 
 
-def test_an_anonymous_point_s_offer_covers_the_cars_it_fans_out_to(monkeypatch):
+def test_a_car_an_anonymous_point_may_serve_has_no_room_without_power(monkeypatch):
+    from TWCManager.Vehicle.Reconcile import Belief as B
     from tests.unit.test_gen2_unplug import beats
 
     m, v, c = placed()
@@ -1548,8 +1551,8 @@ def test_an_anonymous_point_s_offer_covers_the_cars_it_fans_out_to(monkeypatch):
     s = m.getSlaveTWCs()[0]
     m.setMaxAmpsToDivideAmongSlaves(0)
     beats(m, s, c, 20, 0x03, 32.0)
-    m.distributeEVSEPower()
-    assert s.vehicleKey == "anon:8244" and m.offered[VIN] == 0
+    assert s.vehicleKey == "anon:8244"
+    assert B.whyQuiet(m, v) == "no room to start"
 
 
 def vinReadingGen2(requests_mock, monkeypatch, located=True):

@@ -1885,8 +1885,10 @@ def test_a_drive_inside_the_radius_spends_no_budget_and_the_park_applies(
 
 def gen2(monkeypatch, m, c, vin=VIN, maxA=32.0):
     # The serial thread's clock is the test's; the TWC links at 03 with the
-    # car's max amps and, given a vin, names the car by its VIN read
+    # car's max amps and, given a vin, names the car by its VIN read. The
+    # policy offers nothing until the test gives it power
     monkeypatch.setattr(time, "time", c)
+    m.maxAmpsToDivideAmongSlaves = 0
     s = m.getSlaveTWCs()[0]
     heartbeat(m, s, 0.0, state=0x03, amps_max=maxA)
     if vin:
@@ -2068,8 +2070,8 @@ def test_a_sleeping_car_at_00_with_power_available_is_woken_for_a_raise(
     FleetCar(requests_mock, state="asleep", limit=50)
     v.observe("chargeLimit", 50, "TeslaBLE")
     v.observe("batteryLevel", 50, "TeslaBLE")
-    m.setMaxAmpsToDivideAmongSlaves(32)
     s = gen2(monkeypatch, m, c, maxA=32.0)
+    m.setMaxAmpsToDivideAmongSlaves(32)
     beats(m, r, c, s, 300, 0x00, 0.0, cycles(m, 50))
     beats(m, r, c, s, 1800, 0x00, 0.0, cycles(m, 80))
     assert bleCommands(b) == ["wake", "charging-set-limit"] and limits(b) == [80]
@@ -2112,6 +2114,7 @@ def test_gen2_steady_00_after_link_does_not_block_startup_charging(
     assert v.markAt("unplug") == Presence.NEVER
     assert Presence.presence(m, v) != Presence.NOT_HOME
     assert limits(b) == [] and b.runs == []
+    m.setMaxAmpsToDivideAmongSlaves(32)
     m.startCarsCharging(VIN)
     beats(m, r, c, s, 60, 0x00, 0.0, policy)
     # The edge's check, and its one follow-up when that check can't tell
@@ -2202,9 +2205,9 @@ def test_vin_less_two_candidates_ble_pilot_one_apply(requests_mock, monkeypatch)
         **{VIN: ("Charging", 32), VIN2: ("Disconnected", 0)}
     )
     m.settings["chargeRateControl"] = "2"
-    m.setMaxAmpsToDivideAmongSlaves(10)
     policy = cycles(m, 50)
     s = gen2(monkeypatch, m, c, vin=None)
+    m.setMaxAmpsToDivideAmongSlaves(10)
     attributeQueued(m)
     assert v.value("twcVin") == "8244" and two.value("twcVin") is None
     beats(m, r, c, s, 600, 0x03, 32.0, policy)
@@ -2502,35 +2505,37 @@ def unnamedAt00(requests_mock, monkeypatch):
     c.t += (30 - c.t % 30) % 30
     beats(m, r, c, s, 30, 0x00, 32.0)
     assert m.vehicleRegistry.vehicleAt("8244").isAnonymous
-    assert s.vehicleKey is None and m.offered.get(VIN) == 0
+    assert s.vehicleKey is None
     return m, r, v, c, s, b
 
 
 def test_an_unnamed_plug_at_00_wakes_no_candidate_for_a_raise(
     requests_mock, monkeypatch
 ):
-    # The policy raises the limit to 90 while the unnamed TWC rests at 00:
-    # nothing is offered there, so the raise waits for a free channel.
+    # The policy raises the limit to 90 while the unnamed TWC rests at 00
+    # with no power to share, so the raise waits for a free channel.
     # paid == (0, 0, 0)
     m, r, v, c, s, b = unnamedAt00(requests_mock, monkeypatch)
     beats(m, r, c, s, 600, 0x00, 32.0, cycles(m, 90))
     assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
 
 
-def test_an_unnamed_plug_at_00_starts_no_candidate_as_the_offer_rises(
+def test_an_unnamed_plug_at_00_starts_only_the_car_plugged_there_as_the_offer_rises(
     requests_mock, monkeypatch
 ):
     # The offer rises while the unnamed TWC rests at 00 with a car not full:
-    # the TWC reports no car there, so no start fans out. The car's own
-    # endpoint still rates it over BLE. paid == (0, 0, 0)
+    # the TWC reports no car there, so no start fans out. The car plugged in
+    # here, by elimination, would charge and has room: it alone is started,
+    # by its VIN, and its own endpoint rates it over BLE. paid == (0, 0, 0)
     m, r, v, c, s, b = unnamedAt00(requests_mock, monkeypatch)
     starts = []
     monkeypatch.setattr(m, "startCarsCharging", starts.append)
     for amps in (6, 12, 24, 32):
         m.setMaxAmpsToDivideAmongSlaves(amps)
         beats(m, r, c, s, 60, 0x00, 32.0)
-    assert starts == [] and m.desired.get(VIN, CHARGING) is None
-    assert "charging-start" not in bleCommands(b)
+    assert starts == [] and m.desired.get(VIN2, CHARGING) is None
+    assert m.desired.get(VIN, CHARGING).value is True
+    assert bleCommands(b).count("charging-start") == 1
     assert paid(requests_mock) == (0, 0, 0)
 
 

@@ -103,6 +103,11 @@ def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
     if battery and limit and battery >= limit:
         # The car would refuse the start
         return "battery at its charge limit"
+    return _refusesStart(vehicle, known, config)
+
+
+def _refusesStart(vehicle, known, config) -> Optional[str]:
+    # Whatever its limit, the car cannot take a start, or must not get one
     if known is not None and known.value in ("Disconnected", "NoPower"):
         return "the car cannot charge (%s)" % known.value
     if vehicle.value("scheduledChargingPending") is True and config.get(
@@ -113,9 +118,9 @@ def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
     return None
 
 
-def whyQuiet(master, vehicle) -> Optional[str]:
-    # Why the car is expected to quiesce once every pending desire is applied,
-    # or None when it will charge (unknown limit or battery: it will)
+def _wontCharge(master, vehicle) -> Optional[str]:
+    # Why the car would not charge if started now, once every pending desire
+    # is applied; None when it would (unknown limit or battery: it would)
     key, desired = vehicle.key, master.desired
     stop, pending = desired.get(key, CHARGING), desired.get(key, CHARGE_LIMIT)
     held = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
@@ -129,10 +134,45 @@ def whyQuiet(master, vehicle) -> Optional[str]:
         return "not plugged in here"
     if stop is not None and stop.value is False:
         return "stop desired"
-    if plugged is not False and getattr(master, "offered", {}).get(key) == 0:
-        return "nothing offered"
     if limit and battery and limit <= battery:
         return "car won't charge: limit at or below battery"
+    config = (getattr(master, "config", None) or {}).get("config") or {}
+    return _refusesStart(vehicle, known(vehicle, CHARGING), config)
+
+
+def wouldCharge(master, vehicle) -> bool:
+    return _wontCharge(master, vehicle) is None
+
+
+def _room(master, vehicle) -> bool:
+    # The policy's power, less the minimums of the points already drawing
+    # (the split's own test), fits this car's point: a drawing car keeps its
+    # place, and a new car is admitted only into real headroom
+    own, idle = [], [1]
+    free = master.convertAmpsToWatts(master.getMaxAmpsToDivideAmongSlaves())
+    for point in master.chargingPoints():
+        # A TWC still holding the car is its point while it reports no car
+        held = (e.heldKey for e in point.localEndpoints)
+        if vehicle.key in (point.vehicleKey, *held):
+            own.append(point.minPower)
+        elif point.wantsToCharge and not point.isReadOnly:
+            free -= point.minPower
+        else:
+            idle.append(point.minPower)
+    # A car with no point of its own may be on any idle one
+    return free >= max(own or idle)
+
+
+def admissible(master, vehicle) -> bool:
+    # The admission a split that admits before it allocates can share
+    return wouldCharge(master, vehicle) and _room(master, vehicle)
+
+
+def whyQuiet(master, vehicle) -> Optional[str]:
+    # Why the car is expected to quiesce, or None when it will charge
+    reason = _wontCharge(master, vehicle)
+    if reason or not _room(master, vehicle):
+        return reason or "no room to start"
     feeds = map(master.getModuleByName, ("TeslaMateVehicle", "FleetTelemetryMQTT"))
     if any(f and f.registry.now() < f.settleUntil for f in feeds):
         # Its first readings may show a full car

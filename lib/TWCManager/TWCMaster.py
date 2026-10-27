@@ -25,7 +25,8 @@ from TWCManager.Vehicle.Providers.Gen2TWCProvider import Gen2TWCProvider
 from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile.Desired import CHARGING, DesiredStore
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
-from TWCManager.Vehicle.Reconcile.Belief import newerReading
+from TWCManager.Vehicle.Reconcile.Belief import admissible, known, newerReading
+from TWCManager.Vehicle.Reconcile.Rules import satisfied
 from TWCManager.Vehicle.Reconcile.Reconciler import VehicleReconciler
 from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, targetsFor
 from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED
@@ -562,6 +563,10 @@ class TWCMaster:
                 # Power is on offer: a stop not yet delivered is moot
                 self.cancelStopCarsCharging(key)
             gate = slave.chargeGate(now, key)
+            v = self.vehicleRegistry.get(key) if gate == "withdraw" else None
+            if v is not None and admissible(self, v):
+                # Its idle TWC is offered nothing until the car draws
+                gate = None
             if gate == "cancelStop":
                 logger.debug(
                     "Don't stop charging TWC: %s yet because: offer changed "
@@ -578,14 +583,24 @@ class TWCMaster:
                     "start": self.startCarsCharging,
                     "withdraw": self.withdrawStartCharging,
                 }[gate](key)
+        for v in self.vehicleRegistry.vehicles():
+            # The split serves only drawing points, so an admissible car is
+            # started here; a stop or start already wanted stands
+            if (
+                self.desired.get(v.key, CHARGING) is None
+                and v.vin
+                and Presence.pluggedHere(self, v)
+                and not satisfied(CHARGING, True, known(v, CHARGING, True))
+                and admissible(self, v)
+            ):
+                self._wantCharging(v.key, True)
 
     def withdrawOffers(self) -> None:
         # The control pass keeps failing, so stop offering power: a Gen2 TWC
         # gets a 0 offer (its idle minimum) and a Gen3 unit a 0 target. A car
         # that carries its own rate keeps its last commanded rate; only the
         # AMPS desire is cleared. Slaves first, so a failing chargingPoints()
-        # cannot leave them on a stale offer. A car offered 0 is not woken
-        self.offered = dict.fromkeys(self.offered, 0)
+        # cannot leave them on a stale offer
         for slave in self.getSlaveTWCs():
             if slave.heardFrom:
                 slave.offer = Offer(0, 0)
@@ -677,17 +692,6 @@ class TWCMaster:
                 continue
             point.setTargetPower(0)
             offers.append((point, 0))
-        # The targets just set, by each car a point serves or fans out to, or
-        # a TWC still holds (offered power, or none was left for it)
-        held = {
-            e.heldKey: w
-            for p, w in offers
-            for e in p.localEndpoints
-            if w or remaining_watts < p.minPower
-        }
-        held.update({k: w for p, w in offers for k in (p.vehicleKey, *p.carKeys)})
-        held.pop(None, None)
-        self.offered = held
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(

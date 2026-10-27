@@ -18,6 +18,7 @@ def setup(*providers, clock=True, here=True, battery=60, ble=False):
     for p in providers: m.providerOrder.register(p)
     m.desired = DesiredStore(clock=c); m.vehicleRegistry.removed = m.desired.forget; m.heldLimits.load()
     m.reconciler = r = inline(VehicleReconciler(m, clock=c)); v = m.vehicleRegistry.getOrCreate(VIN, "t")
+    m.maxAmpsToDivideAmongSlaves = 32                                        # the policy has room for a car to start
     if ble:
         m.config["config"]["teslaControlPath"] = "/bin/true"
         with patch.object(TeslaBLE, "_start_dbus_session"), patch.object(TeslaBLE, "_cleanup_stale_pipe"): b = TeslaBLE(m)
@@ -678,27 +679,23 @@ def test_a_stop_logs_neither_a_wake_nor_a_skip(caplog):
     assert not any(" wake " in x for x in _info(caplog))
 
 
-def test_a_raise_never_wakes_a_car_its_point_offers_nothing(caplog):
+def test_a_raise_never_wakes_a_car_with_no_room_to_start(caplog):
     caplog.set_level("INFO")
     m, r, v, c = setup(ble(O.Outcome(O.DONE)))
     p = prov(m, "TeslaBLE")
     v.observe("chargeLimit", 50, "TeslaBLE")
-    m.distributeEVSEPower()  # the car's point wants no power: offered 0
-    assert m.offered[VIN] == 0
+    m.setMaxAmpsToDivideAmongSlaves(0)  # no power to share
     m.desired.set(VIN, CHARGE_LIMIT, 80, "policy")
     r.pass_()
     assert names(p) == ["setChargeLimit"]  # sent, but without a wake
-    assert "TeslaBLE no wake for %s before setChargeLimit: nothing offered" % VIN in [
+    assert "TeslaBLE no wake for %s before setChargeLimit: no room to start" % VIN in [
         x.getMessage() for x in caplog.records
     ]
     m.setMaxAmpsToDivideAmongSlaves(32)
-    v.observe("chargingState", "Stopped", "TeslaBLE")  # wants power now
-    m.distributeEVSEPower()
-    assert m.offered[VIN] > 0
     c.t += 60
     m.desired.set(VIN, CHARGE_LIMIT, 90, "policy")
     r.pass_()
-    assert names(p)[1:3] == ["wake", "setChargeLimit"]  # offered: the raise wakes
+    assert names(p)[1:3] == ["wake", "setChargeLimit"]  # room: the raise wakes
 
 
 def quietCar(battery, limit, *wants):
@@ -728,18 +725,14 @@ def test_a_car_that_will_still_charge_may_be_woken_to_lower_its_limit():
     assert quietCar(40, 90, (CHARGE_LIMIT, 70, {}))[0] == ["wake", "setChargeLimit"]
 
 
-def test_a_car_wakes_for_a_lower_once_its_point_offers_power():
+def test_a_car_wakes_for_a_lower_once_there_is_room_to_start():
     m, r, v, c = setup(ble(O.Outcome(O.DONE), O.Outcome(O.DONE)), battery=40)
     v.observe("chargeLimit", 90, "TeslaBLE")
-    m.distributeEVSEPower()  # nothing wanted: offered 0
-    assert m.offered[VIN] == 0
+    m.setMaxAmpsToDivideAmongSlaves(0)
     m.desired.set(VIN, CHARGE_LIMIT, 70, "policy")
     r.pass_()
     assert names(prov(m, "TeslaBLE")) == ["setChargeLimit"]
     m.setMaxAmpsToDivideAmongSlaves(32)
-    v.observe("chargingState", "Stopped", "TeslaBLE")
-    m.distributeEVSEPower()
-    assert m.offered[VIN] > 0
     c.t += 60
     m.desired.set(VIN, CHARGE_LIMIT, 60, "policy")
     r.pass_()
