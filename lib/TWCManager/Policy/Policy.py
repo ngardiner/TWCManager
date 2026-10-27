@@ -263,7 +263,8 @@ class Policy:
 
             # Clear stopAskingToStartCharging so we try charging each car at
             # least once
-            for vehicle in self.master.getModuleByName("TeslaAPI").getCarApiVehicles():
+            carapi = self.master.getModuleByName("TeslaAPI")
+            for vehicle in carapi.getCarApiVehicles() if carapi else []:
                 vehicle.stopAskingToStartCharging = False
 
         if updateLatch and "latch_period" in policy:
@@ -298,10 +299,11 @@ class Policy:
 
         # If a charge limit is defined for this policy, apply it
         limit = limit = self.policyValue(policy.get("charge_limit", -1))
-        if self.limitOverride:
-            currentCharge = (
-                self.master.getModuleByName("TeslaAPI").minBatteryLevelAtHome - 1
-            )
+        # Without the Tesla API (disabled in config) the battery level is not
+        # known, so there is no limit to lower below it
+        carapi = self.master.getModuleByName("TeslaAPI")
+        if self.limitOverride and carapi is not None:
+            currentCharge = carapi.minBatteryLevelAtHome - 1
             if currentCharge < 50:
                 currentCharge = 50
             limit = currentCharge if limit == -1 else min(limit, currentCharge)

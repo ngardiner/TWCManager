@@ -131,7 +131,8 @@ class WebIPCControl:
                 slaveTWCRoundRobin = self.master.getSlaveTWCs()
                 if webMsg == b"getStatus":
                     needCarApiBearerToken = False
-                    if self.master.getModuleByName("TeslaAPI").slotFor("read") is None:
+                    carapi = self.master.getModuleByName("TeslaAPI")
+                    if carapi is not None and carapi.slotFor("read") is None:
                         for i in range(0, self.master.countSlaveTWC()):
                             if slaveTWCRoundRobin[i].protocolVersion == 2:
                                 needCarApiBearerToken = True
@@ -313,7 +314,9 @@ class WebIPCControl:
                         + "\n"
                     )
                     webResponseMsg += (
-                        "carApiLastStartOrStopChargeTime="
+                        ""
+                        if carapi is None
+                        else "carApiLastStartOrStopChargeTime="
                         + str(
                             time.strftime(
                                 "%m-%d-%y %H:%M:%S",
@@ -344,7 +347,7 @@ class WebIPCControl:
                         + "\n"
                     )
 
-                    for vehicle in carapi.getCarApiVehicles():
+                    for vehicle in carapi.getCarApiVehicles() if carapi else []:
                         webResponseMsg += str(vehicle.__dict__) + "\n"
 
                     webResponseMsg += "slaveTWCRoundRobin:\n"
