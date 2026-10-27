@@ -4,9 +4,9 @@
 
 ### Debug Level
 
-Before undertaking any troubleshooting, the number one most useful piece of informaton to have on hand is a lot with the debugLevel turned up high. 
+Before undertaking any troubleshooting, the number one most useful piece of informaton to have on hand is a log with the logLevel turned down low. 
 
-To make sure you capture everything, set debugLevel to 11 in ```/etc/twcmanager/config.json``` and run TWCManager in the following way to log the output:
+To make sure you capture everything, set ```logLevel``` to 9 in ```/etc/twcmanager/config.json``` and run TWCManager in the following way to log the output:
 
 ```python -u -m TWCManager | tee debug.log```
 
@@ -15,6 +15,12 @@ Please provide the log output when you [raise an issue on GitHub](https://github
 ### TWCManager Version
 
 Are you using the development version of TWCManager? If so, and if you are having issues, please switch to the Stable version and see if it is working. If so, you've found a bug! Please [raise an issue on GitHub](https://github.com/ngardiner/TWCManager/issues/) and let us know.
+
+## Vehicles
+
+For a problem with a car (it is not charging, is charging when it should not, or is not seen arriving or leaving), start with the web interface's Vehicles page (1.4.1). It shows whether each car is Home, Probably home or Away, how TWCManager reaches it, and when TWCManager last checked on it and what it found. A car's own page lists the commands TWCManager is waiting to send, each with the reason it hasn't been sent yet, its Bluetooth pairing status, and any problem with its Fleet Telemetry configuration. See [The Vehicles page](README.md#the-vehicles-page) and Vehicle watch in [Settings](Settings.md#vehicle-watch).
+
+The log also has an INFO line for each command's result, each billed Fleet API request, and each change a telemetry feed reports in a car's plug state, driving state or geofence.
 
 ## Adapter
 

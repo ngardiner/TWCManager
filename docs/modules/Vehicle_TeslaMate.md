@@ -4,9 +4,13 @@
 
 <a href="https://github.com/adriankumpf/teslamate">TeslaMate</a> is a self-hosted Tesla datalogger.
 
-The purpose of this integration is to allow users of TWCManager who also use <a href="https://github.com/adriankumpf/teslamate">TeslaMate</a> to leverage on the work already performed by TeslaMate to fetch vehicle status, significantly reducing the number of Tesla API calls that TWCManager needs to make.
+The purpose of this integration is to allow users of TWCManager who also use <a href="https://github.com/adriankumpf/teslamate">TeslaMate</a> to leverage the work already performed by TeslaMate to fetch vehicle status, significantly reducing the number of Tesla API calls that TWCManager needs to make.
 
-With both the API Token and Telemetry options enabled, we're effectively using TeslaMate to manage our API login credentials and fetch all of our vehicle status updates. The only requests that TWCManager would need to send are the initial API call to list all vehicles in your account, and commands (such as wake_up, charge, etc).
+With both the API Token and Telemetry options enabled, TeslaMate manages the Tesla API login and reports each car's changes. While its feed is live for a car, TWCManager sends the Tesla API only the call that lists the cars on your account, the commands it needs (such as wake_up or charge), and the reads a command or a TWC's plug event asks for. While the feed is down, or TeslaMate reports a car unhealthy, the vehicle watch reads that car as it would any other.
+
+TeslaMate normally reads your cars through the Tesla Owner API, so it carries the same caveat as using the Owner API directly: Tesla has deprecated it, and it may stop working without notice. [Fleet Telemetry](Vehicle_FleetTelemetryMQTT.md) is the live feed that doesn't depend on it.
+
+TeslaMate is a free, live telemetry source: it reports each change as it happens. It sends no commands; for those, TWCManager needs a command path such as [TeslaBLE](Vehicle_TeslaBLE.md) or the [Tesla API](Vehicle_TeslaAPI.md).
 
 There is no requirement to use both sync functions when integrating with TeslaMate. You can sync only tokens, or only telemetry.
 
@@ -75,20 +79,35 @@ TWCManager can use the MQTT topics advertised by TeslaMate to recieve charge sta
 
 #### Confirming Telemetry Flow
 
-Once you have MQTT connectivity set up for TeslaMate telemetry, you should see the following log entry appear for each of the vehicles tracked by TeslaMate, as long as they are within your Tesla API credential account, which indicates that we have detected Telemetry information for this vehicle:
-
-00:06:58 🚗 TeslaMat 20 Vehicle R*display_name* telemetry being provided by TeslaMate
-
-This indicates that we have internally switched off telemetry polling to the Tesla API for this vehicle, to instead obtain the information from TeslaMate.
-
-Note however that TeslaMate has a health indicator which indicates whether there is an issue with a TeslaMate vehicle's tracking or connectivity. If we see that the health indicator indicates an issue, we will stop tracking the telemetry via TeslaMate until it shows healthy again, and the following message will appear:
-
-IN PROGRESS
-
-It is possible for TeslaMate to lose connection to the MQTT server and for the data served to become stale. If this occurs, TWCManager will detect it within 1 hour of the data going stale if the vehicle was online at the time. Currently, if the vehicle was offline at the time it will not be detected. 
-
-Once this is detected, TWCManager will print an error message similar to the below, and revert to API polling again:
+Once you have MQTT connectivity set up for TeslaMate telemetry, you should see the following log entry appear for each of the vehicles tracked by TeslaMate that TWCManager can match to a VIN (from the TeslaMate database when the database settings are configured, otherwise by the car's name), which indicates that we have detected Telemetry information for this vehicle:
 
 ```
-18:03:25 🚗 TeslaAPI 40 Data from TeslaMateVehicle for *display_name* is stale. Switching back to TeslaAPI
+00:06:58 🚗 TeslaMat 20 Vehicle *display_name* telemetry being provided by TeslaMateVehicle
 ```
+
+While TeslaMate's feed is live for a car, TWCManager takes that car's changes (plug-ins, drives, position, sleep) from the feed, and the [vehicle watch](../Settings.md#vehicle-watch) leaves the car alone.
+
+The feed counts as live for a car while TWCManager is connected to the MQTT broker and TeslaMate's `healthy` topic for that car, once published, says `true`. When TeslaMate reports a car unhealthy (it has stopped tracking the car), TWCManager logs:
+
+```
+TeslaMate reports car <id> unhealthy
+```
+
+and the vehicle watch looks after the car, at its next due check, until TeslaMate reports it healthy again. The same happens for every car while the broker connection is down; TWCManager logs `Telemetry from TeslaMateVehicle has resumed` once it reconnects.
+
+#### Configuration
+
+```
+   "vehicle": {
+       "TeslaMate": {
+           "enabled": true,
+           "syncTelemetry": true,
+           "mqtt_host": "192.168.1.1",
+           "mqtt_user": "teslamate",
+           "mqtt_pass": "teslamate",
+           "mqtt_prefix": "teslamate"
+       }
+   }
+```
+
+To sync tokens as well, add the database settings shown under Tesla API Tokens above.

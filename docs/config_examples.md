@@ -21,7 +21,7 @@ In some cases, solar installations may be limited in export tariffs by an electr
 This will have the following effect:
 
    * Charging will not *start* until the generated energy is at least 20A (```minAmpsPerTWC``` being 6A and after the 5kW of consumption offset that we have configured).
-   * Flex current is not supported from 1.4.0 (```greenEnergyFlexAmps``` is accepted but ignored), so charging stops once generation drops below the start threshold.
+   * Flex current is not supported (```greenEnergyFlexAmps``` is ignored), so charging stops once generation drops below the start threshold.
 
 The below shows an illustration of how this configuration improves the effeciency of this setup, by starting charging after the orange band (which is 5kW of generation) and stopping it at the same point at the end of the day. This results in avoiding the loss of exports between the orange (5kW) and green (5kW + 6A minAmpsPerTWC) bands.
 

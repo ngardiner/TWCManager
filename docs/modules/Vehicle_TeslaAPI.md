@@ -22,6 +22,24 @@ only some vehicles; see [Owner API tokens](#owner-api-tokens). If you would rath
 register an application at all, TeslaBLE controls charging locally over Bluetooth and
 needs no Tesla account.
 
+## Owner API and Fleet API
+
+TWCManager can hold an Owner API token and a Fleet API token side by side, and uses each for what it does best.
+
+The Owner API is deprecated by Tesla and may stop working without notice. Its free reads are worth having while it lasts, but don't depend on it alone: for commands, pair the car over [Bluetooth](Vehicle_TeslaBLE.md) or set up the Fleet API; for news of the car, use [TeslaMate](Vehicle_TeslaMate.md) or [Fleet Telemetry](Vehicle_FleetTelemetryMQTT.md).
+
+| | Owner API | Fleet API |
+|-|-|-|
+| Status | Deprecated by Tesla; may stop working without notice | Supported |
+| Getting a token | Pasted, or synced from [TeslaMate](Vehicle_TeslaMate.md) | Your own registered app and the login below, or synced |
+| Reads (charge state, location) | Free | Billed (about $0.002 a read) |
+| Commands | Free, but only for cars Tesla lists with `command_signing: off` (see [Owner API tokens](#owner-api-tokens)) | Billed (about $0.001 a command, $0.02 a wake), through the Vehicle Command proxy |
+| Free online check (asleep or awake) | Yes | Yes |
+
+Reads go to the free Owner API when you have both. Both APIs come after Bluetooth (TeslaBLE) in the command order, and a billed command is sent only when no free path can serve the car, or after the free ones have failed for a while (see Vehicle Command Policy in [Settings](../Settings.md#vehicle-command-policy)).
+
+A charge read happens when something needs it (a command, a TWC's plug event) and when the [vehicle watch](../Settings.md#vehicle-watch) asks: on a change such as an arrival, a wake or a plug-in, and on a clock for a car charging at home, every 5 minutes over the Owner API, or every 15 minutes on the Fleet API and only while a policy reads its battery level. The watch's checks of whether a car is asleep or awake use the free online check. A read stays fresh for 5 minutes for every caller. The watch's billed Fleet API reads draw from its monthly budget. `cloudUpdateInterval` does not set how often cars are read (1.4.1).
+
 ## Prerequisites
 
 - A Tesla account that owns the vehicle(s).
@@ -97,6 +115,20 @@ Set the following in the `config` section of `config.json`:
 
 If you do set `teslaApiClientSecret`, keep `config.json` readable only by the
 `twcmanager` user.
+
+> **Energy features need the `energy_device_data` scope.** Two features read
+> your Tesla energy site rather than a car: naming the car on each
+> [Gen3 Wall Connector](../Gen3_Status.md#which-car-is-on-a-gen3), and the
+> [Powerwall](EMS_Powerwall2.md) module's Storm Watch status. Both need a
+> Fleet API token with `energy_device_data`, which the default login does not
+> ask for. Add it to your app's allowed scopes at developer.tesla.com, set
+> `teslaApiScope` to the default list plus `energy_device_data`:
+>
+> `"teslaApiScope": "openid offline_access vehicle_device_data vehicle_cmds vehicle_location vehicle_charging_cmds energy_device_data"`
+>
+> and log in again. Without it, those two features don't work, and
+> TWCManager logs once which scope is missing. The Powerwall's own local
+> readings don't need it.
 
 ## Logging in
 

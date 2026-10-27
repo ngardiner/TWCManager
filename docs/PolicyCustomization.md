@@ -146,7 +146,7 @@ number of minutes after they last evaluated true.
 Note:
 : This does not prevent a policy change if an earlier policy's conditions become
   true.  It also does not prevent the Track Green Energy policy from deciding
-  there is insufficient power to charge, but see Flex below.
+  there is insufficient power to charge.
 
 Caution:
 : Exercise care with latching.  If a policy is restricted to apply only when the
@@ -159,8 +159,7 @@ Custom policies can be latched using the `latch_period` attribute.
 ## Flexibility
 
 Flex current (`greenEnergyFlexAmps`, `useFlexAmpsToStartCharge` and a policy's
-`allowed_flex` attribute) is not supported from 1.4.0. The keys are still
-accepted, but ignored.
+`allowed_flex` attribute) is not supported (1.4.1). The keys are ignored.
 
 ## Webhooks
 
@@ -267,8 +266,8 @@ The values in a policy definition are:
       unknown / no cars are home.
 - Sub-lists
 
-(Note that TWCManager does not know which vehicle is connected to which TWC, so
-only aggregate properties of all vehicles at home can be accessed.)
+(Policies see only these aggregate properties of all vehicles at home, not
+the car on a particular TWC.)
 
 ### Comparisons
 

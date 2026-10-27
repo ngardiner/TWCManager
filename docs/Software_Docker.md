@@ -56,6 +56,25 @@ The default ```docker-compose.yml``` file assumes that you will be using Serial 
 
 The default  ```docker-compose.yml``` file also contains a default timezone Environment variable, commented out. Some systems will not require this to be set, however if you find the graphs and schedules are operating in a different timezone to your location (such as UTC/GMT), then you can specify the TZ attribute here with the linux value for timezone definitions. Uncomment this line to have it take effect.
 
+   * Serial devices
+
+The ```devices``` list passes your RS-485 adapters into the container. The default passes one, ```/dev/ttyUSB0```. Both Gen2 and Gen3 Wall Connectors need an RS-485 adapter, each its own:
+
+* Gen2: the adapter wired to the Wall Connector's load-sharing terminals, matching ```port``` under ```interface.RS485```.
+* Gen3: the adapter wired to the Wall Connector's Neurio meter terminals, matching ```port``` in [Gen3TWCs](modules/Controller_Gen3TWCs.md). With Gen2 units as well, add a second line, for example ```"/dev/ttyUSB1:/dev/ttyUSB1"```.
+
+List every adapter you have, and only those: Docker will not start the container if a listed device does not exist on the host. A car-only install has no adapter, so remove the line. Without a Gen2 adapter, TWCManager starts and needs no change to its ```interface``` settings (1.4.1).
+
+   * Bluetooth (TeslaBLE)
+
+The image includes ```tesla-control```, and ```bluez``` (1.4.1); the default ```docker-compose.yml``` gives the container what [TeslaBLE](modules/Vehicle_TeslaBLE.md) needs:
+
+* The host must run ```bluetoothd``` with a powered, unblocked Bluetooth adapter. The container does not run its own.
+* ```tesla-control``` runs in the host's network namespace, through ```nsenter``` and the ```/proc/1/ns/:/rootns``` mount. ```nsenter``` needs the ```CAP_SYS_PTRACE``` capability; ```CAP_NET_ADMIN```, ```CAP_NET_RAW``` and ```CAP_SYS_ADMIN``` give it the Bluetooth adapter.
+* Range scans (1.4.1) run ```bluetoothctl```, which reaches the host's ```bluetoothd``` through the ```/run/dbus``` mount and the ```DBUS_SYSTEM_BUS_ADDRESS``` setting.
+
+If one of these is missing, TWCManager logs why no range scan can run and shows the reason on the vehicle's page. If you will not use Bluetooth, you can remove the ```cap_add``` list and the ```/rootns``` and ```/run/dbus``` mounts.
+
    * /etc/twcmanager/config.json
 
 On your first start of the TWCManager docker container, a directory on the host will be created if it does not currently exist, and the default configuration file will be copied there. The location of this volume is ```/etc/twcmanager```. If you need to edit the configuration file, run the Docker container in interactive mode (instructions below), exit with Ctrl+C and then edit the ```/etc/twcmanager/config.json``` file that was created.
@@ -76,7 +95,7 @@ sudo docker compose -f docker-compose.yml up -d
 
 ## Monitoring the container operation
 
-After starting TWCManager, the script will run in the foreground and will regularly update with the current status. If you specified detach mode (with the ```-d``` parameter), the information can be viewed by using the ```docker logs docker_twcmanager_1 -f``` command.
+After starting TWCManager, the script will run in the foreground and will regularly update with the current status. If you specified detach mode (with the ```-d``` parameter), the information can be viewed by running ```sudo docker compose -f docker-compose.yml logs -f``` in the directory holding your ```docker-compose.yml```.
 
 An example output is as follows:
 

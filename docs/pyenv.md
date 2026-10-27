@@ -2,7 +2,7 @@
 
 ## Introduction
 
-If you have a Raspberry Pi build prior to late 2019, you may not have a version of Python interpreter install which is new enough to take advantage of some features which only support Python 3.6 or newer.
+If you have a Raspberry Pi build prior to late 2019, you may not have a version of Python interpreter install which is new enough to run TWCManager, which needs Python 3.8 or newer (3.9 for Gen3 Wall Connectors; see [Manual Installation](Software_Manual.md#default-to-python3)).
 
 If the output of the following comamnd:
 
@@ -10,7 +10,7 @@ If the output of the following comamnd:
 python3 -V
 ```
 
-Is any version number prior to 3.6.0, you might want to consider installing a newer Python intepreter. The following commands would install prerequisites for the pyenv platform, download and compible Python 3.7.1, and then run TWCManager under that python version.
+Is any version number prior to 3.8.0, you need a newer Python interpreter. The following commands install prerequisites for the pyenv platform, download and compile a newer Python, and then run TWCManager under that Python version. They use Python 3.7.1 as the example; substitute 3.9 or later.
 
 Keep in mind that compiling Python can take a long time, potentially hours on a Raspberry Pi. It is expected that the following commands would take considerable time to complete.
 

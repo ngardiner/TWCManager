@@ -16,8 +16,10 @@ For background on the Gen3 and why this approach is necessary, see
 
 ## Prerequisites
 
-- **pymodbus >= 3.0.0** - installed automatically with `make install` or
-  `pip install pymodbus`
+- **pymodbus >= 3.8.0**, which needs **Python 3.9** or later.  `make
+  install` installs pymodbus, but on Python 3.8 it gets an older one, and
+  Gen3 support stays off (the log says "pymodbus is not installed").  See
+  [#723](https://github.com/ngardiner/TWCManager/issues/723).
 - A **dedicated RS485 serial adapter** wired to the Gen3's Neurio meter
   terminals.  This must be a *separate* adapter from the one used for
   Gen2 RS485 master/slave communications.  A Gen3-only install can leave
@@ -85,7 +87,7 @@ targets into one synthetic house load:
 
 1. It picks the house load (in amps per phase) at which the units with a
    target together draw the sum of their targets.  With one unit, the
-   headroom is exactly that unit's target, as before.  With several units
+   headroom is exactly that unit's target.  With several units
    and equal fuses, each gets the average of the targets.  If a car is
    drawing less than its headroom (for example, a full battery), its
    unused share goes to the other units.
@@ -229,9 +231,9 @@ independently.  Configure both:
 }
 ```
 
-TWCManager's centralized power distributor allocates watts across all
-EVSE types (Gen2 slaves, Gen3 units, and Tesla API vehicles) using the
-same fair-share algorithm.
+TWCManager shares the available power fairly across all of them: Gen2
+units, Gen3 units, and cars on other charging stations whose charge rate
+it sets through the car.
 
 ## Limitations
 
@@ -260,7 +262,7 @@ same fair-share algorithm.
 ## Troubleshooting
 
 **Gen3TWCs controller fails to start / pymodbus import error**
-: Install pymodbus: `pip install "pymodbus>=3.0.0"`
+: Install pymodbus 3.8 or later, on Python 3.9 or later: `pip install "pymodbus>=3.8.0"`
 
 **Gen3 TWC does not respond to power changes**
 : Verify the Gen3 is configured to use an external Neurio meter at 115200

@@ -35,13 +35,11 @@ This installs TWCManager into `/home/twcmanager/venv`. After running it, update 
 
 ## Default to Python3
 
-TWCManager requires a minimum of python 3.4 to work correctly. To attempt to support Raspberry Pi OS versions going back to 2019, TWCManager is regularly tested against Python 3.4 and above to ensure that support is retained. As of TWCManager v1.2.2, a number of features are beginning to diverge based on minimum Python versions being higher than those required by TWCManager, so the following features may be unavailable if your Python version is below the minimum:
+TWCManager requires a minimum of Python 3.8. The exact minimum is being settled in [#723](https://github.com/ngardiner/TWCManager/issues/723), and may rise to 3.9. Gen3 Wall Connector support already needs Python 3.9, because it needs pymodbus 3.8 or later.
 
-   * Support for OCPP control module requires a minimum Python 3.6.1 version
+Raspberry Pi OS 11 (Bullseye) ships with Python 3.9. Older releases (Buster ships 3.7, Stretch 3.5) cannot run TWCManager: upgrade the operating system, or use [pyenv](pyenv.md) to install a newer Python interpreter.
 
-Raspberry Pi OS version 9 (stretch) from 2019 ships with Python 3.5.3. If you are running Raspberry Pi OS version 9 or earlier, you may not have access to a Python interpreter which supports the above features. You may want to consider the use of [pyenv](pyenv.md) to support installation of a newer Python interpreter.
-
-Python versions below 3.6 may show the following error when running ```setup.py```:
+Older Python versions may show the following error when running ```setup.py```:
 
 ```
 Traceback (most recent call last):
@@ -62,7 +60,7 @@ There is no need to change the python intepreter to python3 in Bullseye, this is
 
 ### Raspberry Pi OS / Raspbian Buster
 
-You may need to set python3 as your default python interpreter version on Raspberry Pi OS / Debian Buster. The following command will set python 3.7 as your default interpreter.
+Buster's Python 3.7 is below TWCManager's minimum; see above. For older TWCManager versions, you may need to set python3 as your default python interpreter version on Raspberry Pi OS / Debian Buster. The following command will set python 3.7 as your default interpreter.
 
 ```
 sudo update-alternatives --install /usr/bin/python python /usr/bin/python2.7 1
@@ -88,13 +86,13 @@ You can check that this command has been successful by running ```python --versi
 
 During this step, the source code and all related files will be cloned from the GitHub repository and installed into the appropriate location on your system.
 
-We have two versions of the codebase that you may want to check out. The stable version is **v1.3.2**, which will only change for stability or urgent fixes. To check out **v1.3.2**, follow these steps:
+We have two versions of the codebase that you may want to check out. The stable version is **v1.4.0**, which will only change for stability or urgent fixes. To check out **v1.4.0**, follow these steps:
 
 
 ```
 git clone https://github.com/ngardiner/TWCManager
 cd TWCManager
-git checkout v1.3.2
+git checkout v1.4.0
 sudo make install
 ```
 
@@ -107,8 +105,12 @@ git checkout main
 make install
 ```
 
+## Optional: Bluetooth (TeslaBLE)
+
+To control cars over Bluetooth, build ```tesla-control``` with ```make tesla-control``` and install the ```bluez``` package (```sudo apt-get install -y bluez```) for range scans. See [TeslaBLE](modules/Vehicle_TeslaBLE.md).
+
 ## Configure TWCManager
-After performing the installation tasks above, edit the /etc/twcmanager/config.json file and customize to suit your environment.
+After performing the installation tasks above, edit the /etc/twcmanager/config.json file and customize to suit your environment. See [Supported setups](README.md#supported-setups) for the charging stations, car connections and energy sources you can combine. A Gen3-only or car-only install needs no Gen2 RS-485 adapter and no change to the ```interface``` settings (1.4.1); a Gen3 still needs its own RS-485 adapter, wired to its Neurio meter terminals.
 
 The following documents provide detail on specific areas of configuration:
 
@@ -152,7 +154,7 @@ sudo cp contrib/twcmanager.service /etc/systemd/system/twcmanager.service
 sudo systemctl enable twcmanager.service --now
 ```
 
-   * Note: The ```systemd``` service file assumes that your TWCManager installation is in ```/home/pi/TWCManager```. If this is not the case, edit ```/etc/systemd/system/twcmanager.service``` and update the ```WorkingDirectory``` parameter to suit.
+   * Note: The ```systemd``` service file runs the installed TWCManager package as the ```twcmanager``` user with ```/usr/bin/python3```, so it does not depend on where you cloned the source.
 
 ### Using the venv-based install with systemd
 
