@@ -113,3 +113,61 @@ def test_resolve_reads_the_merge_that_added_the_note(tmp_path, monkeypatch):
     (note,) = rn.load("HEAD")
     assert note.prs == ["42"]
     assert note.authors == ["alice"]
+
+
+_CHANGELOG = (
+    "# ChangeLog\n\n"
+    f"{rn.MARKER}\n\n"
+    "## v1.4.0 - 2026-10-26\n\n"
+    "* Bugfixes\n"
+    "    * Fix a\n\n"
+    "## v1.3.4 - 2026-10-23\n\n"
+    "* Bugfixes\n"
+    "    * Fix old\n"
+)
+_FIX = [rn.Note("changes/b.bugfix.md", "bugfix", "Fix b.", ["740"], ["x"])]
+
+
+def test_insert_release_below_marker():
+    out = rn.insert(_CHANGELOG, _FIX, "1.4.1", "2026-11-01")
+    assert out.startswith(
+        f"# ChangeLog\n\n{rn.MARKER}\n\n"
+        "## v1.4.1 - 2026-11-01\n\n"
+        "* Bugfixes\n"
+        "    * (@x) - Fix b (#740)\n\n"
+        "## v1.4.0 - 2026-10-26\n"
+    )
+
+
+def test_insert_post_release_after_parent_entries():
+    out = rn.insert(_CHANGELOG, _FIX, "1.4.0.post1", "2026-11-02")
+    out = rn.insert(out, _FIX, "1.4.0.post2", "2026-11-03")
+    assert out == (
+        "# ChangeLog\n\n"
+        f"{rn.MARKER}\n\n"
+        "## v1.4.0 - 2026-10-26\n\n"
+        "* Bugfixes\n"
+        "    * Fix a\n\n"
+        "### v1.4.0.post1 - 2026-11-02\n\n"
+        "* Bugfixes\n"
+        "    * (@x) - Fix b (#740)\n\n"
+        "### v1.4.0.post2 - 2026-11-03\n\n"
+        "* Bugfixes\n"
+        "    * (@x) - Fix b (#740)\n\n"
+        "## v1.3.4 - 2026-10-23\n\n"
+        "* Bugfixes\n"
+        "    * Fix old\n"
+    )
+
+
+def test_insert_post_release_into_last_section():
+    out = rn.insert(_CHANGELOG, _FIX, "1.3.4.post1", "2026-11-02")
+    assert out.endswith(
+        "    * Fix old\n\n### v1.3.4.post1 - 2026-11-02\n\n"
+        "* Bugfixes\n    * (@x) - Fix b (#740)\n"
+    )
+
+
+def test_insert_post_release_needs_its_parent():
+    with pytest.raises(ValueError):
+        rn.insert(_CHANGELOG, _FIX, "1.2.0.post1", "2026-11-02")
