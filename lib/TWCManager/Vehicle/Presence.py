@@ -97,7 +97,14 @@ def _awayCharger(v, obs) -> bool:
     )
 
 
+CACHED = "FleetAPICached"
+
+
 def _plugEvidence(v, field, obs, here) -> Optional[bool]:
+    # The cached snapshot carries no location and may be hours old, so its
+    # plug state says nothing about where the car is plugged in now
+    if obs.source == CACHED:
+        return None
     value = _plug(field, obs)
     car = here is True and not (value and _awayCharger(v, obs))
     return value if obs.source in _STRONG or car else None
@@ -238,7 +245,10 @@ def checkPlug(master, v, since) -> Optional[bool]:
     car = v.attachment("TeslaAPI")
     if car is not None:
         car.statusDeferral, car.staleBefore = 0, since
-    v.read("chargingState", 0, force=True)
+    # Never waits: this runs on the BLE worker. The cached read is left out,
+    # since a snapshot's stamp can predate the unplug being checked
+    reads = [p for p in master.providerOrder.providers() if p.name != CACHED]
+    v.read("chargingState", 0, force=True, since=since, wait=False, providers=reads)
     return pluggedNow(master, v, None, since)
 
 

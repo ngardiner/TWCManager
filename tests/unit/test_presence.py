@@ -1813,3 +1813,42 @@ def test_only_a_keyed_cars_unanswered_ping_falls_back_to_a_range_scan():
     P.checkPlug(m, v, c.t)
     P.pick(m, 32, 0, True, c.t)
     assert scans == [False, False, True, True]
+
+
+@pytest.mark.parametrize(
+    "field, value", [("chargingState", "Disconnected"), ("chargePortOpen", False)]
+)
+def test_cached_unplug_readings_are_never_plug_evidence(field, value):
+    # A car really plugged in (by a strong source), then a stale snapshot
+    m, v, c = placed()
+    v.observe("chargingState", "Charging", "TeslaBLE")
+    assert v.markAt("plugIn") > P.NEVER and P.pluggedNow(m, v)
+    later(c, 5 * 3600)
+    v.observe(field, value, "FleetAPICached")
+    assert v.markAt("unplug") == P.NEVER and P.pluggedNow(m, v)
+
+
+def test_cached_charging_never_plugs_a_car_with_an_old_home_fix():
+    m, v, c = placed()
+    later(c, 5 * 3600)
+    m.attributePlugs = Mock()
+    v.observe("chargingState", "Charging", "FleetAPICached")
+    assert v.markAt("plugIn") == P.NEVER and not P.pluggedNow(m, v)
+    assert not m.attributePlugs.called
+
+
+def test_check_plug_reads_without_the_cached_source(requests_mock):
+    m, r, v, c = setup(clock=False, here=False)
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
+    fleetCars(requests_mock, m)
+    cached = requests_mock.get(
+        FLEET_NA_URL + "/" + VIN + "/vehicle_data_cached", json={"response": {}}
+    )
+    seen = []
+    real = v.read
+    v.read = lambda *a, **k: (seen.append(k), real(*a, **k))[1]
+    P.checkPlug(m, v, 123.0)
+    assert not cached.called
+    assert requests_mock.request_history[-1].url.split("?")[0].endswith("vehicle_data")
+    assert seen[0]["since"] == 123.0 and seen[0]["wait"] is False
+    assert "FleetAPICached" not in [p.name for p in seen[0]["providers"]]
