@@ -316,18 +316,6 @@ class TestFroniusEnergyValues:
     def test_voltage_default(self, fronius):
         """Test voltage defaults to 0."""
         assert fronius.voltage == 0
-    
-    def test_consumed_w_update(self, fronius):
-        """Test consumedW can be updated."""
-        fronius.consumedW = 1500
-        
-        assert fronius.consumedW == 1500
-    
-    def test_generated_w_update(self, fronius):
-        """Test generatedW can be updated."""
-        fronius.generatedW = 3000
-        
-        assert fronius.generatedW == 3000
 
 
 class TestFroniusURLConstruction:
@@ -409,12 +397,6 @@ class TestFroniusErrorHandling:
     def test_fetch_failed_flag_default(self, fronius):
         """Test fetchFailed flag defaults to False."""
         assert fronius.fetchFailed is False
-    
-    def test_fetch_failed_flag_set(self, fronius):
-        """Test fetchFailed flag can be set."""
-        fronius.fetchFailed = True
-        
-        assert fronius.fetchFailed is True
 
 
 class TestFroniusStatus:
@@ -450,14 +432,6 @@ class TestFroniusStatus:
     def test_last_fetch_default(self, fronius):
         """Test lastFetch defaults to 0."""
         assert fronius.lastFetch == 0
-    
-    def test_last_fetch_update(self, fronius):
-        """Test lastFetch can be updated."""
-        import time
-        current_time = time.time()
-        fronius.lastFetch = current_time
-        
-        assert fronius.lastFetch == current_time
 
 
 class TestFroniusFetchErrors:

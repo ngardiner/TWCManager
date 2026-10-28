@@ -300,18 +300,6 @@ class TestHASSEnergyValues:
     def test_generated_w_default(self, hass):
         """Test generatedW defaults to 0."""
         assert hass.generatedW == 0
-    
-    def test_consumed_w_update(self, hass):
-        """Test consumedW can be updated."""
-        hass.consumedW = 2000
-        
-        assert hass.consumedW == 2000
-    
-    def test_generated_w_update(self, hass):
-        """Test generatedW can be updated."""
-        hass.generatedW = 3500
-        
-        assert hass.generatedW == 3500
 
 
 class TestHASSURLConstruction:
@@ -406,12 +394,6 @@ class TestHASSErrorHandling:
     def test_fetch_failed_flag_default(self, hass):
         """Test fetchFailed flag defaults to False."""
         assert hass.fetchFailed is False
-    
-    def test_fetch_failed_flag_set(self, hass):
-        """Test fetchFailed flag can be set."""
-        hass.fetchFailed = True
-        
-        assert hass.fetchFailed is True
 
 
 class TestHASSStatus:
@@ -446,14 +428,6 @@ class TestHASSStatus:
     def test_last_fetch_default(self, hass):
         """Test lastFetch defaults to 0."""
         assert hass.lastFetch == 0
-    
-    def test_last_fetch_update(self, hass):
-        """Test lastFetch can be updated."""
-        import time
-        current_time = time.time()
-        hass.lastFetch = current_time
-        
-        assert hass.lastFetch == current_time
     
     def test_cache_time_default(self, hass):
         """Test cacheTime defaults to 10."""

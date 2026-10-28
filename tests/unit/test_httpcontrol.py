@@ -151,12 +151,6 @@ class TestHTTPControlConfiguration:
 class TestThreadingSimpleServer:
     """Test ThreadingSimpleServer class."""
     
-    def test_threading_simple_server_exists(self):
-        """Test ThreadingSimpleServer class exists."""
-        from TWCManager.Control.HTTPControl import ThreadingSimpleServer
-        
-        assert ThreadingSimpleServer is not None
-    
     def test_threading_simple_server_is_http_server(self):
         """Test ThreadingSimpleServer inherits from HTTPServer."""
         from TWCManager.Control.HTTPControl import ThreadingSimpleServer
@@ -262,7 +256,7 @@ class TestHTTPControlServerStartup:
             mock_master.releaseModule.assert_called_once()
 
 
-class TestHTTPControlConfiguration:
+class TestHTTPControlConfigAttributes:
     """Test HTTPControl configuration attributes."""
     
     @pytest.fixture
@@ -565,49 +559,6 @@ class TestHTTPControlGetStatus:
             required_fields = ["chargerLoadWatts", "currentPolicy", "carsCharging"]
             for field in required_fields:
                 assert field in status
-
-
-class TestHTTPControlErrorHandling:
-    """Test suite for HTTP error handling."""
-    
-    @pytest.fixture
-    def mock_master(self):
-        """Create a mock master object."""
-        master = Mock()
-        master.config = {
-            "config": {
-                "minAmpsPerTWC": 5,
-                "wiringMaxAmpsPerTWC": 32
-            },
-            "control": {
-                "HTTP": {
-                    "enabled": True,
-                    "listenPort": 8080
-                }
-            }
-        }
-        master.releaseModule = Mock()
-        return master
-    
-    def test_httpcontrol_handles_invalid_json(self, mock_master):
-        """Test HTTPControl handles invalid JSON gracefully."""
-        from TWCManager.Control.HTTPControl import HTTPControl
-        
-        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
-            httpcontrol = HTTPControl(mock_master)
-            
-            # Should not raise exception
-            assert httpcontrol is not None
-    
-    def test_httpcontrol_handles_missing_parameters(self, mock_master):
-        """Test HTTPControl handles missing parameters."""
-        from TWCManager.Control.HTTPControl import HTTPControl
-        
-        with patch('TWCManager.Control.HTTPControl.ThreadingSimpleServer'):
-            httpcontrol = HTTPControl(mock_master)
-            
-            # Should not raise exception
-            assert httpcontrol is not None
 
 
 class TestHTTPControlResponseCodes:
