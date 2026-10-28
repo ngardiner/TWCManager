@@ -110,7 +110,7 @@
             {% if master.settings["VehicleGroups"][group]["Built-in"] %}
             Delete
             {% else %}
-            <a href="/vehicles/deleteGroup/{{group}}">Delete</a>
+            <a href="/vehicles/deleteGroup/{{ group|urlencode }}">Delete</a>
             {% endif %}
           </td>
         </tr>

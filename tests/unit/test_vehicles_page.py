@@ -280,6 +280,9 @@ def test_add_vehicle_group():
     assert addVehicleGroup(m, 2024, None) == "/vehicles"
     assert "2024" in m.settings["VehicleGroups"]
     assert render(m).count('href="/vehicles/deleteGroup/Guests"') == 1
+    # Delete's link must carry a name a URL would otherwise cut short
+    addVehicleGroup(m, "Mine? #1", "")
+    assert 'href="/vehicles/deleteGroup/Mine%3F%20%231"' in render(m)
 
 
 def test_add_vehicle_group_refuses_bad_names():
