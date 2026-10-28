@@ -5,6 +5,7 @@ This document logs the changes per release of TWCManager.
 ## v1.4.1 - Upcoming
 
 * Features
+    * (@MikeBishop) - The Vehicles page shows this month's Fleet API spend and approximate Fleet Telemetry cost, in total and per car, with a breakdown on each car's page
     * (@MikeBishop) - The vehicle page shows BLE status (not in range, in range, pairing, paired, pairing failed, key refused) with a Bluetooth scan for the car
     * (@MikeBishop) - The Vehicles page lists the vehicle registry (tier, providers, last seen, held limit) and can add a vehicle by VIN so a VIN-less TWC with BLE only can be set up; a vehicle added by VIN that nothing else has seen can be forgotten from its page
     * (@MikeBishop) - Gen3 Wall Connectors each get their own target; several units on one bus share the headroom. TWCManager names the car on a Gen3 with a free read of the energy site's live status. This needs the Gen3 registered in the Tesla app and a token that can read energy data (a Fleet API token with the `energy_device_data` scope); a unit's optional `din` key fixes a wrong DIN guess
