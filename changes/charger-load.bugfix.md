@@ -3,4 +3,4 @@ pr: 726
 authors: MikeBishop
 ---
 
-Subtract Gen3 Wall Connectors and other chargers at home from house consumption under `subtractChargerLoad`, not only Gen2 TWCs.
+Count Gen3 Wall Connectors and cars on other chargers at home as charger load, both for `subtractChargerLoad` and in `/api/getHistory`, not only Gen2 TWCs.
