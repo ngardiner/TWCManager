@@ -164,6 +164,39 @@ def vehicleLocalMgmt(master, op, vin):
     return "/vehicleDetail/" + vin
 
 
+def vehicleGroupMgmt(master, op, group, vin):
+    """Add to / Remove from Group on a vehicle's page; returns the
+    redirect location."""
+    # A form field of digits arrives as an int
+    group, vin = str(group or ""), str(vin or "").strip()
+    with master.settingsLock:
+        members = master.settings["VehicleGroups"].get(group, {}).get("Members")
+        if members is None:
+            # A stale page: the group was deleted since it was drawn
+            logger.error("No vehicle group %s to change for %s" % (group, vin))
+            return "/vehicleDetail/" + vin
+        if op == "add" and vin not in members:
+            members.append(vin)
+        elif op == "remove":
+            # Every copy: settings from earlier versions may list a car twice
+            members[:] = [m for m in members if m != vin]
+    master.queue_background_task({"cmd": "saveSettings"})
+    master.queue_background_task({"cmd": "checkVINEntitlement", "vin": vin})
+    return "/vehicleDetail/" + vin
+
+
+def deleteVehicleGroup(master, group):
+    """Delete on the Vehicles page; False if there is no such group or it
+    is built in (charging authorization reads the built-in groups)."""
+    with master.settingsLock:
+        groups = master.settings["VehicleGroups"]
+        if group not in groups or groups[group].get("Built-in"):
+            return False
+        del groups[group]
+    master.queue_background_task({"cmd": "saveSettings"})
+    return True
+
+
 def addVehicleByVIN(master, vin):
     try:
         vehicle = master.vehicleRegistry.addUserAsserted(str(vin or "").strip().upper())
@@ -1572,14 +1605,7 @@ def CreateHTTPHandlerClass(master):
 
             if self.url.path.startswith("/vehicles/deleteGroup"):
                 group = urllib.parse.unquote(self.url.path.rsplit("/", 1)[1])
-                if (
-                    group
-                    and len(group) > 0
-                    and group in master.settings["VehicleGroups"]
-                ):
-                    with master.settingsLock:
-                        master.settings["VehicleGroups"].pop(group, None)
-                    master.queue_background_task({"cmd": "saveSettings"})
+                if deleteVehicleGroup(master, group):
                     self.send_response(302)
                     self.send_header("Location", "/vehicles")
 
@@ -1702,43 +1728,14 @@ def CreateHTTPHandlerClass(master):
                 return
 
             if self.url.path == "/vehicle/groupMgmt":
-                group = self.getFieldValue("group")
-                op = self.getFieldValue("operation")
-                vin = self.getFieldValue("vin")
-
-                if op == "add":
-                    try:
-                        with master.settingsLock:
-                            master.settings["VehicleGroups"][group]["Members"].append(
-                                vin
-                            )
-                    except ValueError:
-                        logger.error(
-                            "Error adding vehicle %s to group %s" % (vin, group)
-                        )
-
-                elif op == "remove":
-                    try:
-                        with master.settingsLock:
-                            master.settings["VehicleGroups"][group]["Members"].remove(
-                                vin
-                            )
-                    except ValueError:
-                        logger.error(
-                            "Error removing vehicle %s from group %s" % (vin, group)
-                        )
-
-                master.queue_background_task({"cmd": "saveSettings"})
-
-                master.queue_background_task(
-                    {
-                        "cmd": "checkVINEntitlement",
-                        "vin": vin,
-                    }
+                location = vehicleGroupMgmt(
+                    master,
+                    self.getFieldValue("operation"),
+                    self.getFieldValue("group"),
+                    self.getFieldValue("vin"),
                 )
-
                 self.send_response(302)
-                self.send_header("Location", "/vehicleDetail/" + vin)
+                self.send_header("Location", location)
                 self.end_headers()
                 self.wfile.write("".encode("utf-8"))
                 return
