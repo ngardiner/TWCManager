@@ -27,6 +27,12 @@ _STAMP_SATISFIED = frozenset({CHARGE_LIMIT, AMPS})
 _WAKE_PROCEEDS = frozenset({O.DONE, O.SATISFIED, O.UNSUPPORTED})
 
 
+# How long after a charge ending or a plug event the car's next snapshot is
+# still worth waiting for
+EVENT_WINDOW = 60.0
+_EVENT_MARKS = ("drawStop", "plugIn", "unplug")
+
+
 # One-shot entry keys: a fresh number per one-shot, so none replaces another
 _sequence = itertools.count(1)
 
@@ -172,13 +178,24 @@ def runAttempt(reconciler, attempt) -> O.Outcome:
         if read:
             # Only the providers on this provider's own worker
             worker = workerOf(provider)
+            # Only the charging state follows these events; a limit or
+            # current they leave alone needs no post-event read
+            now = master.vehicleRegistry.now()
+            event = max(vehicle.markAt(m) for m in _EVENT_MARKS)
+            recent = aspect == CHARGING and now - event <= EVENT_WINDOW
+            # The snapshot carries no position, and a car whose position is
+            # unknown needs one
+            skip = ("FleetAPICached",) if state == PRESUMED else ()
             vehicle.read(
                 field,
                 attempt.maxAge,
                 providers=[
-                    p for p in master.providerOrder.providers() if workerOf(p) == worker
+                    p
+                    for p in master.providerOrder.providers()
+                    if workerOf(p) == worker and p.name not in skip
                 ],
                 force=attempt.force,
+                since=event if recent else None,
             )
         believed = (
             vehicle.believed(field, exclude=VEHICLE_SOURCES_EXCLUDED) if field else None

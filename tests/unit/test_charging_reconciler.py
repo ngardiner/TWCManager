@@ -12,6 +12,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import AMPS, CHARGE_LIMIT, CHARGING
 from TWCManager.Vehicle.Reconcile.Reconciler import LIMIT_THEN_START_GAP, PAID_AFTER, PROBE_AFTER, RETRY
+from TWCManager.Vehicle import Presence
 from tests.unit.gen2_helpers import drive
 from tests.unit.reconcile_helpers import AWAY, HOME, ScriptedProvider, placeAt
 from tests.unit.teslatokens import fleet_token, new_api
@@ -485,3 +486,67 @@ def test_a_stop_never_waits_behind_the_rate_due_on_the_same_pass(make):        #
     m, r, v, c = setup(make(O.Outcome(O.DONE))); p = prov(m, make().name); v.observe("chargingState", "Charging", p.name)
     m.desired.set(VIN, AMPS, 10, "distributor"); m.stopCarsCharging(VIN)
     assert r.pass_() == 2 and cmds(p) == ["stopCharging", "setAmps"]
+
+# The event cutoff of an attempt's pre-read
+
+def preReadSince(m, r, v, c, maxAge, markAt=None, mark="drawStop", dt=2.0, aspect=CHARGING, cap=C.START_CHARGING, value=True):
+    from unittest.mock import patch
+    from TWCManager.Vehicle.Reconcile.Desired import Attempt
+    from TWCManager.Vehicle.Reconcile.Run import runAttempt
+    b = m.providerOrder.provider("TeslaBLE"); r.desired.set(VIN, aspect, value, "policy")
+    if markAt is not None: v.mark(mark, markAt)
+    c.t = (markAt if markAt is not None else c.t) + dt
+    a = Attempt(VIN, aspect, cap, value, "TeslaBLE", False, maxAge, False, c.t)
+    with patch.object(v, "read", wraps=v.read) as read: runAttempt(r, a)
+    return read
+
+def test_draw_stop_marks_the_current_falling():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)))
+    v.observe("actualCurrent", 6.0, "Gen3TWC", at=10.0); assert v.markAt("drawStop") == float("-inf")
+    v.observe("actualCurrent", 0.0, "Gen3TWC", at=20.0); assert v.markAt("drawStop") == 20.0
+    v.observe("actualCurrent", 0.0, "Gen3TWC", at=30.0); assert v.markAt("drawStop") == 20.0
+    v.observe("actualCurrent", 6.0, "Gen2TWC", at=40.0); v.observe("actualCurrent", 0.0, "Gen2TWC", at=50.0); assert v.markAt("drawStop") == 50.0
+
+def test_pre_read_after_a_draw_stop_waits_for_the_snapshot():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); t0 = 1000.0
+    read = preReadSince(m, r, v, c, 30.0, markAt=t0)
+    assert read.call_args.kwargs["since"] == t0
+
+def test_pre_read_without_a_recent_event_has_no_event_cutoff():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)))
+    read = preReadSince(m, r, v, c, 30.0, markAt=1000.0, dt=61.0)
+    assert read.call_args.kwargs["since"] is None and read.call_args.args[1] == 30.0
+    assert preReadSince(m, r, v, c, 30.0).call_args.kwargs["since"] is None
+
+def test_charge_limit_pre_read_ignores_the_events():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)))
+    for mark in ("drawStop", "unplug"):
+        read = preReadSince(m, r, v, c, 30.0, markAt=1000.0, mark=mark, aspect=CHARGE_LIMIT, cap=C.SET_CHARGE_LIMIT, value=80)
+        assert read.call_args.kwargs["since"] is None
+
+def test_amps_attempt_still_reads_nothing():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); r.desired.set(VIN, AMPS, 12, "policy")
+    from TWCManager.Vehicle.Reconcile.Desired import Attempt
+    from TWCManager.Vehicle.Reconcile.Run import runAttempt
+    from unittest.mock import patch
+    v.mark("drawStop", c.t - 1)
+    with patch.object(v, "read") as read: runAttempt(r, Attempt(VIN, AMPS, C.SET_AMPS, 12, "TeslaBLE", False, None, False, c.t))
+    read.assert_not_called()
+
+def preReadProviders(requests_mock, here):
+    # The provider names of the attempt's pre-read of a Fleet-only car that is asked to start
+    m, r, v, c, api = fleetOnTwc(requests_mock, read=False)
+    if not here: v.observe("shiftState", "D", "TeslaMateVehicle"); v.observe("shiftState", "P", "TeslaMateVehicle")   # a drive seen, its end not placed
+    assert Presence.presence(m, v) == (Presence.HOME if here else Presence.PRESUMED)
+    seen = []; real = v.read
+    v.read = lambda *a, **k: (seen.append([p.name for p in k["providers"]]), real(*a, **k))[1]
+    m.startCarsCharging(VIN); r.pass_()
+    return m, v, seen
+
+def test_a_car_of_unknown_position_is_pre_read_without_the_cached_source(requests_mock):
+    m, v, seen = preReadProviders(requests_mock, here=False)
+    assert seen and all("FleetAPICached" not in names and "FleetAPI" in names for names in seen)
+
+def test_a_car_at_home_is_pre_read_with_the_cached_source(requests_mock):
+    m, v, seen = preReadProviders(requests_mock, here=True)
+    assert seen and all("FleetAPICached" in names for names in seen)

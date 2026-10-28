@@ -48,7 +48,9 @@ class _TeslaAPIProvider(Provider):
             return False
         if time.time() < car.statusDeferral:
             # As update_vehicle_data: a deferred car reports its stored
-            # values without a request
+            # values without a request, and they are vouched for whatever
+            # the cutoff, so the cascade stops here rather than reach a
+            # billed source such as HomeAssistant
             return True
         slot = getattr(self.carapi, self.slotName)
         # Free online check (vehicles/{vin}) before a paid vehicle_data
@@ -232,9 +234,9 @@ class FleetCachedProvider(Provider):
     # The snapshot carries no phase count
     FIELDS = C.CHARGE_FIELDS - {"phases"}
 
-    # The car posts a snapshot 3-16 s after waking, a charge ending, or
-    # falling asleep: poll that long for one stamped after the event
-    clock = time.time
+    # The car posts a snapshot within about 15 s of waking, a charge ending,
+    # or falling asleep: a wait for one stamped after the event is up to six
+    # requests three seconds apart
     sleep = time.sleep
     POLL = 3.0
     WAIT = 15.0
@@ -262,11 +264,14 @@ class FleetCachedProvider(Provider):
     ) -> bool:
         if not self.ready(vehicle, C.READ_CHARGE):
             return False
-        started = self.clock()
-        while True:
+        for attempt in range(1 + int(self.WAIT / self.POLL) if wait else 1):
+            if attempt:
+                self.sleep(self.POLL)
             stamp = self.carapi.read_cached(vehicle)
             if stamp is not None and (cutoff is None or stamp >= cutoff):
                 return True
-            if not wait or self.clock() - started >= self.WAIT:
+            if not self.ready(vehicle, C.READ_CHARGE):
+                # A refusal latched the car, or the slot stopped reading:
+                # no later request would answer
                 return False
-            self.sleep(self.POLL)
+        return False

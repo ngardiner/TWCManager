@@ -29,6 +29,7 @@ _PLUGS = ("pluggedIn", "chargingState", "chargePortOpen")
 # A plug report from these needs no position: the charger or the radio is here
 _STRONG = frozenset({"TWC", "Gen2TWC", "Gen3TWC", "TeslaBLE"})
 _CHARGERS = frozenset({"Gen2TWC", "Gen3TWC"})
+_TWC_SOURCES = _CHARGERS | {"TWC"}
 _MOVING = frozenset({"D", "R", "N"})
 # Feet per degree of latitude; the box test uses it for longitude too
 _FT_PER_DEGREE = 364488.888
@@ -118,7 +119,7 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
     # The registry's onObserve hook, for every field: obs is the incoming
     # reading, previous the same source's reading before it
     at, before = obs.at, None if previous is None else previous.value
-    from .Reconcile import Targets
+    from .Reconcile import Belief, Targets
 
     if field == "bleReach":
         if isinstance(obs.value, bool):
@@ -149,6 +150,12 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
             wasMoving and not moving and here and (field == "state" or obs.value == "P")
         ):
             vehicle.mark("driveEnd", at)
+    elif field == "actualCurrent":
+        # The car's snapshot after a charge ends follows this fall by seconds
+        flowing = Belief.POWER_FLOWING_AMPS
+        if obs.source in _TWC_SOURCES and None not in (obs.value, before):
+            if obs.value < flowing <= before:
+                vehicle.mark("drawStop", at)
     elif field in _PLUGS:
         plugged = _plugEvidence(vehicle, field, obs, inside(master, vehicle))
         # A feed's retained copy, redelivered on a reconnect, is no plug event

@@ -406,17 +406,10 @@ def cachedProvider(api):
     return api.providers()[2]
 
 
-def fakeTime(provider, t=1000.0):
-    # A clock the provider's sleep advances, so a wait costs no real time
-    now = [t]
+def fakeSleep(provider):
+    # The provider's sleeps, recorded instead of slept
     sleeps = []
-
-    def sleep(seconds):
-        sleeps.append(seconds)
-        now[0] += seconds
-
-    provider.clock = lambda: now[0]
-    provider.sleep = sleep
+    provider.sleep = sleeps.append
     return sleeps
 
 
@@ -480,7 +473,7 @@ def test_cached_without_wait_fetches_once(requests_mock):
     api, v, _ = cachedCar(requests_mock)
     mock = stamps(requests_mock, 940.0)
     cached = cachedProvider(api)
-    sleeps = fakeTime(cached)
+    sleeps = fakeSleep(cached)
     assert cached.fetch(v, "chargingState", cutoff=1000.0) is False
     assert mock.call_count == 1 and sleeps == []
     assert cached.fetch(v, "chargingState", cutoff=900.0) is True
@@ -493,7 +486,7 @@ def test_cached_waits_for_a_post_event_snapshot(requests_mock):
     t0 = 1000.0
     mock = stamps(requests_mock, t0 - 60, t0 - 60, t0 + 4)
     cached = cachedProvider(api)
-    sleeps = fakeTime(cached, t0)
+    sleeps = fakeSleep(cached)
     assert cached.fetch(v, "chargingState", cutoff=t0, wait=True) is True
     assert mock.call_count == 3 and sleeps == [3.0, 3.0]
 
@@ -503,9 +496,23 @@ def test_cached_gives_up_after_fifteen_seconds(requests_mock):
     t0 = 1000.0
     mock = stamps(requests_mock, t0 - 60)
     cached = cachedProvider(api)
-    sleeps = fakeTime(cached, t0)
+    sleeps = fakeSleep(cached)
     assert cached.fetch(v, "chargingState", cutoff=t0, wait=True) is False
-    assert sum(sleeps) <= 15.0 and mock.call_count == len(sleeps) + 1
+    assert sleeps == [3.0] * 5 and mock.call_count == 6
+
+
+def test_cached_stops_waiting_once_a_412_latches_the_car(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    t0 = 1000.0
+    old = {"timestamp": int((t0 - 60) * 1000), "charging_state": "Stopped"}
+    mock = requests_mock.get(
+        FLEET_CACHED,
+        [{"json": {"response": {"charge_state": old, "vehicle_state": {}}}}, {"status_code": 412, "json": {}}],
+    )
+    cached = cachedProvider(api)
+    sleeps = fakeSleep(cached)
+    assert cached.fetch(v, "chargingState", cutoff=t0, wait=True) is False
+    assert mock.call_count == 2 and sleeps == [3.0]
 
 
 def paidFleet(requests_mock, vehicleData=None):
@@ -540,7 +547,7 @@ def test_cached_gives_up_then_paid_fleet_runs(requests_mock):
     api, v, cached, paid = wiredCar(requests_mock)
     t0 = time.time()
     mock = stamps(requests_mock, t0 - 60)
-    sleeps = fakeTime(cached, t0)
+    sleeps = fakeSleep(cached)
     v.read("batteryLevel", 300, since=t0)
     assert sum(sleeps) <= 15.0 and mock.call_count == len(sleeps) + 1
     assert paid.call_count == 1
