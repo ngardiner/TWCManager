@@ -42,6 +42,8 @@ A charge read happens when something needs it (a command, a TWC's plug event) an
 
 The Vehicles page shows this month's Fleet API spend, in total and for each car, with a projection for the whole month and last month's total. Each car's page breaks it down by request type (commands, wakes, reads), with how many, what they cost and when the last one was. These are the requests TWCManager itself sent. Tesla bills the whole account, so another app using the same account adds to your bill without appearing here.
 
+With a Fleet API token, TWCManager also reads each car's last reported charge state (battery level, charge limit, charging state, charge-port door and scheduled charging) from Tesla for free, without waking the car, and uses it before paying for a live Fleet API read (1.4.1). The car reports a fresh state when it wakes, within seconds of a charge ending, about every five minutes while it charges and as it falls asleep. Without a paid read, TWCManager knows a charge that ended on its own (for example, at the car's limit), so it does not try to restart it, and knows a sleeping car's battery level and limit. It never includes the car's location, so presence still comes from a live read, Bluetooth or Fleet Telemetry. Tesla serves this on the Fleet API only, so an install with just an Owner API token behaves as before. Nothing needs configuring.
+
 ## Prerequisites
 
 - A Tesla account that owns the vehicle(s).

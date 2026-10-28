@@ -383,16 +383,16 @@ class TeslaAPI:
         # (the vehicle list), "command", "wake", "energy" (the Wall Connector
         # VIN read), "config" (telemetryConfig) or "cached" (read_cached).
         # A cached read's 412 latches that car alone and any other refusal
-        # nothing: the slot and the API backoff stay as they were. Energy refusals latch that
-        # read alone, config ones nothing: Storm Watch and vehicle reads keep
-        # the token. Elsewhere a 401 refreshes an expired token once
-        # (_REFRESHED: send again) and otherwise retires the slot; 403 refuses
-        # commands or wakes and pauses reads for an hour (an Owner command's
-        # 403 latches that car alone); 412 retires commands, or latches reads
-        # until the token changes; 410 pauses reads; an Owner command's 410 or
-        # 412 retires Owner commands (ownerRefusal); 429 backs off; 408 is an
-        # asleep or unreachable car. None of these touches the API backoff but
-        # 429, so the next poll can use the other slot at once.
+        # nothing: the slot and the API backoff stay as they were. Energy
+        # refusals latch that read alone, config ones nothing: Storm Watch and
+        # vehicle reads keep the token. Elsewhere a 401 refreshes an expired
+        # token once (_REFRESHED: send again) and otherwise retires the slot;
+        # 403 refuses commands or wakes and pauses reads for an hour (an Owner
+        # command's 403 latches that car alone); 412 retires commands, or
+        # latches reads until the token changes; 410 pauses reads; an Owner
+        # command's 410 or 412 retires Owner commands (ownerRefusal); 429 backs
+        # off; 408 is an asleep or unreachable car. None of these touches the
+        # API backoff but 429, so the next poll can use the other slot at once.
         paid = purpose in ("command", "wake")
         owner = paid and slot is self.ownerSlot and vehicle is not None
         if status == 200:
