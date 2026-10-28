@@ -46,7 +46,14 @@ class HomeAssistantProvider(Provider):
             return bool(hv.has_charge_limit_number)
         return True
 
-    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+    def fetch(
+        self,
+        vehicle,
+        field: str,
+        allowWake: bool = False,
+        cutoff: Optional[float] = None,
+        wait: bool = False,
+    ) -> bool:
         # Never wakes the car. None (unreachable, nothing answered) is a
         # failed read, never a stale value reported as one
         hv = vehicle.attachment("HomeAssistant")

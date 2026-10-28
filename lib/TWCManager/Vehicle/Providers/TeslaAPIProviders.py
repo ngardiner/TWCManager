@@ -32,7 +32,14 @@ class _TeslaAPIProvider(Provider):
         self.carapi = carapi
         self.module = carapi
 
-    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+    def fetch(
+        self,
+        vehicle,
+        field: str,
+        allowWake: bool = False,
+        cutoff: Optional[float] = None,
+        wait: bool = False,
+    ) -> bool:
         # Never wakes, whatever allowWake says: a cloud wake is never worth a
         # read. update_vehicle_data observes as the slot's provider
         car = vehicle.attachment("TeslaAPI")

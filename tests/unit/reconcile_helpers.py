@@ -233,7 +233,7 @@ class ScriptedProvider(Provider):
         self.FIELDS, self.readValue, self.fetched = frozenset({field}), value, 0
         return self
 
-    def fetch(self, vehicle, field, allowWake=False):
+    def fetch(self, vehicle, field, allowWake=False, cutoff=None, wait=False):
         self.fetched += 1
         vehicle.observe(field, self.readValue, self.name)
         return True

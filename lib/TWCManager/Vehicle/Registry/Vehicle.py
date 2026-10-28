@@ -221,20 +221,32 @@ class Vehicle:
         return live
 
     @staticmethod
-    def _ageOf(obs: Observation, now: float, liveAt: Any) -> float:
+    def _freshOf(obs: Observation, liveAt: Any) -> float:
         if liveAt is NOT_TRACKED or liveAt is None:
-            return now - obs.at
+            return obs.at
+        return max(obs.at, liveAt)
+
+    @classmethod
+    def _ageOf(cls, obs: Observation, now: float, liveAt: Any) -> float:
         # A live feed's liveAt can be a moment past now; age is never negative.
-        return max(0.0, now - max(obs.at, liveAt))
+        return max(0.0, now - cls._freshOf(obs, liveAt))
+
+    def freshAt(self, field: str) -> Optional[float]:
+        # When the value was last known current: its stamp, or later when a
+        # live feed vouches for it. Age and read cutoffs share this rule.
+        obs = self.latest(field)
+        if obs is None:
+            return None
+        return self._freshOf(obs, self._liveAt(field, obs))
 
     def age(self, field: str) -> Optional[float]:
         # now is read before liveness: a live feed's liveAt is "now", and a
         # later now would make its value a hair old and miss maxAge 0.
         now = self._clock()
-        obs = self.latest(field)
-        if obs is None:
+        fresh = self.freshAt(field)
+        if fresh is None:
             return None
-        return self._ageOf(obs, now, self._liveAt(field, obs))
+        return max(0.0, now - fresh)
 
     def trusted(
         self, field: str, exclude: Collection[str] = ()
@@ -291,23 +303,37 @@ class Vehicle:
         allowWake: bool = False,
         providers: Optional[Collection[Any]] = None,
         force: bool = False,
+        since: Optional[float] = None,
+        wait: Optional[bool] = None,
     ) -> Optional[Observation]:
         # providers (Provider objects or names) limits the provider order's
         # read cascade to those, in cost order. force skips the freshness
         # check: a live report-on-change feed keeps age() at 0, which a
         # restore must not trust. maxAge None still never fetches.
+        # The cutoff is since (an event's time: a value stamped before it
+        # cannot show the event), else now - maxAge. wait lets a provider
+        # hold for a value stamped after the cutoff; it defaults on for an
+        # event cutoff, where a fresh stamp is worth waiting for.
+        now = self._clock()
         latest = self.latest(field)
         if maxAge is None or self._registry is None:
             return latest
+        cutoff = since if since is not None else now - maxAge
+        if wait is None:
+            wait = since is not None
         if latest is not None and not force:
-            age = self.age(field)
+            fresh = self.freshAt(field)
             # A value not newer than our own write (inside the feed lag) is
             # not fresh: it may predate the write.
-            if age is not None and age <= maxAge and self.trusted(field):
+            if fresh is not None and fresh >= cutoff and self.trusted(field):
                 return latest
         order = getattr(self._registry, "providerOrder", None)
         # No lock is held here: providers may do I/O.
-        got = order.read(self, field, allowWake, providers) if order else None
+        got = (
+            order.read(self, field, allowWake, providers, cutoff, wait)
+            if order
+            else None
+        )
         return got if got is not None else self.latest(field)
 
     # Claims
