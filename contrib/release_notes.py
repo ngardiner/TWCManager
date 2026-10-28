@@ -39,6 +39,7 @@ EXEMPT = re.compile(r"^(docs/|tests/|\.github/|[^/]+\.md$)")
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.([a-z]+)\.md$")
 MERGE = re.compile(r"^Merge pull request #(\d+) from ([^/\s]+)/")
 SQUASH = re.compile(r"\(#(\d+)\)$")
+POST = re.compile(r"^(\d+\.\d+\.\d+)\.post\d+$")
 
 # Advisory only: a note longer than this belongs in the docs.
 MAX_WORDS = 50
@@ -193,17 +194,44 @@ def render(notes, heading):
     return "\n".join(lines) + "\n"
 
 
+def insert(changelog, notes, version, date):
+    """CHANGELOG.md with the release added; raises ValueError if it can't be.
+
+    A release goes below the marker. A post release (1.4.0.post1) is listed
+    after its parent's own entries, so the parent's section shows everything
+    the 1.4.0 line shipped.
+    """
+    match = POST.match(version)
+    if not match:
+        if MARKER not in changelog:
+            raise ValueError(f"{CHANGELOG} has no {MARKER!r} line")
+        section = render(notes, f"## v{version} - {date}").rstrip()
+        return changelog.replace(MARKER, f"{MARKER}\n\n{section}", 1)
+
+    parent = re.search(
+        rf"^## v{re.escape(match.group(1))} .*$", changelog, flags=re.MULTILINE
+    )
+    if not parent:
+        raise ValueError(f"{CHANGELOG} has no v{match.group(1)} section")
+    following = re.compile(r"^## ", flags=re.MULTILINE).search(changelog, parent.end())
+    end = following.start() if following else len(changelog)
+    section = render(notes, f"### v{version} - {date}").rstrip()
+    before = changelog[:end].rstrip()
+    after = changelog[end:]
+    return f"{before}\n\n{section}\n" + (f"\n{after}" if after else "")
+
+
 def build(version, date, ref):
     notes = load(ref)
     if not notes:
         sys.exit(f"no notes in {NOTES_DIR}/")
-    section = render(notes, f"## v{version} - {date}")
     path = os.path.join(ROOT, CHANGELOG)
     with open(path, encoding="utf-8") as f:
         changelog = f.read()
-    if MARKER not in changelog:
-        sys.exit(f"{CHANGELOG} has no {MARKER!r} line")
-    changelog = changelog.replace(MARKER, f"{MARKER}\n\n{section.rstrip()}", 1)
+    try:
+        changelog = insert(changelog, notes, version, date)
+    except ValueError as e:
+        sys.exit(str(e))
     with open(path, "w", encoding="utf-8") as f:
         f.write(changelog)
     git("rm", "--quiet", *[n.path for n in notes])

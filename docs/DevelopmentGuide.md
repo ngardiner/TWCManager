@@ -39,6 +39,14 @@ A pull request that changes what users see adds its changelog line as a file in 
 2. Run `python3 contrib/release_notes.py build --version X.Y.Z`. It writes the release's section into CHANGELOG.md from the files in `changes/` and removes them. With the [GitHub CLI](https://cli.github.com/) logged in, authors come from each pull request; without it, from the branch owner in the merge commit.
 3. Commit, then tag `vX.Y.Z` to publish the PyPI package and Docker image.
 
+### Cutting a post release
+
+A post release (`X.Y.Z.postN`) ships fixes from the `release/X.Y.Z` branch. Each fix reaches that branch as a pull request that cherry-picks the fix from main, note file included.
+
+1. On `release/X.Y.Z`, run `python3 contrib/release_notes.py build --version X.Y.Z.postN`. It lists the notes under the `vX.Y.Z` section, after that release's own entries, as `### vX.Y.Z.postN`, and removes the note files. Commit only this change.
+2. Cherry-pick that commit onto main. Main's changelog then records the post release, and the fixes it shipped are not listed again in the next release.
+3. On `release/X.Y.Z`, set the version, commit and tag `vX.Y.Z.postN`.
+
 ## Conventions
 
 ### Debug Levels
