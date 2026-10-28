@@ -14,6 +14,7 @@ from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
 from TWCManager.Control.HTTPControl import (
     ageText,
     addVehicleByVIN,
+    addVehicleGroup,
     canForgetVehicle,
     heldLimitText,
     PRESENCE_TEXT,
@@ -73,7 +74,7 @@ def master():
     return m
 
 
-def render(m, error=""):
+def render(m, error="", groupError=""):
     return (
         env(m)
         .get_template("vehicles.html.j2")
@@ -81,6 +82,7 @@ def render(m, error=""):
             master=m,
             url=SimpleNamespace(path="/vehicles", query=""),
             addVehicleError=error,
+            addGroupError=groupError,
         )
     )
 
@@ -262,3 +264,33 @@ def test_the_vehicles_page_shows_the_watch_line_after_presence():
     status.update(via="ble")
     status["nextAt"] = time.time() + 150
     assert ", next in 3 min;" in watchCell(render(m))
+
+
+def test_add_vehicle_group():
+    m = master()
+    m.queue_background_task = Mock()
+    assert addVehicleGroup(m, " Guests ", "Visitors' cars") == "/vehicles"
+    assert m.settings["VehicleGroups"]["Guests"] == {
+        "Description": "Visitors' cars",
+        "Built-in": 0,
+        "Members": [],
+    }
+    m.queue_background_task.assert_called_once_with({"cmd": "saveSettings"})
+    # a numeric name arrives from the form as an int
+    assert addVehicleGroup(m, 2024, None) == "/vehicles"
+    assert "2024" in m.settings["VehicleGroups"]
+    assert render(m).count('href="/vehicles/deleteGroup/Guests"') == 1
+
+
+def test_add_vehicle_group_refuses_bad_names():
+    m = master()
+    m.settings["VehicleGroups"]["Guests"] = {"Members": ["X"]}
+    for name in ("", "  ", None, "a/b", "Guests"):
+        location = addVehicleGroup(m, name, "")
+        assert location.startswith("/vehicles?groupError=")
+    assert m.settings["VehicleGroups"]["Guests"] == {"Members": ["X"]}
+    assert len(m.settings["VehicleGroups"]) == 1
+    html = render(m, groupError="<b>bad</b>")
+    assert "&lt;b&gt;bad&lt;/b&gt;" in html
+    assert 'action="/vehicle/addGroup"' in html
+    assert 'name="name"' in html and 'name="description"' in html

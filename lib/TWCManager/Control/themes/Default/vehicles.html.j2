@@ -119,15 +119,17 @@
 
     <p>&nbsp;</p>
     <h5>Add Group</h5>
-    <form method=POST action="/vehicle/group">
-    <input type="hidden" name="operation" value="add" />
+    {% if addGroupError %}
+    <p style="color: red;">{{ addGroupError }}</p>
+    {% endif %}
+    <form method=POST action="/vehicle/addGroup">
     <table>
       <tr>
         <th>Group Name &nbsp;</th>
-        <td><input /></td>
+        <td><input name="name" /></td>
         <td>&nbsp;</td>
         <th>Description &nbsp;</th>
-        <td><input /></td>
+        <td><input name="description" /></td>
         <td>&nbsp;</td>
         <td><input type=submit /></td>
       </tr>
