@@ -26,17 +26,17 @@ def _monthStart(month: str, offset: int = 0) -> float:
 class FleetSpend:
     # What TWCManager itself sent to, and heard from, Tesla's paid services
     # this month: informational, it never holds anything back. Last month
-    # keeps only its totals.
+    # keeps only its totals, overall and per car.
     def __init__(self, clock=time.time):
         self._clock = clock
         # A leaf lock: the cloud worker, the MQTT thread and the settings
         # saver all reach it
         self._lock = threading.Lock()
-        self._reset(_monthOf(clock()), {"api": 0.0, "telemetry": 0.0})
+        self._reset(_monthOf(clock()), {"api": 0.0, "telemetry": 0.0}, {})
         self._changed = False
 
-    def _reset(self, month, last):
-        self._month, self._last = month, last
+    def _reset(self, month, last, lastCars):
+        self._month, self._last, self._lastCars = month, last, lastCars
         self._cars = {}
         self._nocar = 0.0
 
@@ -55,9 +55,16 @@ class FleetSpend:
         if month != self._month:
             api, signals = self._totals()
             last = {"api": api, "telemetry": signals * TELEMETRY_SIGNAL_USD}
+            lastCars = {
+                vin: {
+                    "api": sum(t[1] for t in c["types"].values()),
+                    "telemetry": sum(c["fields"].values()) * TELEMETRY_SIGNAL_USD,
+                }
+                for vin, c in self._cars.items()
+            }
             if _previous(month) != self._month:
-                last = {"api": 0.0, "telemetry": 0.0}
-            self._reset(month, last)
+                last, lastCars = {"api": 0.0, "telemetry": 0.0}, {}
+            self._reset(month, last, lastCars)
 
     def _car(self, vin):
         return self._cars.setdefault(vin, {"types": {}, "fields": {}})
@@ -116,6 +123,7 @@ class FleetSpend:
                 for k, (n, cost, last) in c["types"].items()
             ]
             fields = [{"field": f, "count": n} for f, n in c["fields"].items()]
+            last = dict(self._lastCars.get(vin, {"api": 0.0, "telemetry": 0.0}))
         types.sort(key=lambda t: -t["cost"])
         fields.sort(key=lambda f: -f["count"])
         signals = sum(f["count"] for f in fields)
@@ -126,6 +134,7 @@ class FleetSpend:
             "signals": signals,
             "telemetry": signals * TELEMETRY_SIGNAL_USD,
             "fields": fields,
+            "last": last,
         }
 
     def changed(self) -> bool:
@@ -146,6 +155,7 @@ class FleetSpend:
                 },
                 "nocar": self._nocar,
                 "last": dict(self._last),
+                "lastCars": {vin: dict(t) for vin, t in self._lastCars.items()},
             }
 
     def load(self, data) -> None:
@@ -166,7 +176,12 @@ class FleetSpend:
                 }
                 nocar = float(data.get("nocar", 0.0))
                 last = {k: float(data["last"][k]) for k in ("api", "telemetry")}
+                lastCars = {
+                    str(vin): {k: float(t[k]) for k in ("api", "telemetry")}
+                    for vin, t in data.get("lastCars", {}).items()
+                }
             except (TypeError, KeyError, ValueError, AttributeError):
                 return
-            self._month, self._cars, self._nocar, self._last = month, cars, nocar, last
+            self._month, self._cars, self._nocar = month, cars, nocar
+            self._last, self._lastCars = last, lastCars
             self._roll(self._clock())

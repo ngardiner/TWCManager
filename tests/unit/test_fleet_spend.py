@@ -200,3 +200,18 @@ def test_housekeeping_saves_at_most_every_ten_minutes(monkeypatch):
     clock.t += 700
     t.housekeeping()
     assert len(saves()) == 2
+
+
+def test_each_car_keeps_its_last_month_total_across_a_restart():
+    s, clock = spend()
+    s.request(A, "wake_up", 0.02)
+    s.signal(A, "Location")
+    clock.t = at(2026, 11, 2)
+    assert s.car(A)["last"] == {
+        "api": pytest.approx(0.02),
+        "telemetry": pytest.approx(TELEMETRY_SIGNAL_USD),
+    }
+    t, _ = spend(at(2026, 11, 3))
+    t.load(s.toJSON())
+    assert t.car(A)["last"]["api"] == pytest.approx(0.02)
+    assert t.car(B)["last"] == {"api": 0.0, "telemetry": 0.0}

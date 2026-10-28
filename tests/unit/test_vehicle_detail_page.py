@@ -11,7 +11,7 @@ from TWCManager.Vehicle.Reconcile.Desired import (
     Attempt,
 )
 from TWCManager.Vehicle.Reconcile.Outcome import HELD, UNREACHABLE, Outcome
-from tests.unit.test_vehicles_page import env, master, VIN
+from tests.unit.test_vehicles_page import env, master, spending, VIN
 
 
 def status(**kw):
@@ -372,3 +372,16 @@ def test_pending_shows_a_limit_held_asleep_until_the_car_reports_it():
     c.t += 30
     v.observe("chargeLimit", 50, "TeslaMateVehicle")
     assert pending(m) == {} and r.pass_() == 0
+
+
+def test_vehicle_page_lists_types_and_fields():
+    m = master()
+    s = spending(m, telemetry=True)
+    s.request(VIN, "wake_up", 0.02)
+    s.request(VIN, "wake_up", 0.02)
+    for _ in range(3):
+        s.signal(VIN, "Location")
+    html = render(m, status())
+    assert "Fleet API this month: $0.04 in 2 requests" in html
+    assert "<td>wake_up</td>" in html and "<td>Location</td>" in html
+    assert "Fleet Telemetry this month: approx. 3 signals" in html
