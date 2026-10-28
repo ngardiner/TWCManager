@@ -9,7 +9,6 @@ from unittest.mock import ANY
 
 import pytest
 
-from TWCManager.Vehicle.FleetSpend import FleetSpend
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
@@ -157,7 +156,6 @@ def test_a_paid_request_is_counted_under_the_vehicle_lock(requests_mock):
 
 def test_a_paid_request_is_counted_for_its_car(requests_mock):
     api = new_api()
-    api.master.fleetSpend = FleetSpend()
     api.storeToken(fleet_token())
     requests_mock.post(re.compile(".*"), json={"response": {}})
     car = SimpleNamespace(vin=VIN, _lock=threading.Lock(), paidRequests=0)
@@ -180,7 +178,6 @@ def test_a_paid_request_is_counted_for_its_car(requests_mock):
 
 def test_an_owner_api_request_is_not_counted(requests_mock):
     api = new_api()
-    api.master.fleetSpend = FleetSpend()
     api.storeToken(owner_token())
     requests_mock.post(re.compile(".*"), json={"response": {}})
     api._request(

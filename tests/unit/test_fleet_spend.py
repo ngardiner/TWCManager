@@ -215,3 +215,29 @@ def test_each_car_keeps_its_last_month_total_across_a_restart():
     t.load(s.toJSON())
     assert t.car(A)["last"]["api"] == pytest.approx(0.02)
     assert t.car(B)["last"] == {"api": 0.0, "telemetry": 0.0}
+
+
+def test_a_clock_stepping_back_does_not_wipe_the_month():
+    s, clock = spend(at(2026, 11, 3))
+    s.request(A, "wake_up", 0.02)
+    clock.t = at(1970, 1, 2)
+    s.month()
+    clock.t = at(2026, 11, 4)
+    assert s.month()["api"] == pytest.approx(0.02)
+    t, _ = spend(at(1970, 1, 2))
+    t.load(s.toJSON())
+    assert t.car(A)["requests"] == 1
+
+
+@pytest.mark.parametrize("last", [None, "x"])
+def test_a_bad_timestamp_starts_empty(last):
+    s, _ = spend()
+    s.load(
+        {
+            "month": "2026-10",
+            "cars": {A: {"types": {"wake_up": [1, 0.02, last]}, "fields": {}}},
+            "nocar": 0.0,
+            "last": {"api": 0.0, "telemetry": 0.0},
+        }
+    )
+    assert s.car(A)["requests"] == 0

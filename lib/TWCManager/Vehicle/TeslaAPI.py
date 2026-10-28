@@ -355,9 +355,8 @@ class TeslaAPI:
                 logger.info(
                     "Tesla %s paid request: %s ($%.3f)" % (slot.tokenType, kind, price)
                 )
-                spend = getattr(self.master, "fleetSpend", None)
-                if spend is not None:
-                    spend.request(vehicle.vin if vehicle else None, kind, price)
+                vin = vehicle.vin if vehicle else None
+                self.master.fleetSpend.request(vin, kind, price)
             outcome = self._classify(
                 slot, req.status_code, purpose, req.text, vehicle, tries > 0, sent
             )

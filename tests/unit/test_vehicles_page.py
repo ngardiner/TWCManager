@@ -326,3 +326,18 @@ def test_last_month_shows_only_when_nonzero():
     s.request(VIN, "wake_up", 0.02)
     clock.t = time.mktime((2026, 11, 5, 12, 0, 0, 0, 0, -1))
     assert "Last month: $0.02" in render(m)
+
+
+def test_small_telemetry_costs_and_single_requests_read_right():
+    from tests.unit.test_vehicle_detail_page import render as detail, status
+
+    m = master()
+    s = spending(m, telemetry=True)
+    s.request(VIN, "wake_up", 0.02)
+    for _ in range(300):
+        s.signal(VIN, "Location")
+    html = render(m)
+    assert "approx. $0.002 telemetry" in html and "approx. 300 signals, $0.002" in html
+    page = detail(m, status())
+    assert "Fleet API this month: $0.02 in 1 request" in page
+    assert "1 requests" not in page

@@ -123,12 +123,20 @@ def _spendShown(master):
     return fleet, master.getModuleByName("FleetTelemetryMQTT") is not None
 
 
-def _usd(amount, small=False):
-    return ("$%.3f" if small and 0 < amount < 0.01 else "$%.2f") % amount
+def _usd(amount):
+    # Small amounts keep a third decimal so a few hundred signals aren't $0.00
+    return ("$%.3f" if 0 < amount < 0.01 else "$%.2f") % amount
 
 
 def _lastMonth(amount):
     return " · Last month: %s" % _usd(amount) if amount else ""
+
+
+def _teleText(signals, usd):
+    # Counts what reached TWCManager; Tesla bills what the car sent
+    return "Fleet Telemetry this month: approx. {:,} signals, {}".format(
+        signals, _usd(usd)
+    )
 
 
 def spendLines(master):
@@ -136,22 +144,17 @@ def spendLines(master):
     m = master.fleetSpend.month() if fleet or telemetry else None
     pace, lines = m and m["pace"], []
     if fleet:
+        by = " · on pace for %s by %s" % (_usd(pace["api"]), pace["by"]) if pace else ""
         lines.append(
             "Fleet API this month: %s" % _usd(m["api"])
-            + (
-                " · on pace for %s by %s" % (_usd(pace["api"]), pace["by"])
-                if pace
-                else ""
-            )
+            + by
             + _lastMonth(m["last"]["api"])
         )
     if telemetry:
-        # Counts what reached TWCManager; Tesla bills what the car sent
+        by = " · on pace for %s" % _usd(pace["telemetry"]) if pace else ""
         lines.append(
-            "Fleet Telemetry this month: approx. {:,} signals, {}".format(
-                m["signals"], _usd(m["telemetry"])
-            )
-            + (" · on pace for %s" % _usd(pace["telemetry"]) if pace else "")
+            _teleText(m["signals"], m["telemetry"])
+            + by
             + _lastMonth(m["last"]["telemetry"])
         )
     return lines
@@ -162,30 +165,29 @@ def carSpend(master, vin):
     if not (fleet or telemetry):
         return None
     c = master.fleetSpend.car(vin)
+    shows = telemetry and (c["signals"] or c["last"]["telemetry"])
     tele = (
         "approx. %s telemetry" % _usd(c["telemetry"])
         if telemetry and c["signals"]
         else ""
     )
-    cell = " + ".join(filter(None, (_usd(c["api"]) if fleet else "", tele)))
+    n = c["requests"]
     return {
-        "cell": cell,
+        "cell": " + ".join(filter(None, (_usd(c["api"]) if fleet else "", tele))),
         "heading": (
-            "Fleet API this month: %s in %d requests" % (_usd(c["api"]), c["requests"])
+            "Fleet API this month: %s in %d %s"
+            % (_usd(c["api"]), n, "request" if n == 1 else "requests")
             + _lastMonth(c["last"]["api"])
             if fleet
             else ""
         ),
         "types": [
-            dict(t, cost=_usd(t["cost"], small=True), age=time.time() - t["last"])
+            dict(t, cost=_usd(t["cost"]), age=time.time() - t["last"])
             for t in c["types"]
         ],
         "telemetry": (
-            "Fleet Telemetry this month: approx. {:,} signals, {}".format(
-                c["signals"], _usd(c["telemetry"])
-            )
-            + _lastMonth(c["last"]["telemetry"])
-            if telemetry and (c["signals"] or c["last"]["telemetry"])
+            _teleText(c["signals"], c["telemetry"]) + _lastMonth(c["last"]["telemetry"])
+            if shows
             else ""
         ),
         "fields": c["fields"],
