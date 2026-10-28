@@ -78,6 +78,8 @@ class TWCMaster:
     maxAmpsToDivideAmongSlaves = 0
     modules = {}
     nextHistorySnap = 0
+    # The current five-minute bucket's charger watts: (sum, samples)
+    historyBucket = (0.0, 0)
     overrideMasterHeartbeatData = b""
     protocolVersion = 2
     releasedModules = []
@@ -2059,45 +2061,34 @@ class TWCMaster:
         with self.settingsLock:
             self.settings["scheduledAmpsFlexStart"] = enabled
 
-    def snapHistoryData(self):
-        snaptime = self.nextHistorySnap
-        avgCurrent = 0
+    def historyWatts(self):
+        # The current bucket's mean so far: what /api/getHistory shows live
+        total, n = self.historyBucket
+        return total / n if n else 0
 
-        now = None
-        try:
-            now = datetime.now().astimezone()
-            if now < snaptime:
-                return
-        except ValueError as e:
-            logger.debug(str(e))
+    def sampleHistory(self):
+        # Once a control tick: every charger the meter sees, as the charger
+        # load counts them, so history needs no Gen2 TWC. At each five-minute
+        # boundary the bucket's mean is kept for two days
+        total, n = self.historyBucket
+        now = datetime.now().astimezone()
+        if now < self.nextHistorySnap:
+            self.historyBucket = (total + self.getChargerLoad(), n + 1)
             return
-
-        for slave in self.getSlaveTWCs():
-            avgCurrent += slave.historyAvgAmps
-            slave.historyAvgAmps = 0
-            slave.historyNumSamples = 0
+        snaptime, watts = self.nextHistorySnap, self.historyWatts()
+        self.historyBucket = (0.0, 0)
         self.advanceHistorySnap()
-
-        if avgCurrent > 0:
-            periodTimestamp = snaptime - timedelta(minutes=5)
-
-            with self.settingsLock:
-                self.settings.setdefault("history", [])
-
-                self.settings["history"].append(
-                    (
-                        periodTimestamp.isoformat(timespec="seconds"),
-                        self.convertAmpsToWatts(avgCurrent)
-                        * self.getRealPowerFactor(avgCurrent),
-                    )
-                )
-
-                self.settings["history"] = [
-                    e
-                    for e in self.settings["history"]
-                    if datetime.fromisoformat(e[0]) >= (now - timedelta(days=2))
-                ]
-            self.queue_background_task({"cmd": "saveSettings"})
+        if watts <= 0:
+            return
+        start = (snaptime - timedelta(minutes=5)).isoformat(timespec="seconds")
+        with self.settingsLock:
+            kept = [
+                e
+                for e in self.settings.get("history", [])
+                if datetime.fromisoformat(e[0]) >= now - timedelta(days=2)
+            ]
+            self.settings["history"] = kept + [(start, watts)]
+        self.queue_background_task({"cmd": "saveSettings"})
 
     def startCarsCharging(self, vin=None):
         # Desired state, decided again each cycle: the reconciler sends it

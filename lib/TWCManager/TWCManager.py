@@ -360,8 +360,6 @@ def background_tasks_thread(master):
                     master.getSlaveLifetimekWh()
                 elif task["cmd"] == "getVehicleVIN":
                     master.getVehicleVIN(task["slaveTWC"], task["vinPart"])
-                elif task["cmd"] == "snapHistoryData":
-                    master.snapHistoryData()
                 elif task["cmd"] == "updateStatus":
                     update_statuses()
                 elif task["cmd"] == "webhook":

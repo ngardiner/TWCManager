@@ -282,18 +282,6 @@ class TestTWCSlaveAmpsTracking:
         
         assert slave.lastAmpsOffered == 32
     
-    def test_slave_history_avg_amps(self, slave):
-        """Test slave history average amps."""
-        slave.historyAvgAmps = 25.5
-        
-        assert slave.historyAvgAmps == 25.5
-    
-    def test_slave_history_num_samples(self, slave):
-        """Test slave history number of samples."""
-        slave.historyNumSamples = 100
-        
-        assert slave.historyNumSamples == 100
-    
     def test_slave_reported_amps_actual_significant_change_monitor(self, slave):
         """Test slave amps actual significant change monitor."""
         slave.reportedAmpsActualSignificantChangeMonitor = 30.5

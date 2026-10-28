@@ -49,10 +49,6 @@ class TWCSlave:
     # Set by the first reply: a slave not yet heard from is offered nothing
     heardFrom = False
 
-    # history* vars are used to track power usage over time
-    historyAvgAmps = 0
-    historyNumSamples = 0
-
     # reportedAmpsActual frequently changes by small amounts, like 5.14A may
     # frequently change to 5.23A and back.
     # reportedAmpsActualSignificantChangeMonitor is set to reportedAmpsActual
@@ -668,13 +664,6 @@ class TWCSlave:
             module["ref"].setStatus(
                 self.TWCID, "state", "state", self.reportedState, ""
             )
-
-        # Log current history
-        self.historyAvgAmps = (
-            (self.historyAvgAmps * self.historyNumSamples) + self.reportedAmpsActual
-        ) / (self.historyNumSamples + 1)
-        self.historyNumSamples += 1
-        self.master.queue_background_task({"cmd": "snapHistoryData"})
 
         # If power starts flowing, refresh the cars at home
         if (

@@ -708,12 +708,7 @@ def CreateHTTPHandlerClass(master):
                     k: v for k, v in source if datetime.fromisoformat(k) >= startTime
                 }
 
-                avgCurrent = 0
-                for slave in master.getSlaveTWCs():
-                    avgCurrent += slave.historyAvgAmps
-                data[endTime.isoformat(timespec="seconds")] = master.convertAmpsToWatts(
-                    avgCurrent
-                )
+                data[endTime.isoformat(timespec="seconds")] = master.historyWatts()
 
                 output = [
                     {
