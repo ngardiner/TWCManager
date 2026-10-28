@@ -38,7 +38,7 @@ def counts(requests_mock):
     # Every request, by kind: the paid three, Home Assistant service calls,
     # the free vehicle list and online check, and anything else
     out = dict.fromkeys(
-        ("vehicle_data", "wake_up", "command", "ha", "free", "other"), 0
+        ("vehicle_data", "wake_up", "command", "ha", "free", "cached", "other"), 0
     )
     for q in requests_mock.request_history:
         path = q.url.split("?")[0]
@@ -51,6 +51,9 @@ def counts(requests_mock):
             out["command"] += 1
         elif path.endswith("/wake_up"):
             out["wake_up"] += 1
+        elif path.endswith("/vehicle_data_cached"):
+            # The free snapshot read: billed nothing
+            out["cached"] += 1
         elif path.endswith("/vehicle_data"):
             out["vehicle_data"] += 1
         elif "/api/services/" in path:
@@ -113,6 +116,8 @@ class FleetCar:
         )
         requests_mock.post(base + "/wake_up", json=self._wake)
         requests_mock.get(base + "/vehicle_data", json=self._data)
+        # No snapshot to read: the free read before the paid one finds nothing
+        requests_mock.get(base + "/vehicle_data_cached", status_code=404, json={})
         requests_mock.post(
             re.compile(re.escape(base) + r"/command/.*"), json=self._command
         )
@@ -562,10 +567,13 @@ def test_ble_only_limits_never_wake_to_lower(requests_mock):
 
 
 def path_shape(requests_mock):
-    # Each request's method and path below .../api/1/, the host dropped
+    # Each request's method and path below .../api/1/, the host dropped. The
+    # free snapshot read only a Fleet token makes is left out: the parity is
+    # between the paid paths.
     return [
         (q.method, q.url.split("?")[0].split("/api/1/")[-1])
         for q in requests_mock.request_history
+        if not q.url.split("?")[0].endswith("/vehicle_data_cached")
     ]
 
 

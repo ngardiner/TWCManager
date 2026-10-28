@@ -213,14 +213,14 @@ def test_owner_refusal_falls_to_fleet_on_the_next_poll(requests_mock):
 
 def test_fleet_waits_while_the_owner_slot_can_read_energy(requests_mock):
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token())
-    owner, fleet = api.providers()
+    owner, fleet = api.providers()[:2]
     assert owner.ready(None, C.READ_WALL_CONNECTOR_VINS) and not fleet.ready(None, C.READ_WALL_CONNECTOR_VINS)
     assert owner.declarations()[C.READ_WALL_CONNECTOR_VINS] == fleet.declarations()[C.READ_WALL_CONNECTOR_VINS] == C.CLOUD_FREE
 
 def test_ready_without_a_vehicle_is_only_relaxed_for_wall_connector_vins(requests_mock):   # carry 1
     api, reg, ctl, u = setup(requests_mock); api.storeToken(fleet_token())
     api.ownerSlot.clear()
-    owner, fleet = api.providers()
+    owner, fleet = api.providers()[:2]
     assert fleet.ready(None, C.READ_WALL_CONNECTOR_VINS)
     for p in (owner, fleet):
         for cap in (C.READ_CHARGE, C.SET_AMPS, C.WAKE):

@@ -17,6 +17,7 @@ from TWCManager.Vehicle.Presence import homeCars
 from TWCManager.Vehicle.Providers.Capability import FLEET_DATA
 from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
     FleetAPIProvider,
+    FleetCachedProvider,
     OwnerAPIProvider,
 )
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
@@ -236,7 +237,11 @@ class TeslaAPI:
         return self._enabled
 
     def providers(self):
-        return [OwnerAPIProvider(self), FleetAPIProvider(self)]
+        return [
+            OwnerAPIProvider(self),
+            FleetAPIProvider(self),
+            FleetCachedProvider(self),
+        ]
 
     def addVehicle(self, json, slot=None):
         # A listed car joins the registry with this module's record attached;

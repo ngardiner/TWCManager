@@ -254,8 +254,10 @@ def fleet_only_car(requests_mock, states=("online",)):
         FLEET_CAR, [{"json": {"response": {"state": s}}} for s in states]
     )
     data = requests_mock.get(
-        re.compile(re.escape(FLEET_CAR) + r"/vehicle_data"), json=VEHICLE_DATA
+        re.compile(re.escape(FLEET_CAR) + r"/vehicle_data(\?|$)"), json=VEHICLE_DATA
     )
+    # No snapshot: the free read before the paid one finds nothing
+    requests_mock.get(FLEET_CAR + "/vehicle_data_cached", status_code=404, json={})
     return api, reg, reg.get(VIN).attachment("TeslaAPI"), online, data
 
 

@@ -323,7 +323,13 @@ class Watch:
         if not want and not (flowing if named else state == HOME_CHARGING):
             return
         order = self.master.providerOrder
-        found = [p for p in order.candidates(v, READ_CHARGE) if not deaf or not p.local]
+        # The free snapshot provider is no source to price or pace by: its
+        # stale answer would end a read that must reach the paid one
+        found = [
+            p
+            for p in order.candidates(v, READ_CHARGE)
+            if (not deaf or not p.local) and p.name != "FleetAPICached"
+        ]
         local = [p for p in found if p.local]
         if not found or state == UNKNOWN and local and not named:
             # Over the radio only once the ping says it is awake; a cloud
