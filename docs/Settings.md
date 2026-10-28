@@ -30,6 +30,22 @@ This option, which defaults to a vehicle command, allows you to specify how you 
       * [This thread](https://teslamotorsclub.com/tmc/threads/new-wall-connector-load-sharing-protocol.72830/page-24) provides the observations of those who have tested this command.
       * Whilst this option is offered primarily for the benefit of non-Tesla vehicles, it's not recommended for use with Tesla vehicles.
 
+### When There Isn't Power for Every Car
+
+When power runs short, TWCManager first gives each charging station a place while its minimum still fits, cars already charging first, then cars that would charge. The stations with a place share the power at one level, each between its minimum and maximum.
+
+A charging car that loses its place is not stopped straight away. Its charging station is turned down to its minimum, and the car is stopped only if the shortage lasts `startStopDelay` seconds with its charging current steady. Once power is back, a car turned down stays at its minimum, and a car stopped stays stopped, until power has been back for `startStopDelay` too. This applies to every kind of charging station: Gen2 and Gen3 Wall Connectors, and other EVSEs where TWCManager sets the car's own charge rate. On a Gen2, a car drawing 4 A or less is not stopped for lack of power, and a car gets power again as soon as its Wall Connector has some to offer.
+
+The wait is there to ride out an energy monitor's dips. Under a policy with a fixed charge rate, such as Scheduled Charging or Charge Now, there are no such dips, so a car without a place is stopped at once.
+
+`startStopDelay` is set in config.json, under `config`. The default is 60 seconds. If you use Track Green Energy with loads that cycle, such as an oven or a dryer, a longer delay (several minutes) might be better at riding out their dips. That is a choice for your own installation; the default suits most.
+
+### The Car's Own Charging Schedule
+
+Use one scheduler, not both: either TWCManager's Scheduled Charging, or the car's own scheduled charging or departure time. The two don't coordinate, and each may start or stop charging when the other doesn't expect it. In particular, a car set for a departure time can start charging earlier than you expect when its charging station offers little power, because it plans to reach its charge limit by departure at the rate it is offered.
+
+`respectVehicleSchedule` (in config.json, under `config`, on by default) only stops TWCManager from starting a car whose own scheduled charging is waiting to begin, which would override the car's schedule. It doesn't make the two schedules work together.
+
 ### Non-Scheduled Power Action & Charge Rate
 
 This setting determines what TWCManager should do if there is no scheduled charging rate and outside of the Track Green Energy hours. The available options are:
@@ -91,7 +107,7 @@ Provider names are `Gen2TWC`, `Gen3TWC`, `TeslaBLE`, `OwnerAPI`, `FleetAPI` and 
 
 ### Vehicle watch
 
-A TWC tells TWCManager when a car plugs in, charges and leaves. A car on any other charger (a mobile connector, a third-party EVSE) gets no such report. The vehicle watch notices its arrival, plug-in, charge start, charge end and departure, so the car gets a fair share of power and a car that is done or gone stops being counted.
+A TWC tells TWCManager when a car plugs in, charges and leaves. A car on any other EVSE (a mobile connector, a third-party charging station) gets no such report. The vehicle watch notices its arrival, plug-in, charge start, charge end and departure, so the car gets its place when power is shared, and a car that is done or gone stops being counted.
 
 The watch looks after every car that no TWC names and that no live telemetry feed (TeslaMate, Fleet Telemetry) covers. A TWC reports its own car's changes, and a feed reports changes itself. When a feed goes down, the watch picks the car up at its next due check, which is at most one cadence later. A car with no VIN is never watched.
 
