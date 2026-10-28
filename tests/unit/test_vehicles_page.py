@@ -105,7 +105,7 @@ def test_list_renders_registry_rows():
     html = render(m)
     assert f"/vehicleDetail/{VIN}" in html and "TestCar" in html
     assert "BLE: paired" in html and "TeslaBLE" not in html
-    assert "<td>80% (90%)</td>" in html
+    assert cell(html, "Charge limit (car's own)") == "80% (90%)"
     assert "Charge limit (car's own)" in html and "set by TWCManager" not in html
     assert "Unknown car on TWC 8244" in html and "Charge history" in html
     assert 'action="/vehicle/add"' in html
@@ -219,11 +219,13 @@ def test_provider_capability_text_for_tesla_cloud_and_ble():
     ] and "Owner API: commands" in providerLines(m, v)
 
 
-def presenceCell(html):
-    # The Presence column is the fifth cell after the VIN's (the first
-    # link to the car is its picture's)
+def cell(html, label):
     row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
-    return row.split("<td>")[5].split("</td>")[0].strip()
+    return row.split(f'<td data-label="{label}">')[1].split("</td>")[0].strip()
+
+
+def presenceCell(html):
+    return cell(html, "Presence")
 
 
 def test_presence_column_shows_each_state():
@@ -241,8 +243,7 @@ def test_presence_column_shows_each_state():
 
 
 def watchCell(html):
-    row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
-    return row.split("<td>")[7].split("</td>")[0].strip()
+    return cell(html, "Watch")
 
 
 def test_the_vehicles_page_shows_the_watch_line_after_presence():
