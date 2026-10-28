@@ -131,3 +131,72 @@ def test_counting_from_threads_loses_nothing():
     for th in threads:
         th.join()
     assert s.car(A)["signals"] == 8000
+
+
+def test_telemetry_counts_live_signals_only():
+    import json
+    from unittest.mock import Mock
+
+    from tests.unit.test_telemetry_registry import make
+    from TWCManager.Vehicle.FleetTelemetryMQTT import FleetTelemetryMQTT
+
+    t, _ = make(FleetTelemetryMQTT)
+    t.mqtt_prefix = "telemetry"
+    t.master.fleetSpend = FleetSpend()
+    for retain in (False, True):
+        msg = Mock(topic=f"telemetry/{A}/v/Location", payload=json.dumps({}).encode())
+        msg.retain = retain
+        t.mqttMessage(None, None, msg)
+    assert t.master.fleetSpend.car(A)["fields"] == [{"field": "Location", "count": 1}]
+
+
+def test_spend_survives_a_settings_round_trip(tmp_path):
+    from unittest.mock import Mock
+
+    from tests.unit.test_gen2twc_provider import make as make_master
+
+    m, _ = make_master()
+    slot = Mock(accessToken="", refreshToken="", expireTime=0, source="")
+    m.getModuleByName = Mock(return_value=Mock(fleetSlot=slot, ownerSlot=slot))
+    m.config = dict(m.config, config=dict(m.config["config"]))
+    m.config["config"]["settingsPath"] = str(tmp_path)
+    m.fleetSpend.request(A, "wake_up", 0.02)
+    m.saveSettings()
+    m.settings.clear()
+    m.fleetSpend = FleetSpend()
+    m.loadSettings()
+    assert m.fleetSpend.car(A)["requests"] == 1
+
+
+def test_housekeeping_saves_at_most_every_ten_minutes(monkeypatch):
+    from unittest.mock import Mock
+
+    import TWCManager.ControlTick as CT
+    from TWCManager.ControlTick import ControlTick
+
+    clock = Clock(1000.0)
+    monkeypatch.setattr(CT.time, "time", clock)
+    m = Mock(watch=None, lastVehicleExpiry=clock.t)
+    m.getModuleByName = Mock(return_value=None)
+    m.fleetSpend = FleetSpend()
+    t = ControlTick(m)
+
+    def saves():
+        return [
+            c
+            for c in m.queue_background_task.call_args_list
+            if c.args[0] == {"cmd": "saveSettings"}
+        ]
+
+    for _ in range(3):
+        m.fleetSpend.request(A, "wake_up", 0.02)
+        clock.t += 100
+        t.housekeeping()
+    assert len(saves()) == 1
+    m.fleetSpend.request(A, "wake_up", 0.02)
+    clock.t += 600
+    t.housekeeping()
+    assert len(saves()) == 2
+    clock.t += 700
+    t.housekeeping()
+    assert len(saves()) == 2

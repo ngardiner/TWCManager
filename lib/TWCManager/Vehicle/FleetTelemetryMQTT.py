@@ -122,6 +122,9 @@ class FleetTelemetryMQTT(TelmetryBase):
         syncState = obs.value if obs else None
         newSyncState = None
         if len(topic) > 3 and topic[2] == "v":
+            if not retained:
+                # Tesla bills each streamed signal; a redelivered copy is not one
+                self.master.fleetSpend.signal(topic[1], topic[3])
             newSyncState = "online"
             if topic[3] == "Gear":
                 if payload in ("ShiftStateR", "ShiftStateN", "ShiftStateD"):

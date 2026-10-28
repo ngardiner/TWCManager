@@ -3,11 +3,17 @@ telemetry plug, state and geofence changes."""
 
 import logging
 import re
+import threading
 from types import SimpleNamespace
+from unittest.mock import ANY
 
+import pytest
+
+from TWCManager.Vehicle.FleetSpend import FleetSpend
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from TWCManager.Vehicle.Reconcile.Desired import CHARGE_LIMIT
 from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+from TWCManager.Vehicle.TeslaAPI import _PAID_PATH
 from tests.unit.teslatokens import fleet_token, new_api, owner_token
 from tests.unit.test_limit_reconciler import ble, setup
 from tests.unit.test_gen2twc_provider import VIN
@@ -147,3 +153,41 @@ def test_a_paid_request_is_counted_under_the_vehicle_lock(requests_mock):
     requests_mock.post(FLEET + f"vehicles/{VIN}/wake_up", json={"response": {}})
     api._request(api.fleetSlot, "post", f"vehicles/{VIN}/wake_up", "wake", vehicle=v)
     assert Counted.counts == [True]
+
+
+def test_a_paid_request_is_counted_for_its_car(requests_mock):
+    api = new_api()
+    api.master.fleetSpend = FleetSpend()
+    api.storeToken(fleet_token())
+    requests_mock.post(re.compile(".*"), json={"response": {}})
+    car = SimpleNamespace(vin=VIN, _lock=threading.Lock(), paidRequests=0)
+    api._request(
+        api.fleetSlot,
+        "post",
+        f"vehicles/{VIN}/command/set_charge_limit",
+        "command",
+        vehicle=car,
+    )
+    assert api.master.fleetSpend.car(VIN)["types"] == [
+        {
+            "kind": "command:set_charge_limit",
+            "count": 1,
+            "cost": pytest.approx(0.001),
+            "last": ANY,
+        }
+    ]
+
+
+def test_an_owner_api_request_is_not_counted(requests_mock):
+    api = new_api()
+    api.master.fleetSpend = FleetSpend()
+    api.storeToken(owner_token())
+    requests_mock.post(re.compile(".*"), json={"response": {}})
+    api._request(
+        api.ownerSlot, "post", f"vehicles/{VIN}/command/set_charge_limit", "command"
+    )
+    assert api.master.fleetSpend.month()["api"] == 0
+
+
+def test_the_cached_read_stays_free():
+    assert _PAID_PATH.search(f"/api/1/vehicles/{VIN}/vehicle_data_cached") is None

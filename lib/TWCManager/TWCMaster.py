@@ -31,6 +31,7 @@ from TWCManager.Vehicle.Reconcile.Targets import applyPolicyLimit, onArrival, ta
 from TWCManager.Vehicle.Reconcile.Targets import UNDECIDED
 from TWCManager.Vehicle import Presence
 from TWCManager.Vehicle.Watch import settingsOf
+from TWCManager.Vehicle.FleetSpend import FleetSpend
 from TWCManager.Vehicle.WatchBudget import WatchBudget
 
 logger = LoggerFactory.get_logger("Master", "Master")
@@ -133,6 +134,7 @@ class TWCMaster:
         self.vehicleRegistry = VehicleRegistry(config)
         budget = settingsOf(config)["monthlyBudgetUSD"]
         self.watchBudget = WatchBudget(float(budget))
+        self.fleetSpend = FleetSpend()
         # The launcher builds it after settings and modules load
         self.watch = None
         self.heldLimits = HeldLimits(self)
@@ -1237,11 +1239,13 @@ class TWCMaster:
                     self.settings[key] = value
             registryBlob = self.settings.get("vehicleRegistry")
             budgetBlob = self.settings.get("watchBudget")
+            spendBlob = self.settings.get("fleetSpend")
         # Normalises chargeLimits; dict work under the lock only
         self.heldLimits.load()
         # load() tolerates a missing or corrupt blob
         self.vehicleRegistry.load(registryBlob)
         self.watchBudget.load(budgetBlob)
+        self.fleetSpend.load(spendBlob)
 
         # Step 2 - Send settings to other modules
         # Migration and restore run whether or not token sync is on. The
@@ -1757,6 +1761,7 @@ class TWCMaster:
                 self.settings["ownerApiTokenSource"] = carapi.ownerSlot.source
             self.settings["vehicleRegistry"] = self.vehicleRegistry.toJSON()
             self.settings["watchBudget"] = self.watchBudget.toJSON()
+            self.settings["fleetSpend"] = self.fleetSpend.toJSON()
             try:
                 # Keep default arguments (C encoder): adding indent/default/cls
                 # would reintroduce the concurrent-mutation race.
