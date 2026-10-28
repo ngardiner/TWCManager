@@ -1,5 +1,6 @@
 # tests/unit/test_teslaapi_providers.py
 import re
+import time
 from unittest.mock import Mock
 
 from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
@@ -248,3 +249,147 @@ def test_two_callers_inside_read_max_age_pay_once(requests_mock):
     # The deferral runs on real time: age it with the test clock
     c.t += 300; v.attachment("TeslaAPI").statusDeferral -= 400
     v.read("chargingState", 0, force=True); assert paid(requests_mock)[0] == 2
+
+
+FLEET_CACHED = (
+    "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
+    + "/vehicle_data_cached"
+)
+STAMP_MS = 1793202825642
+
+
+def cachedCar(requests_mock, status=200, charge=None, token=fleet_token):
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    api.storeToken(token())
+    charge = {
+        "timestamp": STAMP_MS,
+        "charging_state": "Complete",
+        "battery_level": 65,
+        "charge_limit_soc": 50,
+        "charge_port_door_open": True,
+        "scheduled_charging_mode": "Off",
+        "scheduled_charging_start_time": None,
+        **(charge or {}),
+    }
+    body = {"response": {"charge_state": charge, "vehicle_state": {}}}
+    mock = requests_mock.register_uri(
+        ANY, FLEET_ANY, status_code=status, json=body if status == 200 else {}
+    )
+    return api, reg.get(VIN), mock
+
+
+def test_read_cached_observes_with_the_snapshot_stamp(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    assert api.read_cached(v) == STAMP_MS / 1000
+    level = v.reported("batteryLevel")["FleetAPICached"]
+    assert (level.value, level.at) == (65, 1793202825.642)
+    assert v.reported("scheduledChargingPending")["FleetAPICached"].value is False
+    assert v.reported("chargePortOpen")["FleetAPICached"].value is True
+    for field in ("lat", "phases"):
+        assert "FleetAPICached" not in v.reported(field)
+
+
+@pytest.mark.parametrize(
+    "mode,start,state,pending",
+    [
+        ("StartAt", 1793210000, "Stopped", True),
+        ("StartAt", 1793210000, "Charging", False),
+        ("Off", None, "Stopped", False),
+    ],
+)
+def test_cached_pending_needs_mode_time_and_stopped(
+    requests_mock, mode, start, state, pending
+):
+    api, v, _ = cachedCar(
+        requests_mock,
+        charge={
+            "scheduled_charging_mode": mode,
+            "scheduled_charging_start_time": start,
+            "charging_state": state,
+        },
+    )
+    api.read_cached(v)
+    got = v.reported("scheduledChargingPending")["FleetAPICached"].value
+    assert got is pending
+
+
+def test_cached_412_latches_the_car_not_the_slot(requests_mock):
+    api, v, _ = cachedCar(requests_mock, status=412)
+    assert api.read_cached(v) is None
+    assert v.attachment("TeslaAPI").cachedUnsupported is True
+    assert api.fleetSlot.usable("read")
+
+
+def test_cached_404_latches_nothing(requests_mock):
+    api, v, _ = cachedCar(requests_mock, status=404)
+    assert api.read_cached(v) is None
+    assert v.attachment("TeslaAPI").cachedUnsupported is False
+    assert api.fleetSlot.usable("read")
+
+
+def test_cached_is_never_logged_as_paid(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    assert api.read_cached(v) is not None
+    assert v.paidRequests == 0
+
+
+def test_cached_never_goes_to_the_owner_api(requests_mock):
+    api, v, mock = cachedCar(requests_mock, token=owner_token)
+    assert api.read_cached(v) is None
+    assert mock.call_count == 0
+    assert not any("owner-api" in r.url for r in requests_mock.request_history)
+
+
+def test_update_vehicle_data_still_maps_every_field(requests_mock):
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    api.storeToken(fleet_token())
+    v = reg.get(VIN)
+    v.attachment("TeslaAPI").lastAPIAccessTime = time.time()
+    charge = {
+        "fast_charger_present": False,
+        "fast_charger_type": "<invalid>",
+        "conn_charge_cable": "IEC",
+        "charger_power": 7,
+        "charge_current_request_max": 32,
+        "charge_limit_soc": 80,
+        "battery_level": 61,
+        "time_to_full_charge": 1.5,
+        "charger_pilot_current": 16,
+        "charge_current_request": 16,
+        "charger_actual_current": 15,
+        "charger_phases": 1,
+        "charger_voltage": 240,
+        "charging_state": "Charging",
+        "scheduled_charging_pending": False,
+    }
+    drive = {"latitude": 37.0, "longitude": -122.0, "shift_state": "P"}
+    requests_mock.register_uri(
+        ANY,
+        FLEET_ANY,
+        json={"response": {"drive_state": drive, "charge_state": charge,
+                           "vehicle_state": {}}},
+    )
+    assert api.update_vehicle_data(v, slot=api.fleetSlot)
+    fields = dict(zip(charge, (
+        "fastChargerPresent", "fastChargerType", "connChargeCable",
+        "chargerPower", "chargeCurrentRequestMax", "chargeLimit",
+        "batteryLevel", "timeToFullCharge", "availableCurrent",
+        "chargeCurrentRequest", "actualCurrent", "phases", "voltage",
+        "chargingState", "scheduledChargingPending",
+    )))
+    for key, field in fields.items():
+        assert v.reported(field)["FleetAPI"].value == charge[key], field
+
+
+def test_cached_412_holds_until_the_fleet_token_changes(requests_mock):
+    api, v, mock = cachedCar(requests_mock, status=412)
+    assert api.read_cached(v) is None
+    assert api.cachedRefused(v)
+    assert api.read_cached(v) is None
+    assert mock.call_count == 1
+    api.storeToken(fleet_token())
+    assert not api.cachedRefused(v)
+    api.read_cached(v)
+    assert mock.call_count == 2
