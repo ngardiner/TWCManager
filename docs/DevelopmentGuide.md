@@ -29,6 +29,16 @@ This is your working branch of the repository.
 
 Python dependencies are documented in the setup.py script.
 
+### Release notes
+
+A pull request that changes what users see adds its changelog line as a file in [changes/](../changes/README.md), rather than editing CHANGELOG.md, so pull requests never conflict over the changelog. The PR number and author are filled in when a release is cut.
+
+### Cutting a release
+
+1. Set the version in `setup.py`, `lib/TWCManager/__init__.py` and `lib/TWCManager/TWCMaster.py`.
+2. Run `python3 contrib/release_notes.py build --version X.Y.Z`. It writes the release's section into CHANGELOG.md from the files in `changes/` and removes them. With the [GitHub CLI](https://cli.github.com/) logged in, authors come from each pull request; without it, from the branch owner in the merge commit.
+3. Commit, then tag `vX.Y.Z` to publish the PyPI package and Docker image.
+
 ## Conventions
 
 ### Debug Levels
