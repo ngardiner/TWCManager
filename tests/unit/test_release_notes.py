@@ -138,6 +138,21 @@ def test_resolve_without_a_pr_credits_the_commit_author(merged, monkeypatch):
     (note,) = rn.load("HEAD")
     assert note.prs == []
     assert note.authors == ["carol"]
+    assert len(note.commit) == 8
+    assert rn.line(note) == f"    * (@carol) - Add x ({note.commit})"
+
+
+def test_resolve_named_commit_credits_its_author(merged, monkeypatch):
+    os.makedirs(os.path.join(merged, "changes"), exist_ok=True)
+    with open(os.path.join(merged, "changes", "x.feature.md"), "w") as f:
+        f.write("---\ncommit: fd00543d\n---\nAdd x.\n")
+    _git(merged, "add", ".")
+    _git(merged, "commit", "-qm", "Add a note for fd00543d")
+    monkeypatch.setattr(
+        rn, "gh", lambda path, jq: "erin" if path == "commits/fd00543d" else None
+    )
+    (note,) = rn.load("HEAD")
+    assert (note.prs, note.commit, note.authors) == ([], "fd00543d", ["erin"])
 
 
 def test_resolve_named_pr_credits_its_author(merged, monkeypatch):

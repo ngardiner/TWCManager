@@ -3,8 +3,10 @@
 
 Each pull request adds a file changes/<slug>.<type>.md holding its changelog
 line. The PR number and author are read from git history at release time, so
-the file needs neither; a front matter block (pr: 702, authors: name) sets
-them where history would name the wrong PR, as for notes moved between files.
+the file needs neither, and a change merged without a PR is credited to the
+commit that added its note. A front matter block (pr: 702, commit: fd00543d,
+authors: name) sets them where history would name the wrong change, as for
+notes moved between files.
 
   release_notes.py draft                    print the upcoming section
   release_notes.py build --version 1.4.1    write it to CHANGELOG.md, remove the notes
@@ -47,12 +49,13 @@ MAX_SENTENCES = 2
 
 
 class Note:
-    def __init__(self, path, kind, text, prs=(), authors=()):
+    def __init__(self, path, kind, text, prs=(), authors=(), commit=None):
         self.path = path
         self.kind = kind
         self.text = text
         self.prs = list(prs)
         self.authors = list(authors)
+        self.commit = commit
 
 
 def git(*args):
@@ -77,13 +80,20 @@ def parse(path, content):
         for line in header.strip().splitlines():
             key, _, value = line.partition(":")
             key = key.strip().lower()
-            if key not in ("pr", "authors"):
+            if key not in ("pr", "commit", "authors"):
                 raise ValueError(f"{path}: unknown front matter key {key!r}")
             meta[key] = [v.strip(" #@[]") for v in value.split(",") if v.strip(" #@[]")]
     text = " ".join(body.split())
     if not text:
         raise ValueError(f"{path}: note is empty")
-    return Note(path, match.group(1), text, meta.get("pr", []), meta.get("authors", []))
+    return Note(
+        path,
+        match.group(1),
+        text,
+        meta.get("pr", []),
+        meta.get("authors", []),
+        (meta.get("commit") or [None])[0],
+    )
 
 
 def advice(note):
@@ -149,9 +159,10 @@ def resolve(note, ref):
 
     The PR's author is credited, not whoever merged it. Without gh, the
     merge commit's subject names the PR and the branch's owner, who is the
-    author when the branch is on a fork.
+    author when the branch is on a fork. A note no PR carried names the
+    commit that added it, credited to its author.
     """
-    if note.prs and note.authors:
+    if (note.prs or note.commit) and note.authors:
         return
     added = git("log", ref, "--diff-filter=A", "--format=%H", "--", note.path).split()
     merged = git(
@@ -168,13 +179,15 @@ def resolve(note, ref):
         pr, login = from_subject(merged[-1])
     if not note.prs and pr:
         note.prs = [pr]
+    if not note.prs and not note.commit and added:
+        note.commit = added[-1][:8]
     if note.authors:
         return
     if note.prs and note.prs[0] != pr:
         login = gh(f"pulls/{note.prs[0]}", ".user.login")
-    elif not login and added:
-        # No PR: credit whoever GitHub matches to the commit's author.
-        login = gh(f"commits/{added[-1]}", ".author.login")
+    elif not note.prs and note.commit:
+        # Credit whoever GitHub matches to the commit's author.
+        login = gh(f"commits/{note.commit}", ".author.login")
     if login:
         note.authors = [login]
 
@@ -202,6 +215,8 @@ def line(note):
     out += note.text[:-1] if note.text.endswith(".") else note.text
     if note.prs:
         out += " (" + ", ".join("#" + p for p in note.prs) + ")"
+    elif note.commit:
+        out += f" ({note.commit})"
     return out
 
 
