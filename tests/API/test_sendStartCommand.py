@@ -14,7 +14,7 @@ success = 1
 response = None
 
 try:
-    response = session.post("http://127.0.0.1:8088/api/sendStartCommand", timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/sendStartCommand", timeout=(3, 30))
 except requests.Timeout:
     print("Error: Connection Timed Out")
     exit(255)

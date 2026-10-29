@@ -36,7 +36,7 @@ def addOffset(tag, data):
 
     try:
         response = session.post("http://127.0.0.1:8088/api/addConsumptionOffset",
-            json=data, timeout=30)
+            json=data, timeout=(3, 30))
         values["elapsed"][tag] = response.elapsed
         values["response"][tag] = response.status_code
     except requests.Timeout:
@@ -48,7 +48,7 @@ def addOffset(tag, data):
 
 def getOffsets(tag):
     try:
-        response = session.get("http://127.0.0.1:8088/api/getConsumptionOffsets", timeout=30)
+        response = session.get("http://127.0.0.1:8088/api/getConsumptionOffsets", timeout=(3, 30))
         values["response"][tag] = response.status_code
     except requests.Timeout:
         print("Error: Connection Timed Out at " + tag)
@@ -74,7 +74,7 @@ def setSetting(setting, value):
     }
 
     try:
-        response = session.post("http://127.0.0.1:8088/api/setSetting", json=data, timeout=30)
+        response = session.post("http://127.0.0.1:8088/api/setSetting", json=data, timeout=(3, 30))
         values["response"]["setSetting " + setting] = response.status_code
     except requests.Timeout:
         print("Error: Connection Timed Out at setSetting " + setting)
@@ -94,12 +94,15 @@ while (not values["target"]["wattsSecond"] or values["target"]["wattsFirst"] == 
 
 # Set initial Dummy module settings
 setSetting("DummyModule", dummySettings)
+if "setSetting DummyModule" not in values["response"]:
+    print("Error: TWCManager API is not reachable, so nothing can be tested")
+    exit(255)
 
 # Test 1 - Call addConsumptionOffset with no arguments
 values["expected"]["addConNoArgs"] = 400
 values["tests"]["addConNoArgs"] = {}
 try:
-    response = session.post("http://127.0.0.1:8088/api/addConsumptionOffset", timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/addConsumptionOffset", timeout=(3, 30))
     values["elapsed"]["addConNoArgs"] = response.elapsed
     values["response"]["addConNoArgs"] = response.status_code
 except requests.Timeout:
@@ -267,7 +270,7 @@ for offsetName in [ "First Amp Offset Positive", "Second Amp Offset Negative",
 
     try:
         response = session.post("http://127.0.0.1:8088/api/addConsumptionOffset",
-            json=data, timeout=30)
+            json=data, timeout=(3, 30))
         values["elapsed"][runname] = response.elapsed
         values["response"][runname] = response.status_code
     except requests.Timeout:
@@ -288,7 +291,7 @@ for offset in offsets.keys():
 
     try:
         response = session.post("http://127.0.0.1:8088/api/deleteConsumptionOffset",
-            json=data, timeout=30)
+            json=data, timeout=(3, 30))
     except requests.Timeout:
         print("Error: Connection Timed Out at deleteConsumption")
         values["tests"]["deleteConsumption"]["fail"] = 1

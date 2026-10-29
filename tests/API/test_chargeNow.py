@@ -35,7 +35,7 @@ response = None
 def getStatus(tag):
     # Query getStatus to see our current offered amperage
     try:
-        response = session.get("http://127.0.0.1:8088/api/getStatus", timeout=30)
+        response = session.get("http://127.0.0.1:8088/api/getStatus", timeout=(3, 30))
         values["response"][tag] = response.status_code
     except requests.Timeout:
         print("Error: Connection Timed Out at " + tag)
@@ -54,6 +54,9 @@ def getStatus(tag):
     return jsonOut
 
 values["status"]["Before"] = getStatus("getStatusBefore")
+if "getStatusBefore" not in values["response"]:
+    print("Error: TWCManager API is not reachable, so nothing can be tested")
+    exit(255)
 
 # Generate a random amperage value between 12 and 80 twice for two separate
 # tests, make sure they are not the same
@@ -68,7 +71,7 @@ print("Using values First: " + str(values["targetFirst"]) + " and Second: " + st
 values["expected"]["chargeNowNoArgs"] = 400
 values["tests"]["chargeNowNoArgs"] = {}
 try:
-    response = session.post("http://127.0.0.1:8088/api/chargeNow", timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/chargeNow", timeout=(3, 30))
     values["elapsed"]["chargeNowNoArgs"] = response.elapsed
     values["response"]["chargeNowNoArgs"] = response.status_code
 except requests.Timeout:
@@ -89,7 +92,7 @@ data = {
 values["tests"]["chargeNowNegativeRate"] = {}
 values["expected"]["chargeNowNegativeRate"] = 400
 try:
-    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data, timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data, timeout=(3, 30))
     values["elapsed"]["chargeNowNegativeRate"] = response.elapsed
     values["response"]["chargeNowNegativeRate"] = response.status_code
 except requests.Timeout:
@@ -110,7 +113,7 @@ data = {
 values["tests"]["chargeNowNegativeDuration"] = {}
 values["expected"]["chargeNowNegativeDuration"] = 400
 try:
-    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data, timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data, timeout=(3, 30))
     values["elapsed"]["chargeNowNegativeDuration"] = response.elapsed
     values["response"]["chargeNowNegativeDuration"] = response.status_code
 except requests.Timeout:
@@ -131,7 +134,7 @@ data = {
 }
 
 try:
-    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data, timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data, timeout=(3, 30))
     values["elapsed"]["chargeNowFirst"] = response.elapsed
     values["response"]["chargeNowFirst"] = response.status_code
     values["text"]["chargeNowFirst"] = response.text
@@ -154,7 +157,7 @@ values["tests"]["chargeNowRandom"] = {}
 values["expected"]["chargeNowRandom"] = 400
 
 try:
-    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data_ascii, timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data_ascii, timeout=(3, 30))
     values["elapsed"]["chargeNowRandom"] = response.elapsed
     values["response"]["chargeNowRandom"] = response.status_code
 except TypeError:
@@ -180,7 +183,7 @@ data = {
 }
 
 try:
-    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data, timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/chargeNow", json=data, timeout=(3, 30))
     values["elapsed"]["chargeNowSecond"] = response.elapsed
     values["response"]["chargeNowSecond"] = response.status_code
     values["text"]["chargeNowSecond"] = response.text
@@ -198,7 +201,7 @@ time.sleep(2)
 values["tests"]["cancelChargeNow"] = {}
 values["expected"]["cancelChargeNow"] = 204
 try:
-    response = session.post("http://127.0.0.1:8088/api/cancelChargeNow", timeout=30)
+    response = session.post("http://127.0.0.1:8088/api/cancelChargeNow", timeout=(3, 30))
     values["elapsed"]["cancelChargeNow"] = response.elapsed
     values["response"]["cancelChargeNow"] = response.status_code
 except requests.Timeout:

@@ -25,7 +25,7 @@ response = None
 success = 1
 
 try:
-    response = session.get("http://127.0.0.1:8088/api/getConfig", timeout=30)
+    response = session.get("http://127.0.0.1:8088/api/getConfig", timeout=(3, 30))
 except requests.Timeout:
     print("Error: Connection Timed Out")
     success = 0
