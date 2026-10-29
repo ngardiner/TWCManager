@@ -884,7 +884,7 @@ def test_a_restores_own_ble_reply_re_applies_nothing():
         later(c, 60)
         m.setPolicyLimit(50, transition=False)
         m.reconciler.pass_()
-    assert len(p.calls) == 1 and settled(m.desired, VIN, CHARGE_LIMIT)
+    assert len(p.calls) == 1 and m.desired.get(VIN, CHARGE_LIMIT) is None
 
 
 def test_a_plug_or_a_newer_arrival_cancels_a_pending_restore():
