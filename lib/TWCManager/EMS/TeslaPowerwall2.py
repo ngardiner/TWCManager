@@ -18,7 +18,6 @@ class TeslaPowerwall2:
     configPowerwall = None
     master = None
     minSOE = 90
-    lastFetch = dict()
     password = None
     serverIP = None
     serverPort = 443
@@ -31,6 +30,8 @@ class TeslaPowerwall2:
 
     def __init__(self, master):
         self.master = master
+        # Per instance: a class-level dict was shared by every Powerwall
+        self.lastFetch = {}
         self.config = master.config
         self.configConfig = self.config.get("config", dict())
         self.configPowerwall = self.config.get("sources", dict()).get(

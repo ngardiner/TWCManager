@@ -83,6 +83,21 @@ class TestTeslaPowerwall2Initialization:
             master.releaseModule.assert_not_called()
             assert tp2.serverIP == "192.168.1.100"
 
+    def test_instances_keep_their_own_fetch_cache(self):
+        """One Powerwall's cached fetches must not rate-limit another (#691)."""
+        master = Mock()
+        master.config = {
+            "config": {},
+            "sources": {"Powerwall2": {"enabled": True, "serverIP": "192.168.1.100"}},
+        }
+
+        with patch('TWCManager.EMS.TeslaPowerwall2.logger', _make_logger_mock()):
+            from TWCManager.EMS.TeslaPowerwall2 import TeslaPowerwall2
+            first, second = TeslaPowerwall2(master), TeslaPowerwall2(master)
+
+            first.lastFetch["/api/meters/aggregates"] = (time.time(), {})
+            assert second.lastFetch == {}
+
 
 class TestTeslaPowerwall2Getters:
     """Test TeslaPowerwall2 getter methods."""
@@ -147,7 +162,6 @@ class TestStormWatchTokenSlots:
 
         pw = TeslaPowerwall2(master)
         pw.cloudCacheTime = 0
-        pw.lastFetch = {}  # the class attribute is shared between instances
         return pw
 
     def test_storm_watch_403_does_not_pause_slot(self, requests_mock, caplog):
