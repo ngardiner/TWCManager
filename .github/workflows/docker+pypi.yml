@@ -1,4 +1,4 @@
-name: "Create PyPi Package and Docker Image"
+name: "Create Docker Image"
 
 on:
   push:
@@ -25,107 +25,8 @@ on:
         description: Allows generating a :testing docker image using cloud runners.
         required: true
         default: "no"
-      trigger_pypi_dev:
-        description: "Should we trigger the pypi-dev upload action? This will create a fake version number for upload."
-        required: true
-        default: "no"
-      trigger_pypi_cloud:
-        description: "Should we trigger a pypi package upload using cloud runners?"
-        required: true
-        default: "no"
 
 jobs:
-  pypi-dev:
-    name: Build a PyPi Package if this is a commit to the ci_dev branch
-    runs-on: ubuntu-latest
-
-    if: |
-      github.event_name == 'push' && startsWith(github.ref, 'refs/heads/ci_dev') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_pypi_dev == 'yes')
-
-    steps:
-    - name: Check out Repository
-      uses: actions/checkout@v4
-
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v4
-      with:
-        python-version: 3.12
-
-    - name: Install pypa/build
-      run: >-
-        python -m
-        pip install
-        build
-        --user
-
-    - name: Obtain current commit hash
-      id: vars
-      shell: bash
-      run: |
-        echo "::set-output name=commit::$(git rev-parse --short HEAD)"
-        echo "::set-output name=commitint::$(git rev-parse HEAD | tr -d -c 0-9)"
-
-    - name: Set dummy version number in setup.py for publishing unique version
-      shell: bash
-      run: |
-        sed -i -E s/'version="(.+)",'/'version="0.0.'${{ steps.vars.outputs.commitint }}'"',/g setup.py
-
-    - name: Build a binary wheel and a source tarball
-      run: >-
-        python -m
-        build
-        --sdist
-        --wheel
-        --outdir dist/
-        .
-
-    - name: Publish distribution package to Test PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        skip-existing: true
-        repository-url: https://test.pypi.org/legacy/
-
-  pypi:
-    name: Build a PyPi Package if this is a tagged release commit
-    runs-on: ubuntu-latest
-
-    if: |
-      github.event_name == 'push' && startsWith(github.ref, 'refs/tags') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_pypi_cloud == 'yes')
-
-    steps:
-    - name: Check out Repository
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.inputs.release_version || github.ref }}
-
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v4
-      with:
-        python-version: 3.12
-
-    - name: Install pypa/build
-      run: >-
-        python -m pip install build --user
-
-    - name: Build a binary wheel and a source tarball
-      run: >-
-        python -m build --sdist --wheel --outdir dist/ .
-
-    - name: Publish distribution package to Test PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        skip-existing: true
-        repository-url: https://test.pypi.org/legacy/
-
-    - name: Publish distribution package to Production PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
-
   docker-latest:
     name: Create docker-latest Docker Image from current head
     runs-on: ubuntu-latest
