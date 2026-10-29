@@ -1355,7 +1355,13 @@ class TeslaBLE:
             "ok": bool(ok),
             "at": now,
             "message": (
-                "Pairing request sent; tap your key card on the car" if ok else reason
+                (
+                    "Pairing request sent; within 30 seconds, tap your key card "
+                    "on the card reader in the car (the car shows nothing until "
+                    "you do), then accept on the screen"
+                )
+                if ok
+                else reason
             ),
         }
         paired = self._storedStatus(vin)["status"] == "paired"

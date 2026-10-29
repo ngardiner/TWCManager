@@ -44,7 +44,7 @@ Once TWCManager restarts, it will check for the tesla-control command. If this e
 
   * Ensure the vehicle is near to your TWCManager device, and that you have your key card available.
   * Click the Pair with Vehicle button, which will initiate Bluetooth Pairing
-  * Enter the vehicle, tap your card on the card reader location in front of the center console and accept the peering
+  * Within 30 seconds, tap your card on the card reader location in front of the center console and accept the peering. The car's screen shows no prompt until the card is tapped; if you miss the window, click Pair with Vehicle again
 
 ### Controlling charge rate using tesla-control
 
