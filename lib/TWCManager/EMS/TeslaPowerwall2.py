@@ -2,7 +2,11 @@
 import logging
 import time
 from datetime import datetime
-from zoneinfo import ZoneInfo
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python 3.8: touPeriod falls back to the host's clock
+    ZoneInfo = None
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("TeslaPwl", "EMS")
@@ -172,7 +176,11 @@ class TeslaPowerwall2:
             return ""
         try:
             now = datetime.now(ZoneInfo(zone))
-        except (KeyError, TypeError, ValueError):  # ZoneInfoNotFoundError is a KeyError
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+        ):  # no zoneinfo (None) or an unknown zone
             now = datetime.now()
         return touPeriodAt(tariff, now)
 

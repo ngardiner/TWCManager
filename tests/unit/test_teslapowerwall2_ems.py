@@ -358,15 +358,15 @@ class TestTouPeriodProperty:
     INFO = {"response": {"installation_time_zone": "America/New_York",
                          "tariff_content_v2": DUKE}}
 
+    class Frozen(datetime):
+        # 15:00 on a Wednesday in the tariff's peak season, in whatever zone asked
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 7, 15, 15, 0, tzinfo=tz)
+
     @pytest.fixture(autouse=True)
     def _july_weekday_afternoon(self):
-        # 15:00 on a Wednesday in the tariff's peak season, in whatever zone asked
-        class Frozen(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return datetime(2026, 7, 15, 15, 0, tzinfo=tz)
-
-        with patch("TWCManager.EMS.TeslaPowerwall2.datetime", Frozen):
+        with patch("TWCManager.EMS.TeslaPowerwall2.datetime", self.Frozen):
             yield
 
     def _site(self, scp=None):
@@ -456,6 +456,24 @@ class TestTouPeriodProperty:
         requests_mock.get(self.SITE_INFO, json=body)
 
         assert pw.touPeriod == "ON_PEAK"
+
+    def test_works_without_zoneinfo(self, requests_mock, monkeypatch):
+        # Python 3.8 has no zoneinfo; periods then follow the host's clock
+        import importlib
+        import sys
+        import TWCManager.EMS.TeslaPowerwall2 as module
+
+        monkeypatch.setitem(sys.modules, "zoneinfo", None)
+        try:
+            importlib.reload(module)
+            _, pw = self._site()
+            requests_mock.get(self.SITE_INFO, json=self.INFO)
+            # The reload replaced the frozen clock
+            monkeypatch.setattr(module, "datetime", self.Frozen)
+            assert pw.touPeriod == "ON_PEAK"
+        finally:
+            monkeypatch.undo()
+            importlib.reload(module)
 
     def test_storm_watch_and_tariff_cache_separately(self, requests_mock):
         _, pw = self._site()
