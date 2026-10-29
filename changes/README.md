@@ -22,7 +22,8 @@ Leave out the PR number and your name: when a release is cut, they are read
 from the pull request that added the file, crediting its author rather than
 whoever merged it. A note added for someone else's change, such as one written
 after merging a PR that had none, names the PR in front matter, and its author
-is credited; `authors` overrides that:
+is credited. A change merged without a PR is listed with the commit that
+added its note, or the one named by `commit:`. `authors` overrides either:
 
 ```
 ---
