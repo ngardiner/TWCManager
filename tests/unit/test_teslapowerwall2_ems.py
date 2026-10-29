@@ -132,6 +132,44 @@ class TestTeslaPowerwall2Getters:
                 assert isinstance(result, (int, float))
 
 
+class TestGetPWJsonErrors:
+    """getPWJson must survive a Powerwall that cannot be reached."""
+
+    URL = "https://192.168.1.100:443/api/meters/aggregates"
+
+    def _powerwall(self):
+        master = Mock()
+        master.config = {
+            "config": {},
+            "sources": {
+                "Powerwall2": {"enabled": True, "serverIP": "192.168.1.100"}
+            },
+        }
+        with patch('TWCManager.EMS.TeslaPowerwall2.logger', _make_logger_mock()):
+            from TWCManager.EMS.TeslaPowerwall2 import TeslaPowerwall2
+            return TeslaPowerwall2(master)
+
+    @pytest.mark.parametrize("exc_name", ["ConnectionError", "ReadTimeout"])
+    def test_unreachable_returns_last_data(self, requests_mock, exc_name):
+        import requests
+
+        pw = self._powerwall()
+        requests_mock.get(
+            self.URL, exc=getattr(requests.exceptions, exc_name)("unreachable")
+        )
+
+        assert pw.getPWValues() == {}
+        assert pw.generatedW == 0
+
+    def test_403_forces_relogin(self, requests_mock):
+        pw = self._powerwall()
+        pw.tokenTimeout = time.time() + 3600
+        requests_mock.get(self.URL, status_code=403)
+
+        assert pw.getPWValues() == {}
+        assert pw.tokenTimeout == 0
+
+
 class TestStormWatchTokenSlots:
     """Storm Watch reads through the TeslaAPI energy slot."""
 

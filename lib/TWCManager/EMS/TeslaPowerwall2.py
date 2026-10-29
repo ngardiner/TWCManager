@@ -207,7 +207,9 @@ class TeslaPowerwall2:
                 )
                 r.raise_for_status()
             except Exception as e:
-                if hasattr(e, "response") and e.response.status_code == 403:
+                # A connection failure has a response attribute, but it is None
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status == 403:
                     logger.info("Authentication required to access local Powerwall API")
                     self.tokenTimeout = 0
                 else:
