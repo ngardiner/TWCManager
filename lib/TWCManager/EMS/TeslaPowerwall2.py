@@ -1,6 +1,8 @@
 # Tesla Powerwall 2 EMS Module
 import logging
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 
 logger = LoggerFactory.get_logger("TeslaPwl", "EMS")
@@ -37,7 +39,7 @@ def touPeriodAt(tariff, now):
     a datetime in the site's local time; "" if no season covers it."""
     seasons = tariff.get("seasons") if isinstance(tariff, dict) else None
     best = None
-    for season in (seasons or {}).values():
+    for season in seasons.values() if isinstance(seasons, dict) else ():
         try:
             span = _seasonSpan(season, now)
         except (AttributeError, TypeError):
@@ -162,6 +164,17 @@ class TeslaPowerwall2:
         else:
             value = self.getOperation()
             return self.adjustPercentage(float(value.get("backup_reserve_percent", 0)))
+
+    @property
+    def touPeriod(self):
+        tariff, zone = self.getTariff()
+        if not isinstance(tariff, dict):
+            return ""
+        try:
+            now = datetime.now(ZoneInfo(zone))
+        except (KeyError, TypeError, ValueError):  # ZoneInfoNotFoundError is a KeyError
+            now = datetime.now()
+        return touPeriodAt(tariff, now)
 
     @property
     def stormWatch(self):
@@ -293,13 +306,34 @@ class TeslaPowerwall2:
         return self.getPWJson("/api/system_status/grid_status")
 
     def getStormWatch(self):
+        return self.getCloudJson("live_status")
+
+    def getTariff(self):
+        # The Fleet API's site_info carries the tariff and the site's time
+        # zone; the Owner API gives the tariff only from tariff_rate, which on
+        # the Fleet API is billable
+        info = self.getCloudJson("site_info", only="fleet")
+        if "tariff_content_v2" in info:
+            return info["tariff_content_v2"], info.get("installation_time_zone")
+        return self.getCloudJson("tariff_rate", only="owner") or None, None
+
+    def getCloudJson(self, endpoint, only=None):
         carapi = self.master.getModuleByName("TeslaAPI")
         # No Tesla API (disabled in config) is the same as no energy token
         if carapi is not None:
             carapi.refreshTokenIfNeeded()
         slot = carapi.slotFor("energy") if carapi is not None else None
+        if only and slot is not None:
+            slot = next(
+                (
+                    s
+                    for s in (carapi.ownerSlot, carapi.fleetSlot)
+                    if s.kind == only and s.usable("energy")
+                ),
+                None,
+            )
         now = time.time()
-        key = "CLOUD/live_status"
+        key = "CLOUD/" + endpoint
 
         lastTime, lastData = (
             self.lastFetch[key] if key in self.lastFetch else (0, dict())
@@ -351,7 +385,7 @@ class TeslaPowerwall2:
 
                 if self.cloudID:
                     url = baseURL.replace("vehicles", "energy_sites")
-                    url = f"{url}/{self.cloudID}/live_status"
+                    url = f"{url}/{self.cloudID}/{endpoint}"
                     bodyjson = None
 
                     try:
@@ -360,7 +394,8 @@ class TeslaPowerwall2:
                         )
                         r.raise_for_status()
                         bodyjson = r.json()
-                        lastData = bodyjson["response"]
+                        if isinstance(bodyjson["response"], dict):
+                            lastData = bodyjson["response"]
                     except Exception as e:
                         status = getattr(
                             getattr(e, "response", None), "status_code", None
@@ -369,12 +404,15 @@ class TeslaPowerwall2:
                             slot.reportScopeRefused("energy", refused=True)
                         else:
                             logger.warning(
-                                "Error fetching Powerwall data: %s", type(e).__name__
+                                "Error fetching Powerwall %s: %s",
+                                endpoint,
+                                type(e).__name__,
                             )
             else:
                 logger.log(
                     logging.INFO8,
-                    "Skipping Storm Watch check; Tesla API token unavailable or expired.",
+                    "Skipping Powerwall %s; Tesla API token unavailable or expired.",
+                    endpoint,
                 )
 
             self.lastFetch[key] = (now, lastData)
