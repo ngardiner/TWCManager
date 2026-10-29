@@ -16,11 +16,13 @@ from TWCManager.Control.HTTPControl import (
     addVehicleByVIN,
     addVehicleGroup,
     canForgetVehicle,
+    carSpend,
     heldLimitText,
     PRESENCE_TEXT,
     pendingCommands,
     providerLines,
     sourceName,
+    spendLines,
     watchLine,
 )
 
@@ -43,6 +45,8 @@ def env(master):
         registry=master.vehicleRegistry,
         vehicles=master.vehicleRegistry.vehicles,
         canForget=lambda vin: canForgetVehicle(master, vin),
+        spendLines=lambda: spendLines(master),
+        carSpend=lambda vin: carSpend(master, vin),
     )
     return e
 
@@ -298,3 +302,78 @@ def test_add_vehicle_group_refuses_bad_names():
     assert "&lt;b&gt;bad&lt;/b&gt;" in html
     assert 'action="/vehicle/addGroup"' in html
     assert 'name="name"' in html and 'name="description"' in html
+
+
+def spending(m, fleet=True, telemetry=False, clock=None):
+    from TWCManager.Vehicle.FleetSpend import FleetSpend
+
+    slot = SimpleNamespace(accessToken="tok" if fleet else "")
+    mods = {"TeslaAPI": SimpleNamespace(fleetSlot=slot)}
+    if telemetry:
+        mods["FleetTelemetryMQTT"] = object()
+    m.getModuleByName = mods.get
+    m.fleetSpend = FleetSpend(
+        clock=clock or (lambda: time.mktime((2026, 11, 16, 0, 0, 0, 0, 0, -1)))
+    )
+    return m.fleetSpend
+
+
+def test_no_fleet_no_spend_shown():
+    m = master()
+    spending(m, fleet=False)
+    html = render(m)
+    assert "Fleet API this month" not in html and "Fleet this month" not in html
+
+
+def test_fleet_spend_line_and_column():
+    m = master()
+    s = spending(m)
+    s.request(VIN, "vehicle_data", 0.30)
+    s.request(VIN, "command:set_charge_limit", 0.01)
+    html = render(m)
+    assert "Fleet API this month: $0.31 · on pace for $0.62 by Dec 1" in html
+    assert "<th>Fleet this month</th>" in html
+    row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
+    assert "$0.31" in row
+
+
+def test_zero_spend_still_shows_with_a_fleet_token():
+    m = master()
+    spending(m)
+    assert "Fleet API this month: $0.00" in render(m)
+
+
+def test_telemetry_line_is_approximate():
+    m = master()
+    s = spending(m, telemetry=True)
+    for _ in range(41800):
+        s.signal(VIN, "Location")
+    html = render(m)
+    assert "Fleet Telemetry this month: approx. 41,800 signals, $0.28" in html
+    row = html[html.index("/vehicleDetail/" + VIN) :].split("</tr>")[0]
+    assert "approx. $0.28 telemetry" in row
+
+
+def test_last_month_shows_only_when_nonzero():
+    m = master()
+    clock = SimpleNamespace(t=time.mktime((2026, 10, 20, 12, 0, 0, 0, 0, -1)))
+    s = spending(m, clock=lambda: clock.t)
+    assert "Last month" not in render(m)
+    s.request(VIN, "wake_up", 0.02)
+    clock.t = time.mktime((2026, 11, 5, 12, 0, 0, 0, 0, -1))
+    assert "Last month: $0.02" in render(m)
+
+
+def test_small_telemetry_costs_and_single_requests_read_right():
+    from tests.unit.test_vehicle_detail_page import render as detail, status
+
+    m = master()
+    s = spending(m, telemetry=True)
+    s.request(VIN, "wake_up", 0.02)
+    for _ in range(300):
+        s.signal(VIN, "Location")
+    html = render(m)
+    assert "approx. $0.002 telemetry" in html and "approx. 300 signals, $0.002" in html
+    page = detail(m, status())
+    assert "Fleet API this month: $0.02 in 1 request" in page
+    assert "1 requests" not in page

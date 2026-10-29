@@ -54,6 +54,29 @@
     {% else %}
     <p>Nothing pending</p>
     {% endif %}
+    {% set spend = carSpend(regVehicle.vin) %}
+    {% if spend %}
+    <p>&nbsp;</p>
+    <h3>Fleet spend</h3>
+    {% if spend.heading %}<p>{{ spend.heading }}</p>{% endif %}
+    {% if spend.types %}
+    <table>
+      <tr><th>Request</th><td>&nbsp;</td><th>Count</th><td>&nbsp;</td><th>Cost</th><td>&nbsp;</td><th>Last</th></tr>
+      {% for t in spend.types %}
+      <tr><td>{{ t.kind }}</td><td>&nbsp;</td><td>{{ t.count }}</td><td>&nbsp;</td><td>{{ t.cost }}</td><td>&nbsp;</td><td>{{ ageText(t.age) }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% if spend.telemetry %}
+    <p>{{ spend.telemetry }}</p>
+    <table>
+      <tr><th>Field</th><td>&nbsp;</td><th>Signals</th></tr>
+      {% for f in spend.fields %}
+      <tr><td>{{ f.field }}</td><td>&nbsp;</td><td>{{ "{:,}".format(f.count) }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% endif %}
     <p>&nbsp;</p>
     {% endif %}
     {% if vin != "00000000000000000" %}

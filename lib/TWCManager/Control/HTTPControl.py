@@ -116,6 +116,84 @@ def watchLine(master, vehicle):
     )
 
 
+def _spendShown(master):
+    # Fleet API spend only with a Fleet token, telemetry only with its module
+    api = master.getModuleByName("TeslaAPI")
+    fleet = bool(api and getattr(api.fleetSlot, "accessToken", ""))
+    return fleet, master.getModuleByName("FleetTelemetryMQTT") is not None
+
+
+def _usd(amount):
+    # Small amounts keep a third decimal so a few hundred signals aren't $0.00
+    return ("$%.3f" if 0 < amount < 0.01 else "$%.2f") % amount
+
+
+def _lastMonth(amount):
+    return " · Last month: %s" % _usd(amount) if amount else ""
+
+
+def _teleText(signals, usd):
+    # Counts what reached TWCManager; Tesla bills what the car sent
+    return "Fleet Telemetry this month: approx. {:,} signals, {}".format(
+        signals, _usd(usd)
+    )
+
+
+def spendLines(master):
+    fleet, telemetry = _spendShown(master)
+    m = master.fleetSpend.month() if fleet or telemetry else None
+    pace, lines = m and m["pace"], []
+    if fleet:
+        by = " · on pace for %s by %s" % (_usd(pace["api"]), pace["by"]) if pace else ""
+        lines.append(
+            "Fleet API this month: %s" % _usd(m["api"])
+            + by
+            + _lastMonth(m["last"]["api"])
+        )
+    if telemetry:
+        by = " · on pace for %s" % _usd(pace["telemetry"]) if pace else ""
+        lines.append(
+            _teleText(m["signals"], m["telemetry"])
+            + by
+            + _lastMonth(m["last"]["telemetry"])
+        )
+    return lines
+
+
+def carSpend(master, vin):
+    fleet, telemetry = _spendShown(master)
+    if not (fleet or telemetry):
+        return None
+    c = master.fleetSpend.car(vin)
+    shows = telemetry and (c["signals"] or c["last"]["telemetry"])
+    tele = (
+        "approx. %s telemetry" % _usd(c["telemetry"])
+        if telemetry and c["signals"]
+        else ""
+    )
+    n = c["requests"]
+    return {
+        "cell": " + ".join(filter(None, (_usd(c["api"]) if fleet else "", tele))),
+        "heading": (
+            "Fleet API this month: %s in %d %s"
+            % (_usd(c["api"]), n, "request" if n == 1 else "requests")
+            + _lastMonth(c["last"]["api"])
+            if fleet
+            else ""
+        ),
+        "types": [
+            dict(t, cost=_usd(t["cost"]), age=time.time() - t["last"])
+            for t in c["types"]
+        ],
+        "telemetry": (
+            _teleText(c["signals"], c["telemetry"]) + _lastMonth(c["last"]["telemetry"])
+            if shows
+            else ""
+        ),
+        "fields": c["fields"],
+    }
+
+
 PRESENCE_TEXT = {HOME: "Home", PRESUMED: "Probably home", NOT_HOME: "Away"}
 
 
@@ -496,6 +574,8 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(
                 watchLine=lambda v: watchLine(master, v),
                 providerLines=lambda v: providerLines(master, v),
+                spendLines=lambda: spendLines(master),
+                carSpend=lambda vin: carSpend(master, vin),
             )
             self.templateEnv.globals.update(registry=master.vehicleRegistry)
             self.templateEnv.globals.update(

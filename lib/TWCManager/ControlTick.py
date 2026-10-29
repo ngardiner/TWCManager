@@ -21,6 +21,7 @@ class ControlTick(threading.Thread):
         self.interval = interval
         self._stopping = threading.Event()
         self.failures = 0
+        self._spendSavedAt = 0.0
 
     def run(self):
         while not self._stopping.wait(self.interval):
@@ -67,6 +68,11 @@ class ControlTick(threading.Thread):
         if self.master.watch:
             self._guarded("watch", self.master.watch.pass_)
         self._guarded("history", self.master.sampleHistory)
+        # Counting never saves by itself (telemetry can arrive many times a
+        # second): spend still changing goes to disk at most every 10 minutes
+        if time.time() - self._spendSavedAt >= 600 and self.master.fleetSpend.changed():
+            self._spendSavedAt = time.time()
+            self.master.queue_background_task({"cmd": "saveSettings"})
         # Hourly, forget vehicles no one has claimed or seen for the window
         if time.time() - self.master.lastVehicleExpiry > 3600:
             self.master.lastVehicleExpiry = time.time()

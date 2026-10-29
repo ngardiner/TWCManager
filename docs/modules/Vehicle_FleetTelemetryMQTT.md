@@ -215,6 +215,10 @@ Example command:
 curl -s -o out.json --cacert proxy.crt --header "Authorization: Bearer $TESLA_AUTH_TOKEN" -H 'Content-Type: application/json' --data @fleet-telemetry-config.json https://localhost:4443/api/1/vehicles/fleet_telemetry_config
 ```
 
+#### What it costs
+
+Tesla bills Fleet Telemetry by the signal (each field the car streams). The Vehicles page shows an approximate cost for this month, in total and for each car, and each car's page counts its signals by field. The count is what TWCManager received; Tesla bills what the car sent, which also includes anything sent while TWCManager was not running and fields it does not subscribe to, so the bill can be higher. If one field drives most of the count, a coarser `minimum_delta` for it in your telemetry configuration cuts the cost.
+
 #### TWCManager Configuration
 
 ```

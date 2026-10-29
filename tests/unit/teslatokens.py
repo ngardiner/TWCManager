@@ -11,6 +11,7 @@ import time
 
 import jwt
 import pytest
+from TWCManager.Vehicle.FleetSpend import FleetSpend
 
 SIGNING_KEY = "unit-test-signing-key-0123456789abcdef"
 
@@ -90,6 +91,7 @@ class FakeMaster:
         self.settings = {}
         self.modules = {}
         self.tasks = []
+        self.fleetSpend = FleetSpend()
 
     def getModuleByName(self, name):
         return self.modules.get(name)

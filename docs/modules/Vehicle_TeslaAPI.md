@@ -40,6 +40,8 @@ Reads go to the free Owner API when you have both. Both APIs come after Bluetoot
 
 A charge read happens when something needs it (a command, a TWC's plug event) and when the [vehicle watch](../Settings.md#vehicle-watch) asks: on a change such as an arrival, a wake or a plug-in, and on a clock for a car charging at home, every 5 minutes over the Owner API, or every 15 minutes on the Fleet API and only while a policy reads its battery level. The watch's checks of whether a car is asleep or awake use the free online check. A read stays fresh for 5 minutes for every caller. The watch's billed Fleet API reads draw from its monthly budget. `cloudUpdateInterval` does not set how often cars are read (1.4.1).
 
+The Vehicles page shows this month's Fleet API spend, in total and for each car, with a projection for the whole month and last month's total. Each car's page breaks it down by request type (commands, wakes, reads), with how many, what they cost and when the last one was. These are the requests TWCManager itself sent. Tesla bills the whole account, so another app using the same account adds to your bill without appearing here.
+
 ## Prerequisites
 
 - A Tesla account that owns the vehicle(s).

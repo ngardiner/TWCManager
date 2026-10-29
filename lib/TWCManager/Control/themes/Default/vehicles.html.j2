@@ -10,6 +10,8 @@
     {% include 'navbar.html.j2' %}
     <p>&nbsp;</p>
     <h3>Vehicles</h3>
+    {% set spend = spendLines() %}
+    {% for line in spend %}<p>{{ line }}</p>{% endfor %}
     <table class="stack">
       <tr>
         <th></th>
@@ -20,6 +22,7 @@
         <th>Providers</th>
         <th>Last seen</th>
         <th>Charge limit (car's own)</th>
+        {% if spend %}<th>Fleet this month</th>{% endif %}
       </tr>
       {% for v in registry.vehicles() %}
         {% set row = v.summary() %}
@@ -40,6 +43,7 @@
           <td data-label="Providers">{% for line in providerLines(v) %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
           <td data-label="Last seen">{{ ageText(row.lastSeenAge) }} via {{ sourceName(row.lastSeenSource) }}</td>
           <td data-label="Charge limit (car's own)">{{ heldLimitText(v) }}</td>
+          {% if spend %}<td data-label="Fleet this month">{% if not row.anonymous %}{{ carSpend(row.vin).cell }}{% endif %}</td>{% endif %}
         </tr>
       {% endfor %}
     </table>
