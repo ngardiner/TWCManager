@@ -1,6 +1,8 @@
 """distributeEVSEPower admits points while their minimums fit, drawing
 points first, then shares the power among them at one water level."""
 
+import pytest
+
 from TWCManager import TWCMaster as T
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
 from TWCManager.TWCMaster import TWCMaster
@@ -168,3 +170,23 @@ def test_the_drawing_car_keeps_its_seat_as_power_wavers_at_the_edge(monkeypatch)
             p.reportedAmpsActual = 10 if p.target else 0
         seats.append(tuple(bool(p.target) for p in (a, b)))
     assert seats == [(False, True)] * 20
+
+
+@pytest.mark.parametrize("kind", ["VehicleEndpoints", "Gen3TWCs"])
+def test_an_arrival_gets_only_what_the_others_draw_leaves(kind):
+    # A draws all 48 A when B's car arrives. Each is given 24 A at once, but
+    # A's car takes a while to ramp down: until it has, B gets only what A's
+    # draw leaves, never less than its minimum. The 48 A is the policy's for
+    # car-side points, the Gen3 circuit's for units
+    class Gen3:
+        maxPower = 48 * V
+
+    a, b = (Point(k, 6, 48, controllers=[kind]) for k in "ab")
+    a.reportedAmpsActual, b.reportedAmpsActual = 48, 0
+    feed = 48 if kind == "VehicleEndpoints" else 100
+    seen = []
+    for draw in (48, 40, 30, 24):
+        a.reportedAmpsActual = draw
+        _master([a, b], feed, Gen3())
+        seen.append(amps([a, b]))
+    assert seen == [[24, 6], [24, 8], [24, 18], [24, 24]]

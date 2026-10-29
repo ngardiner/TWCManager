@@ -62,16 +62,30 @@ def _carsAt(point) -> set:
     return {point.vehicleKey, *(e.heldKey for e in point.localEndpoints)} - {None}
 
 
-def _drawing(point) -> bool:
-    # Current flows there now, by its TWC's report or else its car's state
-    amps = [
+def _localAmps(point) -> list:
+    return [
         getattr(e, "reportedAmpsActual", getattr(e, "currentAmps", 0))
         for e in point.localEndpoints
     ]
+
+
+def _drawing(point) -> bool:
+    # Current flows there now, by its TWC's report or else its car's state
+    amps = _localAmps(point)
     if amps:
         return max(amps) >= POWER_FLOWING_AMPS
     states = [e.vehicle.value("chargingState") for e in point.vehicleEndpoints]
     return point.wantsToCharge and "Charging" in states
+
+
+def _drawAmps(point) -> float:
+    # The current there now, by its TWC's report or else its charging car's
+    amps = _localAmps(point)
+    if amps:
+        return max(amps)
+    cars = [e.vehicle for e in point.vehicleEndpoints]
+    charging = [v for v in cars if v.value("chargingState") == "Charging"]
+    return max((v.value("actualCurrent") or 0 for v in charging), default=0)
 
 
 def _draws(point, budgets) -> set:
@@ -721,6 +735,24 @@ class TWCMaster:
                     for c in _draws(p, left):
                         left[c] -= share[p]
                 pool = [p for p in pool if p not in group]
+            # A car comes up to a new share at once, but another comes down
+            # to its own only as it ramps: each point gets no more than what
+            # the others' shares, or their draws where higher, leave in each
+            # budget they share, and never less than its minimum
+            taken = {
+                p: max(given.get(p, 0), self.convertAmpsToWatts(_drawAmps(p)))
+                for p in points
+                if not p.isReadOnly
+            }
+            for p, watts in list(given.items()):
+                for c in _draws(p, budgets):
+                    others = sum(
+                        w
+                        for q, w in taken.items()
+                        if q is not p and c in _draws(q, budgets)
+                    )
+                    watts = min(watts, max(budgets[c] - others, p.minPower))
+                given[p] = watts
             # Points neither admitted nor held get a target of 0. For an idle Gen2 TWC that
             # 0 goes out as its hardware minimum (the TWC treats an offer of 0
             # as its minimum), which it needs to see a car plug in. The

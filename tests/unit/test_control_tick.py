@@ -584,6 +584,9 @@ def test_retired_settings_keys_load_and_are_ignored(tmp_path):
         m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else lookup(n)
         m.loadSettings()
         assert ("spikeAmpsProactively" in m.settings) is retired
+        # The second car has stopped drawing, so the first's share is all
+        # there
+        m.getSlaveTWCs()[1].reportedAmpsActual = 0
         m.controlPass()
         return [(s.offer.amps, s.pointAmps) for s in m.getSlaveTWCs()]
 
