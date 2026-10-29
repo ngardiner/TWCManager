@@ -15,6 +15,11 @@ from pathlib import Path
 # Scenario runner fixtures — imported so pytest auto-discovers them
 from tests.scenario_runner import run_scenario  # noqa: F401
 
+# The API scripts are run by tests/Makefile against a live TWCManager; their
+# requests run as they are imported, so collecting them would hit a server
+# that isn't there
+collect_ignore = ["API"]
+
 # Test configuration
 TEST_API_BASE_URL = "http://127.0.0.1:8088/api"
 TEST_CONFIG_PATH = (

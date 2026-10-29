@@ -13,7 +13,7 @@ session.trust_env = False
 response = None
 
 try:
-    response = session.get("http://127.0.0.1:8088/api/getSlaveTWCs", timeout=5)
+    response = session.get("http://127.0.0.1:8088/api/getSlaveTWCs", timeout=(3, 5))
 except requests.Timeout:
     print("Error: Connection Timed Out")
     exit(255)

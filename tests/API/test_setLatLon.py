@@ -28,7 +28,7 @@ data = {
 
 values["tests"]["setHomeLat"] = {}
 try:
-    response = session.post("http://127.0.0.1:8088/api/setSetting", json=data, timeout=5)
+    response = session.post("http://127.0.0.1:8088/api/setSetting", json=data, timeout=(3, 5))
     values["elapsed"]["setHomeLat"] = response.elapsed
     values["response"]["setHomeLat"] = response.status_code
 except requests.Timeout:
@@ -46,7 +46,7 @@ data = {
 
 values["tests"]["setHomeLon"] = {}
 try:
-    response = session.post("http://127.0.0.1:8088/api/setSetting", json=data, timeout=5)
+    response = session.post("http://127.0.0.1:8088/api/setSetting", json=data, timeout=(3, 5))
     values["elapsed"]["setHomeLon"] = response.elapsed
     values["response"]["setHomeLon"] = response.status_code
 except requests.Timeout:

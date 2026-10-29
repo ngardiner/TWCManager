@@ -11,7 +11,7 @@ session.trust_env = False
 response = None
 
 try:
-    response = session.get("http://127.0.0.1:8088/api/getStatus", timeout=5)
+    response = session.get("http://127.0.0.1:8088/api/getStatus", timeout=(3, 5))
 except requests.Timeout:
     print("Error: Connection Timed Out")
     exit(255)
