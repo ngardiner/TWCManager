@@ -7,3 +7,19 @@ span.VINClick { cursor: pointer; }
 
 img.vehicleImage { width: 400px; }
 img.vehicleImage.thumbnail { width: 160px; }
+
+/* Data tables that collapse to one labelled card per row on phones */
+table.stack th, table.stack td { padding: 0.25em 1em 0.25em 0; vertical-align: top; }
+
+@media (max-width: 767.98px) {
+  img.vehicleImage { max-width: 100%; height: auto; }
+  table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; }
+  table.stack tr:first-child { display: none; }
+  table.stack tr { border-top: 1px solid #dee2e6; padding: 0.5em 0; }
+  table.stack td { padding: 0.1em 0; }
+  table.stack td:empty { display: none; }
+  table.stack td[data-label]::before {
+    content: attr(data-label) ": ";
+    font-weight: bold;
+  }
+}

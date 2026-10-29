@@ -10,42 +10,36 @@
     {% include 'navbar.html.j2' %}
     <p>&nbsp;</p>
     <h3>Vehicles</h3>
-    <table>
+    <table class="stack">
       <tr>
         <th></th>
-        <th>VIN</th><td>&nbsp;</td>
-        <th>Name</th><td>&nbsp;</td>
-        <th>Presence</th><td>&nbsp;</td>
-        <th>Watch</th><td>&nbsp;</td>
-        <th>Providers</th><td>&nbsp;</td>
-        <th>Last seen</th><td>&nbsp;</td>
+        <th>VIN</th>
+        <th>Name</th>
+        <th>Presence</th>
+        <th>Watch</th>
+        <th>Providers</th>
+        <th>Last seen</th>
         <th>Charge limit (car's own)</th>
       </tr>
       {% for v in registry.vehicles() %}
         {% set row = v.summary() %}
         <tr>
-          <td>
+          <td class="picture">
             {% if not row.anonymous %}
             <a href="/vehicleDetail/{{ row.vin }}"><img class="vehicleImage thumbnail" hidden alt=""
                  data-vin="{{ row.vin }}" data-appearance="{{ row.appearance|tojson|forceescape }}"></a>
             {% endif %}
           </td>
-          <td>
+          <td data-label="VIN">
             {% if row.anonymous %}Unknown car on TWC {{ row.point }}
             {% else %}<a href="/vehicleDetail/{{ row.vin }}">{{ row.vin }}</a>{% endif %}
           </td>
-          <td>&nbsp;</td>
-          <td>{{ row.name }}</td>
-          <td>&nbsp;</td>
-          <td>{{ presence(v) }}</td>
-          <td>&nbsp;</td>
-          <td>{{ watchLine(v) }}</td>
-          <td>&nbsp;</td>
-          <td>{% for line in providerLines(v) %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
-          <td>&nbsp;</td>
-          <td>{{ ageText(row.lastSeenAge) }} via {{ sourceName(row.lastSeenSource) }}</td>
-          <td>&nbsp;</td>
-          <td>{{ heldLimitText(v) }}</td>
+          <td data-label="Name">{{ row.name }}</td>
+          <td data-label="Presence">{{ presence(v) }}</td>
+          <td data-label="Watch">{{ watchLine(v) }}</td>
+          <td data-label="Providers">{% for line in providerLines(v) %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+          <td data-label="Last seen">{{ ageText(row.lastSeenAge) }} via {{ sourceName(row.lastSeenSource) }}</td>
+          <td data-label="Charge limit (car's own)">{{ heldLimitText(v) }}</td>
         </tr>
       {% endfor %}
     </table>
@@ -61,22 +55,18 @@
 
     <p>&nbsp;</p>
     <h3>Charge history</h3>
-    <table>
+    <table class="stack">
         <tr>
           <th>Vehicle VIN</th>
-          <td>&nbsp;</td>
           <th>Charges</th>
-          <td>&nbsp;</td>
           <th>Total kWh</th>
         </tr>
       {% if master.settings["Vehicles"] %}
         {% for vehicle in master.settings["Vehicles"].keys()|sort %}
             <tr>
-              <td><a href="/vehicleDetail/{{ vehicle }}">{{ vehicle }}</a></td>
-              <td>&nbsp;</td>
-              <td>{{ master.settings["Vehicles"][vehicle]["chargeSessions"] }}</td>
-              <td>&nbsp;</td>
-              <td>{{ master.settings["Vehicles"][vehicle]["totalkWh"] }}</td>
+              <td data-label="VIN"><a href="/vehicleDetail/{{ vehicle }}">{{ vehicle }}</a></td>
+              <td data-label="Charges">{{ master.settings["Vehicles"][vehicle]["chargeSessions"] }}</td>
+              <td data-label="Total kWh">{{ master.settings["Vehicles"][vehicle]["totalkWh"] }}</td>
             </tr>
         {% endfor %}
       {% endif %}
@@ -84,28 +74,22 @@
 
     <p>&nbsp;</p>
     <h3>Vehicle Groups</h3>
-    <table>
+    <table class="stack">
       <tr>
         <th>Group Name</th>
-        <td>&nbsp;</td>
         <th>Members</th>
-        <td>&nbsp;</td>
         <th>Description</th>
-        <td>&nbsp;</td>
         <th>Actions</th>
       </tr>
       {% for group in master.settings["VehicleGroups"].keys()|sort %}
         <tr>
-          <td><b>{{ group }}</b></td>
-          <td>&nbsp;</td>
-          <td>
+          <td data-label="Group"><b>{{ group }}</b></td>
+          <td data-label="Members">
             {% for vehicle in master.settings["VehicleGroups"][group]["Members"] %}
               {{ vehicle }}<br/>
             {% endfor %}
           </td>
-          <td>&nbsp;</td>
-          <td>{{ master.settings["VehicleGroups"][group]["Description"] }}</td>
-          <td>&nbsp;</td>
+          <td data-label="Description">{{ master.settings["VehicleGroups"][group]["Description"] }}</td>
           <td>
             {% if master.settings["VehicleGroups"][group]["Built-in"] %}
             Delete
@@ -121,17 +105,9 @@
     <h5>Add Group</h5>
     <form method=POST action="/vehicle/group">
     <input type="hidden" name="operation" value="add" />
-    <table>
-      <tr>
-        <th>Group Name &nbsp;</th>
-        <td><input /></td>
-        <td>&nbsp;</td>
-        <th>Description &nbsp;</th>
-        <td><input /></td>
-        <td>&nbsp;</td>
-        <td><input type=submit /></td>
-      </tr>
-    </table>
+    <label>Group Name <input /></label>
+    <label>Description <input /></label>
+    <input type=submit />
     </form>
   </body>
 </html>

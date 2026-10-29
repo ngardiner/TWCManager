@@ -21,6 +21,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Power is shared evenly among the EVSEs whose minimum fits, cars already charging first, and a charging car without room is turned down to its minimum before it is stopped (#709)
     * (@MikeBishop) - BLE's sleep-safe check needs no pairing and, while the car is awake, reports whether the charge-port door is open: a closed door counts as unplugged, an open one on an awake car at home is confirmed by a charge read
     * (@MikeBishop) - The Vehicles page and each vehicle's page show a picture of the car (model, paint and wheels), drawn by Tesla's image service; clicking the picture in the list opens the car's page. Its looks come from TeslaMate or a Tesla API read, are saved across restarts, and are read once at most for a car a telemetry feed covers. A car whose looks are unknown is drawn from its VIN
+    * (@MikeBishop) - The Vehicles page fits a phone: on a narrow screen each row of its tables shows as a card, with each value labelled
 * Architecture
     * (@MikeBishop) - The watch sets when cars are read, in place of the Tesla API deferral ladder (300/1800/3600 s of paid `vehicle_data`) and the half-hourly battery refresh of cars at home, both removed; a read stays fresh for 5 minutes for every caller. `cloudUpdateInterval` no longer sets how often cars are read (the Powerwall module uses it as its cloud cache time)
     * (@MikeBishop) - Serialise settings.json saves under a settings lock so a save no longer races writers on other threads
