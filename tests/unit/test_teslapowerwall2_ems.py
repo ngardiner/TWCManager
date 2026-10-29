@@ -8,9 +8,38 @@ Tests cover:
 - Caching behavior
 """
 
+import copy
 import pytest
+from datetime import datetime
 from unittest.mock import Mock, patch
 import time
+
+
+def _w(fromDow, toDow, fromHour, toHour):
+    return {"fromDayOfWeek": fromDow, "toDayOfWeek": toDow,
+            "fromHour": fromHour, "fromMinute": 0, "toHour": toHour, "toMinute": 0}
+
+
+# A real site's tariff_content_v2 (Duke), as site_info returned it on 2026-10-29
+DUKE = {
+    "seasons": {
+        "Summer": {
+            "fromMonth": 10, "fromDay": 1, "toMonth": 4, "toDay": 30,
+            "tou_periods": {
+                "OFF_PEAK": {"periods": [_w(0, 6, 5, 0)]},
+                "SUPER_OFF_PEAK": {"periods": [_w(0, 6, 0, 5)]},
+            },
+        },
+        "Winter": {
+            "fromMonth": 5, "fromDay": 1, "toMonth": 9, "toDay": 30,
+            "tou_periods": {
+                "OFF_PEAK": {"periods": [_w(0, 4, 5, 14), _w(0, 4, 20, 0), _w(5, 6, 5, 0)]},
+                "ON_PEAK": {"periods": [_w(0, 4, 14, 20)]},
+                "SUPER_OFF_PEAK": {"periods": [_w(0, 4, 0, 5), _w(5, 6, 0, 5)]},
+            },
+        },
+    },
+}
 
 
 def _make_logger_mock():
@@ -242,3 +271,66 @@ class TestStormWatchTokenSlots:
         assert products.last_request.timeout == 10 and live.last_request.timeout == 10
         assert token not in caplog.text and "Bearer" not in caplog.text
         assert "ValueError" in caplog.text and "ConnectionError" in caplog.text
+
+
+class TestTouPeriodAt:
+    """The period a tariff names for a moment in the site's local time."""
+
+    def _at(self, tariff, *when):
+        from TWCManager.EMS.TeslaPowerwall2 import touPeriodAt
+
+        return touPeriodAt(tariff, datetime(*when))
+
+    def test_weekday_peak_in_season(self):
+        assert self._at(DUKE, 2026, 7, 15, 15, 0) == "ON_PEAK"  # Wednesday
+
+    def test_peak_end_is_exclusive(self):
+        assert self._at(DUKE, 2026, 7, 15, 20, 0) == "OFF_PEAK"
+
+    def test_weekend_has_no_peak(self):
+        assert self._at(DUKE, 2026, 7, 18, 15, 0) == "OFF_PEAK"  # Saturday
+
+    def test_midnight_end_covers_late_evening(self):
+        assert self._at(DUKE, 2026, 7, 15, 23, 59) == "OFF_PEAK"
+
+    def test_season_wrapping_year_end(self):
+        assert self._at(DUKE, 2026, 1, 10, 3, 0) == "SUPER_OFF_PEAK"
+        assert self._at(DUKE, 2026, 10, 29, 15, 0) == "OFF_PEAK"
+
+    def test_one_day_season_beats_parent(self):
+        cpp = copy.deepcopy(DUKE)
+        cpp["seasons"]["CPP"] = {
+            "fromMonth": 1, "fromDay": 12, "toMonth": 1, "toDay": 12,
+            "tou_periods": {"ON_PEAK": {"periods": [
+                {"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 6, "toHour": 9}
+            ]}},
+        }
+        assert self._at(cpp, 2026, 1, 12, 7, 0) == "ON_PEAK"
+        assert self._at(cpp, 2026, 1, 12, 10, 0) == "OFF_PEAK"
+        assert self._at(cpp, 2026, 1, 13, 7, 0) == "OFF_PEAK"
+
+    def test_v1_list_form(self):
+        v1 = {"seasons": {"All": {
+            "fromMonth": 1, "fromDay": 1, "toMonth": 12, "toDay": 31,
+            "tou_periods": {"ON_PEAK": [{"toDayOfWeek": 6, "fromHour": 16, "toHour": 21}]},
+        }}}
+        assert self._at(v1, 2026, 3, 3, 17, 0) == "ON_PEAK"
+
+    def test_no_season_matches(self):
+        assert self._at({}, 2026, 7, 15, 15, 0) == ""
+        only_summer = {"seasons": {"S": {
+            "fromMonth": 6, "fromDay": 1, "toMonth": 9, "toDay": 30, "tou_periods": {}
+        }}}
+        assert self._at(only_summer, 2026, 1, 1, 12, 0) == ""
+
+    def test_malformed_tariff_never_raises(self):
+        year = {"toMonth": 12, "toDay": 31}
+        for bad in (
+            {"seasons": None},
+            {"seasons": {"S": None}},
+            {"seasons": {"S": dict(year)}},
+            {"seasons": {"S": dict(year, tou_periods={"ON_PEAK": "x"})}},
+            {"seasons": {"S": dict(year, tou_periods={"ON_PEAK": [None, {"fromHour": "a"}]})}},
+            {"seasons": {"S": dict(year, fromMonth="x")}},
+        ):
+            assert self._at(bad, 2026, 7, 15, 15, 0) in ("", "OFF_PEAK")

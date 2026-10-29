@@ -6,6 +6,62 @@ from TWCManager.Logging.LoggerFactory import LoggerFactory
 logger = LoggerFactory.get_logger("TeslaPwl", "EMS")
 
 
+def _seasonSpan(season, now):
+    """Roughly how many days a tariff season spans, or None if it excludes now."""
+    start = (season.get("fromMonth", 0), season.get("fromDay", 0))
+    end = (season.get("toMonth", 0), season.get("toDay", 0))
+    today = (now.month, now.day)
+    if start <= end:
+        covers = start <= today <= end
+    else:  # the season runs over the new year
+        covers = today >= start or today <= end
+    # 31-day months: close enough to rank a one-day season above its parent
+    return (end[0] * 31 + end[1] - start[0] * 31 - start[1]) % 372 if covers else None
+
+
+def _inWindow(window, now):
+    def field(key):
+        return window.get(key, 0)  # the API leaves out zero values
+
+    day, first, last = now.weekday(), field("fromDayOfWeek"), field("toDayOfWeek")
+    if not (first <= day <= last if first <= last else day >= first or day <= last):
+        return False
+    start = field("fromHour") * 60 + field("fromMinute")
+    end = field("toHour") * 60 + field("toMinute") or 24 * 60  # 00:00 ends the day
+    minute = now.hour * 60 + now.minute
+    return start <= minute < end if start < end else minute >= start or minute < end
+
+
+def touPeriodAt(tariff, now):
+    """The period label (ON_PEAK, OFF_PEAK, ...) a Tesla tariff gives for now,
+    a datetime in the site's local time; "" if no season covers it."""
+    seasons = tariff.get("seasons") if isinstance(tariff, dict) else None
+    best = None
+    for season in (seasons or {}).values():
+        try:
+            span = _seasonSpan(season, now)
+        except (AttributeError, TypeError):
+            continue
+        # Seasons should not overlap, but a single-day season added inside its
+        # parent (a critical-peak day) must win while it lasts
+        if span is not None and (best is None or span < best[0]):
+            best = (span, season)
+    if best is None:
+        return ""
+    periods = best[1].get("tou_periods")
+    for label, windows in periods.items() if isinstance(periods, dict) else ():
+        if isinstance(windows, dict):  # tariff_content_v2 wraps each list
+            windows = windows.get("periods")
+        for window in windows if isinstance(windows, list) else ():
+            try:
+                if _inWindow(window, now):
+                    return label
+            except (AttributeError, TypeError):
+                continue
+    # Hours no window names carry the base rate
+    return "OFF_PEAK"
+
+
 class TeslaPowerwall2:
     import requests
     import urllib3
