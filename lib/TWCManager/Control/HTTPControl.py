@@ -230,6 +230,30 @@ def forgetVehicle(master, vin):
     return "/vehicles"
 
 
+def addVehicleGroup(master, name, description):
+    """The Add Group form; returns the redirect location."""
+    name = str(name or "").strip()
+    # Delete takes the name as the last segment of its URL path
+    if not name or "/" in name:
+        error = "A group needs a name, without /"
+    else:
+        with master.settingsLock:
+            groups = master.settings.setdefault("VehicleGroups", {})
+            if name in groups:
+                error = "There is already a group named " + name
+            else:
+                error = None
+                groups[name] = {
+                    "Description": str(description or "").strip(),
+                    "Built-in": 0,
+                    "Members": [],
+                }
+    if error:
+        return "/vehicles?groupError=" + urllib.parse.quote_plus(error)
+    master.queue_background_task({"cmd": "saveSettings"})
+    return "/vehicles"
+
+
 class ThreadingSimpleServer(ThreadingMixIn, HTTPServer):
     address_family = socket.AF_INET6
 
@@ -1418,9 +1442,9 @@ def CreateHTTPHandlerClass(master):
                 self.do_API_GET()
                 return
 
-            self.addVehicleError = urllib.parse.parse_qs(self.url.query).get(
-                "error", [""]
-            )[0]
+            query = urllib.parse.parse_qs(self.url.query)
+            self.addVehicleError = query.get("error", [""])[0]
+            self.addGroupError = query.get("groupError", [""])[0]
 
             webroutes = [
                 {"route": "/debug", "tmpl": "debug.html.j2"},
@@ -1757,6 +1781,18 @@ def CreateHTTPHandlerClass(master):
 
             if self.url.path == "/vehicle/forget":
                 location = forgetVehicle(self.master, self.getFieldValue("vin"))
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.end_headers()
+                self.wfile.write("".encode("utf-8"))
+                return
+
+            if self.url.path == "/vehicle/addGroup":
+                location = addVehicleGroup(
+                    self.master,
+                    self.getFieldValue("name"),
+                    self.getFieldValue("description"),
+                )
                 self.send_response(302)
                 self.send_header("Location", location)
                 self.end_headers()

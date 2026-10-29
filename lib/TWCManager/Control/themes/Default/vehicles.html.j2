@@ -94,7 +94,7 @@
             {% if master.settings["VehicleGroups"][group]["Built-in"] %}
             Delete
             {% else %}
-            <a href="/vehicles/deleteGroup/{{group}}">Delete</a>
+            <a href="/vehicles/deleteGroup/{{ group|urlencode }}">Delete</a>
             {% endif %}
           </td>
         </tr>
@@ -103,10 +103,12 @@
 
     <p>&nbsp;</p>
     <h5>Add Group</h5>
-    <form method=POST action="/vehicle/group">
-    <input type="hidden" name="operation" value="add" />
-    <label>Group Name <input /></label>
-    <label>Description <input /></label>
+    {% if addGroupError %}
+    <p style="color: red;">{{ addGroupError }}</p>
+    {% endif %}
+    <form method=POST action="/vehicle/addGroup">
+    <label>Group Name <input name="name" /></label>
+    <label>Description <input name="description" /></label>
     <input type=submit />
     </form>
   </body>
