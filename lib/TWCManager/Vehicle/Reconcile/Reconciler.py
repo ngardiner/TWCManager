@@ -69,6 +69,10 @@ def _tier(provider, capability) -> int:
 
 
 class VehicleReconciler(threading.Thread):
+    # A car whose charging state nothing has given (after a restart) may be
+    # woken for a start once a run, which learns it; False: never
+    wakeUnreadOnce = True
+
     def __init__(self, master, clock=time.time):
         super().__init__(daemon=True, name="VehicleReconciler")
         self.master = master
@@ -79,6 +83,8 @@ class VehicleReconciler(threading.Thread):
         # (key, aspect) -> the last hands-off or no-candidate message, so
         # each is logged once; pruned to the store's keys every pass
         self._said: Dict[Tuple[str, str], str] = {}
+        # The cars a start has woken, once its wake was sent
+        self._wokeUnread = set()
         self.ble, self.cloud = (
             VehicleCommandQueue(
                 name="Vehicle-" + name,
@@ -331,9 +337,17 @@ class VehicleReconciler(threading.Thread):
         # A start goes with the limit first: its wake carries the limit
         ride = aspect == CHARGE_LIMIT and self._startWanted(vehicle, config)
         field = FIELD_FOR[aspect]
-        # Only a car expected to charge is woken; a restore or stop never is
-        quiet = B.whyQuiet(self.master, vehicle)
-        wakes = quiet is None and not d.restore and d.value is not False
+        # Only a car expected to charge is woken; a restore or stop never is,
+        # nor waits on the question
+        wakes = not d.restore and d.value is not False
+        quiet = B.whyQuiet(self.master, vehicle) if wakes else None
+        if aspect == CHARGING and B.known(vehicle, CHARGING) is None:
+            if key in self._wokeUnread or not self.wakeUnreadOnce:
+                quiet = quiet or "its charging state is unknown"
+        if aspect == CHARGING and quiet == "no room to start":
+            # The start waits for room, keeping its desire and its budget
+            return None
+        wakes = wakes and quiet is None
         asleep = Presence.asleep(vehicle, rec.heldAt or 0) is not False
         # A billed provider never wakes for amps
         holder = self.master.providerOrder.provider(rec.lastProvider)
@@ -589,6 +603,8 @@ class VehicleReconciler(threading.Thread):
         if attempt.aspect is None:
             # A debug one-shot changes no record
             return
+        if attempt.aspect == CHARGING and attempt.wake and not O.isNotSent(outcome):
+            self._wokeUnread.add(attempt.key)
         provider = self.master.providerOrder.provider(attempt.provider)
         vehicle = self.master.vehicleRegistry.get(attempt.key)
         self.desired.noteOutcome(

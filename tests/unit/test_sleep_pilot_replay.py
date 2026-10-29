@@ -41,7 +41,7 @@ def test_a_car_read_under_the_sleep_pilot_is_offered_its_share_and_woken(caplog)
     m.setMaxAmpsToDivideAmongSlaves(48)
     m.controlPass(now=c())
     assert s.pointAmps == pytest.approx(48)
-    assert s.offer.amps == 48 and m.offered[VIN] > 0
+    assert s.offer.amps == 48
     assert m.desired.get(VIN, CHARGING).value is True  # the start
     m.desired.set(VIN, CHARGE_LIMIT, 70, "policy")
     assert B.whyQuiet(m, v) is None  # the raise may wake the car

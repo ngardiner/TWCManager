@@ -202,4 +202,4 @@ def test_an_anonymous_point_finds_its_cars_once_per_pass(rig, monkeypatch):
         ChargingPoint, "candidates", lambda *a: calls.append(a) or real(*a)
     )
     m.controlPass()
-    assert len(calls) == 1 and "anon:8244" in m.offered
+    assert len(calls) == 1

@@ -192,7 +192,6 @@ GATES = (
     "stopCarsCharging",
     "cancelStopCarsCharging",
     "startCarsCharging",
-    "withdrawStartCharging",
 )
 
 
@@ -213,9 +212,9 @@ def calls(m):
     return out
 
 
-def age(s, offered=0, amps=0):
-    s.timeLastAmpsOfferedChanged -= offered
-    s.timeReportedAmpsActualChangedSignificantly -= amps
+def age(m, seconds):
+    # The car has been without room, its draw steady, seconds longer
+    m._held = {key: (*h[:-1], h[-1] - seconds) for key, h in m._held.items()}
 
 
 def test_a_car_drawing_over_4a_offered_zero_is_stopped_after_60s():
@@ -224,7 +223,7 @@ def test_a_car_drawing_over_4a_offered_zero_is_stopped_after_60s():
     beat(m, s)
     assert s.lastAmpsOffered == 0
     assert calls(m) == [("cancelStopCarsCharging", VIN)]  # the offer just changed
-    age(s, offered=61, amps=61)
+    age(m, 61)
     beat(m, s)
     assert calls(m) == [("stopCarsCharging", VIN)]
 
@@ -232,13 +231,15 @@ def test_a_car_drawing_over_4a_offered_zero_is_stopped_after_60s():
 def test_the_stop_waits_start_stop_delay_after_a_significant_amps_change():
     m = master(feed=3)
     s = gated(m, actual=10.0)
-    s.startStopDelay = 120
+    m.config["config"]["startStopDelay"] = 120
     beat(m, s)
-    age(s, offered=61, amps=90)
+    age(m, 90)
     calls(m)
+    beat(m, s, actual=12.0)  # a significant change: the hold restarts
+    age(m, 90)
     beat(m, s)
-    assert calls(m) == [("cancelStopCarsCharging", VIN)]
-    age(s, amps=40)
+    assert calls(m) == [("cancelStopCarsCharging", VIN)] * 2
+    age(m, 40)
     beat(m, s)
     assert calls(m) == [("stopCarsCharging", VIN)]
 
@@ -257,30 +258,30 @@ def test_an_error_state_is_not_started():
     beat(m, s)
     assert s.lastAmpsOffered >= s.minAmpsToOffer()
     names = [name for name, _ in calls(m)]
-    assert "startCarsCharging" not in names and "withdrawStartCharging" not in names
+    assert "startCarsCharging" not in names
 
 
-def test_offered_below_the_minimum_withdraws_a_pending_start():
+def test_offered_below_the_minimum_and_not_drawing_decides_nothing():
+    # A start already wanted waits for room in the reconciler
     m = master(feed=3)
     s = gated(m, state=0x03, actual=0.0)
     beat(m, s)
     assert s.lastAmpsOffered == 0
-    assert calls(m) == [("withdrawStartCharging", VIN)]
+    assert calls(m) == []
 
 
 def test_protocol_1_and_keyless_twcs_decide_nothing():
-    # Protocol 1: offered 0 while drawing (a stop), then not drawing (a
-    # withdraw), then offered the minimum (a start) at 2
+    # Protocol 1: offered 0 while drawing (a stop), then not drawing, then
+    # offered the minimum (a start) at 2
     m = master(feed=3)
     s = gated(m, protocol=1, actual=10.0)
-    age(s, offered=61, amps=61)
+    age(m, 61)
     beat(m, s)
     beat(m, s, actual=0.0)
     assert calls(m) == []
     budget(m, 40)
     beat(m, s)
-    names = [name for name, _ in calls(m)]
-    assert "startCarsCharging" not in names and "withdrawStartCharging" not in names
+    assert "startCarsCharging" not in [name for name, _ in calls(m)]
     # Protocol 2 with no car key: nothing plugged in, so no session
     m = master(feed=3)
     s = gated(m, vin=None, state=0x00, actual=0.0)
@@ -297,7 +298,7 @@ def test_no_gate_runs_during_the_mode_2_silence():
     assert calls(m) == [("cancelStopCarsCharging", VIN)]  # the offer just changed
     m.settings["respondToSlaves"] = 0
     m.settings["respondToSlavesExpiry"] = time.time() + 60
-    age(s, offered=61, amps=61)
+    age(m, 61)
     tickThenBeat(m, s, 0x01, 40, 10.0)
     assert calls(m) == []  # silent TWCs are not started or stopped
     m.settings["respondToSlavesExpiry"] = time.time() - 1

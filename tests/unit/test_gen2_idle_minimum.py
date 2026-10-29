@@ -230,8 +230,12 @@ def test_next_cycle_rebalances_when_the_idle_twcs_car_wants_power():
     placeAt(m, v)
     v.observe("chargingState", "Charging", "OwnerAPI")
     m.distributeEVSEPower()
+    # Each is due 16 A, but both still draw 20: each gets what the other's
+    # draw leaves until it comes down
+    assert busy.pointAmps == idle.pointAmps == 12
+    idle.reportedAmpsActual = busy.reportedAmpsActual = 16
+    m.distributeEVSEPower()
     assert busy.pointAmps == idle.pointAmps == 16
-    assert busy.pointAmps + idle.pointAmps <= 32
 
 
 def test_charging_point_below_min_amps_per_twc_gets_a_stop():
@@ -242,9 +246,36 @@ def test_charging_point_below_min_amps_per_twc_gets_a_stop():
     m.distributeEVSEPower()
     assert busy.pointAmps == 0
     # Two cars, 20 A: the 10 A fair share is under the floor, so that car is
-    # stopped and the other takes the rest, never a partial amount
+    # stopped and the other takes the rest once it has, never a partial
+    # amount
     m, iface = real(minAmps=12, feed=20)
     a = chargingSlave(m, b"\x82\x45", VIN)
     b = chargingSlave(m, b"\x82\x46", "5YJ3E1EA1KF000002")
     m.distributeEVSEPower()
+    assert sorted([a.pointAmps, b.pointAmps]) == [0, 12]
+    (stopped,) = [s for s in (a, b) if s.pointAmps == 0]
+    stopped.reportedAmpsActual = 0
+    m.distributeEVSEPower()
     assert sorted([a.pointAmps, b.pointAmps]) == [0, 20]
+
+
+def test_a_car_arriving_beside_a_full_draw_is_held_until_the_other_ramps_down():
+    # Two TWCs on one 48 A circuit. A draws all 48 A when B's car plugs in:
+    # each is given 24 A at once, but A's car takes a while to ramp down, so
+    # B is offered only what A's measured draw leaves (its minimum while
+    # there is none), climbing to its share as A comes down
+    m, iface = real(minAmps=6, feed=48)
+    m.config["config"].update(wiringMaxAmpsAllTWCs=48, wiringMaxAmpsPerTWC=48)
+    a = chargingSlave(m, b"\x82\x45", VIN)
+    a.wiringMaxAmps, a.reportedAmpsActual = 48, 48
+    m.controlPass()
+    assert a.offer.amps == 48
+    b = chargingSlave(m, b"\x82\x46", "5YJ3E1EA1KF000002")
+    b.wiringMaxAmps, b.reportedAmpsActual = 48, 0
+    seen = []
+    for drawA in (48, 40, 30, 24):
+        a.reportedAmpsActual = a.reportedAmpsMax = drawA
+        a.timeLastAmpsOfferedChanged -= 10
+        m.controlPass()
+        seen.append((a.offer.amps, b.offer.amps))
+    assert seen == [(24, 6), (24, 8), (24, 18), (24, 24)]

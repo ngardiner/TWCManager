@@ -64,17 +64,6 @@ class TestTWCSlaveInitialization:
         slave = TWCSlave(bytearray(b"AB"), 80, mock_config, mock_master)
         
         assert slave.wiringMaxAmps == 32
-    
-    def test_slave_start_stop_delay_from_config(self, mock_master, mock_config):
-        """Test slave start/stop delay from configuration."""
-        from TWCManager.TWCSlave import TWCSlave
-        
-        mock_config["config"]["startStopDelay"] = 120
-        slave = TWCSlave(bytearray(b"AB"), 80, mock_config, mock_master)
-        
-        assert slave.startStopDelay == 120
-
-
 class TestTWCSlaveHeartbeat:
     """Test TWCSlave heartbeat handling."""
     

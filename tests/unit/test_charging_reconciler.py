@@ -24,10 +24,9 @@ def slave(m):
     # Only a protocol 2 TWC decides start and stop, as on main
     s = m.getSlaveTWCs()[0]; s.protocolVersion = 2; return s
 
-def ready_to_stop(s):
-    # The heartbeat's 60 s gates (time.time) have run: the car drew this much for a minute
-    s.reportedAmpsActualSignificantChangeMonitor = 12.0
-    s.timeLastAmpsOfferedChanged = s.timeReportedAmpsActualChangedSignificantly = time.time() - 61
+def ready_to_stop(m):
+    # The 60 s hold has run: each car without room drew this much for a minute
+    m._held = {k: (*h[:-1], h[-1] - 61) for k, h in m._held.items()}
 
 # The heartbeat and the master
 
@@ -46,19 +45,20 @@ def test_heartbeat_skips_the_registry_write_for_a_pending_vin():             # S
     s.currentVIN = VIN; drive(m, s, amps_actual=12.0); assert v.latest("actualCurrent").value == 12.0 and v.latest("actualCurrent").source == "Gen2TWC"
 
 def test_heartbeat_readings_are_not_evidence_for_a_car_with_vehicle_reads():   # S4, paid counted
-    m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "not_charging"))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI")
+    m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "not_charging"))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); m.setMaxAmpsToDivideAmongSlaves(0)   # no power to give: no rate
     v.observe("chargingState", "Charging", "FleetAPI"); m.stopCarsCharging(VIN); r.pass_(); assert cmds(f) == ["stopCharging"]
     for _ in range(10): c.t += 61; drive(m, s, amps_actual=12.0); r.pass_()                                                # readings every heartbeat, past RETRY each time
     assert cmds(f) == ["stopCharging"]                                                                                    # no vehicle read arrived: not re-sent
 
 def test_heartbeat_stop_targets_the_anonymous_car():                         # real TWCSlave heartbeat, non-Tesla car
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"
-    m.setMaxAmpsToDivideAmongSlaves(0); iface = drive(m, s, amps_actual=12.0); ready_to_stop(s); drive(m, s, amps_actual=12.0)   # offer 0, the car still draws past the gates
+    m.setMaxAmpsToDivideAmongSlaves(0); iface = drive(m, s, amps_actual=12.0); ready_to_stop(m); drive(m, s, amps_actual=12.0)   # offer 0, the car still draws past the gates
     assert m.desired.get(anon.key, CHARGING).value is False and r.pass_() == 1 and [x[:2] + x[4:6] for x in m._outbox] == [b"\xfc\xb2" + s.TWCID]
     iface.send.reset_mock(); assert m.flushRS485() == 1 and iface.send.call_args.args[0][:2] == b"\xfc\xb2"            # sent by the serial loop, on its thread
 
 def test_heartbeat_with_no_vehicle_key_decides_nothing():
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); v.observe("chargingState", "Stopped", "TeslaBLE")
+    v.observe("chargeLimit", 60, "TeslaBLE")                                                                                # at its limit: its own point would not start it
     m.desired.set(VIN, CHARGING, False, "distributor"); m.setMaxAmpsToDivideAmongSlaves(32)
     for _ in range(3): drive(m, s, amps_actual=0.0, state=0x00)                                                              # 00: no car known plugged in (a plugged state is an anonymous session, test_limit_wiring)
     assert s.vehicleKey is None and m.desired.get(VIN, CHARGING).value is False                                            # never a broadcast start or cancel
@@ -93,17 +93,17 @@ def test_disruptive_stop_waits_for_ble_only_when_ble_is_set_up_for_the_car():
     assert m2.settings["respondToSlaves"] == 0 and m2.providerOrder.provider("TeslaBLE").calls == []           # at once
 
 def test_disruptive_stop_is_sent_once_until_new_evidence_then_reasserted():   # real heartbeat readings
-    m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "2"
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "2"; m.setMaxAmpsToDivideAmongSlaves(0)   # no power to give: no rate
     drive(m, s, amps_actual=12.0); assert anon.latest("actualCurrent").value == 12.0 and anon.latest("actualCurrent").source == "Gen2TWC"   # the heartbeat records current
     m.stopCarsCharging(anon.key); assert r.pass_() == 1 and m.settings["respondToSlaves"] == 0 and anon.lastWrite("chargingState") is None     # never stamped
     m.settings["respondToSlaves"] = 1
     for _ in range(5): assert r.pass_() == 0                                                                    # no new reading: not re-sent
     c.t += 30; drive(m, s, amps_actual=12.0); assert r.pass_() == 0 and m.settings["respondToSlaves"] == 1         # newer reading, inside RETRY: held
-    c.t += 31; drive(m, s, amps_actual=12.0); m.stopCarsCharging(anon.key); assert r.pass_() == 1 and m.settings["respondToSlaves"] == 0   # resumed, past RETRY: re-stopped
+    c.t += 31; drive(m, s, amps_actual=12.0); m.cancelStopCarsCharging(anon.key); m.stopCarsCharging(anon.key); assert r.pass_() == 1 and m.settings["respondToSlaves"] == 0   # resumed, past RETRY, a new stop: re-stopped
     m.settings["respondToSlaves"] = 1; c.t += 61; drive(m, s, amps_actual=0.5); assert r.pass_() == 0 and m.settings["respondToSlaves"] == 1   # quiet bus: satisfied
 
 def test_disruptive_stop_on_the_real_clock_is_sent_once():                    # production clock
-    m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"
+    m, r, v, c = setup(ble(O.Outcome(O.DONE)), clock=False); s = slave(m); anon = m.vehicleRegistry.beginPlugSession("8244"); m.settings["chargeStopMode"] = "3"; m.setMaxAmpsToDivideAmongSlaves(0)   # no power to give: no rate
     drive(m, s, amps_actual=12.0); m.stopCarsCharging(anon.key)
     sent = sum(r.pass_() for _ in range(20)); drive(m, s, amps_actual=12.0)
     assert sent == 1 and m.flushRS485() == 1                                                                         # one relay stop, not one per pass
@@ -188,10 +188,10 @@ def test_an_app_start_after_our_stop_is_stopped_again_once_per_newer_reading(): 
     for _ in range(5): c.t += 61; m.stopCarsCharging(VIN); r.pass_()
     assert len(cmds(b)) == 2                                                 # no newer reading: our stamp holds
 
-def test_zero_offer_clears_a_pending_start_and_sends_no_wake():             # Review Focus 3, paid counted
+def test_zero_offer_holds_a_pending_start_and_sends_no_wake():             # Review Focus 3, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.DONE))); s = onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
     m.startCarsCharging(VIN); m.setMaxAmpsToDivideAmongSlaves(0); drive(m, s, amps_actual=0.0)
-    assert m.desired.get(VIN, CHARGING) is None
+    assert m.desired.get(VIN, CHARGING).value is True                                                             # it waits for room
     for _ in range(5): c.t += 61; drive(m, s, amps_actual=0.0); r.pass_()
     assert f.calls == []
 
@@ -283,22 +283,6 @@ def test_a_fleet_only_car_is_stopped_once_the_list_loads(requests_mock):    # C1
     api.loadList(); r.pass_()
     assert len(calls(requests_mock, "charge_stop")) == 1 and calls(requests_mock, "wake_up") == []
 
-def test_a_queued_start_is_withdrawn_when_the_offer_drops(requests_mock):   # pre-flight M7, threaded, paid counted
-    m, r, v, c, api = fleetOnTwc(requests_mock, inline_=False, state="asleep"); gate = threading.Event()
-    block = ScriptedProvider("Blocker", 9, False, [O.Outcome(O.DONE)]); block.wake = lambda vin: (gate.wait(5), O.Outcome(O.DONE))[1]
-    m.providerOrder.register(block); r.cloud.start()
-    try:
-        from TWCManager.Vehicle.Reconcile.Desired import Attempt
-        r.submit(Attempt(VIN, None, C.WAKE, None, "Blocker", False, None, False, time.time()))                    # holds the cloud worker
-        from tests.unit.test_reconciler_queues import wait_for
-        assert wait_for(lambda: r.cloud._busy and not r.cloud._low)
-        m.startCarsCharging(VIN); r.pass_(); assert len(r.cloud._low) == 1                                       # the Fleet start waits behind it
-        m.desired.clearIf(VIN, CHARGING, True); gate.set()
-        r.drain(5)
-    finally:
-        gate.set()
-    assert calls(requests_mock, "wake_up") == [] and calls(requests_mock, "charge_start") == [] and calls(requests_mock, "vehicle_data") == []
-
 # Fix round 1
 
 def test_an_asleep_fleet_car_with_an_unknown_limit_is_woken_then_limited_then_started(requests_mock, monkeypatch):   # C1, paid counted
@@ -338,7 +322,8 @@ def test_an_anonymous_point_fans_out_as_main_did():                         # I1
     m.stopCarsCharging(anon.key); assert wanted(m, False) == fanned                                                # mode 1 stop: at-home API cars and BLE VINs, other points included
     assert m.cancelStopCarsCharging(anon.key) == 3 and wanted(m, False) == []
     m.startCarsCharging(anon.key); assert wanted(m, True) == fanned                                                # mode 1 start: unaddressed
-    m.withdrawStartCharging(anon.key); assert wanted(m, True) == []                                                # the zero-offer clear too
+    m.desired.clearIf(anon.key, CHARGING, True); assert wanted(m, True) == fanned                                 # the anonymous key holds none
+    for k in fanned: m.desired.clearIf(k, CHARGING, True)
     m.settings["chargeStopMode"] = "3"
     m.startCarsCharging(anon.key); assert wanted(m, True) == fanned                                                # mode 3 start: as mode 1
     m.desired = type(m.desired)(clock=c); m.reconciler.desired = m.desired
@@ -365,10 +350,11 @@ def test_a_car_at_its_limit_is_not_started():                               # #5
 
 def test_offer_flaps_do_not_multiply_paid_starts():                         # I4 + N3, paid counted
     m, r, v, c = setup(fleet(O.Outcome(O.SATISFIED, "requested"))); onTwc(m, v); f = m.providerOrder.provider("FleetAPI"); v.observe("chargingState", "Stopped", "FleetAPI")
-    for _ in range(30): m.startCarsCharging(VIN); r.pass_(); c.t += 11; m.withdrawStartCharging(VIN); r.pass_(); c.t += 11
-    assert len(cmds(f)) <= 30 * 22 // 60 + 1                                                                       # main's 60 s gate, not one per flap (30)
-    n = len(cmds(f)); c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert len(cmds(f)) == n + 1                  # N3: kept no longer than 60 s
-    c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert len(cmds(f)) == n + 1                                    # still wanted: settled, no repeat
+    m.setMaxAmpsToDivideAmongSlaves(0)                                                                             # no room
+    for _ in range(30): m.startCarsCharging(VIN); r.pass_(); c.t += 11; r.pass_(); c.t += 11
+    assert cmds(f) == []                                                                                           # a start with no room waits
+    m.setMaxAmpsToDivideAmongSlaves(32); c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert len(cmds(f)) == 1  # room: sent once
+    c.t += 61; m.startCarsCharging(VIN); r.pass_(); assert len(cmds(f)) == 1                                        # still wanted: settled, no repeat
 
 def test_a_rejected_twc_vin_falls_back_to_the_anonymous_session():          # review M3
     m, r, v, c = setup(ble(O.Outcome(O.DONE))); s = slave(m); s.reportedState = 0x01; anon = m.vehicleRegistry.beginPlugSession("8244")

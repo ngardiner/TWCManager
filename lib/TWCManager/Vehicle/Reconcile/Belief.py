@@ -41,12 +41,12 @@ def standIn(vehicle):
 
 def uncompleted(vehicle, obs):
     # "Complete" read before our last limit write above the battery level
-    # is no longer true: the car can charge again
+    # (or with the level unknown) is no longer true: the car can charge again
     write = vehicle.lastWrite(FIELD_FOR[CHARGE_LIMIT])
     soc = vehicle.latest("batteryLevel")
-    if obs is None or obs.value != "Complete" or write is None or soc is None:
+    if obs is None or obs.value != "Complete" or write is None:
         return obs
-    raised = obs.at <= write.at and soc.value < write.value
+    raised = obs.at <= write.at and (soc is None or soc.value < write.value)
     return obs._replace(value="Stopped") if raised else obs
 
 
@@ -103,6 +103,11 @@ def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
     if battery and limit and battery >= limit:
         # The car would refuse the start
         return "battery at its charge limit"
+    return _refusesStart(vehicle, known, config)
+
+
+def _refusesStart(vehicle, known, config) -> Optional[str]:
+    # Whatever its limit, the car cannot take a start, or must not get one
     if known is not None and known.value in ("Disconnected", "NoPower"):
         return "the car cannot charge (%s)" % known.value
     if vehicle.value("scheduledChargingPending") is True and config.get(
@@ -113,26 +118,39 @@ def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
     return None
 
 
-def whyQuiet(master, vehicle) -> Optional[str]:
-    # Why the car is expected to quiesce once every pending desire is applied,
-    # or None when it will charge (unknown limit or battery: it will)
+def _wontCharge(master, vehicle) -> Optional[str]:
+    # Why the car would not charge if started now, once every pending desire
+    # is applied; None when it would (unknown limit or battery: it would)
     key, desired = vehicle.key, master.desired
-    stop, pending = desired.get(key, CHARGING), desired.get(key, CHARGE_LIMIT)
+    pending = desired.get(key, CHARGE_LIMIT)
     held = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
     limit, battery = known(vehicle, CHARGE_LIMIT), vehicle.value("batteryLevel")
-    limit = limit and limit.value
+    limit = believed = limit and limit.value
+    state = known(vehicle, CHARGING)
     if pending is not None and not (releases(pending) and not held):
         limit = held.outside if releases(pending) else pending.value
     # Unplugged is known only by a reading
     plugged = pluggedNow(master, vehicle, None)
     if presence(master, vehicle) == NOT_HOME or plugged is False:
         return "not plugged in here"
-    if stop is not None and stop.value is False:
-        return "stop desired"
-    if plugged is not False and getattr(master, "offered", {}).get(key) == 0:
-        return "nothing offered"
     if limit and battery and limit <= battery:
         return "car won't charge: limit at or below battery"
+    if getattr(state, "value", None) == "Complete" and limit == believed:
+        return "car won't charge: complete at its limit"
+    config = (getattr(master, "config", None) or {}).get("config") or {}
+    return _refusesStart(vehicle, state, config)
+
+
+def wouldCharge(master, vehicle) -> bool:
+    return _wontCharge(master, vehicle) is None
+
+
+def whyQuiet(master, vehicle) -> Optional[str]:
+    # Why the car is expected to quiesce, or None when it will charge. Room
+    # is the control tick's admission, a set swapped whole
+    reason = _wontCharge(master, vehicle)
+    if reason or vehicle.key not in getattr(master, "admission", ()):
+        return reason or "no room to start"
     feeds = map(master.getModuleByName, ("TeslaMateVehicle", "FleetTelemetryMQTT"))
     if any(f and f.registry.now() < f.settleUntil for f in feeds):
         # Its first readings may show a full car

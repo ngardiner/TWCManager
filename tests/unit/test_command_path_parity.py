@@ -1944,7 +1944,11 @@ def test_box_2026_10_18_departure_restores_over_ble_within_a_minute(
     assert limits(b) == []
     onset = c.t + 10
     beats(m, r, c, s, 600, 0x00, 0.0, policy)
-    assert limits(b) == [90] and "wake" not in bleCommands(b)
+    # With 32 A to share the car was started and rated over BLE; the restore
+    # itself woke nothing
+    assert limits(b) == [90] and bleCommands(b)[-2:] == ["charging-set-amps"] + [
+        "charging-set-limit"
+    ]
     sent = [t for t, run in zip(b.sent, b.runs) if run[1] == "charging-set-limit"]
     assert len(sent) == 1 and onset + s.CHECK_WAIT <= sent[0] <= onset + 60
     assert paid(requests_mock) == (0, 0, 0) and m.heldLimits.get(VIN) is None
@@ -2003,7 +2007,9 @@ def test_box_2026_10_17_morning_wake_episodes_declare_no_departure(
     for state, seconds in runs:
         beats(m, r, c, s, seconds, state, 32.0, policy, step=1)
     assert v.markAt("unplug") == Presence.NEVER and v.value("twcVin") == "8244"
-    assert limits(b) == [] and "wake" not in bleCommands(b)
+    # Started and rated over BLE with the 32 A to share, a read showing it
+    # Stopped sends the start again (the car here never draws); no limit
+    assert limits(b) == [] and "charging-set-limit" not in bleCommands(b)
     assert paid(requests_mock) == (0, 0, 0)
 
 
@@ -2013,11 +2019,12 @@ def test_a_sleeping_car_at_a_gen2_00_is_never_woken_by_a_restore(
     # Three real unplugs and returns; BLE never answers. An unplug wakes a
     # car, but Fleet here answers asleep throughout: it stands for a car no
     # provider can read, so no unplug is declared, and nothing restores or
-    # wakes it: paid == (0, 0, 0)
+    # wakes it. At its limit, it is not started: paid == (0, 0, 0)
     m, r, v, c, api = install(fleet=True, held=(90, 50))
     b = realBle(m, answers=None, ping=False)
     FleetCar(requests_mock, state="asleep", limit=50)
     v.observe("chargeLimit", 50, "TeslaBLE")
+    v.observe("batteryLevel", 50, "TeslaBLE")
     policy = cycles(m, 50)
     policy()  # the policy in force when the TWC names the car
     s = gen2(monkeypatch, m, c)
@@ -2053,14 +2060,18 @@ def test_an_idle_car_at_0_a_never_departs_on_a_twc_00_even_when_the_re_apply_wou
         beats(m, r, c, s, 300, 0x00, 0.0, policy)
         beats(m, r, c, s, 300, 0x03, 0.0, policy)
     assert v.markAt("unplug") == Presence.NEVER and arrivals == []
-    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+    # With 32 A to share, the raise to a car that would charge wakes it over
+    # BLE, after its start
+    assert bleCommands(b)[-2:] == ["wake", "charging-set-limit"]
+    assert paid(requests_mock) == (0, 0, 0)
 
 
 def test_a_sleeping_car_at_00_with_power_available_is_woken_for_a_raise(
     requests_mock, monkeypatch
 ):
     # 32 A to share; the named car asleep at 00 (max 0 A), its limit at its
-    # battery: the policy's raise wakes it over BLE; paid == (0, 0, 0)
+    # battery: the policy's raise wakes it over BLE, and the TWC still
+    # holding it is admitted, so it is started too; paid == (0, 0, 0)
     m, r, v, c, api = install(fleet=True)
     b = realBle(
         m, ping=lambda vin: not v.observe("state", "asleep", "TeslaBLE") or True
@@ -2068,12 +2079,12 @@ def test_a_sleeping_car_at_00_with_power_available_is_woken_for_a_raise(
     FleetCar(requests_mock, state="asleep", limit=50)
     v.observe("chargeLimit", 50, "TeslaBLE")
     v.observe("batteryLevel", 50, "TeslaBLE")
-    m.setMaxAmpsToDivideAmongSlaves(32)
     s = gen2(monkeypatch, m, c, maxA=32.0)
+    m.setMaxAmpsToDivideAmongSlaves(32)
     beats(m, r, c, s, 300, 0x00, 0.0, cycles(m, 50))
     beats(m, r, c, s, 1800, 0x00, 0.0, cycles(m, 80))
-    assert bleCommands(b) == ["wake", "charging-set-limit"] and limits(b) == [80]
-    assert paid(requests_mock) == (0, 0, 0)
+    assert bleCommands(b) == ["wake", "charging-set-limit", "wake", "charging-start"]
+    assert limits(b) == [80] and paid(requests_mock) == (0, 0, 0)
 
 
 def test_no_gps_source_plug_unplug_cycle_end_to_end(requests_mock, monkeypatch):
@@ -2099,8 +2110,8 @@ def test_gen2_steady_00_after_link_does_not_block_startup_charging(
 ):
     # Plugged in and asleep across the restart: 03 for two minutes after the
     # link, then a steady 00 inside the link grace, the max dropping to 0:
-    # no departure, nothing restored or woken, and the start still goes over
-    # BLE once the ping answers; paid == (0, 0, 0)
+    # no departure and nothing restored, and the start goes over BLE once
+    # the ping answers: the car, on no point, has room; paid == (0, 0, 0)
     m, r, v, c, api = install(fleet=True, located=False, held=(90, 50))
     b = realBle(m)
     FleetCar(requests_mock, state="asleep", limit=50)
@@ -2111,11 +2122,13 @@ def test_gen2_steady_00_after_link_does_not_block_startup_charging(
     beats(m, r, c, s, 900, 0x00, 0.0, policy)
     assert v.markAt("unplug") == Presence.NEVER
     assert Presence.presence(m, v) != Presence.NOT_HOME
-    assert limits(b) == [] and b.runs == []
+    assert limits(b) == [] and bleCommands(b) == ["wake", "charging-start"]
+    m.setMaxAmpsToDivideAmongSlaves(32)
     m.startCarsCharging(VIN)
     beats(m, r, c, s, 60, 0x00, 0.0, policy)
-    # The edge's check, and its one follow-up when that check can't tell
-    assert b.pings == [VIN, VIN] and Presence.presence(m, v) == Presence.HOME
+    # The edge's check, its one follow-up when that check can't tell, and
+    # the start's (the car only presumed home)
+    assert b.pings == [VIN] * 3 and Presence.presence(m, v) == Presence.HOME
     assert "charging-start" in bleCommands(b) and limits(b) == []
     assert m.heldLimits.get(VIN) == HeldLimit(90, 50)
     assert paid(requests_mock) == (0, 0, 0)
@@ -2136,6 +2149,35 @@ def test_plug_in_on_a_vin_twc_comes_home_with_one_apply(requests_mock, monkeypat
     beats(m, r, c, s, 600, 0x03, 32.0, policy)
     assert limits(b) == [50] and m.heldLimits.get(VIN) == HeldLimit(80, 50)
     assert paid(requests_mock) == (0, 0, 0)
+
+
+def test_a_protocol_2_gen2_with_power_at_its_minimum_keeps_one_start_budget(
+    requests_mock, monkeypatch
+):
+    # Fleet only; the TWC speaks protocol 2, so its gate starts the car
+    # when it is offered its minimum. The car accepts starts but stays
+    # Stopped, a feed says so every 30 s, and the power swings across the
+    # TWC's 6 A minimum every 90 s for an hour. A start that has gone waits
+    # for room, at most two sends a desire: paid == (0, 0, 3), its rate and
+    # two starts
+    m, r, v, c, api = install(fleet=True)
+    car = FleetCar(requests_mock, state="online", limit=80, soc=50)
+    reads = dict(chargingState="Stopped", chargeLimit=80, batteryLevel=50)
+    for field, value in dict(reads, state="online").items():
+        v.observe(field, value, "FleetAPI")
+    s = gen2(monkeypatch, m, c)
+    s.protocolVersion = 2
+    t0 = c.t
+    while c.t - t0 < 3600:
+        c.t += 10
+        m.setMaxAmpsToDivideAmongSlaves((7, 5)[int((c.t - t0) // 90) % 2])
+        if int(c.t) % 30 == 0:
+            car.charge["charging_state"] = "Stopped"
+            v.observe("chargingState", "Stopped", "FleetTelemetryMQTT")
+        heartbeat(m, s, 0.0, state=0x03, amps_max=32.0)
+        r.pass_()
+    assert commands(requests_mock) == ["set_charging_amps"] + ["charge_start"] * 2
+    assert paid(requests_mock) == (0, 0, 3)
 
 
 # A VIN-less plug: one attribution names the car, else nobody is rated
@@ -2202,9 +2244,9 @@ def test_vin_less_two_candidates_ble_pilot_one_apply(requests_mock, monkeypatch)
         **{VIN: ("Charging", 32), VIN2: ("Disconnected", 0)}
     )
     m.settings["chargeRateControl"] = "2"
-    m.setMaxAmpsToDivideAmongSlaves(10)
     policy = cycles(m, 50)
     s = gen2(monkeypatch, m, c, vin=None)
+    m.setMaxAmpsToDivideAmongSlaves(10)
     attributeQueued(m)
     assert v.value("twcVin") == "8244" and two.value("twcVin") is None
     beats(m, r, c, s, 600, 0x03, 32.0, policy)
@@ -2493,6 +2535,7 @@ def unnamedAt00(requests_mock, monkeypatch):
     b._fetch_state_json = chargeRead()
     s = gen2(monkeypatch, m, c, vin=None)
     s.protocolVersion = 2
+    m.setMaxAmpsToDivideAmongSlaves(0)  # nothing to share until a row says
     attributeQueued(m)
     assert s.vehicleKey == "anon:8244"
     v.observe("batteryLevel", 50, "FleetAPI")
@@ -2502,35 +2545,37 @@ def unnamedAt00(requests_mock, monkeypatch):
     c.t += (30 - c.t % 30) % 30
     beats(m, r, c, s, 30, 0x00, 32.0)
     assert m.vehicleRegistry.vehicleAt("8244").isAnonymous
-    assert s.vehicleKey is None and m.offered.get(VIN) == 0
+    assert s.vehicleKey is None
     return m, r, v, c, s, b
 
 
 def test_an_unnamed_plug_at_00_wakes_no_candidate_for_a_raise(
     requests_mock, monkeypatch
 ):
-    # The policy raises the limit to 90 while the unnamed TWC rests at 00:
-    # nothing is offered there, so the raise waits for a free channel.
+    # The policy raises the limit to 90 while the unnamed TWC rests at 00
+    # with no power to share, so the raise waits for a free channel.
     # paid == (0, 0, 0)
     m, r, v, c, s, b = unnamedAt00(requests_mock, monkeypatch)
     beats(m, r, c, s, 600, 0x00, 32.0, cycles(m, 90))
     assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
 
 
-def test_an_unnamed_plug_at_00_starts_no_candidate_as_the_offer_rises(
+def test_an_unnamed_plug_at_00_starts_only_the_car_plugged_there_as_the_offer_rises(
     requests_mock, monkeypatch
 ):
     # The offer rises while the unnamed TWC rests at 00 with a car not full:
-    # the TWC reports no car there, so no start fans out. The car's own
-    # endpoint still rates it over BLE. paid == (0, 0, 0)
+    # the TWC reports no car there, so no start fans out. The car plugged in
+    # here, by elimination, would charge and has room: it alone is started,
+    # by its VIN, and its own endpoint rates it over BLE. paid == (0, 0, 0)
     m, r, v, c, s, b = unnamedAt00(requests_mock, monkeypatch)
     starts = []
     monkeypatch.setattr(m, "startCarsCharging", starts.append)
     for amps in (6, 12, 24, 32):
         m.setMaxAmpsToDivideAmongSlaves(amps)
         beats(m, r, c, s, 60, 0x00, 32.0)
-    assert starts == [] and m.desired.get(VIN, CHARGING) is None
-    assert "charging-start" not in bleCommands(b)
+    assert starts == [] and m.desired.get(VIN2, CHARGING) is None
+    assert m.desired.get(VIN, CHARGING).value is True
+    assert bleCommands(b).count("charging-start") == 1
     assert paid(requests_mock) == (0, 0, 0)
 
 
@@ -2648,8 +2693,10 @@ def test_box_2026_10_20_each_unplug_departs_once_ble_reads_it_disconnected(
     m, r, v, c, s, b = checkedCar(requests_mock, monkeypatch)
     beats(m, r, c, s, 600, 0x03, 47.0)
     boxUnplugs(m, r, c, s, v)
-    assert len(b.reads) == 3 and len(b.pings) == 3
-    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+    # One more read: the start's, of a car whose charging state was unknown
+    assert len(b.reads) == 4 and len(b.pings) == 3
+    assert "charging-set-limit" not in bleCommands(b)
+    assert paid(requests_mock) == (0, 0, 0)
 
 
 def test_box_2026_10_20_with_teslamate_live_the_feed_departs_the_car(
@@ -2672,7 +2719,9 @@ def test_box_2026_10_20_with_teslamate_live_the_feed_departs_the_car(
     )
     assert [int(t) for t in b.reads] == [wake + 21] and len(b.pings) == 1
     assert (first, second) == (said[0], said[2])  # at the feed's reports
-    assert "wake" not in bleCommands(b) and paid(requests_mock) == (0, 0, 0)
+    # Started and rated over BLE with the 32 A to share; no limit
+    assert bleCommands(b) == ["wake", "charging-set-amps", "wake", "charging-start"]
+    assert paid(requests_mock) == (0, 0, 0)
 
 
 def test_a_sleeping_car_on_a_03_00_flicker_stays_plugged_in(requests_mock, monkeypatch):
@@ -2682,25 +2731,27 @@ def test_a_sleeping_car_on_a_03_00_flicker_stays_plugged_in(requests_mock, monke
     beats(m, r, c, s, 600, 0x03, 6.0)
     beats(m, r, c, s, 10, 0x00, 6.0)
     beats(m, r, c, s, 120, 0x03, 6.0)
-    assert b.pings == [VIN] and b.reads == []
+    # The one read is the start's, of a car whose charging state was unknown
+    assert b.pings == [VIN] and len(b.reads) == 1
     assert v.markAt("unplug") == Presence.NEVER and v.value("twcVin") == "8244"
     assert paid(requests_mock) == (0, 0, 0)
 
 
-@pytest.mark.parametrize("state, reads", [("online", 1), ("asleep", 0)])
+@pytest.mark.parametrize("state, spent", [("online", (2, 0, 1)), ("asleep", (2, 1, 0))])
 def test_fleet_only_checks_a_car_awake_with_one_read(
-    requests_mock, monkeypatch, state, reads
+    requests_mock, monkeypatch, state, spent
 ):
     # The free online check first; only an awake car is read, and Disconnected
-    # departs it. paid == (reads, 0, 0)
+    # departs it. Just restarted, with 32 A to share and its charging state
+    # unknown, the car is started: its one wake (if asleep) and read learn it
+    # Complete; its rate is set. Awake then, the unplug's check reads it too
     m, r, v, c, api = install(fleet=True)
     car = FleetCar(requests_mock, state=state, limit=50, charging="Complete")
     s = gen2(monkeypatch, m, c)
     beats(m, r, c, s, 600, 0x03, 32.0)
     car.charge["charging_state"] = "Disconnected"
     beats(m, r, c, s, 120, 0x00, 0.0)
-    assert (v.markAt("unplug") > Presence.NEVER) == bool(reads)
-    assert paid(requests_mock) == (reads, 0, 0)
+    assert v.markAt("unplug") > Presence.NEVER and paid(requests_mock) == spent
 
 
 def test_an_unnamed_session_ends_when_its_only_candidate_reads_disconnected(
@@ -2720,32 +2771,36 @@ def test_an_unnamed_session_ends_when_its_only_candidate_reads_disconnected(
 
 def test_fleet_only_checks_past_its_stored_reading(requests_mock, monkeypatch):
     # The wake's check pays for a read, which defers reads 300 s; the unplug
-    # 49 s later still reads the car and departs it. paid == (2, 0, 0)
+    # 49 s later still reads the car and departs it. Started with 32 A to
+    # share, its charging state unknown: one more read, and its rate.
+    # paid == (3, 0, 1)
     m, r, v, c, api = install(fleet=True)
     car = FleetCar(requests_mock, state="online", limit=50, charging="Complete")
     s = gen2(monkeypatch, m, c, maxA=47.0)
     beats(m, r, c, s, 600, 0x03, 47.0)
     beats(m, r, c, s, 49, 0x00, 47.0, step=7)
-    assert paid(requests_mock) == (1, 0, 0)
+    assert paid(requests_mock) == (2, 0, 1)
     car.charge["charging_state"] = "Disconnected"
     beats(m, r, c, s, 40, 0x00, 0.0, step=2)
     assert v.markAt("unplug") > Presence.NEVER and v.value("twcVin") is None
-    assert paid(requests_mock) == (2, 0, 0)
+    assert paid(requests_mock) == (3, 0, 1)
 
 
 def test_fleet_only_checks_past_its_cached_asleep(requests_mock, monkeypatch):
     # The wake's check finds the car asleep (no read); the unplug wakes it,
     # and the next check, inside the online check's 120 s cache, asks again
-    # and reads it Disconnected. paid == (1, 0, 0)
+    # and reads it Disconnected. Just restarted with 32 A to share, its
+    # charging state unknown, the car is started first: one wake and read
+    # learn it Complete. paid == (3, 1, 0)
     m, r, v, c, api = install(fleet=True)
     car = FleetCar(requests_mock, state="asleep", limit=50, charging="Complete")
     s = gen2(monkeypatch, m, c, maxA=47.0)
     beats(m, r, c, s, 600, 0x03, 47.0)
     beats(m, r, c, s, 49, 0x00, 47.0, step=7)
-    assert paid(requests_mock) == (0, 0, 0)
+    assert paid(requests_mock) == (2, 1, 0)
     car.state, car.charge["charging_state"] = "online", "Disconnected"
     beats(m, r, c, s, 40, 0x00, 0.0, step=2)
-    assert v.markAt("unplug") > Presence.NEVER and paid(requests_mock) == (1, 0, 0)
+    assert v.markAt("unplug") > Presence.NEVER and paid(requests_mock) == (3, 1, 0)
 
 
 def test_box_2026_10_20_a_late_feed_neither_holds_an_unplug_nor_departs_a_replug(

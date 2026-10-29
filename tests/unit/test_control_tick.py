@@ -357,16 +357,6 @@ def test_a_withdrawal_targets_gen3_units_and_cars_zero():
     assert setAmps(m) == []
 
 
-def test_a_withdrawal_leaves_no_car_offered_power():
-    m = real()
-    car(m, VIN, "Charging")
-    m.getMaxAmpsToDivideAmongSlaves = lambda: 20
-    m.controlPass()
-    assert m.offered[VIN] > 0
-    m.withdrawOffers()
-    assert m.offered[VIN] == 0 and not any(m.offered.values())
-
-
 def test_a_withdrawal_zeroes_the_slaves_even_if_points_cannot_be_built():
     m = pureGen2(feed=40)
     m.controlPass()
@@ -563,13 +553,13 @@ def test_the_heartbeat_decides_no_charging():
 def test_no_gate_acts_before_the_first_offer():
     # A reply alone decides nothing: the gates wait for the tick's offer
     m = pureGen2(feed=40, slaves=0)
-    m.withdrawStartCharging = Mock()
+    m.startCarsCharging = Mock()
     s = charging(m, actual=0.0)
     s.protocolVersion, s.currentVIN = 2, VIN
-    assert s.offer is None and s.chargeGate(time.time(), VIN) is None
+    assert s.offer is None and s.chargeGate(VIN) is False
     s.heardFrom = False
     m.controlPass()
-    assert s.offer is None and not m.withdrawStartCharging.called
+    assert s.offer is None and not m.startCarsCharging.called
 
 
 def test_retired_settings_keys_load_and_are_ignored(tmp_path):
@@ -594,11 +584,15 @@ def test_retired_settings_keys_load_and_are_ignored(tmp_path):
         m.getModuleByName = lambda n: carapi if n == "TeslaAPI" else lookup(n)
         m.loadSettings()
         assert ("spikeAmpsProactively" in m.settings) is retired
+        # The second car has stopped drawing, so the first's share is all
+        # there
+        m.getSlaveTWCs()[1].reportedAmpsActual = 0
         m.controlPass()
         return [(s.offer.amps, s.pointAmps) for s in m.getSlaveTWCs()]
 
-    # One car gets the 10 A, the other a stop: no flex share for either
-    assert offers(True) == offers(False) == [(0, 0), (10, 10)]
+    # One car (the first) gets the 10 A, the other a stop: no flex share
+    # for either
+    assert offers(True) == offers(False) == [(10, 10), (0, 0)]
 
 
 def test_the_tick_runs_the_watch_each_pass_and_a_watch_error_does_not_stop_distribution():
