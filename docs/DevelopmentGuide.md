@@ -36,7 +36,7 @@ A pull request that changes what users see adds its changelog line as a file in 
 ### Cutting a release
 
 1. Set the version in `setup.py`, `lib/TWCManager/__init__.py` and `lib/TWCManager/TWCMaster.py`.
-2. Run `python3 contrib/release_notes.py build --version X.Y.Z`. It writes the release's section into CHANGELOG.md from the files in `changes/` and removes them. With the [GitHub CLI](https://cli.github.com/) logged in, authors come from each pull request; without it, from the branch owner in the merge commit.
+2. Run `python3 contrib/release_notes.py build --version X.Y.Z`. It writes the release's section into CHANGELOG.md from the files in `changes/` and removes them. With the [GitHub CLI](https://cli.github.com/) logged in, each note is credited to the author of the pull request GitHub links its commit to, however it was merged; without it, the merge commit's subject names the PR and the branch owner.
 3. Commit, then tag `vX.Y.Z` to publish the PyPI package and Docker image.
 
 ### Cutting a post release

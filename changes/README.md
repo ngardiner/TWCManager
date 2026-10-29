@@ -18,9 +18,11 @@ TWCManager:
 Show a picture of each car, in its model, paint and wheels, on the Vehicles pages.
 ```
 
-Leave out the PR number and your name: they are read from the merge that
-added the file when a release is cut. A file moved from elsewhere, or one that
-should credit someone else, can set them in front matter:
+Leave out the PR number and your name: when a release is cut, they are read
+from the pull request that added the file, crediting its author rather than
+whoever merged it. A note added for someone else's change, such as one written
+after merging a PR that had none, names the PR in front matter, and its author
+is credited; `authors` overrides that:
 
 ```
 ---
