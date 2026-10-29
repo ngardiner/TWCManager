@@ -87,7 +87,9 @@ def _git(cwd, *args):
     )
 
 
-def test_resolve_reads_the_merge_that_added_the_note(tmp_path, monkeypatch):
+@pytest.fixture
+def merged(tmp_path, monkeypatch):
+    """A repo whose main merged a branch adding one note; returns its path."""
     repo = str(tmp_path)
     _git(repo, "init", "-q", "-b", "main")
     os.mkdir(os.path.join(repo, "changes"))
@@ -98,8 +100,13 @@ def test_resolve_reads_the_merge_that_added_the_note(tmp_path, monkeypatch):
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "Add x")
     _git(repo, "checkout", "-q", "main")
+    monkeypatch.setattr(rn, "ROOT", repo)
+    return repo
+
+
+def test_resolve_reads_the_merge_subject_without_gh(merged, monkeypatch):
     _git(
-        repo,
+        merged,
         "merge",
         "-q",
         "--no-ff",
@@ -107,12 +114,44 @@ def test_resolve_reads_the_merge_that_added_the_note(tmp_path, monkeypatch):
         "-m",
         "Merge pull request #42 from alice/topic",
     )
-
-    monkeypatch.setattr(rn, "ROOT", repo)
-    monkeypatch.setattr(rn, "gh_login", lambda pr: None)
+    monkeypatch.setattr(rn, "gh", lambda path, jq: None)
     (note,) = rn.load("HEAD")
     assert note.prs == ["42"]
     assert note.authors == ["alice"]
+
+
+def test_resolve_credits_the_pr_author_not_the_merger(merged, monkeypatch):
+    # Merged in git, so no PR in the subject; GitHub still links the commit.
+    _git(merged, "merge", "-q", "--no-ff", "topic", "-m", "Merge branch 'topic'")
+    answers = {"pulls": "42 bob"}
+    monkeypatch.setattr(rn, "gh", lambda path, jq: answers.get(path.split("/")[-1]))
+    (note,) = rn.load("HEAD")
+    assert note.prs == ["42"]
+    assert note.authors == ["bob"]
+
+
+def test_resolve_without_a_pr_credits_the_commit_author(merged, monkeypatch):
+    _git(merged, "merge", "-q", "--ff-only", "topic")
+    monkeypatch.setattr(
+        rn, "gh", lambda path, jq: "carol" if jq == ".author.login" else None
+    )
+    (note,) = rn.load("HEAD")
+    assert note.prs == []
+    assert note.authors == ["carol"]
+
+
+def test_resolve_named_pr_credits_its_author(merged, monkeypatch):
+    os.makedirs(os.path.join(merged, "changes"), exist_ok=True)
+    with open(os.path.join(merged, "changes", "x.feature.md"), "w") as f:
+        f.write("---\npr: 7\n---\nAdd x.\n")
+    _git(merged, "add", ".")
+    _git(merged, "commit", "-qm", "Add a note for #7")
+    monkeypatch.setattr(
+        rn, "gh", lambda path, jq: "dave" if path == "pulls/7" else None
+    )
+    (note,) = rn.load("HEAD")
+    assert note.prs == ["7"]
+    assert note.authors == ["dave"]
 
 
 _CHANGELOG = (

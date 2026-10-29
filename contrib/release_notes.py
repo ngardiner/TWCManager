@@ -111,16 +111,11 @@ def from_subject(subject):
 
 
 @functools.lru_cache(maxsize=None)
-def gh_login(pr):
+def gh(path, jq):
+    """One GitHub API answer, or None without gh or a match."""
     try:
         out = subprocess.run(
-            [
-                "gh",
-                "api",
-                f"repos/{REPO}/pulls/{pr}",
-                "--jq",
-                ".user.login",
-            ],
+            ["gh", "api", f"repos/{REPO}/{path}", "--jq", jq],
             cwd=ROOT,
             check=True,
             capture_output=True,
@@ -131,29 +126,57 @@ def gh_login(pr):
     return out or None
 
 
+def commit_pr(sha):
+    """(PR number, author) of the first merged PR holding the commit.
+
+    GitHub links a commit to its PR however the PR was merged: the merge
+    button, a squash, or a merge made in git and pushed. A commit in stacked
+    PRs is linked to each; the first one merged carried it.
+    """
+    found = gh(
+        f"commits/{sha}/pulls",
+        "[.[] | select(.merged_at)] | sort_by(.merged_at) | first // empty"
+        ' | "\\(.number) \\(.user.login)"',
+    )
+    if not found:
+        return None, None
+    pr, login = found.split()
+    return pr, login
+
+
 def resolve(note, ref):
-    """Fill in the PR and author from the commit that added the note."""
-    owner = None
-    if not note.prs:
-        added = git(
-            "log",
-            ref,
-            "--first-parent",
-            "--diff-filter=A",
-            "--format=%s",
-            "--",
-            note.path,
-        ).splitlines()
-        if added:
-            pr, owner = from_subject(added[-1])
-            if pr:
-                note.prs = [pr]
-    if not note.authors and note.prs:
-        # A merge subject names the branch's owner, who is the author only
-        # when the branch is on a fork; ask GitHub first.
-        login = gh_login(note.prs[0]) or owner
-        if login:
-            note.authors = [login]
+    """Fill in the PR and author from the commit that added the note.
+
+    The PR's author is credited, not whoever merged it. Without gh, the
+    merge commit's subject names the PR and the branch's owner, who is the
+    author when the branch is on a fork.
+    """
+    if note.prs and note.authors:
+        return
+    added = git("log", ref, "--diff-filter=A", "--format=%H", "--", note.path).split()
+    merged = git(
+        "log",
+        ref,
+        "--first-parent",
+        "--diff-filter=A",
+        "--format=%s",
+        "--",
+        note.path,
+    ).splitlines()
+    pr, login = commit_pr(added[-1]) if added else (None, None)
+    if not pr and merged:
+        pr, login = from_subject(merged[-1])
+    if not note.prs and pr:
+        note.prs = [pr]
+    if note.authors:
+        return
+    if note.prs and note.prs[0] != pr:
+        login = gh(f"pulls/{note.prs[0]}", ".user.login")
+    elif not login and added:
+        # No PR: credit whoever GitHub matches to the commit's author.
+        login = gh(f"commits/{added[-1]}", ".author.login")
+    if login:
+        note.authors = [login]
 
 
 def load(ref=None):
