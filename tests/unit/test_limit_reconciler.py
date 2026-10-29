@@ -837,3 +837,13 @@ def test_no_feed_means_no_wait():
 def test_an_awake_car_is_commanded_during_the_wait():
     m, r, v, c, tm = restarted(asleep=False)
     assert names(prov(m, "TeslaBLE")) == ["setAmps"]  # sent without a wake
+
+def test_a_restore_that_lands_clears_so_a_limit_set_away_is_not_adopted():
+    m, r, v, c = setup(ble(O.Outcome(O.DONE), O.Outcome(O.DONE))); m.heldLimits.set(VIN, 90, 50); v.observe("chargeLimit", 50, "TeslaBLE")
+    leave(v); m.desired.set(VIN, CHARGE_LIMIT, 90, "restore", restore=True)
+    assert r.pass_() == 1 and cmds(prov(m, "TeslaBLE")) == ["setChargeLimit"]
+    c.t += MIN_SEND_GAP[CHARGE_LIMIT]; r.pass_(); assert m.desired.get(VIN, CHARGE_LIMIT) is None   # back at the outside limit: nothing left to want
+    c.t += 600; v.observe("chargeLimit", 100, "TeslaMateVehicle")             # set by hand while away
+    assert r.pass_() == 0 and m.desired.get(VIN, CHARGE_LIMIT) is None
+    m.desired.set(VIN, CHARGE_LIMIT, 50, "policy")                            # parked here again: the policy's hold is not ignored
+    assert m.desired.get(VIN, CHARGE_LIMIT).value == 50

@@ -271,9 +271,12 @@ class VehicleReconciler(threading.Thread):
                 return None
         held = self._held(vehicle)
         if R.satisfied(aspect, d.value, k):
-            if d.restore and held is not None and held.held is not None:
-                # Already back at the outside limit: nothing is held
-                self.master.heldLimits.remove(vehicle.vin)
+            if d.restore:
+                # Back at the outside limit: nothing is held, and nothing is
+                # left to want; a lingering restore would adopt a limit set
+                # away and hold off the policy's limit on the way back
+                if held is not None and held.held is not None:
+                    self.master.heldLimits.remove(vehicle.vin)
                 self.desired.clear(key, aspect)
             return None
         if d.restore and (held is None or held.held is None):
