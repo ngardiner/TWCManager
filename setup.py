@@ -7,7 +7,7 @@ setup(
     version="1.4.0",
     package_dir={"": "lib"},
     packages=find_namespace_packages(where="lib"),
-    python_requires=">= 3.6",
+    python_requires=">= 3.8",
     include_package_data=True,
     long_description="Controls the charge rate of certain versions of Tesla Wall Connector (TWC) via the built-in Load Sharing protocol.",
     # Dependencies
@@ -33,8 +33,7 @@ setup(
         "sysv_ipc",
         "termcolor>=1.1.0",
         "urllib3>=1.26.11",
-        "websockets<=9.1; python_version == '3.6'",
-        "websockets>=9.1; python_version >= '3.7'",
+        "websockets>=9.1",
     ],
     # Package Metadata
     author="Nathan Gardiner",

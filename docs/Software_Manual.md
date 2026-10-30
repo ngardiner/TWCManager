@@ -35,7 +35,7 @@ This installs TWCManager into `/home/twcmanager/venv`. After running it, update 
 
 ## Default to Python3
 
-TWCManager requires a minimum of Python 3.8. The exact minimum is being settled in [#723](https://github.com/ngardiner/TWCManager/issues/723), and may rise to 3.9. Gen3 Wall Connector support already needs Python 3.9, because it needs pymodbus 3.8 or later.
+TWCManager requires a minimum of Python 3.8, and pip refuses to install it on anything older. Gen3 Wall Connector support needs Python 3.9, because it needs pymodbus 3.8 or later.
 
 Raspberry Pi OS 11 (Bullseye) ships with Python 3.9. Older releases (Buster ships 3.7, Stretch 3.5) cannot run TWCManager: upgrade the operating system, or use [pyenv](pyenv.md) to install a newer Python interpreter.
 

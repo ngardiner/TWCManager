@@ -10,7 +10,7 @@ If the output of the following comamnd:
 python3 -V
 ```
 
-Is any version number prior to 3.8.0, you need a newer Python interpreter. The following commands install prerequisites for the pyenv platform, download and compile a newer Python, and then run TWCManager under that Python version. They use Python 3.7.1 as the example; substitute 3.9 or later.
+Is any version number prior to 3.8.0, you need a newer Python interpreter. The following commands install prerequisites for the pyenv platform, download and compile a newer Python, and then run TWCManager under that Python version. They use Python 3.9.18 as the example.
 
 Keep in mind that compiling Python can take a long time, potentially hours on a Raspberry Pi. It is expected that the following commands would take considerable time to complete.
 
@@ -19,7 +19,7 @@ apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-
 
 curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash
 
-pyenv install 3.7.1
+pyenv install 3.9.18
 
 echo 'export PYENV_ROOT="${HOME}/.pyenv"' >> ~/.bashrc
 echo 'if [ -d "${PYENV_ROOT}" ]; then' >> ~/.bashrc
@@ -30,6 +30,6 @@ echo 'fi' >> ~/.bashrc
 exec $SHELL -l
 
 cd <twcmanager source directory>
-python3.7 setup.py install
-python3.7 -m TWCManager
+python3.9 setup.py install
+python3.9 -m TWCManager
 ```

@@ -418,7 +418,8 @@ class Gen3TWCs:
             from pymodbus.framer import FramerType
         except ImportError as exc:
             logger.error(
-                "Gen3TWCs: pymodbus is not installed - Gen3 TWC support unavailable (%s)",
+                "Gen3TWCs: Gen3 TWC support needs pymodbus 3.8 or later "
+                "(Python 3.9 or later) - unavailable (%s)",
                 exc,
             )
             return
