@@ -586,9 +586,12 @@ class TeslaAPI:
             return "car requires signed commands"
         return "car refused an unsigned command" if car.ownerCommandsRefused else None
 
+    def fleetTokenHeld(self):
+        return not self.fleetSlot.empty() and self.fleetSlot.tokenType == "fleet"
+
     def fleetReadOnlyReason(self):
         slot = self.fleetSlot
-        if slot.empty() or slot.tokenType != "fleet":
+        if not self.fleetTokenHeld():
             return "no Fleet API token"
         if "command" in slot.refusedPurposes:
             return "Tesla refused commands"

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import jinja2
+import pytest
 
 from TWCManager.Vehicle.Presence import presence
 from TWCManager.Vehicle.Reconcile.Desired import DesiredStore
@@ -223,6 +224,25 @@ def test_provider_capability_text_for_tesla_cloud_and_ble():
         "Fleet API: commands",
         "Home Assistant: entities, commands",
     ] and "Owner API: commands" in providerLines(m, v)
+
+
+@pytest.mark.parametrize("held", ["Owner", "Fleet"])
+def test_a_cloud_api_without_its_token_is_not_listed(held):
+    # The account listing claims the car for both APIs; without its token an
+    # API can neither read nor command the car
+    m = master()
+    v = m.vehicleRegistry.get(VIN)
+    api = Mock()
+    api.ownerTokenHeld.return_value = held == "Owner"
+    api.fleetTokenHeld.return_value = held == "Fleet"
+    api.ownerReadOnlyReason.return_value = None
+    m.getModuleByName = lambda n: api if n == "TeslaAPI" else None
+    v.claim("OwnerAPI", held == "Owner", "listed")
+    v.claim("FleetAPI", held == "Fleet", "listed")
+    other = "Fleet" if held == "Owner" else "Owner"
+    lines = providerLines(m, v)
+    assert "%s API: commands" % held in lines
+    assert not [line for line in lines if line.startswith(other)]
 
 
 def cell(html, label):
