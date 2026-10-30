@@ -67,3 +67,29 @@ def test_token_cleared_while_command_ran_sends_nothing_more(requests_mock):
     requests_mock.post(re.compile(r".*/command/.*"), text=first)
     assert p.stopCharging(VIN) == O.Outcome(O.REFUSED, "401")
     assert len(calls(requests_mock, "charge_stop")) == 1
+
+
+def test_token_replaced_just_before_the_clear_is_kept(requests_mock):
+    # The replacement lands after the 401's first check but before the clear:
+    # the clear must refuse to write, and the command goes once more with the
+    # new token.
+    api, reg, p = fleet(requests_mock)
+    replacement = fleet_token(jti="late")
+    slot = api.fleetSlot
+    clear = slot.clear
+
+    def raced(claimed=None):
+        api.storeToken(replacement, "", "pasted")
+        return clear(claimed)
+
+    slot.clear = raced
+    requests_mock.post(
+        re.compile(r".*/command/.*"),
+        [{"text": "invalid bearer token", "status_code": 401},
+         {"json": {"response": {"result": True}}}],
+    )
+    assert p.stopCharging(VIN).kind == O.DONE
+    sent = calls(requests_mock, "charge_stop")
+    assert len(sent) == 2
+    assert sent[1].headers["Authorization"] == "Bearer " + replacement
+    assert slot.accessToken == replacement
