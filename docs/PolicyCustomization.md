@@ -258,6 +258,12 @@ The values in a policy definition are:
       `backup`, or `autonomous` (Advanced Time-of-Use)
     - `reservePercent`:  The percentage to reserve for backup events
     - `stormWatch`:  Whether Storm Watch is currently in effect
+    - `touPeriod`:  The rate-plan period in effect now, from the tariff set in
+      the Tesla app (for example `ON_PEAK`, `PARTIAL_PEAK`, `OFF_PEAK` or
+      `SUPER_OFF_PEAK`); empty until the tariff has been read.  Needs the Tesla
+      API with a token that can read energy data, and refreshes every
+      `cloudUpdateInterval`.  With only an Owner API token, periods follow the
+      time zone of the computer running TWCManager rather than the site's
   - From `TeslaAPI`:
     - `numCarsAtHome`:  The number of (Tesla) vehicles currently believed to be
       at home, including those that are only probably home
@@ -330,6 +336,24 @@ There are three extension points:
 - `after` defines policies which apply between **Track Green Energy** and
   **Non-Scheduled Charging**.  Define policies here which augment your daily
   schedule.
+
+For example, this `emergency` policy stops charging during the peak periods of
+your rate plan while the grid is up, even if Charge Now was requested.  The
+periods come from the tariff in the Tesla app, so a critical-peak day added
+there is followed too:
+
+    "extend": {
+      "emergency": [
+        { "name": "Peak Electricity",
+          "match": [ "modules.TeslaPowerwall2.gridStatus",
+            [ "modules.TeslaPowerwall2.touPeriod",
+              "modules.TeslaPowerwall2.touPeriod" ] ],
+          "condition": [ "eq", [ "eq", "eq" ] ],
+          "value": [ true, [ "ON_PEAK", "PARTIAL_PEAK" ] ],
+          "charge_amps": 0
+        }
+      ]
+    }
 
 ## Policy Replacement
 

@@ -8,9 +8,38 @@ Tests cover:
 - Caching behavior
 """
 
+import copy
 import pytest
+from datetime import datetime
 from unittest.mock import Mock, patch
 import time
+
+
+def _w(fromDow, toDow, fromHour, toHour):
+    return {"fromDayOfWeek": fromDow, "toDayOfWeek": toDow,
+            "fromHour": fromHour, "fromMinute": 0, "toHour": toHour, "toMinute": 0}
+
+
+# A real site's tariff_content_v2 (Duke), as site_info returned it on 2026-10-29
+DUKE = {
+    "seasons": {
+        "Summer": {
+            "fromMonth": 10, "fromDay": 1, "toMonth": 4, "toDay": 30,
+            "tou_periods": {
+                "OFF_PEAK": {"periods": [_w(0, 6, 5, 0)]},
+                "SUPER_OFF_PEAK": {"periods": [_w(0, 6, 0, 5)]},
+            },
+        },
+        "Winter": {
+            "fromMonth": 5, "fromDay": 1, "toMonth": 9, "toDay": 30,
+            "tou_periods": {
+                "OFF_PEAK": {"periods": [_w(0, 4, 5, 14), _w(0, 4, 20, 0), _w(5, 6, 5, 0)]},
+                "ON_PEAK": {"periods": [_w(0, 4, 14, 20)]},
+                "SUPER_OFF_PEAK": {"periods": [_w(0, 4, 0, 5), _w(5, 6, 0, 5)]},
+            },
+        },
+    },
+}
 
 
 def _make_logger_mock():
@@ -19,6 +48,14 @@ def _make_logger_mock():
     m = MagicMock()
     m.getEffectiveLevel.return_value = 20
     return m
+
+# The same tariff in the older form tariff_rate and tariff_content use
+DUKE_V1 = {"seasons": {
+    name: dict(season, tou_periods={
+        label: windows["periods"] for label, windows in season["tou_periods"].items()
+    })
+    for name, season in DUKE["seasons"].items()
+}}
 
 
 class TestTeslaPowerwall2Initialization:
@@ -280,3 +317,214 @@ class TestStormWatchTokenSlots:
         assert products.last_request.timeout == 10 and live.last_request.timeout == 10
         assert token not in caplog.text and "Bearer" not in caplog.text
         assert "ValueError" in caplog.text and "ConnectionError" in caplog.text
+
+
+class TestTouPeriodAt:
+    """The period a tariff names for a moment in the site's local time."""
+
+    def _at(self, tariff, *when):
+        from TWCManager.EMS.TeslaPowerwall2 import touPeriodAt
+
+        return touPeriodAt(tariff, datetime(*when))
+
+    def test_weekday_peak_in_season(self):
+        assert self._at(DUKE, 2026, 7, 15, 15, 0) == "ON_PEAK"  # Wednesday
+
+    def test_peak_end_is_exclusive(self):
+        assert self._at(DUKE, 2026, 7, 15, 20, 0) == "OFF_PEAK"
+
+    def test_weekend_has_no_peak(self):
+        assert self._at(DUKE, 2026, 7, 18, 15, 0) == "OFF_PEAK"  # Saturday
+
+    def test_midnight_end_covers_late_evening(self):
+        assert self._at(DUKE, 2026, 7, 15, 23, 59) == "OFF_PEAK"
+
+    def test_season_wrapping_year_end(self):
+        assert self._at(DUKE, 2026, 1, 10, 3, 0) == "SUPER_OFF_PEAK"
+        assert self._at(DUKE, 2026, 10, 29, 15, 0) == "OFF_PEAK"
+
+    def test_one_day_season_beats_parent(self):
+        cpp = copy.deepcopy(DUKE)
+        cpp["seasons"]["CPP"] = {
+            "fromMonth": 1, "fromDay": 12, "toMonth": 1, "toDay": 12,
+            "tou_periods": {"ON_PEAK": {"periods": [
+                {"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 6, "toHour": 9}
+            ]}},
+        }
+        assert self._at(cpp, 2026, 1, 12, 7, 0) == "ON_PEAK"
+        assert self._at(cpp, 2026, 1, 12, 10, 0) == "OFF_PEAK"
+        assert self._at(cpp, 2026, 1, 13, 7, 0) == "OFF_PEAK"
+
+    def test_v1_list_form(self):
+        v1 = {"seasons": {"All": {
+            "fromMonth": 1, "fromDay": 1, "toMonth": 12, "toDay": 31,
+            "tou_periods": {"ON_PEAK": [{"toDayOfWeek": 6, "fromHour": 16, "toHour": 21}]},
+        }}}
+        assert self._at(v1, 2026, 3, 3, 17, 0) == "ON_PEAK"
+
+    def test_no_season_matches(self):
+        assert self._at({}, 2026, 7, 15, 15, 0) == ""
+        only_summer = {"seasons": {"S": {
+            "fromMonth": 6, "fromDay": 1, "toMonth": 9, "toDay": 30, "tou_periods": {}
+        }}}
+        assert self._at(only_summer, 2026, 1, 1, 12, 0) == ""
+
+    def test_malformed_tariff_never_raises(self):
+        year = {"toMonth": 12, "toDay": 31}
+        for bad in (
+            {"seasons": None},
+            {"seasons": [dict(year, tou_periods={})]},
+            {"seasons": "Summer"},
+            {"seasons": {"S": None}},
+            {"seasons": {"S": dict(year)}},
+            {"seasons": {"S": dict(year, tou_periods={"ON_PEAK": "x"})}},
+            {"seasons": {"S": dict(year, tou_periods={"ON_PEAK": [None, {"fromHour": "a"}]})}},
+            {"seasons": {"S": dict(year, fromMonth="x")}},
+        ):
+            assert self._at(bad, 2026, 7, 15, 15, 0) in ("", "OFF_PEAK")
+
+
+class TestTouPeriodProperty:
+    """touPeriod resolves the tariff from the energy site's site_info."""
+
+    SITE = TestStormWatchTokenSlots.SITE
+    _powerwall = TestStormWatchTokenSlots._powerwall
+    SITE_INFO = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/energy_sites/42/site_info"
+    PRODUCTS = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/products"
+    OWNER_INFO = "https://owner-api.teslamotors.com/api/1/energy_sites/42/site_info"
+    OWNER_RATE = "https://owner-api.teslamotors.com/api/1/energy_sites/42/tariff_rate"
+    INFO = {"response": {"installation_time_zone": "America/New_York",
+                         "tariff_content_v2": DUKE}}
+
+    class Frozen(datetime):
+        # 15:00 on a Wednesday in the tariff's peak season, in whatever zone asked
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 7, 15, 15, 0, tzinfo=tz)
+
+    @pytest.fixture(autouse=True)
+    def _july_weekday_afternoon(self):
+        with patch("TWCManager.EMS.TeslaPowerwall2.datetime", self.Frozen):
+            yield
+
+    def _site(self, scp=None):
+        from tests.unit.teslatokens import FLEET_SCOPES, fleet_token, new_api
+
+        api = new_api()
+        api.storeToken(fleet_token(scp=scp or FLEET_SCOPES))
+        return api, self._powerwall(api)
+
+    def test_tou_period_reads_site_info(self, requests_mock):
+        _, pw = self._site()
+        info = requests_mock.get(self.SITE_INFO, json=self.INFO)
+
+        assert pw.touPeriod == "ON_PEAK"
+        assert info.call_count == 1
+
+    def test_failed_refresh_keeps_last_tariff(self, requests_mock, caplog):
+        _, pw = self._site()
+        requests_mock.get(self.SITE_INFO, json=self.INFO)
+        assert pw.touPeriod == "ON_PEAK"
+
+        requests_mock.get(self.SITE_INFO, status_code=500)
+        pw.lastFetch["CLOUD/site_info"] = (0, pw.lastFetch["CLOUD/site_info"][1])
+        assert pw.touPeriod == "ON_PEAK"
+        assert "HTTPError" in caplog.text and "Bearer" not in caplog.text
+
+    def test_no_energy_scope_gives_empty_period(self, requests_mock):
+        from tests.unit.teslatokens import FLEET_SCOPES
+
+        _, pw = self._site([s for s in FLEET_SCOPES if s != "energy_device_data"])
+        info = requests_mock.get(self.SITE_INFO, json=self.INFO)
+
+        assert pw.touPeriod == ""
+        assert info.call_count == 0
+
+    def test_no_tesla_api_gives_empty_period(self, requests_mock):
+        api, pw = self._site()
+        del api.master.modules["TeslaAPI"]
+        info = requests_mock.get(self.SITE_INFO, json=self.INFO)
+
+        assert pw.touPeriod == ""
+        assert info.call_count == 0
+
+    def test_non_object_response_gives_empty_period(self, requests_mock):
+        _, pw = self._site()
+        requests_mock.get(self.SITE_INFO, json={"response": None})
+
+        assert pw.touPeriod == ""
+
+    def test_tariff_reads_fleet_even_with_owner_token(self, requests_mock):
+        # The Owner API's site_info carries no tariff
+        from tests.unit.teslatokens import owner_token
+
+        api, pw = self._site()
+        api.storeToken(owner_token())
+        info = requests_mock.get(self.SITE_INFO, json=self.INFO)
+        rate = requests_mock.get(self.OWNER_RATE, json={"response": DUKE_V1})
+
+        assert pw.touPeriod == "ON_PEAK"
+        assert (info.call_count, rate.call_count) == (1, 0)
+
+    def test_owner_token_alone_reads_tariff_rate(self, requests_mock):
+        from tests.unit.teslatokens import new_api, owner_token
+
+        api = new_api()
+        api.storeToken(owner_token())
+        pw = self._powerwall(api)
+        rate = requests_mock.get(self.OWNER_RATE, json={"response": DUKE_V1})
+        info = requests_mock.get(self.OWNER_INFO, json=self.INFO)
+
+        assert pw.touPeriod == "ON_PEAK"
+        assert (rate.call_count, info.call_count) == (1, 0)
+
+    def test_fleet_never_reads_tariff_rate(self, requests_mock):
+        # tariff_rate is in a Fleet billing category; site_info is free
+        _, pw = self._site()
+        requests_mock.get(self.SITE_INFO, status_code=500)
+        rate = requests_mock.get(self.SITE_INFO.replace("site_info", "tariff_rate"),
+                                 json={"response": DUKE_V1})
+
+        assert pw.touPeriod == ""
+        assert rate.call_count == 0
+
+    def test_bad_time_zone_falls_back_to_local(self, requests_mock):
+        _, pw = self._site()
+        body = {"response": dict(self.INFO["response"], installation_time_zone="Not/AZone")}
+        requests_mock.get(self.SITE_INFO, json=body)
+
+        assert pw.touPeriod == "ON_PEAK"
+
+    def test_works_without_zoneinfo(self, requests_mock, monkeypatch):
+        # Python 3.8 has no zoneinfo; periods then follow the host's clock
+        import importlib
+        import sys
+        import TWCManager.EMS.TeslaPowerwall2 as module
+
+        monkeypatch.setitem(sys.modules, "zoneinfo", None)
+        try:
+            importlib.reload(module)
+            _, pw = self._site()
+            requests_mock.get(self.SITE_INFO, json=self.INFO)
+            # The reload replaced the frozen clock
+            monkeypatch.setattr(module, "datetime", self.Frozen)
+            assert pw.touPeriod == "ON_PEAK"
+        finally:
+            monkeypatch.undo()
+            importlib.reload(module)
+
+    def test_storm_watch_and_tariff_cache_separately(self, requests_mock):
+        _, pw = self._site()
+        pw.cloudCacheTime = 1800
+        pw.cloudID = None
+        products = requests_mock.get(self.PRODUCTS, json={"response": [
+            {"energy_site_id": 42, "site_name": "Home", "battery_type": "ac_powerwall"}
+        ]})
+        live = requests_mock.get(self.SITE, json={"response": {"storm_mode_active": True}})
+        info = requests_mock.get(self.SITE_INFO, json=self.INFO)
+
+        for _ in range(2):
+            assert pw.stormWatch is True
+            assert pw.touPeriod == "ON_PEAK"
+
+        assert (products.call_count, live.call_count, info.call_count) == (1, 1, 1)
