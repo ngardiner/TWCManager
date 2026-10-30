@@ -24,6 +24,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - The Vehicles page and each vehicle's page show a picture of the car (model, paint and wheels), drawn by Tesla's image service; clicking the picture in the list opens the car's page. Its looks come from TeslaMate or a Tesla API read, are saved across restarts, and are read once at most for a car a telemetry feed covers. A car whose looks are unknown is drawn from its VIN
     * (@MikeBishop) - The Vehicles page fits a phone: on a narrow screen each row of its tables shows as a card, with each value labelled
     * (@MikeBishop) - Expose the Powerwall's current rate-plan period to policies (`modules.TeslaPowerwall2.touPeriod`, such as `ON_PEAK`), read from the tariff set in the Tesla app with a free read on either a Fleet or an Owner API token
+    * (@MikeBishop) - Read each car's last reported charge state for free with a Fleet API token, even while the car sleeps, before paying for a live read ([details](docs/modules/Vehicle_TeslaAPI.md#owner-api-and-fleet-api))
 * Architecture
     * (@MikeBishop) - The watch sets when cars are read, in place of the Tesla API deferral ladder (300/1800/3600 s of paid `vehicle_data`) and the half-hourly battery refresh of cars at home, both removed; a read stays fresh for 5 minutes for every caller. `cloudUpdateInterval` no longer sets how often cars are read (the Powerwall module uses it as its cloud cache time)
     * (@MikeBishop) - Serialise settings.json saves under a settings lock so a save no longer races writers on other threads

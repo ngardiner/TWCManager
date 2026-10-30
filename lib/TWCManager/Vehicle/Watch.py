@@ -285,8 +285,12 @@ class Watch:
         late = now >= max(fixAt, lastRead) + wait and cloudOnly(self.master, v)
         if late and seen[0] in (HOME_AWAKE, AWAY_AWAKE):
             want = want or (EVENT, False)
+        # That read, and one on its wake, is for where the car is
+        fix = late or woke and cloudOnly(self.master, v)
         if "read" not in busy and (why is None or named):
-            self._read(v, seen[0], named, want, tried, lastRead, now, last == TWICE)
+            self._read(
+                v, seen[0], named, want, tried, lastRead, now, last == TWICE, fix
+            )
         if "status" not in busy and now >= at + self._cadence(seen[0]):
             # Coverage counts for the check only when it is due: a feed
             # blip between checks changes nothing
@@ -305,8 +309,9 @@ class Watch:
             else:
                 self._submit(v, "scan", lambda: ble.ping(vin, scan=False), "ble")
 
-    def _read(self, v, state, named, want, tried, lastRead, now, deaf) -> None:
-        # The charge read due now, if any; deaf: the radio missed it twice.
+    def _read(self, v, state, named, want, tried, lastRead, now, deaf, fix) -> None:
+        # The charge read due now, if any; deaf: the radio missed it twice;
+        # fix: the read is for the car's position.
         # A TWC-named car is touched only for its plug-in, on request, and
         # while its TWC reports current
         if state in (HOME_ASLEEP, AWAY_ASLEEP):
@@ -323,7 +328,13 @@ class Watch:
         if not want and not (flowing if named else state == HOME_CHARGING):
             return
         order = self.master.providerOrder
-        found = [p for p in order.candidates(v, READ_CHARGE) if not deaf or not p.local]
+        # The free snapshot provider is no source to price or pace by: its
+        # stale answer would end a read that must reach the paid one
+        found = [
+            p
+            for p in order.candidates(v, READ_CHARGE)
+            if (not deaf or not p.local) and p.name != "FleetAPICached"
+        ]
         local = [p for p in found if p.local]
         if not found or state == UNKNOWN and local and not named:
             # Over the radio only once the ping says it is awake; a cloud
@@ -342,14 +353,26 @@ class Watch:
         self._take(v.vin, want)
         cls = want[0] if want else ROUTINE
         miss = RETRY[want[1]] if cls == EVENT and tried not in RETRY else MISS
-        # A cloud read pays from the budget first; a refusal waits its cadence
         worker = "ble" if found[0].local else "cloud"
-        if worker == "cloud" and not self.master.watchBudget.spend(price, cls):
-            logger.debug("No budget for a %s read of %s", cls, v.vin)
-            self._settle(v.vin, "read", now)
-            return
-        # The cascade itself: None when the read failed, not the old value
-        read = lambda: order.read(v, "chargingState", False, found) is not None
+
+        def read():
+            # None when the read failed, not the old value. A paid read first
+            # takes a snapshot newer than this car's last read for free (a
+            # free read is live, which beats one minutes old), and pays only
+            # when there is none; a snapshot carries no location, so a read
+            # for the position pays. A refusal waits its cadence as a settled
+            # read, not a miss
+            if price and not fix:
+                snapshot = order.read(
+                    v, "chargingState", False, ["FleetAPICached"], cutoff=lastRead
+                )
+                if snapshot is not None:
+                    return True
+            if worker == "cloud" and not self.master.watchBudget.spend(price, cls):
+                logger.debug("No budget for a %s read of %s", cls, v.vin)
+                return ""
+            return order.read(v, "chargingState", False, found) is not None
+
         self._submit(v, "read", read, worker, miss)
 
     def _look(self, v, busy, now) -> None:

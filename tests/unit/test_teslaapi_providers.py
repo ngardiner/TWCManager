@@ -1,5 +1,6 @@
 # tests/unit/test_teslaapi_providers.py
 import re
+import time
 from unittest.mock import Mock
 
 from TWCManager.Vehicle.Registry.Fields import READ_MAX_AGE
@@ -11,6 +12,7 @@ from TWCManager.Vehicle.Providers import Capability as C
 from TWCManager.Vehicle.Reconcile import Outcome as O
 from tests.unit.test_teslaapi_registry import api_with_registry, VIN
 from tests.unit.teslatokens import fleet_token, owner_token
+from tests.unit.teslatokens import wire_reads
 from tests.unit.vehicle_helpers import commands
 
 OWNER_VEHICLE = "https://owner-api.teslamotors.com/api/1/vehicles/" + VIN
@@ -19,7 +21,7 @@ FLEET_ANY = re.compile(r"https://fleet-api\.prd\..*")
 
 def test_two_providers_with_honest_costs():
     api, reg = api_with_registry()
-    owner, fleet = api.providers()
+    owner, fleet, cached = api.providers()
     assert (owner.name, owner.rank, fleet.name, fleet.rank, owner.local) == (
         "OwnerAPI",
         4,
@@ -27,6 +29,10 @@ def test_two_providers_with_honest_costs():
         5,
         False,
     )
+    assert (cached.name, cached.rank, cached.local) == ("FleetAPICached", 5, False)
+    assert cached.cost(C.READ_CHARGE) == C.CLOUD_FREE
+    assert cached.declarations() == {C.READ_CHARGE: C.CLOUD_FREE}
+    assert cached.FIELDS == C.CHARGE_FIELDS - {"phases"} and cached.module is api
     assert owner.cost(C.READ_CHARGE) == C.CLOUD_FREE
     # Free, but paced as Fleet (#659)
     assert owner.cost(C.SET_AMPS) == C.OWNER_COMMAND and C.OWNER_COMMAND.price == 0.0
@@ -44,7 +50,7 @@ def test_fleet_reads_only_when_owner_cannot():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     v = reg.get(VIN)
-    owner, fleet = api.providers()
+    owner, fleet = api.providers()[:2]
     api.storeToken(fleet_token())
     assert fleet.ready(v, C.READ_CHARGE) and not owner.ready(v, C.READ_CHARGE)
     api.storeToken(owner_token())
@@ -71,7 +77,7 @@ def test_fleet_commands_resolve_the_car_by_vin():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     v = reg.get(VIN)
-    owner, fleet = api.providers()
+    owner, fleet = api.providers()[:2]
     api.command = Mock(return_value=O.Outcome(O.DONE))
     api.wakeOutcome = Mock(return_value=O.Outcome(O.DONE))
     fleet.clock = lambda: 1000.0
@@ -128,7 +134,7 @@ def test_a_data_only_fleet_token_reads_but_never_commands():
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
     v = reg.get(VIN)
-    owner, fleet = api.providers()
+    owner, fleet = api.providers()[:2]
     api.storeToken(fleet_token(scp=["openid", "vehicle_device_data"]))
     assert fleet.available(C.READ_CHARGE) is True and fleet.ready(v, C.READ_CHARGE)
     assert fleet.available(C.SET_AMPS) is False and fleet.available(C.WAKE) is False
@@ -156,8 +162,9 @@ OWNER_READS = {
 
 @pytest.mark.parametrize("case", sorted(OWNER_READS))
 def test_owner_reads_cost_nothing_with_a_fleet_token_held(requests_mock, case):
-    # Both tokens held, Owner can read: a read cascade makes no Fleet request
-    # at all, whether or not the Owner read succeeds.
+    # Both tokens held, Owner can read: a read cascade makes no paid Fleet
+    # request, whether or not the Owner read succeeds. The free snapshot read
+    # that follows a failed Owner read is not one.
     state, payload = OWNER_READS[case]
     api, reg = api_with_registry()
     api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
@@ -168,6 +175,7 @@ def test_owner_reads_cost_nothing_with_a_fleet_token_held(requests_mock, case):
     car.onlineCheckedAt = 0
     car.lastAPIAccessTime = 0
     fleet = requests_mock.register_uri(ANY, FLEET_ANY, json=VEHICLE_DATA)
+    requests_mock.get(FLEET_CACHED, status_code=404, json={})
     online = requests_mock.get(
         OWNER_VEHICLE, json={"response": {"state": state, "vin": VIN}}
     )
@@ -248,3 +256,305 @@ def test_two_callers_inside_read_max_age_pay_once(requests_mock):
     # The deferral runs on real time: age it with the test clock
     c.t += 300; v.attachment("TeslaAPI").statusDeferral -= 400
     v.read("chargingState", 0, force=True); assert paid(requests_mock)[0] == 2
+
+
+FLEET_CACHED = (
+    "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
+    + "/vehicle_data_cached"
+)
+STAMP_MS = 1793202825642
+
+
+def cachedCar(requests_mock, status=200, charge=None, token=fleet_token):
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    api.storeToken(token())
+    charge = {
+        "timestamp": STAMP_MS,
+        "charging_state": "Complete",
+        "battery_level": 65,
+        "charge_limit_soc": 50,
+        "charge_port_door_open": True,
+        "scheduled_charging_mode": "Off",
+        "scheduled_charging_start_time": None,
+        **(charge or {}),
+    }
+    body = {"response": {"charge_state": charge, "vehicle_state": {}}}
+    mock = requests_mock.register_uri(
+        ANY, FLEET_ANY, status_code=status, json=body if status == 200 else {}
+    )
+    return api, reg.get(VIN), mock
+
+
+def test_read_cached_observes_with_the_snapshot_stamp(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    assert api.read_cached(v) == STAMP_MS / 1000
+    level = v.reported("batteryLevel")["FleetAPICached"]
+    assert (level.value, level.at) == (65, 1793202825.642)
+    assert v.reported("scheduledChargingPending")["FleetAPICached"].value is False
+    assert v.reported("chargePortOpen")["FleetAPICached"].value is True
+    for field in ("lat", "phases"):
+        assert "FleetAPICached" not in v.reported(field)
+
+
+@pytest.mark.parametrize(
+    "mode,start,state,pending",
+    [
+        ("StartAt", 1793210000, "Stopped", True),
+        ("StartAt", 1793210000, "Charging", False),
+        ("Off", None, "Stopped", False),
+    ],
+)
+def test_cached_pending_needs_mode_time_and_stopped(
+    requests_mock, mode, start, state, pending
+):
+    api, v, _ = cachedCar(
+        requests_mock,
+        charge={
+            "scheduled_charging_mode": mode,
+            "scheduled_charging_start_time": start,
+            "charging_state": state,
+        },
+    )
+    api.read_cached(v)
+    got = v.reported("scheduledChargingPending")["FleetAPICached"].value
+    assert got is pending
+
+
+def test_cached_412_latches_the_car_not_the_slot(requests_mock):
+    api, v, _ = cachedCar(requests_mock, status=412)
+    assert api.read_cached(v) is None
+    assert v.attachment("TeslaAPI").cachedUnsupported is True
+    assert api.fleetSlot.usable("read")
+
+
+def test_cached_404_latches_nothing(requests_mock):
+    api, v, _ = cachedCar(requests_mock, status=404)
+    assert api.read_cached(v) is None
+    assert v.attachment("TeslaAPI").cachedUnsupported is False
+    assert api.fleetSlot.usable("read")
+
+
+def test_cached_is_never_logged_as_paid(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    assert api.read_cached(v) is not None
+    assert v.paidRequests == 0
+
+
+def test_cached_never_goes_to_the_owner_api(requests_mock):
+    api, v, mock = cachedCar(requests_mock, token=owner_token)
+    assert api.read_cached(v) is None
+    assert mock.call_count == 0
+    assert not any("owner-api" in r.url for r in requests_mock.request_history)
+
+
+def test_update_vehicle_data_still_maps_every_field(requests_mock):
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    api.storeToken(fleet_token())
+    v = reg.get(VIN)
+    v.attachment("TeslaAPI").lastAPIAccessTime = time.time()
+    charge = {
+        "fast_charger_present": False,
+        "fast_charger_type": "<invalid>",
+        "conn_charge_cable": "IEC",
+        "charger_power": 7,
+        "charge_current_request_max": 32,
+        "charge_limit_soc": 80,
+        "battery_level": 61,
+        "time_to_full_charge": 1.5,
+        "charger_pilot_current": 16,
+        "charge_current_request": 16,
+        "charger_actual_current": 15,
+        "charger_phases": 1,
+        "charger_voltage": 240,
+        "charging_state": "Charging",
+        "scheduled_charging_pending": False,
+    }
+    drive = {"latitude": 37.0, "longitude": -122.0, "shift_state": "P"}
+    requests_mock.register_uri(
+        ANY,
+        FLEET_ANY,
+        json={"response": {"drive_state": drive, "charge_state": charge,
+                           "vehicle_state": {}}},
+    )
+    assert api.update_vehicle_data(v, slot=api.fleetSlot)
+    fields = dict(zip(charge, (
+        "fastChargerPresent", "fastChargerType", "connChargeCable",
+        "chargerPower", "chargeCurrentRequestMax", "chargeLimit",
+        "batteryLevel", "timeToFullCharge", "availableCurrent",
+        "chargeCurrentRequest", "actualCurrent", "phases", "voltage",
+        "chargingState", "scheduledChargingPending",
+    )))
+    for key, field in fields.items():
+        assert v.reported(field)["FleetAPI"].value == charge[key], field
+
+
+def test_cached_412_holds_until_the_fleet_token_changes(requests_mock):
+    api, v, mock = cachedCar(requests_mock, status=412)
+    assert api.read_cached(v) is None
+    assert api.cachedRefused(v)
+    assert api.read_cached(v) is None
+    assert mock.call_count == 1
+    api.storeToken(fleet_token())
+    assert not api.cachedRefused(v)
+    api.read_cached(v)
+    assert mock.call_count == 2
+
+
+def cachedProvider(api):
+    return api.providers()[2]
+
+
+def fakeSleep(provider):
+    # The provider's sleeps, recorded instead of slept
+    sleeps = []
+    provider.sleep = sleeps.append
+    return sleeps
+
+
+def stamps(requests_mock, *seconds):
+    # The cached snapshot answers each request with the next stamp (the last
+    # repeats)
+    queue = list(seconds)
+
+    def body(req, ctx):
+        at = queue.pop(0) if len(queue) > 1 else queue[0]
+        return {
+            "response": {
+                "charge_state": {
+                    "timestamp": int(at * 1000),
+                    "charging_state": "Stopped",
+                    "battery_level": 65,
+                },
+                "vehicle_state": {},
+            }
+        }
+
+    return requests_mock.get(FLEET_CACHED, json=body)
+
+
+def test_cached_provider_sorts_after_owner_before_fleet():
+    api, reg = api_with_registry()
+    api.storeToken(owner_token())
+    api.storeToken(fleet_token())
+    order = wire_reads(reg, *api.providers())
+    assert [p.name for p in order.ordered(C.READ_CHARGE)] == [
+        "OwnerAPI",
+        "FleetAPICached",
+        "FleetAPI",
+    ]
+
+
+def test_cached_ready_needs_fleet_read_and_no_latch():
+    api, reg = api_with_registry()
+    api.addVehicle({"id": 1, "vin": VIN, "display_name": "C"})
+    v = reg.get(VIN)
+    cached = cachedProvider(api)
+    api.storeToken(owner_token())
+    assert not cached.ready(v, C.READ_CHARGE)
+    api.storeToken(fleet_token())
+    assert cached.ready(v, C.READ_CHARGE)
+    assert not cached.ready(v, C.SET_AMPS) and not cached.ready(None, C.READ_CHARGE)
+    car = v.attachment("TeslaAPI")
+    car.cachedUnsupported, car.cachedRefusedAt = True, api.fleetSlot.changes
+    assert not cached.ready(v, C.READ_CHARGE)
+
+
+def test_cached_never_asks_online_or_wakes(requests_mock):
+    api, v, mock = cachedCar(requests_mock)
+    stamps(requests_mock, time.time())
+    assert cachedProvider(api).fetch(v, "chargingState") is True
+    urls = [r.url for r in requests_mock.request_history]
+    assert urls and all(u.endswith("/vehicle_data_cached") for u in urls)
+
+
+def test_cached_without_wait_fetches_once(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    mock = stamps(requests_mock, 940.0)
+    cached = cachedProvider(api)
+    sleeps = fakeSleep(cached)
+    assert cached.fetch(v, "chargingState", cutoff=1000.0) is False
+    assert mock.call_count == 1 and sleeps == []
+    assert cached.fetch(v, "chargingState", cutoff=900.0) is True
+    assert cached.fetch(v, "chargingState") is True
+    assert mock.call_count == 3
+
+
+def test_cached_waits_for_a_post_event_snapshot(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    t0 = 1000.0
+    mock = stamps(requests_mock, t0 - 60, t0 - 60, t0 + 4)
+    cached = cachedProvider(api)
+    sleeps = fakeSleep(cached)
+    assert cached.fetch(v, "chargingState", cutoff=t0, wait=True) is True
+    assert mock.call_count == 3 and sleeps == [3.0, 3.0]
+
+
+def test_cached_gives_up_after_fifteen_seconds(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    t0 = 1000.0
+    mock = stamps(requests_mock, t0 - 60)
+    cached = cachedProvider(api)
+    sleeps = fakeSleep(cached)
+    assert cached.fetch(v, "chargingState", cutoff=t0, wait=True) is False
+    assert sleeps == [3.0] * 5 and mock.call_count == 6
+
+
+def test_cached_stops_waiting_once_a_412_latches_the_car(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    t0 = 1000.0
+    old = {"timestamp": int((t0 - 60) * 1000), "charging_state": "Stopped"}
+    mock = requests_mock.get(
+        FLEET_CACHED,
+        [{"json": {"response": {"charge_state": old, "vehicle_state": {}}}}, {"status_code": 412, "json": {}}],
+    )
+    cached = cachedProvider(api)
+    sleeps = fakeSleep(cached)
+    assert cached.fetch(v, "chargingState", cutoff=t0, wait=True) is False
+    assert mock.call_count == 2 and sleeps == [3.0]
+
+
+def paidFleet(requests_mock, vehicleData=None):
+    # An awake car on the paid Fleet endpoints; returns the paid-read mock
+    base = "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/" + VIN
+    requests_mock.get(base, json={"response": {"state": "online", "vin": VIN}})
+    return requests_mock.get(
+        base + "/vehicle_data",
+        json={
+            "response": {
+                "charge_state": {
+                    "charging_state": "Charging",
+                    "battery_level": 70,
+                    "charger_pilot_current": 16,
+                    "timestamp": int(time.time() * 1000),
+                },
+                "drive_state": {},
+                "vehicle_state": {},
+            }
+        },
+    )
+
+
+def wiredCar(requests_mock):
+    api, v, _ = cachedCar(requests_mock)
+    providers = api.providers()
+    wire_reads(api.registry, *providers)
+    return api, v, providers[2], paidFleet(requests_mock)
+
+
+def test_cached_gives_up_then_paid_fleet_runs(requests_mock):
+    api, v, cached, paid = wiredCar(requests_mock)
+    t0 = time.time()
+    mock = stamps(requests_mock, t0 - 60)
+    sleeps = fakeSleep(cached)
+    v.read("batteryLevel", 300, since=t0)
+    assert sum(sleeps) <= 15.0 and mock.call_count == len(sleeps) + 1
+    assert paid.call_count == 1
+
+
+def test_stale_cached_falls_through_to_paid_fleet(requests_mock):
+    api, v, cached, paid = wiredCar(requests_mock)
+    stamps(requests_mock, time.time() - 400)
+    v.read("batteryLevel", 300)
+    assert paid.call_count == 1

@@ -30,7 +30,7 @@ class Reader(Provider):
     def ready(self, vehicle, capability):
         return capability == C.READ_CHARGE and self.isReady
 
-    def fetch(self, vehicle, field, allowWake=False):
+    def fetch(self, vehicle, field, allowWake=False, cutoff=None, wait=False):
         self.calls.append((field, allowWake))
         if vehicle._fieldLock.locked() or vehicle._lock.locked():
             self.lockHeld = True
@@ -107,7 +107,7 @@ def test_readiness_is_asked_just_before_each_fetch():
     paid.isReady = False
     free = Reader("OwnerAPI", C.CLOUD_FREE, None)
 
-    def refused(vehicle, field, allowWake=False):
+    def refused(vehicle, field, allowWake=False, cutoff=None, wait=False):
         free.calls.append(field)
         paid.isReady = True
         return False
@@ -128,7 +128,7 @@ def test_all_providers_fail_returns_stale_latest():
 def test_raising_provider_counts_as_failure_and_next_is_tried():
     ble = Reader("TeslaBLE", C.LOCAL, None)
 
-    def boom(vehicle, field, allowWake=False):
+    def boom(vehicle, field, allowWake=False, cutoff=None, wait=False):
         raise RuntimeError("radio")
 
     ble.fetch = boom
@@ -140,13 +140,13 @@ def test_true_with_nothing_recorded_continues():
     # A provider that says it read but left no value (a deferred API car
     # with nothing stored) does not end the walk
     empty = Reader("OwnerAPI", C.CLOUD_FREE, {})
-    empty.fetch = lambda vehicle, field, allowWake=False: True
+    empty.fetch = lambda vehicle, field, allowWake=False, cutoff=None, wait=False: True
     reg, v = setup(empty, Reader("HomeAssistant", C.HA_BILLED, {"chargeLimit": 3}))
     assert v.read("chargeLimit", maxAge=0).value == 3
 
 
 def test_true_after_recording_itself_ends_the_walk():
-    def self_(vehicle, field, allowWake=False):
+    def self_(vehicle, field, allowWake=False, cutoff=None, wait=False):
         vehicle.observe(field, 3, "OwnerAPI")
         return True
 
@@ -172,7 +172,7 @@ def test_no_registry_or_no_order_returns_latest():
 def test_raising_fetch_logs_no_message_or_traceback(caplog):
     ble = Reader("TeslaBLE", C.LOCAL, None)
 
-    def boom(vehicle, field, allowWake=False):
+    def boom(vehicle, field, allowWake=False, cutoff=None, wait=False):
         raise RuntimeError("token=SECRET")
 
     ble.fetch = boom

@@ -29,6 +29,7 @@ _PLUGS = ("pluggedIn", "chargingState", "chargePortOpen")
 # A plug report from these needs no position: the charger or the radio is here
 _STRONG = frozenset({"TWC", "Gen2TWC", "Gen3TWC", "TeslaBLE"})
 _CHARGERS = frozenset({"Gen2TWC", "Gen3TWC"})
+_TWC_SOURCES = _CHARGERS | {"TWC"}
 _MOVING = frozenset({"D", "R", "N"})
 # Feet per degree of latitude; the box test uses it for longitude too
 _FT_PER_DEGREE = 364488.888
@@ -97,7 +98,14 @@ def _awayCharger(v, obs) -> bool:
     )
 
 
+CACHED = "FleetAPICached"
+
+
 def _plugEvidence(v, field, obs, here) -> Optional[bool]:
+    # The cached snapshot carries no location and may be hours old, so its
+    # plug state says nothing about where the car is plugged in now
+    if obs.source == CACHED:
+        return None
     value = _plug(field, obs)
     car = here is True and not (value and _awayCharger(v, obs))
     return value if obs.source in _STRONG or car else None
@@ -111,7 +119,7 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
     # The registry's onObserve hook, for every field: obs is the incoming
     # reading, previous the same source's reading before it
     at, before = obs.at, None if previous is None else previous.value
-    from .Reconcile import Targets
+    from .Reconcile import Belief, Targets
 
     if field == "bleReach":
         if isinstance(obs.value, bool):
@@ -142,6 +150,12 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
             wasMoving and not moving and here and (field == "state" or obs.value == "P")
         ):
             vehicle.mark("driveEnd", at)
+    elif field == "actualCurrent":
+        # The car's snapshot after a charge ends follows this fall by seconds
+        flowing = Belief.POWER_FLOWING_AMPS
+        if obs.source in _TWC_SOURCES and None not in (obs.value, before):
+            if obs.value < flowing <= before:
+                vehicle.mark("drawStop", at)
     elif field in _PLUGS:
         plugged = _plugEvidence(vehicle, field, obs, inside(master, vehicle))
         # A feed's retained copy, redelivered on a reconnect, is no plug event
@@ -238,7 +252,10 @@ def checkPlug(master, v, since) -> Optional[bool]:
     car = v.attachment("TeslaAPI")
     if car is not None:
         car.statusDeferral, car.staleBefore = 0, since
-    v.read("chargingState", 0, force=True)
+    # Never waits: this runs on the BLE worker. The cached read is left out,
+    # since a snapshot's stamp can predate the unplug being checked
+    reads = [p for p in master.providerOrder.providers() if p.name != CACHED]
+    v.read("chargingState", 0, force=True, since=since, wait=False, providers=reads)
     return pluggedNow(master, v, None, since)
 
 

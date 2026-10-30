@@ -49,7 +49,14 @@ class TeslaBLEProvider(Provider):
             "lon": loc.get("longitude"),
         }
 
-    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+    def fetch(
+        self,
+        vehicle,
+        field: str,
+        allowWake: bool = False,
+        cutoff: Optional[float] = None,
+        wait: bool = False,
+    ) -> bool:
         # Only for a ready (claimed) VIN: each miss costs the command timeout
         vin = vehicle.vin
         result = self._get(vin, field)

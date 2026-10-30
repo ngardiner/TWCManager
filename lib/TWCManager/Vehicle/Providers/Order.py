@@ -110,9 +110,14 @@ class ProviderOrder:
         field: str,
         allowWake: bool = False,
         providers: Optional[Collection] = None,
+        cutoff: Optional[float] = None,
+        wait: bool = False,
     ):
         """The registry's read cascade: the providers that fetch field,
         cheapest first; providers (objects or names) limits it to those.
+        cutoff and wait go to each fetch, which vouches only for a value that
+        clears cutoff: a source may stamp a value with the car's own, older,
+        snapshot time.
         Readiness is asked just before each fetch, since one fetch can change
         the next one's: a refused Owner read hands reads to Fleet. A raising
         fetch counts as failed and logs only its exception type. Called with
@@ -125,7 +130,7 @@ class ProviderOrder:
             if not self._ready(p, vehicle, READ_CHARGE):
                 continue
             try:
-                fetched = p.fetch(vehicle, field, allowWake)
+                fetched = p.fetch(vehicle, field, allowWake, cutoff, wait)
             except Exception as e:
                 logger.debug("%s read of %s raised %s", p.name, field, type(e).__name__)
                 continue

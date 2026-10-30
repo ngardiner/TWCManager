@@ -4,7 +4,8 @@
 # bills each vehicle_data, command and wake, so it reads only when the Owner
 # slot cannot (slotFor("read")). Neither does I/O to answer ready or
 # available. Both read the energy site's Wall Connector VINs for free, Owner
-# first.
+# first. A third provider reads the car's last snapshot over the Fleet token
+# for free (FleetCachedProvider).
 import time
 from typing import Dict, Optional, Tuple
 
@@ -32,7 +33,14 @@ class _TeslaAPIProvider(Provider):
         self.carapi = carapi
         self.module = carapi
 
-    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+    def fetch(
+        self,
+        vehicle,
+        field: str,
+        allowWake: bool = False,
+        cutoff: Optional[float] = None,
+        wait: bool = False,
+    ) -> bool:
         # Never wakes, whatever allowWake says: a cloud wake is never worth a
         # read. update_vehicle_data observes as the slot's provider
         car = vehicle.attachment("TeslaAPI")
@@ -40,7 +48,9 @@ class _TeslaAPIProvider(Provider):
             return False
         if time.time() < car.statusDeferral:
             # As update_vehicle_data: a deferred car reports its stored
-            # values without a request
+            # values without a request, and they are vouched for whatever
+            # the cutoff, so the cascade stops here rather than reach a
+            # billed source such as HomeAssistant
             return True
         slot = getattr(self.carapi, self.slotName)
         # Free online check (vehicles/{vin}) before a paid vehicle_data
@@ -209,3 +219,59 @@ class FleetAPIProvider(_TeslaAPIProvider):
 
     def wallConnectorVins(self) -> Optional[Dict[str, str]]:
         return self.carapi.wallConnectorVins(self.carapi.fleetSlot)
+
+
+class FleetCachedProvider(Provider):
+    # The car's last snapshot, free over the Fleet token: it never wakes the
+    # car and never asks whether it is online. It sorts between the Owner API
+    # and paid Fleet by cost, and a snapshot older than the read's cutoff
+    # returns False so the cascade falls through to paid Fleet.
+    name = "FleetAPICached"
+    rank = 5
+    local = False
+    DECLARATIONS = {C.READ_CHARGE: C.CLOUD_FREE}
+    SUPPRESSED = CLOUD_SUPPRESSED
+    # The snapshot carries no phase count
+    FIELDS = C.CHARGE_FIELDS - {"phases"}
+
+    # The car posts a snapshot within about 15 s of waking, a charge ending,
+    # or falling asleep: a wait for one stamped after the event is up to six
+    # requests three seconds apart
+    sleep = time.sleep
+    POLL = 3.0
+    WAIT = 15.0
+
+    def __init__(self, carapi):
+        self.carapi = carapi
+        self.module = carapi
+
+    def ready(self, vehicle, capability) -> bool:
+        if vehicle is None or capability not in self.declarations():
+            return False
+        if vehicle.attachment("TeslaAPI") is None:
+            return False
+        return self.carapi.fleetSlot.usable("read") and not self.carapi.cachedRefused(
+            vehicle
+        )
+
+    def fetch(
+        self,
+        vehicle,
+        field: str,
+        allowWake: bool = False,
+        cutoff: Optional[float] = None,
+        wait: bool = False,
+    ) -> bool:
+        if not self.ready(vehicle, C.READ_CHARGE):
+            return False
+        for attempt in range(1 + int(self.WAIT / self.POLL) if wait else 1):
+            if attempt:
+                self.sleep(self.POLL)
+            stamp = self.carapi.read_cached(vehicle)
+            if stamp is not None and (cutoff is None or stamp >= cutoff):
+                return True
+            if not self.ready(vehicle, C.READ_CHARGE):
+                # A refusal latched the car, or the slot stopped reading:
+                # no later request would answer
+                return False
+        return False

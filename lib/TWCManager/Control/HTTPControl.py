@@ -53,6 +53,7 @@ SOURCE_NAMES = {
     "TeslaBLE": "BLE",
     "OwnerAPI": "Owner API",
     "FleetAPI": "Fleet API",
+    "FleetAPICached": "Fleet API (cached)",
     "HomeAssistant": "Home Assistant",
     "Gen2TWC": "TWC",
     "Gen3TWC": "Gen3 Wall Connector",

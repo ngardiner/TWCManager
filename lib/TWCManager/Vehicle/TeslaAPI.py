@@ -17,6 +17,7 @@ from TWCManager.Vehicle.Presence import homeCars
 from TWCManager.Vehicle.Providers.Capability import FLEET_DATA
 from TWCManager.Vehicle.Providers.TeslaAPIProviders import (
     FleetAPIProvider,
+    FleetCachedProvider,
     OwnerAPIProvider,
 )
 from TWCManager.Vehicle.Reconcile.HeldLimits import HeldLimits
@@ -62,6 +63,10 @@ class CarApiState:
     commandSigning = None
     ownerCommandsRefused = False
     refusalLoggedAt = None  # refusalState when its read-only line was logged
+    # vehicle_data_cached answered 412 for this car: not asked again while the
+    # Fleet token is the one that was refused (cachedRefusedAt: its changes)
+    cachedUnsupported = False
+    cachedRefusedAt = None
 
 
 class TLS13Adapter(HTTPAdapter):
@@ -232,7 +237,11 @@ class TeslaAPI:
         return self._enabled
 
     def providers(self):
-        return [OwnerAPIProvider(self), FleetAPIProvider(self)]
+        return [
+            OwnerAPIProvider(self),
+            FleetAPIProvider(self),
+            FleetCachedProvider(self),
+        ]
 
     def addVehicle(self, json, slot=None):
         # A listed car joins the registry with this module's record attached;
@@ -372,21 +381,29 @@ class TeslaAPI:
         # What an answer means, acted on: None for an HTTP 200 (unless it is an
         # Owner command's refusal), else an Outcome. purpose is "read", "list"
         # (the vehicle list), "command", "wake", "energy" (the Wall Connector
-        # VIN read) or "config" (telemetryConfig). Energy refusals latch that
-        # read alone, config ones nothing: Storm Watch and vehicle reads keep
-        # the token. Elsewhere a 401 refreshes an expired token once
-        # (_REFRESHED: send again) and otherwise retires the slot; 403 refuses
-        # commands or wakes and pauses reads for an hour (an Owner command's
-        # 403 latches that car alone); 412 retires commands, or latches reads
-        # until the token changes; 410 pauses reads; an Owner command's 410 or
-        # 412 retires Owner commands (ownerRefusal); 429 backs off; 408 is an
-        # asleep or unreachable car. None of these touches the API backoff but
-        # 429, so the next poll can use the other slot at once.
+        # VIN read), "config" (telemetryConfig) or "cached" (read_cached).
+        # A cached read's 412 latches that car alone and any other refusal
+        # nothing: the slot and the API backoff stay as they were. Energy
+        # refusals latch that read alone, config ones nothing: Storm Watch and
+        # vehicle reads keep the token. Elsewhere a 401 refreshes an expired
+        # token once (_REFRESHED: send again) and otherwise retires the slot;
+        # 403 refuses commands or wakes and pauses reads for an hour (an Owner
+        # command's 403 latches that car alone); 412 retires commands, or
+        # latches reads until the token changes; 410 pauses reads; an Owner
+        # command's 410 or 412 retires Owner commands (ownerRefusal); 429 backs
+        # off; 408 is an asleep or unreachable car. None of these touches the
+        # API backoff but 429, so the next poll can use the other slot at once.
         paid = purpose in ("command", "wake")
         owner = paid and slot is self.ownerSlot and vehicle is not None
         if status == 200:
             # Tesla can refuse an Owner command in a 200's error text
             return self.ownerRefusal(vehicle, status, body) if owner else None
+        if purpose == "cached" and status != 401:
+            if status == 412 and vehicle is not None:
+                car = vehicle.attachment("TeslaAPI")
+                car.cachedUnsupported = True
+                car.cachedRefusedAt = slot.changes
+            return O.Outcome(O.REFUSED if status == 412 else O.ERROR, str(status))
         if purpose in ("energy", "config"):
             if purpose == "config" or status not in (401, 403, 410, 412):
                 return O.Outcome(O.ERROR, str(status))
@@ -1851,6 +1868,80 @@ class TeslaAPI:
     def readPrice(self) -> float:
         return FLEET_DATA.price if self.slotFor("read") is self.fleetSlot else 0.0
 
+    def _observeCharge(self, vehicle, charge, source, at):
+        # Only keys present in the response are observed: a default or a
+        # carried-over value is not a fresh reading.
+        for key, field in (
+            ("fast_charger_present", "fastChargerPresent"),
+            ("fast_charger_type", "fastChargerType"),
+            ("conn_charge_cable", "connChargeCable"),
+            ("charger_power", "chargerPower"),
+            ("charge_current_request_max", "chargeCurrentRequestMax"),
+            ("charge_limit_soc", "chargeLimit"),
+            ("battery_level", "batteryLevel"),
+            ("time_to_full_charge", "timeToFullCharge"),
+            ("charger_pilot_current", "availableCurrent"),
+            ("charge_current_request", "chargeCurrentRequest"),
+            ("charger_actual_current", "actualCurrent"),
+            ("charger_phases", "phases"),
+            ("charger_voltage", "voltage"),
+            ("charging_state", "chargingState"),
+            ("scheduled_charging_pending", "scheduledChargingPending"),
+        ):
+            if key in charge:
+                vehicle.observe(field, charge[key], source, at=at)
+
+    def cachedRefused(self, vehicle):
+        # Whether the car's 412 still stands: it holds only for the Fleet
+        # token that was refused, so a replaced token is asked again.
+        car = vehicle.attachment("TeslaAPI")
+        return car.cachedUnsupported and car.cachedRefusedAt == self.fleetSlot.changes
+
+    def read_cached(self, vehicle):
+        # One free Fleet GET of the car's last snapshot (it never wakes the
+        # car): the charge fields are observed at the snapshot's own stamp,
+        # which is returned; None when nothing was observed. The Owner API
+        # answers 412 to this endpoint, so only the Fleet slot is used.
+        slot = self.fleetSlot
+        if self.cachedRefused(vehicle) or not slot.usable("read"):
+            return None
+        path = "vehicles/%s/vehicle_data_cached" % vehicle.vin
+        req, outcome = self._request(slot, "get", path, "cached", vehicle=vehicle)
+        if outcome is not None:
+            return None
+        try:
+            data = json.loads(req.text)["response"]
+            charge = data["charge_state"]
+            stamp = charge["timestamp"] / 1000
+        except (ValueError, KeyError, TypeError):
+            return None
+        source = "FleetAPICached"
+        name = (data.get("vehicle_state") or {}).get("vehicle_name")
+        if name:
+            vehicle.observe("name", name, source, at=stamp)
+        self._observeCharge(vehicle, charge, source, stamp)
+        if "charge_port_door_open" in charge:
+            vehicle.observe(
+                "chargePortOpen", charge["charge_port_door_open"], source, at=stamp
+            )
+        # The snapshot has no pending flag of its own
+        if "scheduled_charging_mode" in charge:
+            vehicle.observe(
+                "scheduledChargingPending",
+                self._cachedPending(charge),
+                source,
+                at=stamp,
+            )
+        return stamp
+
+    @staticmethod
+    def _cachedPending(charge):
+        return (
+            charge.get("scheduled_charging_mode") != "Off"
+            and charge.get("scheduled_charging_start_time") is not None
+            and charge.get("charging_state") == "Stopped"
+        )
+
     def update_vehicle_data(self, vehicle, slot=None):
         car = vehicle.attachment("TeslaAPI")
         path = (
@@ -1911,26 +2002,7 @@ class TeslaAPI:
 
             # One reading: the charger details carry the charging state's
             # stamp, and come first so it is judged with them
-            stamp = self.registry.now()
-            for key, field in (
-                ("fast_charger_present", "fastChargerPresent"),
-                ("fast_charger_type", "fastChargerType"),
-                ("conn_charge_cable", "connChargeCable"),
-                ("charger_power", "chargerPower"),
-                ("charge_current_request_max", "chargeCurrentRequestMax"),
-                ("charge_limit_soc", "chargeLimit"),
-                ("battery_level", "batteryLevel"),
-                ("time_to_full_charge", "timeToFullCharge"),
-                ("charger_pilot_current", "availableCurrent"),
-                ("charge_current_request", "chargeCurrentRequest"),
-                ("charger_actual_current", "actualCurrent"),
-                ("charger_phases", "phases"),
-                ("charger_voltage", "voltage"),
-                ("charging_state", "chargingState"),
-                ("scheduled_charging_pending", "scheduledChargingPending"),
-            ):
-                if key in charge:
-                    vehicle.observe(field, charge[key], source, at=stamp)
+            self._observeCharge(vehicle, charge, source, self.registry.now())
 
             car.statusDeferral = now + READ_MAX_AGE
 

@@ -167,7 +167,7 @@ def test_ha_down_is_a_failed_read_and_cascade_continues():
         DECLARATIONS = {C.READ_CHARGE: C.HA_BILLED}
         ready = lambda self, v, c: True
 
-        def fetch(self, v, f, allowWake=False):
+        def fetch(self, v, f, allowWake=False, cutoff=None, wait=False):
             v.observe("batteryLevel", 55.0, self.name)
             return True
 

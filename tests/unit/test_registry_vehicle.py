@@ -209,7 +209,7 @@ def test_feed_outage_costs_one_cloud_read_not_one_per_window():  # C1 probe
             def ready(self, vehicle, capability):
                 return True
 
-            def fetch(self, vehicle, field, allowWake=False):
+            def fetch(self, vehicle, field, allowWake=False, cutoff=None, wait=False):
                 calls.append(c.t)
                 vehicle.observe("lat", cloudLat, "OwnerAPI")
                 return True
@@ -268,3 +268,108 @@ def test_telemetry_state_ages_only_telemetry():
     assert v.telemetryState() == (api, None)
     tm = v.observe("state", "asleep", "FleetTelemetryMQTT", at=950.0)
     assert v.telemetryState() == (tm, 50.0)
+
+
+def _cascade(clock, *stamps, live=None):
+    """A vehicle whose cascade holds one free fake provider per entry of
+    stamps (an offset from the stamped value's time, or None to observe
+    nothing); returns the vehicle and the list of recorded fetch calls."""
+    from TWCManager.Vehicle.Providers import Capability as C
+    from TWCManager.Vehicle.Providers.Provider import Provider
+    from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+    from tests.unit.teslatokens import wire_reads
+
+    calls = []
+
+    def make(i, at):
+        class Fake(Provider):
+            name = "Fake%d" % i
+            FIELDS = frozenset({"chargingState"})
+            DECLARATIONS = {C.READ_CHARGE: C.CLOUD_FREE}
+
+            def ready(self, vehicle, capability):
+                return True
+
+            def fetch(self, vehicle, field, allowWake=False, cutoff=None, wait=False):
+                calls.append((self.name, cutoff, wait))
+                vehicle.observe(field, "Fake%d" % i, self.name, at=at)
+                # Vouches only for a value that clears the cutoff
+                return cutoff is None or at >= cutoff
+
+        return Fake()
+
+    reg = VehicleRegistry({}, clock=clock)
+    wire_reads(reg, *[make(i, at) for i, at in enumerate(stamps)])
+    return reg.getOrCreate(VIN, "test"), calls
+
+
+def test_cascade_skips_a_value_older_than_the_cutoff():
+    c = Clock(5000.0)
+    v, calls = _cascade(c, c.t - 400, c.t)
+    assert v.read("chargingState", 300).value == "Fake1"
+    assert [n for n, _, _ in calls] == ["Fake0", "Fake1"]
+
+
+def test_cascade_stops_at_a_value_inside_the_cutoff():
+    c = Clock(5000.0)
+    v, calls = _cascade(c, c.t - 100, c.t)
+    assert v.read("chargingState", 300).value == "Fake0"
+    assert [n for n, _, _ in calls] == ["Fake0"]
+
+
+def test_event_cutoff_rejects_a_value_inside_max_age():
+    c = Clock(5000.0)
+    t0 = 4990.0
+    v, calls = _cascade(c, t0 - 5, t0 + 3)
+    assert v.read("chargingState", 300, since=t0).value == "Fake1"
+
+
+def test_event_cutoff_accepts_a_late_fetch_stamped_after_the_event():
+    t0 = 4990.0
+    c = Clock(t0 + 10)
+    v, calls = _cascade(c, t0 + 3, t0 + 10)
+    assert v.read("chargingState", 0, since=t0).value == "Fake0"
+    assert [n for n, _, _ in calls] == ["Fake0"]
+
+
+def test_shortcut_uses_the_event_cutoff():
+    c = Clock(5000.0)
+    t0 = 4990.0
+    v, calls = _cascade(c, t0 + 3)
+    v.observe("chargingState", "stored", "Fake0", at=t0 - 5)
+    assert v.read("chargingState", 300, since=t0).value == "Fake0"
+    assert len(calls) == 1
+
+
+def test_live_feed_still_vouches_under_a_cutoff():
+    c = Clock(5000.0)
+    v, calls = _cascade(c, c.t)
+    v._registry.sourceLiveAt = lambda source, vehicle: (
+        c.t if source == "Feed" else NOT_TRACKED
+    )
+    v.observe("chargingState", "Charging", "Feed", at=c.t - 1000)
+    assert v.read("chargingState", 300).value == "Charging"
+    assert calls == []
+
+
+def test_wait_flag_reaches_fetch():
+    c = Clock(5000.0)
+    t0 = 4990.0
+    v, calls = _cascade(c, t0 + 3)
+    v.read("chargingState", 300, since=t0)
+    assert calls[-1] == ("Fake0", t0, True)
+    v.read("chargingState", 300, force=True)
+    assert calls[-1] == ("Fake0", c.t - 300, False)
+    v.read("chargingState", 0, since=t0, wait=False, force=True)
+    assert calls[-1] == ("Fake0", t0, False)
+
+
+def test_a_true_fetch_with_a_stale_value_ends_the_walk():
+    # A provider that vouches (a deferred car's stored values) is believed
+    c = Clock(5000.0)
+    v, calls = _cascade(c, c.t - 400, c.t)
+    v._registry.providerOrder.provider("Fake0").fetch = lambda *a, **k: (
+        v.observe("chargingState", "Stored", "Fake0", at=c.t - 400) and True
+    )
+    assert v.read("chargingState", 300).value == "Stored"
+    assert calls == []

@@ -54,10 +54,21 @@ class Provider:
     def ampsRange(self, vehicle) -> Optional[Tuple[float, float]]:
         return None
 
-    def fetch(self, vehicle, field: str, allowWake: bool = False) -> bool:
+    def fetch(
+        self,
+        vehicle,
+        field: str,
+        allowWake: bool = False,
+        cutoff: Optional[float] = None,
+        wait: bool = False,
+    ) -> bool:
         # Reads field (and whatever comes with it) into the registry; True
-        # when the provider now vouches for vehicle.latest(field). Does I/O:
-        # called with no lock held. Never wakes the car unless allowWake.
+        # when the provider now vouches for a value of field that clears
+        # cutoff (a stamp no older; None: any). A provider deferring its
+        # requests vouches for its stored value whatever the cutoff: the
+        # read ends there, off any billed source after it. wait lets it hold
+        # for a value stamped after cutoff. Does I/O: called with no lock
+        # held. Never wakes the car unless allowWake.
         return False
 
     def online(self, vehicle) -> Optional[bool]:

@@ -126,7 +126,7 @@ def test_default_boot_registers_unconfigured_modules_that_never_command():
     m = TWCMaster("AB", CONFIG)
     for name, cls in (("TeslaAPI", TeslaAPI), ("HomeAssistant", HomeAssistant)):
         m.registerModule({"name": name, "ref": cls(m), "type": "Vehicle"})
-    assert registerProviders(m) == ["Gen2TWC", "OwnerAPI", "FleetAPI"]
+    assert registerProviders(m) == ["Gen2TWC", "OwnerAPI", "FleetAPI", "FleetAPICached"]
     v = m.vehicleRegistry.getOrCreate(VIN, "test")
     for cap in sorted(C.COMMANDS):
         assert [p.name for p in m.providerOrder.candidates(v, cap) if not p.local] == []
