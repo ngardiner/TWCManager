@@ -155,7 +155,7 @@ class TWCMaster:
     treatGenerationAsGridDelivery = False
     TWCID = None
     updateVersion = False
-    version = "1.4.0"
+    version = "1.4.1"
 
     # TWCs send a seemingly-random byte after their 2-byte TWC id in a number of
     # messages. I call this byte their "Sign" for lack of a better term. The byte
