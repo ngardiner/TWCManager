@@ -3,6 +3,7 @@
 # wake check reads the control tick's admission. Real master, store and
 # reconciler; a scripted BLE, or the real TeslaAPI with a scripted Fleet car.
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -114,6 +115,35 @@ def test_a_raise_wakes_a_car_a_snapshot_shows_plugged_in_since_it_left(
     run(m, r, c, 1800)
     assert commands(requests_mock)[:1] == ["set_charge_limit"]
     assert "charge_start" in commands(requests_mock)
+    assert wakeUps(requests_mock) == 1
+
+
+def test_a_raise_held_asleep_without_room_wakes_once_admitted(
+    requests_mock, monkeypatch
+):
+    # The raise reaches the reconciler before the control tick admits the
+    # car (here, the first pass after a restart), so it is held asleep with
+    # no wake. The watch owns the car's cloud checks, so no newer reading
+    # comes; admission alone changes
+    m, r, v, c, api = install(fleet=True)
+    FleetCar(requests_mock, state="asleep", limit=50, charging="Complete", soc=64)
+    for field, value in dict(
+        pluggedIn=True, chargingState="Complete", chargeLimit=50, batteryLevel=64
+    ).items():
+        v.observe(field, value, "FleetAPI", at=c() - 600)
+    v.observe("state", "asleep", "FleetAPI", at=c() - 600)
+    m.heldLimits.set(VIN, outside=100, held=50)
+    monkeypatch.setattr(r, "_asleepCheckDue", lambda *a: False)
+    m.setMaxAmpsToDivideAmongSlaves(32)
+    run(m, r, c, 600)
+    m.setPolicyLimit(70, transition=True)
+    admit = m._admit
+    m._admit = Mock(side_effect=RuntimeError)  # the pass admits nothing
+    r.pass_()
+    m._admit = admit
+    assert m.desired.record(VIN, CHARGE_LIMIT).lastOutcome == O.ASLEEP
+    run(m, r, c, 600)
+    assert commands(requests_mock)[:1] == ["set_charge_limit"]
     assert wakeUps(requests_mock) == 1
 
 
