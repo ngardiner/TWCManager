@@ -1472,6 +1472,9 @@ class TeslaAPI:
         outcome, response = self._paidPost(vehicle, slot, "command/" + name, body)
         if outcome is None:
             reason = response.get("reason") or ""
+            if isinstance(reason, str):
+                # The Vehicle Command proxy puts the car's own code last
+                reason = reason.rsplit(": ", 1)[-1]
             if not isinstance(reason, str) or not re.fullmatch(r"[a-z_]{1,40}", reason):
                 # Only a short reason code is carried or logged
                 reason = "not accepted" if reason else ""
