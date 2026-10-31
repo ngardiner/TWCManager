@@ -205,6 +205,12 @@ def pluggedNow(master, v, unknown=False, since=NEVER) -> Optional[bool]:
         not best or best[1] or best[2] == "Gen2TWC" or best[0][0] <= named
     ):
         return True
+    # A snapshot of the car plugged in since its unplug places it nowhere,
+    # but the unplug is no longer known: a car that came back unseen
+    cached = v.reported("chargingState").get(CACHED)
+    if best and best[1] is False and cached and cached.at > best[0][0]:
+        if _plug("chargingState", cached):
+            return unknown
     return unknown if best is None else best[1]
 
 
