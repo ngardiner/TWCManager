@@ -29,6 +29,24 @@ This is your working branch of the repository.
 
 Python dependencies are documented in the setup.py script.
 
+### Release notes
+
+A pull request that changes what users see adds its changelog line as a file in [changes/](../changes/README.md), rather than editing CHANGELOG.md, so pull requests never conflict over the changelog. The PR number and author are filled in when a release is cut.
+
+### Cutting a release
+
+1. Set the version in `setup.py`, `lib/TWCManager/__init__.py` and `lib/TWCManager/TWCMaster.py`.
+2. Run `python3 contrib/release_notes.py build --version X.Y.Z`. It writes the release's section into CHANGELOG.md from the files in `changes/` and removes them. With the [GitHub CLI](https://cli.github.com/) logged in, each note is credited to the author of the pull request GitHub links its commit to, however it was merged; without it, the merge commit's subject names the PR and the branch owner.
+3. Commit, then tag `vX.Y.Z` to publish the PyPI package and Docker image.
+
+### Cutting a post release
+
+A post release (`X.Y.Z.postN`) ships fixes from the `release/X.Y.Z` branch. Each fix reaches that branch as a pull request that cherry-picks the fix from main, note file included.
+
+1. On `release/X.Y.Z`, run `python3 contrib/release_notes.py build --version X.Y.Z.postN`. It lists the notes under the `vX.Y.Z` section, after that release's own entries, as `### vX.Y.Z.postN`, and removes the note files. Commit only this change.
+2. Cherry-pick that commit onto main. Main's changelog then records the post release, and the fixes it shipped are not listed again in the next release.
+3. On `release/X.Y.Z`, set the version, commit and tag `vX.Y.Z.postN`.
+
 ## Conventions
 
 ### Debug Levels
