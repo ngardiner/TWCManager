@@ -69,8 +69,13 @@ def providerLines(master, vehicle):
     """One line per provider claim: its source, any informative status, and
     whether it can command the car or only read it (and why not, if known)."""
     api = master.getModuleByName("TeslaAPI")
+    # The account listing claims the car for both APIs, live so a token added
+    # later manages it; until then that API can neither read nor command it
+    held = {"OwnerAPI": "ownerTokenHeld", "FleetAPI": "fleetTokenHeld"}
     lines = []
     for name, claim in vehicle.claims.items():
+        if api and name in held and not getattr(api, held[name])():
+            continue
         can = claim.commands
         why = None
         if not can and api and name == "OwnerAPI":
