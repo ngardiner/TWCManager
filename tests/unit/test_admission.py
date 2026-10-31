@@ -92,6 +92,31 @@ def test_last_nights_raise_on_fleet_costs_one_wake(requests_mock):
     assert wakeUps(requests_mock) == 1
 
 
+def test_a_raise_wakes_a_car_a_snapshot_shows_plugged_in_since_it_left(
+    requests_mock,
+):
+    # Fleet only, no live feed: last read unplugged as it left, then back
+    # and plugged in, which only the free snapshot saw. Asleep, Complete at
+    # 64% above its held 50%; the policy raises the limit to 70
+    m, r, v, c, api = install(fleet=True)
+    FleetCar(requests_mock, state="asleep", limit=50, charging="Complete", soc=64)
+    v.observe("chargingState", "Disconnected", "FleetAPI", at=c() - 7200)
+    for field, value in dict(
+        chargingState="Complete", chargeLimit=50, batteryLevel=64
+    ).items():
+        v.observe(field, value, "FleetAPICached", at=c() - 600)
+    v.observe("state", "asleep", "FleetAPI", at=c() - 600)
+    m.heldLimits.set(VIN, outside=100, held=50)
+    m.setMaxAmpsToDivideAmongSlaves(32)
+    run(m, r, c, 600)
+    assert paid(requests_mock) == (0, 0, 0)
+    m.setPolicyLimit(70, transition=True)
+    run(m, r, c, 1800)
+    assert commands(requests_mock)[:1] == ["set_charge_limit"]
+    assert "charge_start" in commands(requests_mock)
+    assert wakeUps(requests_mock) == 1
+
+
 def test_a_car_at_its_limit_is_neither_woken_nor_started():
     m, r, v, c, p = finished()
     m.setMaxAmpsToDivideAmongSlaves(32)
