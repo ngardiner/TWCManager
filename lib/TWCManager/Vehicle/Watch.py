@@ -168,6 +168,9 @@ class Watch:
         minAmpsPerPhase = 5 if phases < 3 else 1
         least = max(self._settings["emsNoiseWatts"], minAmpsPerPhase * volts * phases)
         self._step, self._triggered = LoadStep(least), {}
+        # vin -> a rise that may be the car, away by its last fix, come home:
+        # the step's thread writes it, a pass reads one key
+        self._backStep = {}
         # A leaf: never held across a registry or provider call, or a submit
         self._lock = threading.Lock()
         # (vin, job kind) queued or running, and its last answer and time,
@@ -334,6 +337,8 @@ class Watch:
         self._stale(now)
         step = self._step.sample(self.unexplainedWatts())
         maybe = (HOME_AWAKE, AWAY_AWAKE, UNKNOWN) if step == "up" else (HOME_CHARGING,)
+        if step == "up":
+            self._mayBeBack(now)
         for v, where, state in self._watched() if step else ():
             # A car not home is asked only once it could be back. A rise reads
             # a car once a courtesy window, so a cycling load never keeps it
@@ -342,6 +347,20 @@ class Watch:
             wait = self._settings["sleepCourtesySecs"] if step == "up" else 300
             calm = now >= self._triggered.get(key, NEVER) + wait
             if where == NOT_HOME or not back:
+                # Should the read find it home and charging, the charge began
+                # here; nothing polls a car away. One that slept away may have
+                # woken and driven home between its checks: its wake's read
+                # says where it is
+                if step == "up" and state == AWAY_AWAKE and self._fleet(v):
+                    self.suspect(v.vin, first, "load step up", step=True)
+                elif (
+                    step == "up"
+                    and back
+                    and state in ASLEEP
+                    and cloudOnly(self.master, v)
+                ):
+                    with self._lock:
+                        self._waking[v.vin] = first
                 continue
             if not self._fleet(v):
                 if state in maybe and calm:
@@ -443,7 +462,11 @@ class Watch:
         # Only the cloud sees an awake car free to leave go, or come back once
         # it could: it is read once its fix is a courtesy window old
         fixAt, wait = _fix(self.master, v)[1], self._settings["sleepCourtesySecs"]
-        late = now >= max(fixAt, readAt) + wait and cloudOnly(self.master, v)
+        # A rise since then, which may be it plugging in just home, makes the
+        # read due at once
+        known = max(fixAt, readAt)
+        due = now >= known + wait or self._backStep.get(vin, NEVER) > known
+        late = due and cloudOnly(self.master, v)
         if late and state in (HOME_AWAKE, AWAY_AWAKE):
             want = want or Ask(EVENT, False)
         # That read, and one on its wake, is for where the car is
@@ -642,6 +665,17 @@ class Watch:
             km = math.hypot(v.value("lat") - home[0], east) * _FT_PER_DEGREE / 3280.84
         fixAt = fixAt if fixAt > NEVER else self._started or now
         return fixAt + max(300.0, km / self._settings["returnKph"] * 3600)
+
+    def _mayBeBack(self, now) -> None:
+        # A rise may be a car only the cloud reads plugging in just home: its
+        # last fix says away, and only a fix says otherwise, so the courtesy
+        # read comes early, once it could be back. A rise counts once a
+        # window, so a cycling load adds at most one read a window
+        wait = self._settings["sleepCourtesySecs"]
+        for v, where, state in self._watched():
+            if where == NOT_HOME and state == AWAY_AWAKE and cloudOnly(self.master, v):
+                if now >= self._backStep.get(v.vin, NEVER) + wait:
+                    self._backStep[v.vin] = now
 
     def _listen(self, v, where, ble, now):
         # How and how often a lost car's return is heard: a scan, or where none

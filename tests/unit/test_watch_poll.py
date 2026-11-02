@@ -7,7 +7,7 @@ from TWCManager.Vehicle.Watch import DEFAULTS, Watch, fleetOnly
 from tests.unit.reconcile_helpers import AWAY, HOME, attachFleet, bleAnswers, bleReads, placeAt, runPending
 from tests.unit.test_command_path_parity import FLEET, FleetCar, counts, paid
 from tests.unit.test_limit_reconciler import VIN, setup
-from tests.unit.test_watch import apiOnly, chargingFleetCar, later, noScan
+from tests.unit.test_watch import apiOnly, chargingFleetCar, later, noScan, northOfHome, rise
 
 CHARGING = dict(charging_state="Charging", charger_actual_current=32, charger_voltage=240)
 SAVE = {"cmd": "saveSettings"}
@@ -91,6 +91,21 @@ def test_a_charge_only_a_paid_read_saw_is_counted(requests_mock):
     assert not w.ledger.isOpen(VIN) and segs[0][0] == S and S + 100 < segs[-1][1] < S + 106
     assert sum((e - s) * x for s, e, x in segs) == pytest.approx(0.16 * 3.6e6 / 0.93)
     assert paid(requests_mock) == (0, 0, 0)
+
+def test_a_charge_on_arrival_ended_by_the_read_that_found_it_is_counted(requests_mock):
+    # Its last fix on the road, it plugs in just home; the read the rise brings
+    # finds it charging, and the next snapshot finds it done
+    m, r, v, c, car = apiOnly(requests_mock); northOfHome(m, v, 5, c.t); v.observe("state", "online", "FleetAPI")
+    car.charge.update(charging_state="Charging", charger_actual_current=48, charger_voltage=240, charger_phases=1, charge_energy_added=0.15)
+    snap = upload(requests_mock, stamp=c.t - 600, charging_state="Disconnected")
+    w = Watch(m, clock=c); m.queue_background_task = lambda task, delay=0: None; w.pass_(); runPending(r.cloud)
+    later(m, v, c, 400); S = c.t; rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud); R = c.t
+    assert paid(requests_mock)[0] == 1
+    snap.update(stamp=R + 6, charging_state="Complete", charge_energy_added=0.16, charger_actual_current=0)
+    run(m, v, c, w, r, 3)
+    segs = w.ledger.toJSON()[VIN]["segments"]
+    assert not w.ledger.isOpen(VIN) and segs[0][0] == S and R < segs[-1][1] <= R + 6
+    assert sum((e - s) * x for s, e, x in segs) == pytest.approx(0.16 * 3.6e6 / 0.93)
 
 def test_a_paid_read_alone_opens_a_session(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock); S = c.t

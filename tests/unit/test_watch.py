@@ -635,6 +635,38 @@ def test_a_lost_car_in_a_ble_install_gets_no_cloud_status_checks(requests_mock):
     for _ in range(40): later(m, v, c, 150); w.pass_(); runPending(r.ble); runPending(r.cloud)
     assert scans.count > 1 and requests_mock.request_history == []
 
+def rise(m, w, c, before, after):
+    # A step held for the next sample, 30 s on
+    m.setConsumption("t", before); w.loadSample(); m.setConsumption("t", after); w.loadSample(); c.t += 30; w.loadSample()
+
+def test_a_rise_reads_an_api_only_car_away_once_it_could_be_back(requests_mock):
+    # Home and plugging in, but its last fix was on the road: only a fix says it is back
+    m, r, v, c, car = apiOnly(requests_mock, at=HOME); northOfHome(m, v, 5, c.t); v.observe("state", "online", "FleetAPI")
+    w = Watch(m, clock=c); w.pass_(); runPending(r.cloud)
+    rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 0                                   # it could not be back yet
+    later(m, v, c, 400); rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1 and P.presence(m, v) == P.HOME   # well inside the courtesy window
+
+def test_a_rise_reads_an_api_only_car_still_away_once_a_window(requests_mock):
+    m, r, v, c, car = apiOnly(requests_mock, at=AWAY); northOfHome(m, v, 5, c.t); v.observe("state", "online", "FleetAPI")
+    w = Watch(m, clock=c); w.pass_(); runPending(r.cloud); later(m, v, c, 400)
+    rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1 and P.presence(m, v) == P.NOT_HOME
+    for _ in range(3):
+        later(m, v, c, 300); rise(m, w, c, 12000, 500); rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1                                   # a cycling load: the window's read only
+
+def test_a_rise_checks_an_api_only_car_that_slept_away_once_it_could_be_back(requests_mock):
+    # It slept away, then woke and drove home between its checks: only a
+    # check says it woke, and the wake's read says where it is
+    m, r, v, c, car = apiOnly(requests_mock, state="asleep", at=AWAY); northOfHome(m, v, 5, c.t)
+    w = Watch(m, clock=c); later(m, v, c, 400); w.pass_(); runPending(r.cloud); later(m, v, c, 300)
+    assert situation(m, v) == AWAY_ASLEEP and counts(requests_mock)["free"] == 1
+    car.state, car.at = "online", HOME
+    rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud); later(m, v, c, 1); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1 and P.presence(m, v) == P.HOME   # long before its 1800 s check
+
 def test_a_failed_read_of_an_api_only_car_away_waits_a_window(requests_mock):
     # A failed read leaves the fix as old as it was: the last read, not the
     # fix, holds off the next
