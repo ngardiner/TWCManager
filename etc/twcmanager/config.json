@@ -729,6 +729,25 @@
           # Consumption from grid as positive values or Push to grid as negative values.
           "uuidTotalGridW": "1cbbe494-a049-11eb-bcbc-0242ac130002"
         },
+        # The Victron module reads Consumption/Generation from a Victron CerboGX (or
+        # other GX device) over Modbus TCP. The default registers read the system-bus
+        # per-phase Output Power (consumption) and AC-coupled PV Output (generation).
+        "Victron": {
+          "enabled": false,
+          # IP address of the CerboGX / GX device
+          "serverIP": "192.168.1.2",
+          # Modbus TCP port (almost always 502)
+          "serverPort": 502,
+          # Default Modbus unit/device ID for the system bus (100 = system)
+          "unitID": 100,
+          # Modbus connection timeout in seconds
+          "timeout": 10
+          # Optional: override the registers read for each value. Each entry is a
+          # [register, unitID] pair; the values read are summed. Use these to read,
+          # for example, a specific grid meter instead of the system bus.
+          #"consumptionRegisters": [ [817, 100], [818, 100], [819, 100] ],
+          #"generationRegisters":  [ [808, 100], [809, 100], [810, 100] ]
+        },
         # The URL module allows fetching of consumption and generation data from URL items.
         # If you do not track one of these values (generation or consumption) via URL, leave
         # the parameter blank, and it will not be retrieved.

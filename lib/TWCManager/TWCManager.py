@@ -113,6 +113,7 @@ modules_available = [
     "EMS.SolarLog",
     "EMS.TeslaPowerwall2",
     "EMS.TED",
+    "EMS.Victron",
     "EMS.Volkszahler",
     "EMS.ScenarioEMS",
     "EMS.URL",

@@ -777,12 +777,7 @@ def CreateHTTPHandlerClass(master):
                     totals["carsCharging"] += slaveTWC.isCharging
                     totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
                     totals["lifetimekWh"] += slaveTWC.lifetimekWh
-                    # maxAmps should be the minimum across all TWCs (bottleneck), not sum
-                    totals["maxAmps"] = (
-                        slaveTWC.maxAmps
-                        if totals["maxAmps"] == 0
-                        else min(totals["maxAmps"], slaveTWC.maxAmps)
-                    )
+                    totals["maxAmps"] += slaveTWC.maxAmps
                     totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
 
                 # A car on a charger no TWC reports is offered its share as
