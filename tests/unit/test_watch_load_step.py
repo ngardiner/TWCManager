@@ -112,3 +112,55 @@ def test_the_watch_wants_the_meter_read_while_its_step_can_run():
     assert not w.wantsEMS()
     m.getModulesByType = lambda kind: []
     assert not w.wantsEMS()
+
+
+def homeCar(c, state="Stopped", amps=0):
+    # A watched car at home whose last reading was taken now; writes after it are newer
+    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
+    v.observe("chargingState", state, "TeslaBLE"); v.observe("actualCurrent", amps, "TeslaBLE")
+    m.getRealPowerFactor = lambda amps: 1
+    return m, v, c, Watch(m, clock=c)
+
+def test_an_accepted_start_counts_at_the_commanded_amps_until_a_reading():
+    m, v, c, w = homeCar(None); c.t += 5
+    v.noteWrite("chargingState", "Charging", "FleetAPI"); v.noteWrite("chargeCurrentRequest", 32, "FleetAPI")
+    assert w.chargingAmps() == 32
+    c.t += 5; v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("actualCurrent", 30, "TeslaBLE")
+    assert w.chargingAmps() == 30                                      # a reading after the command is the truth
+
+def test_a_start_with_no_rate_written_counts_at_the_cars_maximum():
+    m, v, c, w = homeCar(None); v.observe("chargeCurrentRequestMax", 48, "TeslaBLE"); c.t += 5
+    v.noteWrite("chargingState", "Charging", "FleetAPI"); assert w.chargingAmps() == 48
+    c.t += 5; v.noteWrite("chargingState", "Stopped", "FleetAPI"); assert w.chargingAmps() == 0
+
+def test_a_rate_written_to_a_stopped_car_counts_nothing():
+    m, v, c, w = homeCar(None); c.t += 5
+    v.noteWrite("chargeCurrentRequest", 32, "FleetAPI"); assert w.chargingAmps() == 0
+
+def test_a_lowered_rate_keeps_the_old_draw_until_a_newer_reading():
+    m, v, c, w = homeCar(None, "Charging", 48); c.t += 5
+    v.noteWrite("chargeCurrentRequest", 16, "FleetAPI"); assert w.chargingAmps() == 48
+    c.t += 5; v.observe("actualCurrent", 16, "TeslaBLE"); assert w.chargingAmps() == 16
+
+def test_a_stop_keeps_the_old_draw_until_a_newer_reading():
+    m, v, c, w = homeCar(None, "Charging", 32); c.t += 5
+    v.noteWrite("chargingState", "Stopped", "FleetAPI"); assert w.chargingAmps() == 32
+    c.t += 5; v.observe("chargingState", "Stopped", "TeslaBLE"); v.observe("actualCurrent", 0, "TeslaBLE")
+    assert w.chargingAmps() == 0
+
+def test_a_raised_rate_counts_at_once():
+    m, v, c, w = homeCar(None, "Charging", 16); c.t += 5
+    v.noteWrite("chargeCurrentRequest", 32, "FleetAPI"); assert w.chargingAmps() == 32
+
+def test_a_car_away_counts_nothing_even_with_a_start_written():
+    m, v, c, w = homeCar(None); c.t += 5; placeAt(m, v, AWAY); c.t += 5
+    v.noteWrite("chargingState", "Charging", "FleetAPI"); v.noteWrite("chargeCurrentRequest", 32, "FleetAPI")
+    assert w.chargingAmps() == 0
+
+def test_without_the_ledger_a_cloud_only_car_is_left_out_and_a_ble_car_kept():
+    import TWCManager.Vehicle.Watch as W
+    m, v, c, w = homeCar(None, "Charging", 20)
+    assert w.chargingAmps(ledgered=False) == 20
+    orig, W.cloudOnly = W.cloudOnly, lambda master, car: True
+    try: assert w.chargingAmps(ledgered=False) == 0 and w.chargingAmps() == 20
+    finally: W.cloudOnly = orig

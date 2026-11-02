@@ -205,15 +205,31 @@ class Watch:
             and any(True for _ in self._watched())
         )
 
-    def chargingAmps(self) -> float:
+    def believedAmps(self, v) -> float:
+        # What the car draws, as far as is known. Until a reading newer than
+        # a command arrives, the higher of that reading and the commanded
+        # rate: a lowered rate or a stop keeps the old draw, and an accepted
+        # start counts at its rate before any reading shows it
+        if v.isAnonymous or twcVinAt(self.master, v) > NEVER:
+            return 0
+        where = situation(self.master, v)
+        reading = v.value("actualCurrent") or 0 if where == HOME_CHARGING else 0
+        seen = v.latest("actualCurrent")
+        newer = lambda w: w is not None and (seen is None or w.at > seen.at)
+        started, rate = v.lastWrite("chargingState"), v.lastWrite("chargeCurrentRequest")
+        charging = started.value == "Charging" if newer(started) else where == HOME_CHARGING
+        if not (newer(started) or newer(rate)) or not charging or where not in (HOME_AWAKE, HOME_CHARGING):
+            return reading
+        return max(reading, rate.value if rate else v.value("chargeCurrentRequestMax") or 0)
+
+    def chargingAmps(self, ledgered: bool = True) -> float:
         # Cars charging at home on chargers that report to no TWC, watched or
-        # covered by a feed: a TWC naming a car counts its draw itself
+        # covered by a feed: a TWC naming a car counts its draw itself.
+        # ledgered=False leaves out the cars read only through the cloud
         return sum(
-            v.value("actualCurrent") or 0
+            self.believedAmps(v)
             for v in self.master.vehicleRegistry.vehicles()
-            if not v.isAnonymous
-            and twcVinAt(self.master, v) <= NEVER
-            and situation(self.master, v) == HOME_CHARGING
+            if ledgered or not cloudOnly(self.master, v)
         )
 
     def unexplainedWatts(self) -> float:
