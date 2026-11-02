@@ -127,6 +127,16 @@ def chargingFleetCar(requests_mock, m, v, battery=True, **kw):
     m.watchBudget = WatchBudget(3.0, clock=lambda: 1000.0)
     return car
 
+def namedFleetCar(requests_mock, m, v, **kw):
+    # Charging on a TWC that names it: the cloud read is paid, as only a
+    # Fleet-only car's charge is polled for free instead
+    car = chargingFleetCar(requests_mock, m, v, **kw); twcNames(m, v)
+    v.observe("actualCurrent", 24, "Gen2TWC", seen=False)
+    return car
+
+def twcNames(m, v):
+    m.vehicleRegistry.observeTwcVin("8244", VIN); gen2Slave(m, "8244", state=0x03); v.observe("pluggedIn", True, "Gen2TWC")
+
 def test_arrival_by_twc_plug_in_reads_the_battery_once():
     m, r, v, c = setup(here=False, ble=True); w = Watch(m, clock=c); reads = bleReads(m, soc=18)
     w.pass_()                                                        # the start: nothing is news yet
@@ -192,7 +202,7 @@ def test_a_charging_car_is_read_on_the_cadence_and_released_when_it_sleeps():
     c.t += 300; w.pass_(); runPending(r.ble); assert reads.count == 2
 
 def test_cloud_reads_draw_from_the_budget_and_stop_at_the_floor(requests_mock):
-    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    m, r, v, c = setup(here=False); namedFleetCar(requests_mock, m, v)
     w = Watch(m, clock=c); w.readNow(VIN, "start"); w.pass_(); runPending(r.cloud)   # status check, then the event read
     paidBefore = paid(requests_mock)[0]; assert paidBefore == 1
     for _ in range(40): later(m, v, c, 900); w.pass_(); runPending(r.cloud)
@@ -201,7 +211,7 @@ def test_cloud_reads_draw_from_the_budget_and_stop_at_the_floor(requests_mock):
     assert m.watchBudget.tokens() >= 0.05 - 0.002
 
 def test_a_refused_read_waits_the_routine_cadence(requests_mock, caplog):
-    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    m, r, v, c = setup(here=False); namedFleetCar(requests_mock, m, v)
     m.watchBudget.spend(0.049, EVENT)                                 # one event read above the floor
     w = Watch(m, clock=c); w.readNow(VIN, "start"); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 1
     spend, asked = m.watchBudget.spend, []
@@ -264,12 +274,12 @@ def test_a_covered_car_keeps_no_ask_for_later(requests_mock):
     feed.down = True; later(m, v, c, 60); w.pass_(); runPending(r.cloud)
     assert paid(requests_mock) == (0, 0, 0)
 
-def test_cloud_reads_while_charging_run_on_the_slower_cadence(requests_mock):
+def test_a_fleet_only_car_charging_is_polled_instead_of_read_on_the_cloud_cadence(requests_mock):
     m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
-    w = Watch(m, clock=c); w.readNow(VIN, "start"); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 1
-    later(m, v, c, DEFAULTS["chargingReadSecs"]); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 1
+    w = Watch(m, clock=c); w.suspect(VIN, c.t, "start"); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 0
+    later(m, v, c, DEFAULTS["chargingReadSecs"]); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 0
     later(m, v, c, DEFAULTS["cloudChargingReadSecs"] - DEFAULTS["chargingReadSecs"]); w.pass_(); runPending(r.cloud)
-    assert paid(requests_mock)[0] == 2
+    assert paid(requests_mock)[0] == 0 and counts(requests_mock)["cached"] == 2  # no newer snapshot: given up at 600 s
 
 def awayLong(m, v, c, ago=6000):
     # Away, the fix old enough that the car could be home by now
@@ -485,6 +495,7 @@ def test_a_charge_port_opening_on_an_awake_car_at_home_reads_it_once():
 
 def test_a_failed_read_asked_for_is_tried_once_more_a_cadence_later(requests_mock):
     m, r, v, c = setup(here=False); attachFleet(m, v, FleetCar(requests_mock, state="online", at=HOME)); placeAt(m, v, HOME)
+    twcNames(m, v)                                                         # a Fleet-only car would be polled instead
     requests_mock.get(FLEET + VIN + "/vehicle_data", status_code=500, json={})
     w = Watch(m, clock=c); w.pass_(); runPending(r.cloud)
     w.readNow(VIN, "test"); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 1

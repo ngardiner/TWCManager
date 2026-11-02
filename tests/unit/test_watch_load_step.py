@@ -157,10 +157,42 @@ def test_a_car_away_counts_nothing_even_with_a_start_written():
     v.noteWrite("chargingState", "Charging", "FleetAPI"); v.noteWrite("chargeCurrentRequest", 32, "FleetAPI")
     assert w.chargingAmps() == 0
 
-def test_without_the_ledger_a_cloud_only_car_is_left_out_and_a_ble_car_kept():
+def test_without_the_ledger_a_fleet_only_car_is_left_out_and_a_ble_car_kept():
     import TWCManager.Vehicle.Watch as W
     m, v, c, w = homeCar(None, "Charging", 20)
     assert w.chargingAmps(ledgered=False) == 20
-    orig, W.cloudOnly = W.cloudOnly, lambda master, car: True
+    orig, W.fleetOnly = W.fleetOnly, lambda master, car, deaf=False: True
     try: assert w.chargingAmps(ledgered=False) == 0 and w.chargingAmps() == 20
-    finally: W.cloudOnly = orig
+    finally: W.fleetOnly = orig
+
+
+def fleetStep(requests_mock, state="online"):
+    from tests.unit.test_watch_poll import start
+    m, r, v, c, w, saved, car = start(requests_mock, state=state); m.setConsumption("t", 500); w.loadSample()
+    return m, r, v, c, w, car
+
+def test_an_up_step_suspects_an_awake_fleet_only_car_from_the_steps_first_sample(requests_mock):
+    m, r, v, c, w, car = fleetStep(requests_mock); c.t += 30; T = c.t
+    m.setConsumption("t", 5300); w.loadSample(); c.t += 30; w.loadSample()
+    assert w._suspect[VIN] == (T, T)                                                       # since, and the step's own time
+
+def test_an_up_step_asks_an_asleep_car_online_and_suspects_it_only_if_awake(requests_mock):
+    from tests.unit.test_command_path_parity import counts
+    from tests.unit.test_watch import later
+    m, r, v, c, w, car = fleetStep(requests_mock, state="asleep"); later(m, v, c, 300); n = counts(requests_mock)["free"]
+    step(m, w, c, 500, 5300); w.pass_(); runPending(r.cloud)                              # at the next pass, off its cadence
+    assert counts(requests_mock)["free"] == n + 1 and VIN not in w._suspect               # still asleep
+    car.state = "online"; later(m, v, c, 60); step(m, w, c, 5300, 500); T = c.t; step(m, w, c, 500, 5300)
+    w.pass_(); runPending(r.cloud); assert counts(requests_mock)["free"] == n + 2 and w._suspect[VIN] == (T, T)
+    w.pass_(); runPending(r.cloud); assert counts(requests_mock)["free"] == n + 2            # asked once
+
+def test_a_cycling_load_does_not_throttle_a_fleet_only_suspicion(requests_mock):
+    m, r, v, c, w, car = fleetStep(requests_mock)
+    step(m, w, c, 500, 2500); assert VIN in w._suspect
+    w._suspect.clear(); c.t += 60; step(m, w, c, 2500, 500); assert VIN not in w._suspect   # not charging: a fall says nothing
+    T = c.t; step(m, w, c, 500, 2500); assert w._suspect[VIN][0] == T
+
+def test_a_down_step_suspects_a_charging_car(requests_mock):
+    m, r, v, c, w, car = fleetStep(requests_mock); m.setConsumption("t", 8000); w.loadSample()
+    v.observe("chargingState", "Charging", "FleetAPI"); v.observe("actualCurrent", 32, "FleetAPI")
+    T = c.t; step(m, w, c, 8000, 500); assert w._suspect[VIN][0] == T

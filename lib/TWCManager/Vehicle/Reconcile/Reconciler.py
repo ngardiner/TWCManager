@@ -598,6 +598,10 @@ class VehicleReconciler(threading.Thread):
         ):
             # A start goes back through the provider that stopped the car
             self.desired.state(attempt.key).lastStopProvider = attempt.provider
+        sent = attempt.sentAt is not None and outcome.kind in O.SETTLED
+        if self.master.watch and sent:
+            # The car took it: what it draws may change from the send on
+            self.master.watch.commanded(attempt.key, attempt.sentAt)
 
     def report(self, attempt, outcome) -> None:
         # On a queue's or the submitter's thread. Never submits or cancels

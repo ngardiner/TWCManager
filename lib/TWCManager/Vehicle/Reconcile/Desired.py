@@ -69,6 +69,8 @@ class Attempt(NamedTuple):
     wakeSkipped: Optional[str] = None
     # The car's paid request count when planned (Vehicle.paidRequests)
     paidBefore: int = 0
+    # When the command went to the provider (the registry's clock)
+    sentAt: Optional[float] = None
 
 
 class AttemptRecord:

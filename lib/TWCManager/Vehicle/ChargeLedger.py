@@ -105,6 +105,12 @@ class ChargeLedger:
             car = self.cars.get(vin)
             return bool(car and car["open"] is not None)
 
+    def lastStamp(self, vin: str) -> Optional[float]:
+        # The open session's newest snapshot: only a later one says more
+        with self.lock:
+            car = self.cars.get(vin)
+            return car["open"]["stamp"] if car and car["open"] else None
+
     def wattsBetween(self, start: float, end: float, live: Callable[[str], float]) -> float:
         if end <= start:
             return 0.0

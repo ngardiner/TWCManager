@@ -121,3 +121,11 @@ def test_two_cars_sum():
     l.observe("OTHER", Snapshot(T0, "Charging", 0.5, 5760.0), startHint=T0 - 100)
     assert l.wattsBetween(T0 - 100, T0, never) == pytest.approx(wall(1.5, 100))
     assert l.wattsBetween(T0, T0 + 100, lambda v: 1000 if v == VIN else 200) == pytest.approx(1200)
+
+
+def test_last_stamp_is_the_open_sessions_newest_snapshot():
+    l = ChargeLedger(clock=lambda: T0)
+    assert l.lastStamp(VIN) is None
+    l.observe(VIN, Snapshot(T0, "Charging", 1.0, 11520.0)); assert l.lastStamp(VIN) == T0
+    l.observe(VIN, Snapshot(T0 + 300, "Charging", 2.0, 11520.0)); assert l.lastStamp(VIN) == T0 + 300
+    l.observe(VIN, Snapshot(T0 + 600, "Complete", 2.5, 0.0)); assert l.lastStamp(VIN) is None    # closed
