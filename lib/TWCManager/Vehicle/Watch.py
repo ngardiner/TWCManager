@@ -19,6 +19,7 @@ from .Presence import HOME, NEVER, _ble, _fix, _FT_PER_DEGREE, asleep, decide, l
 from .Presence import AWAY_ASLEEP_SECS, HOME_ASLEEP_SECS, NOT_HOME, covered, presence
 from .Presence import twcVinAt
 from .Providers.Capability import READ_CHARGE, SET_AMPS
+from .Providers.Provider import vehicleMaxAmps
 from .Reconcile.Belief import twcChargingState
 from .WatchBudget import EVENT, ROUTINE
 
@@ -94,11 +95,11 @@ def fleetOnly(master, v, deaf=False) -> bool:
     return bool(carapi and carapi.fleetTokenHeld() and not carapi.ownerTokenHeld())
 
 
-def snapshot(v, cutoff) -> Optional[Snapshot]:
-    # The cached snapshot's own readings, once one clears cutoff: a field it
-    # left out carries an older stamp, and counts as missing
+def snapshot(v, cutoff, source=CACHED) -> Optional[Snapshot]:
+    # One read's own readings, once it clears cutoff: a field it left out
+    # carries an older stamp, and counts as missing
     got = {
-        f: v.reported(f).get(CACHED)
+        f: v.reported(f).get(source)
         for f in ("chargingState", "chargeEnergyAdded", "actualCurrent", "voltage", "phases")
     }
     state = got.pop("chargingState")
@@ -182,6 +183,8 @@ class Watch:
         # vin -> (since, the latest load step since): a charge may have
         # changed since then
         self._suspect, self.ledger = {}, ChargeLedger(clock)
+        # The settings load runs before the watch exists
+        self.ledger.load(master.settings.get("chargeLedger"))
         # vin -> the evidence a poll gave up on: a belief it could not settle
         # is suspected again only once something newer is known; vin -> the
         # load step an asleep car's next online check answers for
@@ -584,20 +587,27 @@ class Watch:
             return
 
         def poll():
-            # A snapshot another read fetched counts as well as this one's
+            # A snapshot another read fetched counts as well as this one's,
+            # and so does a paid read since: a charge a lowered limit ends at
+            # once may show only in the read that found it
             self.master.providerOrder.read(v, "chargingState", False, [CACHED], cutoff=cutoff)
-            snap = snapshot(v, cutoff)
-            if snap is None:
+            snaps = sorted(s for s in (snapshot(v, cutoff, f) for f in ("FleetAPI", CACHED)) if s)
+            if not snaps:
                 return None
             with self._lock:
-                if self._suspect.get(vin, (snap.stamp,))[0] <= snap.stamp:
+                if self._suspect.get(vin, (snaps[-1].stamp,))[0] <= snaps[-1].stamp:
                     self._suspect.pop(vin, None)
-            # Charging away from home (a Supercharger) is no home session:
-            # the car may have left since the poll was asked
-            opens = snap.state == CHARGING and not self.ledger.isOpen(vin)
-            if not opens or presence(self.master, v) == HOME:
-                near = stepAt is not None and snap.stamp - stepAt <= STEP_SECS
-                self._saved(self.ledger.observe(vin, snap, stepAt if near else None))
+            m = self.master
+            most = vehicleMaxAmps(v, m.config.get("config", {}))
+            ceiling = m.convertAmpsToWatts(most)
+            for snap in snaps:
+                # Charging away from home (a Supercharger) is no home session:
+                # the car may have left since the poll was asked
+                opens = snap.state == CHARGING and not self.ledger.isOpen(vin)
+                if not opens or presence(m, v) == HOME:
+                    near = stepAt is not None and snap.stamp - stepAt <= STEP_SECS
+                    hint = stepAt if near else None
+                    self._saved(self.ledger.observe(vin, snap, hint, ceiling))
             return True
 
         self._submit(v, "poll", poll, "cloud")

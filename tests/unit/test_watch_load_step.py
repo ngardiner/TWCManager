@@ -196,3 +196,11 @@ def test_a_down_step_suspects_a_charging_car(requests_mock):
     m, r, v, c, w, car = fleetStep(requests_mock); m.setConsumption("t", 8000); w.loadSample()
     v.observe("chargingState", "Charging", "FleetAPI"); v.observe("actualCurrent", 32, "FleetAPI")
     T = c.t; step(m, w, c, 8000, 500); assert w._suspect[VIN][0] == T
+
+
+def test_a_watch_made_after_the_settings_load_restores_the_saved_ledger():
+    from TWCManager.Vehicle.ChargeLedger import Snapshot
+    m, r, v, c = setup(here=False, ble=True)
+    first = Watch(m, clock=c); first.ledger.observe(VIN, Snapshot(c.t, "Charging", 1.0, 9000.0), startHint=c.t - 60)
+    m.settings["chargeLedger"] = first.ledger.toJSON()
+    assert Watch(m, clock=c).ledger.toJSON() == first.ledger.toJSON() and first.ledger.toJSON()

@@ -916,10 +916,20 @@ def CreateHTTPHandlerClass(master):
 
                 data[endTime.isoformat(timespec="seconds")] = master.historyWatts()
 
+                # Fleet-only cars' sessions come from the ledger; the current
+                # slot's mean runs only to now, as its bucket's does
+                watch, nowSecs = master.watch, time.time()
+
+                def ledgerWatts(timestamp):
+                    start = datetime.fromisoformat(timestamp).timestamp()
+                    return watch.ledger.wattsBetween(
+                        start, min(start + 300, nowSecs), watch.liveWatts
+                    ) if watch else 0
+
                 output = [
                     {
                         "timestamp": timestamp,
-                        "charger_power": data[timestamp] if timestamp in data else 0,
+                        "charger_power": data.get(timestamp, 0) + ledgerWatts(timestamp),
                     }
                     for timestamp in [
                         (startTime + timedelta(minutes=5 * i)).isoformat(

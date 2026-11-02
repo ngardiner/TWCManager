@@ -1146,16 +1146,17 @@ class TWCMaster:
         except Exception as e:
             logger.warning("Plug session update failed: %s", e, exc_info=True)
 
-    def getChargerLoad(self):
+    def getChargerLoad(self, ledgered: bool = True):
         # The watts charging draws through the meter, excluded from the
         # house's consumption under subtractChargerLoad: what the Gen2 slaves
         # report, what the Gen3 units read, and the watched cars charging at
         # home on chargers no TWC reports. Leaving any out counts a car's own
-        # draw as house load, and a green policy then shrinks its offer
+        # draw as house load, and a green policy then shrinks its offer.
+        # ledgered=False leaves out the cars whose sessions the ledger carries
         gen3 = self.getModuleByName("Gen3TWCs")
         amps = self.getTotalAmpsInUse()
         amps += sum(u.currentAmps for u in (gen3.allEVSEs if gen3 else []))
-        amps += self.watch.chargingAmps() if self.watch else 0
+        amps += self.watch.chargingAmps(ledgered) if self.watch else 0
         return self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
 
     def getConsumption(self):
@@ -1418,12 +1419,16 @@ class TWCMaster:
             registryBlob = self.settings.get("vehicleRegistry")
             budgetBlob = self.settings.get("watchBudget")
             spendBlob = self.settings.get("fleetSpend")
+            ledgerBlob = self.settings.get("chargeLedger")
         # Normalises chargeLimits; dict work under the lock only
         self.heldLimits.load()
         # load() tolerates a missing or corrupt blob
         self.vehicleRegistry.load(registryBlob)
         self.watchBudget.load(budgetBlob)
         self.fleetSpend.load(spendBlob)
+        # A watch made after this reads the blob itself
+        if self.watch:
+            self.watch.ledger.load(ledgerBlob)
 
         # Step 2 - Send settings to other modules
         # Migration and restore run whether or not token sync is on. The
@@ -1940,6 +1945,9 @@ class TWCMaster:
             self.settings["vehicleRegistry"] = self.vehicleRegistry.toJSON()
             self.settings["watchBudget"] = self.watchBudget.toJSON()
             self.settings["fleetSpend"] = self.fleetSpend.toJSON()
+            if self.watch:
+                self.watch.ledger.prune(time.time())
+                self.settings["chargeLedger"] = self.watch.ledger.toJSON()
             try:
                 # Keep default arguments (C encoder): adding indent/default/cls
                 # would reintroduce the concurrent-mutation race.
@@ -2251,12 +2259,13 @@ class TWCMaster:
 
     def sampleHistory(self):
         # Once a control tick: every charger the meter sees, as the charger
-        # load counts them, so history needs no Gen2 TWC. At each five-minute
-        # boundary the bucket's mean is kept for two days
+        # load counts them, so history needs no Gen2 TWC; Fleet-only cars come
+        # from the ledger instead. At each five-minute boundary the bucket's
+        # mean is kept for two days
         total, n = self.historyBucket
         now = datetime.now().astimezone()
         if now < self.nextHistorySnap:
-            self.historyBucket = (total + self.getChargerLoad(), n + 1)
+            self.historyBucket = (total + self.getChargerLoad(ledgered=False), n + 1)
             return
         snaptime, watts = self.nextHistorySnap, self.historyWatts()
         self.historyBucket = (0.0, 0)

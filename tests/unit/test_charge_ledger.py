@@ -22,6 +22,16 @@ def test_a_session_starts_from_its_energy_when_no_step_was_seen():
     assert l.wattsBetween(start, T0, lambda v: 0) == pytest.approx(11376.0, rel=0.01)
 
 
+def test_a_session_read_after_a_slowdown_starts_from_the_fastest_rate():
+    # Box, 2026-11-03: 11.7 kW 09:42-09:55, then 1.3 kW until the first read
+    # at 10:00:28 found 2.38 kWh; at the read's rate the start fell at 07:52
+    l = ChargeLedger(clock=lambda: T0)
+    l.observe(VIN, Snapshot(T0, "Charging", 2.38, 1200.0), ceiling=11520.0)
+    start = T0 - 2.38 * 3.6e6 / (11520.0 * 0.93)
+    assert l.wattsBetween(T0 - 7200, start, never) == 0
+    assert l.wattsBetween(start, T0, never) == pytest.approx(11520.0, rel=0.01)
+
+
 def test_a_load_step_sets_the_start():
     l = ChargeLedger(clock=lambda: T0); l.observe(VIN, Snapshot(T0, "Charging", 0.82, 11328.0), startHint=T0 - 300)
     assert l.wattsBetween(T0 - 300, T0, lambda v: 0) == pytest.approx(0.82 * 3.6e6 / 0.93 / 300)
@@ -112,7 +122,10 @@ def test_segments_older_than_two_days_are_pruned():
     l.prune(T0 + ChargeLedger.KEEP_SECS - 50)
     assert l.wattsBetween(T0 - 100, T0, never) > 0
     l.prune(T0 + ChargeLedger.KEEP_SECS + 50)
-    assert l.wattsBetween(T0 - 100, T0, never) == 0 and l.toJSON() == {}
+    # The counter stays known: a charge resumed later adds only its growth
+    assert l.wattsBetween(T0 - 100, T0, never) == 0 and l.toJSON()[VIN]["segments"] == []
+    assert l.observe(VIN, Snapshot(T0 + 1, "Disconnected", 0.0, 0.0))
+    l.prune(T0 + ChargeLedger.KEEP_SECS + 50); assert l.toJSON() == {}
 
 
 def test_two_cars_sum():
@@ -129,3 +142,77 @@ def test_last_stamp_is_the_open_sessions_newest_snapshot():
     l.observe(VIN, Snapshot(T0, "Charging", 1.0, 11520.0)); assert l.lastStamp(VIN) == T0
     l.observe(VIN, Snapshot(T0 + 300, "Charging", 2.0, 11520.0)); assert l.lastStamp(VIN) == T0 + 300
     l.observe(VIN, Snapshot(T0 + 600, "Complete", 2.5, 0.0)); assert l.lastStamp(VIN) is None    # closed
+
+
+def test_load_swaps_state_into_the_same_ledger():
+    src = ChargeLedger(); src.observe(VIN, Snapshot(T0, "Charging", 1.0, 11520.0), startHint=T0 - 100)
+    l = ChargeLedger(); l.observe("other", Snapshot(T0, "Charging", 1.0, 100.0), startHint=T0 - 10)
+    l.load(src.toJSON())
+    assert l.toJSON() == src.toJSON() and l.isOpen(VIN) and not l.isOpen("other")
+    l.load(None); assert not l.toJSON()
+
+
+def night(l, energy=3.3, drift=0.12):
+    # A charge that ended, the car left plugged in: its counter drifts down after
+    l.observe(VIN, Snapshot(T0, "Charging", energy, 11520.0), startHint=T0 - 1000)
+    l.observe(VIN, Snapshot(T0 + 100, "Complete", energy - drift, 0.0))
+    return T0 + 86400
+
+
+def test_a_resumed_charge_counts_only_what_it_added():
+    l = ChargeLedger(clock=lambda: T0 + 86400)
+    at = night(l)
+    l.observe(VIN, Snapshot(at, "Charging", 4.18, 11520.0))
+    start = at - 1.0 * 3.6e6 / (11520.0 * 0.93)
+    assert l.wattsBetween(start - 100, at, never) == pytest.approx(wall(1.0, at - start + 100))
+    assert l.wattsBetween(T0 + 100, start - 100, never) == 0
+
+
+def test_a_resumed_charge_with_a_step_spreads_only_what_it_added():
+    l = ChargeLedger(clock=lambda: T0 + 86400)
+    at = night(l)
+    l.observe(VIN, Snapshot(at, "Charging", 3.48, 11520.0), startHint=at - 300)
+    assert l.wattsBetween(at - 300, at, never) == pytest.approx(wall(0.3, 300))
+
+
+def test_a_slow_resume_under_an_unseen_drift_is_the_same_plug_in():
+    l = ChargeLedger(clock=lambda: T0 + 86400)
+    at = night(l, drift=0.0)
+    l.observe(VIN, Snapshot(at, "Charging", 3.25, 1440.0), startHint=at - 300)
+    assert l.wattsBetween(T0 + 100, at, never) == 0
+    l.observe(VIN, Snapshot(at + 300, "Charging", 3.35, 1440.0))
+    assert l.wattsBetween(at, at + 300, never) == pytest.approx(wall(0.1, 300))
+
+
+def test_a_reading_further_under_is_an_unseen_unplug():
+    l = ChargeLedger(clock=lambda: T0 + 86400)
+    at = night(l, drift=0.0)
+    l.observe(VIN, Snapshot(at, "Charging", 2.7, 11520.0), startHint=at - 1200)
+    assert l.wattsBetween(at - 1200, at, never) == pytest.approx(wall(2.7, 1200))
+
+
+def test_unplugging_resets_the_count():
+    l = ChargeLedger(clock=lambda: T0 + 86400)
+    at = night(l)
+    assert l.observe(VIN, Snapshot(at - 500, "Disconnected", 0.0, 0.0))
+    l.observe(VIN, Snapshot(at, "Charging", 3.5, 11520.0), startHint=at - 1200)
+    assert l.wattsBetween(at - 1200, at, never) == pytest.approx(wall(3.5, 1200))
+
+
+def test_a_new_session_never_reaches_back_past_the_last_one():
+    l = ChargeLedger(clock=lambda: T0 + 400)
+    l.observe(VIN, Snapshot(T0, "Charging", 2.0, 11520.0), startHint=T0 - 100)
+    l.observe(VIN, Snapshot(T0 + 100, "Stopped", 2.0, 0.0))
+    # A drop in the counter, an unplug no snapshot saw: its own energy, but after the last
+    l.observe(VIN, Snapshot(T0 + 300, "Charging", 0.9, 11520.0))
+    assert l.wattsBetween(T0 - 100, T0, never) == pytest.approx(wall(2.0, 100))
+    assert l.wattsBetween(T0, T0 + 300, never) == pytest.approx(wall(0.9, 300))
+
+
+def test_the_last_energy_survives_a_restart():
+    l = ChargeLedger(clock=lambda: T0 + 86400)
+    at = night(l)
+    l.prune(at)
+    r = ChargeLedger.fromJSON(l.toJSON(), clock=lambda: T0 + 86400)
+    r.observe(VIN, Snapshot(at, "Charging", 3.48, 11520.0), startHint=at - 300)
+    assert r.wattsBetween(at - 300, at, never) == pytest.approx(wall(0.3, 300))

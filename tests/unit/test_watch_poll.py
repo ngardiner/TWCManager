@@ -1,5 +1,6 @@
 import time
 
+import pytest
 import requests
 
 from TWCManager.Vehicle.Watch import DEFAULTS, Watch, fleetOnly
@@ -67,6 +68,38 @@ def test_a_session_polls_each_minute_and_ends_on_a_closing_snapshot(requests_moc
     run(m, v, c, w, r, 1); assert not w.ledger.isOpen(VIN) and len(saved) == 3
     run(m, v, c, w, r, 5)
     assert counts(requests_mock)["cached"] == 6 and paid(requests_mock) == (0, 0, 0)
+
+def test_a_charge_resumed_on_the_same_plug_in_counts_only_its_growth(requests_mock):
+    m, r, v, c, w, saved, car = start(requests_mock); T = c.t
+    snap = upload(requests_mock, stamp=T + 5, charging_state="Complete", charge_energy_added=3.3); w.suspect(VIN, T, "wake")
+    run(m, v, c, w, r, 1); assert saved == [SAVE]                                          # its counter, kept for a resume
+    w.suspect(VIN, c.t, "load step up", step=True); S = c.t
+    snap.update(CHARGING, stamp=S + 250, charge_energy_added=3.6); run(m, v, c, w, r, 5)
+    [seg] = w.ledger.toJSON()[VIN]["segments"]
+    assert seg[:2] == [S, S + 250] and seg[2] == pytest.approx(0.3 * 3.6e6 / 0.93 / 250)
+
+def test_a_charge_only_a_paid_read_saw_is_counted(requests_mock):
+    # Plugged in on arrival, its limit lowered at once: the free snapshot
+    # after the command already says Complete
+    m, r, v, c, w, saved, car = start(requests_mock); S = c.t
+    w.suspect(VIN, S, "load step up", step=True)
+    for f, x in dict(chargingState="Charging", actualCurrent=48, voltage=240, phases=1, chargeEnergyAdded=0.15).items():
+        v.observe(f, x, "FleetAPI", at=S + 100)
+    upload(requests_mock, stamp=S + 106, charging_state="Complete", charge_energy_added=0.16, charger_actual_current=0)
+    run(m, v, c, w, r, 3)
+    segs = w.ledger.toJSON()[VIN]["segments"]
+    assert not w.ledger.isOpen(VIN) and segs[0][0] == S and S + 100 < segs[-1][1] < S + 106
+    assert sum((e - s) * x for s, e, x in segs) == pytest.approx(0.16 * 3.6e6 / 0.93)
+    assert paid(requests_mock) == (0, 0, 0)
+
+def test_a_paid_read_alone_opens_a_session(requests_mock):
+    m, r, v, c, w, saved, car = start(requests_mock); S = c.t
+    upload(requests_mock, stamp=S - 60, charging_state="Stopped"); w.suspect(VIN, S, "load step up", step=True)
+    for f, x in dict(chargingState="Charging", actualCurrent=48, voltage=240, phases=1, chargeEnergyAdded=0.15).items():
+        v.observe(f, x, "FleetAPI", at=S + 100)
+    run(m, v, c, w, r, 3)
+    assert w.ledger.isOpen(VIN) and w.ledger.toJSON()[VIN]["segments"][0][:2] == [S, S + 100]
+    assert VIN not in w._suspect and paid(requests_mock) == (0, 0, 0)
 
 def test_an_asleep_car_is_never_polled_and_its_session_ends(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock); T = c.t
@@ -190,7 +223,7 @@ def test_an_outcome_never_sent_suspects_nothing_and_still_saves_the_limit(reques
 def stale(m, w, c, v, consumption):
     # The car believed drawing 32 A beside a house drawing consumption
     m.watch = w; m.subtractChargerLoad = True; m.getRealPowerFactor = lambda amps: 1
-    v.observe("chargingState", "Charging", "FleetAPI"); v.observe("actualCurrent", 32, "FleetAPI")
+    v.observe("chargingState", "Charging", "HomeAssistant"); v.observe("actualCurrent", 32, "HomeAssistant")
     for watts in consumption: m.setConsumption("t", watts); w.loadSample(); c.t += 30
 
 def test_believed_load_above_consumption_twice_suspects_the_car(requests_mock):
@@ -203,7 +236,7 @@ def test_one_sample_above_consumption_is_a_ramp_not_staleness(requests_mock):
 
 def test_a_fleet_only_car_believed_charging_with_no_session_is_suspected(requests_mock):
     m, r, v, c, car = apiOnly(requests_mock); placeAt(m, v, HOME); T = c.t                # as after a restart
-    upload(requests_mock, stamp=T - 600, charging_state="Charging"); v.observe("chargingState", "Charging", "FleetAPI")
+    upload(requests_mock, stamp=T - 600, charging_state="Charging"); v.observe("chargingState", "Charging", "FleetAPI", at=T - 600)
     w = Watch(m, clock=c); m.queue_background_task = lambda task, delay=0: None; w.pass_()
     assert w._suspect[VIN][0] == T
     run(m, v, c, w, r, 2); assert w._suspect[VIN][0] == T                                # one open, not reopened
@@ -218,7 +251,7 @@ def test_a_wake_and_a_plug_in_suspect_a_fleet_only_car_and_pay_nothing(requests_
 def test_a_belief_no_snapshot_settles_is_polled_one_window_until_new_evidence(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock); T = c.t
     upload(requests_mock, stamp=T - 600, charging_state="Complete")
-    v.observe("chargingState", "Charging", "FleetAPI")                                   # a start the car never acted on
+    v.observe("chargingState", "Charging", "HomeAssistant")                              # a feed no snapshot bears out
     run(m, v, c, w, r, 60)
     assert counts(requests_mock)["cached"] == 9 and paid(requests_mock) == (0, 0, 0)      # T+60 .. T+540, then given up
     v.observe("actualCurrent", 0, "FleetAPI"); run(m, v, c, w, r, 20)                    # something newer is known

@@ -1,4 +1,6 @@
 import json
+
+import pytest
 import pathlib
 import subprocess
 import urllib.parse
@@ -72,6 +74,7 @@ def _master(reg, teslaapi=None):
     master.settings = {"homeLat": 1.0, "homeLon": 2.0}
     master.getModuleByName = Mock(return_value=teslaapi)
     master.chargingPoints = Mock(return_value=[])
+    master.watch = None
     return master
 
 
@@ -401,3 +404,76 @@ def test_flex_start_uses_scheduled_policy_limit_not_the_cars():
     # limit is used and we are back to the 80% start hour.
     policy.policyValue = lambda value: -1 if value == "config.scheduledLimit" else value
     assert m.getScheduledAmpsTimeFlex()[0] == 1.54
+
+def _history(master):
+    request = Mock()
+    request.url = urllib.parse.urlparse("/api/getHistory")
+    _handler(master).do_API_GET.__func__(request)
+    return json.loads(request.wfile.write.call_args[0][0].decode("utf-8"))
+
+
+def _ledgerMaster(*segments, live=0.0):
+    from TWCManager.Vehicle.ChargeLedger import ChargeLedger
+
+    master = _master(_registry())
+    master.getSlaveTWCs = Mock(return_value=[])
+    master.settings = {}
+    master.historyWatts = Mock(return_value=0.0)
+    ledger = ChargeLedger()
+    ledger.load({VIN: {"segments": segments}})
+    master.watch = Mock(ledger=ledger, liveWatts=Mock(return_value=live))
+    return master
+
+
+def _epoch(row):
+    from datetime import datetime
+
+    return datetime.fromisoformat(row["timestamp"]).timestamp()
+
+
+def test_get_history_adds_ledger_segments_to_buckets():
+    from datetime import datetime, timedelta
+
+    top = datetime.now().astimezone().replace(minute=0, second=0, microsecond=0) - timedelta(hours=3)
+    t = top.timestamp()
+    master = _ledgerMaster((t + 306, t + 1380, 11000.0))        # 00:05:06 - 00:23:00
+    master.settings = {"history": [((top + timedelta(minutes=10)).isoformat(timespec="seconds"), 500.0)]}
+    rows = {_epoch(r) - t: r["charger_power"] for r in _history(master)}
+    assert rows[0] == 0 and rows[1500] == 0
+    assert rows[300] == pytest.approx(11000 * 294 / 300)         # partial at the start
+    assert rows[600] == pytest.approx(500 + 11000)               # a bucket and the ledger add
+    assert rows[900] == pytest.approx(11000)
+    assert rows[1200] == pytest.approx(11000 * 180 / 300)        # partial at the end
+
+
+def test_the_current_slot_is_the_live_bucket_plus_the_ledger_so_far():
+    from datetime import datetime
+
+    now = datetime.now().timestamp()
+    master = _ledgerMaster((now - 600, now, 6000.0))
+    master.historyWatts = Mock(return_value=1000.0)
+    rows = _history(master)
+    slot = _epoch(rows[-1])
+    assert rows[-1]["charger_power"] == pytest.approx(
+        1000.0 + master.watch.ledger.wattsBetween(slot, now, master.watch.liveWatts), rel=0.05
+    )
+    assert rows[-1]["charger_power"] > 1000.0
+
+
+def test_a_backfilled_session_replaces_the_live_belief_in_history():
+    from datetime import datetime
+    from TWCManager.Vehicle.ChargeLedger import Snapshot
+
+    now = datetime.now().timestamp()
+    master = _ledgerMaster()
+    ledger = master.watch.ledger
+    ledger.clock = lambda: now
+    ledger.observe(VIN, Snapshot(now - 3600, "Charging", 1.0, 9000.0), startHint=now - 3700)
+    master.watch.liveWatts = Mock(return_value=9000.0)
+    before = {_epoch(r): r["charger_power"] for r in _history(master)}
+    # The car stopped long ago: the closing snapshot trims the belief
+    ledger.observe(VIN, Snapshot(now - 1800, "Stopped", 1.0, 0.0))
+    after = {_epoch(r): r["charger_power"] for r in _history(master)}
+    stop = now - 1800
+    assert sum(before.values()) > sum(after.values())
+    assert all(w == 0 for k, w in after.items() if k > stop + 300)
