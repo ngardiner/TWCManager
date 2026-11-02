@@ -117,3 +117,10 @@ def test_a_cloud_only_car_is_read_on_its_wake_past_a_fresh_snapshot(requests_moc
     snapshotAt(requests_mock, lambda: c.t)                               # posted on the wake
     car.state = "online"
     assert readsAt(requests_mock, m, v, c, w, r, 2160) == [360]          # paid, not the snapshot
+
+def test_a_snapshot_carries_the_session_energy(requests_mock):
+    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    requests_mock.get(FLEET + VIN + "/vehicle_data_cached", json={"response": {"charge_state": {
+        "timestamp": 1_000_000, "charging_state": "Charging", "charge_energy_added": 1.02}, "vehicle_state": {}}})
+    m.getModuleByName("TeslaAPI").read_cached(v)
+    obs = v.latest("chargeEnergyAdded"); assert obs.value == 1.02 and obs.at == 1000.0 and obs.source == "FleetAPICached"

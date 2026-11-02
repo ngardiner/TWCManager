@@ -1890,6 +1890,7 @@ class TeslaAPI:
             ("charge_current_request", "chargeCurrentRequest"),
             ("charger_actual_current", "actualCurrent"),
             ("charger_phases", "phases"),
+            ("charge_energy_added", "chargeEnergyAdded"),
             ("charger_voltage", "voltage"),
             ("charging_state", "chargingState"),
             ("scheduled_charging_pending", "scheduledChargingPending"),
