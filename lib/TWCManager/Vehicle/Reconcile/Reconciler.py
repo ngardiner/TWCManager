@@ -244,8 +244,15 @@ class VehicleReconciler(threading.Thread):
             return None
         waiting = rec.heldAt is not None
         if waiting and (vehicle.lastObservedAt <= rec.heldAt or driving):
-            # Held: only newer evidence (or a new desire) plans it again
-            return None
+            # Held: only newer evidence (or a new desire) plans it again. An
+            # asleep hold went without a wake, the car not then expected to
+            # charge; once it is (admitted, its plug no longer known
+            # unplugged), that changed here, with no word from the car
+            wakes = not (driving or d.restore or d.value is False)
+            if not (wakes and rec.lastOutcome == O.ASLEEP) or B.whyQuiet(
+                self.master, vehicle
+            ):
+                return None
         k = B.known(vehicle, aspect, d.value)
         if d.lift and (rec.settledAt is not None or R.satisfied(AMPS, d.value, k)):
             # A lift is a one-shot desire: done once it settles

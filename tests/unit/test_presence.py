@@ -1837,6 +1837,18 @@ def test_cached_charging_never_plugs_a_car_with_an_old_home_fix():
     assert not m.attributePlugs.called
 
 
+def test_a_cached_plug_after_an_unplug_leaves_the_plug_unknown():
+    # Read unplugged as it left; a snapshot since says plugged in somewhere.
+    # It places the car on no EVSE, but the unplug is no longer known
+    m, v, c = placed()
+    v.observe("chargingState", "Disconnected", "FleetAPI")
+    assert P.pluggedNow(m, v, None) is False
+    later(c, 3600)
+    v.observe("chargingState", "Complete", "FleetAPICached")
+    assert P.pluggedNow(m, v, None) is None and P.pluggedNow(m, v) is False
+    assert v.markAt("plugIn") == P.NEVER
+
+
 def test_check_plug_reads_without_the_cached_source(requests_mock):
     m, r, v, c = setup(clock=False, here=False)
     m.settings.update(homeLat=HOME[0], homeLon=HOME[1])

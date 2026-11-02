@@ -218,6 +218,13 @@ def test_odd_reasons_are_not_carried(requests_mock):   # L3
     api, reg, p = fleet(requests_mock, result=False, reason="Some Text")
     assert p.stopCharging(VIN) == O.Outcome(O.ERROR, "not accepted")
 
+def test_a_proxy_wrapped_reason_is_the_cars(requests_mock):
+    # The Vehicle Command proxy prefixes the car's own reason code
+    api, reg, p = fleet(requests_mock, result=False, reason="car could not execute command: is_charging")
+    assert p.startCharging(VIN) == O.Outcome(O.SATISFIED, "is_charging")
+    api, reg, p = fleet(requests_mock, result=False, reason="car could not execute command: Some Text")
+    assert p.startCharging(VIN) == O.Outcome(O.ERROR, "not accepted")
+
 def test_ha_http_error_without_a_response(requests_mock):   # L4
     import requests
     ha, reg = make_ha()
