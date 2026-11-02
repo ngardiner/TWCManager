@@ -2286,6 +2286,9 @@ class TWCMaster:
         elif modulename[0] == "Status":
             configloc[0] = "status"
             configloc[1] = str(modulename[1]).replace("Status", "")
+        elif modulename[0] == "Pricing":
+            configloc[0] = "pricing"
+            configloc[1] = str(modulename[1]).replace("Pricing", "")
         else:
             return modulename
 

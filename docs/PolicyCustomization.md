@@ -270,6 +270,13 @@ The values in a policy definition are:
     - `minBatteryLevelAtHome`:  The lowest battery level (0-100) of any Tesla
       currently believed to be at home (probably-home cars included); `10000` if
       unknown / no cars are home.
+  - From a Pricing module (`StaticPricing`, `aWATTarPricing`, `AmberPricing`;
+    see `docs/modules/Pricing_*.md`), when one is configured:
+    - `importPrice`:  The current electricity import price, in currency per kWh.
+      With wholesale providers this can be negative.
+    - `exportPrice`:  The current export (feed-in) price, in currency per kWh.
+    - `spikeStatus` / `renewables` (Amber only):  The wholesale spike state and
+      the current renewables percentage.
 - Sub-lists
 
 (Policies see only these aggregate properties of all vehicles at home, not
@@ -354,6 +361,32 @@ there is followed too:
         }
       ]
     }
+
+### Price-based charging
+
+If a Pricing module is configured (see `docs/modules/Pricing_*.md`), the current
+price is available to policy as `modules.<Module>.importPrice` /
+`.exportPrice`.  Because this works through the generic `modules.*` mechanism, no
+special configuration is needed beyond enabling a pricing module and writing the
+policy.
+
+This `emergency` policy stops charging whenever the live import price rises above
+a ceiling you set in `config.maxImportPrice`:
+
+    "extend": {
+      "emergency": [
+        { "name": "Import Price Too High",
+          "match": [ "modules.AmberPricing.importPrice" ],
+          "condition": [ "gt" ],
+          "value": [ "config.maxImportPrice" ],
+          "charge_amps": 0
+        }
+      ]
+    }
+
+Price rules fail safe: if the pricing module is not loaded, the `modules.*`
+reference does not resolve to a number and the comparison will not match, so
+charging is unaffected.
 
 ## Policy Replacement
 

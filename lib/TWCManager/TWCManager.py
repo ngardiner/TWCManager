@@ -117,6 +117,9 @@ modules_available = [
     "EMS.Volkszahler",
     "EMS.ScenarioEMS",
     "EMS.URL",
+    "Pricing.StaticPricing",
+    "Pricing.aWATTarPricing",
+    "Pricing.AmberPricing",
     "Status.HASSStatus",
     "Status.MQTTStatus",
 ]

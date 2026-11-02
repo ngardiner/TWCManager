@@ -196,6 +196,58 @@ class TestPolicyValueMacros:
         policy.master.checkScheduledCharging.assert_called_once()
 
 
+class TestPricingPolicyValue:
+    """Pricing integration: a Pricing module's price resolves and matches
+    through the generic modules.<Name>.<attr> policy macro, the same way
+    Storm Watch (modules.TeslaPowerwall2.stormWatch) does. No engine changes."""
+
+    @pytest.fixture
+    def mock_master(self):
+        master = Mock()
+        master.config = {"config": {"maxImportPrice": 0.30}, "policy": {}}
+        master.settings = {}
+        # A stub pricing module exposing importPrice/exportPrice attributes
+        pricing = Mock()
+        pricing.importPrice = 0.42
+        pricing.exportPrice = 0.08
+        # The resolver requires the name to be present in master.modules
+        master.modules = {"StaticPricing": {"ref": pricing, "type": "Pricing"}}
+        master.getModuleByName = Mock(return_value=pricing)
+        master.getModulesByType = Mock(return_value=[])
+        return master
+
+    @pytest.fixture
+    def policy(self, mock_master):
+        from TWCManager.Policy.Policy import Policy
+        return Policy(mock_master)
+
+    def test_import_price_attribute_resolves(self, policy):
+        assert policy.policyValue("modules.StaticPricing.importPrice") == 0.42
+
+    def test_export_price_attribute_resolves(self, policy):
+        assert policy.policyValue("modules.StaticPricing.exportPrice") == 0.08
+
+    def test_unknown_module_falls_through_to_literal(self, policy):
+        # A price condition referencing an unloaded module must not raise; it
+        # returns the token unchanged (which will not match numerically).
+        value = "modules.NotLoadedPricing.importPrice"
+        assert policy.policyValue(value) == value
+
+    def test_price_over_ceiling_matches_emergency_rule(self, policy):
+        # The shipped example rule: import price (0.42) > config.maxImportPrice
+        # (0.30) -> condition matches -> charging would be stopped (charge_amps 0).
+        assert policy.doesConditionMatch(
+            "modules.StaticPricing.importPrice", "gt", "config.maxImportPrice", False
+        ) is True
+
+    def test_price_under_ceiling_does_not_match(self, policy):
+        policy.master.getModuleByName.return_value.importPrice = 0.10
+        policy.master.modules["StaticPricing"]["ref"].importPrice = 0.10
+        assert policy.doesConditionMatch(
+            "modules.StaticPricing.importPrice", "gt", "config.maxImportPrice", False
+        ) is False
+
+
 class TestCheckConditions:
     """Test multiple condition checking (AND/OR logic)."""
     

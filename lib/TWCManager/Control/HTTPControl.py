@@ -830,6 +830,34 @@ def CreateHTTPHandlerClass(master):
                 except BrokenPipeError:
                     self.debugLogAPI("Connection Error: Broken Pipe")
 
+            elif self.url.path == "/api/getPricing":
+                # Current import/export price from each loaded Pricing module.
+                data = {"modules": {}}
+                currency = ""
+                for module in master.getModulesByType("Pricing"):
+                    ref = module["ref"]
+                    name = module["name"]
+                    try:
+                        data["modules"][name] = {
+                            "importPrice": ref.getImportPrice(),
+                            "exportPrice": ref.getExportPrice(),
+                            "currency": getattr(ref, "currency", ""),
+                        }
+                        if not currency:
+                            currency = getattr(ref, "currency", "")
+                    except Exception:
+                        continue
+                data["currency"] = currency
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+
+                json_data = json.dumps(data)
+                try:
+                    self.wfile.write(json_data.encode("utf-8"))
+                except BrokenPipeError:
+                    self.debugLogAPI("Connection Error: Broken Pipe")
+
             elif self.url.path == "/api/getHistory":
                 output = []
                 now = datetime.now().replace(second=0, microsecond=0).astimezone()

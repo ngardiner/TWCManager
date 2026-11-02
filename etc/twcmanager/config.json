@@ -220,6 +220,10 @@
         #"scheduledLimit": 50,
         #"nonScheduledLimit": -1,
 
+        # Import price ceiling (currency per kWh) used by the example
+        # "Import Price Too High" pricing policy. See the "pricing" section.
+        #"maxImportPrice": 0.30,
+
         # Deprecated, use logLevel instead
         # Choose how much debugging info to output.
         # 0 is no output other than errors.
@@ -371,6 +375,14 @@
         #
         # They should primarily be used to abort charging when necessary.
         "emergency":[
+          # Example: stop charging when the live import price exceeds a ceiling.
+          # Requires a Pricing module (see the "pricing" section below) and
+          # config.maxImportPrice. Uncomment to enable.
+          # { "name": "Import Price Too High",
+          #   "match": [ "modules.StaticPricing.importPrice" ],
+          #   "condition": [ "gt" ],
+          #   "value": [ "config.maxImportPrice" ],
+          #   "charge_amps": 0 },
         ],
         # Rules in the before section here are evaluated after the Charge Now rule
         "before":[
@@ -444,6 +456,33 @@
       #   "charge_limit": "config.nonScheduledLimit" },
 
       ]
+    },
+    # Dynamic electricity pricing. Each module reports the current import/export
+    # price so that charging policy can react to it (see the example rule in the
+    # policy > extend > emergency section above, and docs/PolicyCustomization.md).
+    # All modules are disabled by default; enabling none leaves behaviour
+    # unchanged. Reference a module's price in a policy as, e.g.,
+    # "modules.AmberPricing.importPrice".
+    "pricing":{
+        # Static: fixed tariff. No network access; reports the configured prices.
+        "Static":{
+          "enabled": false,
+          "currency": "$",
+          "peak":{
+            "import": 0.30,
+            "export": 0.10
+          }
+        },
+        # aWATTar: Austrian/German spot market (prices in EUR/kWh).
+        "aWATTar":{
+          "enabled": false
+        },
+        # Amber Electric: Australian wholesale pricing (prices in AUD/kWh).
+        # Obtain an API token from the Amber app; siteId is auto-discovered.
+        "Amber":{
+          "enabled": false,
+          "token": ""
+        }
     },
     "logging":{
         # Logging configuration controls where status messages about the TWC
