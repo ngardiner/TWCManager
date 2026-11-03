@@ -130,7 +130,7 @@ class Vehicle:
         seen: bool = True,
     ) -> Observation:
         hook = getattr(self._registry, "onObserve", None)
-        prior = self.reported(field).get(source) if hook else None
+        prior = self.reported(field).get(source) if hook is not None else None
         obs = self._store(self._latest, field, value, source, at, True, seen)
         self.lastObservedAt = self._clock()
         if seen:
@@ -140,14 +140,15 @@ class Vehicle:
                 if at >= self.lastSeen:
                     self.lastSeen = at
                     self.lastSeenSource = obs.source
-        # The incoming reading, not the kept one: an older stamp is stored
-        # per source but loses the field's latest
-        mine = self.reported(field).get(source) if hook else prior
-        if mine is not prior:
-            try:
-                hook(self, field, mine, prior)
-            except Exception:
-                logger.exception("Observe hook failed")
+        if hook is not None:
+            # The incoming reading, not the kept one: an older stamp is stored
+            # per source but loses the field's latest
+            mine = self.reported(field).get(source)
+            if mine is not prior:
+                try:
+                    hook(self, field, mine, prior)
+                except Exception:
+                    logger.exception("Observe hook failed")
         return obs
 
     def mark(self, name: str, at: float) -> None:
@@ -202,6 +203,9 @@ class Vehicle:
     def _liveAt(
         self, field: str, obs: Optional[Observation], exclude: Collection[str] = ()
     ) -> Any:
+        # As sourceLiveAt for obs's source: NOT_TRACKED (no liveness) or None
+        # (not live), unless a live feed that reported field vouches for it:
+        # then the newest time one did
         if obs is None or self._registry is None:
             return NOT_TRACKED
         live = self._registry.sourceLiveAt(obs.source, self)
@@ -275,7 +279,9 @@ class Vehicle:
     # Sync state is a feed's own latest "state" observation and its age.
 
     def telemetryState(self) -> Tuple[Optional[Observation], Optional[float]]:
-        obs = self.latestFrom("state", set(self.reported("state")) - TELEMETRY_SOURCES)
+        reported = self.reported("state")
+        feeds = [obs for src, obs in reported.items() if src in TELEMETRY_SOURCES]
+        obs = max(feeds, key=lambda o: o.at, default=None)
         if obs is None:
             return self.latest("state"), None
         return obs, self._ageOf(obs, self._clock(), self._liveAt("state", obs))
