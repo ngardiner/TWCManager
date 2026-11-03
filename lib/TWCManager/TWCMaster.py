@@ -918,9 +918,11 @@ class TWCMaster:
                 amps = self.getScheduledAmpsMax()
                 watts = self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
                 hoursForFullCharge = self.getScheduledAmpsBatterySize() / (watts / 1000)
+                # The level the car will actually stop at under Scheduled
+                # Charging, which the policy may cap below the car's own limit.
+                targetLimit = self.getFlexChargeLimit(vehicle)
                 realChargeFactor = (
-                    vehicle.value("chargeLimit", -1)
-                    - vehicle.value("batteryLevel", 10000)
+                    targetLimit - vehicle.value("batteryLevel", 10000)
                 ) / 100
                 # calculating startHour with a max Battery size - so it starts charging and then it has the time
                 startHour = round(
@@ -931,7 +933,7 @@ class TWCMaster:
                 # Always starting a quarter of a hour earlier
                 startHour -= 0.25
                 # adding half an hour if battery should be charged over 98%
-                if vehicle.value("chargeLimit", -1) >= 98:
+                if targetLimit >= 98:
                     startHour -= 0.5
                 if startHour < 0:
                     startHour = startHour + 24
@@ -940,6 +942,29 @@ class TWCMaster:
                 if startHour < self.getScheduledAmpsDaysBitmap():
                     days = self.rotl(days, 7)
         return (startHour, self.getScheduledAmpsEndHour(), days)
+
+    def getFlexChargeLimit(self, vehicle):
+        # The charge level flex start should aim for. The car's current limit
+        # is not necessarily what the Scheduled Charging policy will apply: if
+        # that policy sets a charge_limit (e.g. config.scheduledLimit = 50),
+        # the car stops there regardless of its own limit. Sizing the flex
+        # window off the car's limit instead would start charging far too
+        # early and cause the policy to flap. Prefer the policy's limit when
+        # it has a usable one; otherwise fall back to the car's.
+        carLimit = vehicle.value("chargeLimit", -1)
+        policy = self.getModuleByName("Policy")
+        if policy is not None:
+            scheduled = policy.getPolicyByName("Scheduled Charging")
+            if scheduled is not None and "charge_limit" in scheduled:
+                policyLimit = policy.policyValue(scheduled["charge_limit"])
+                # enforcePolicy only applies a limit in the 50-100 range; match
+                # that so an unset (-1) or out-of-range value keeps the car's.
+                try:
+                    if 50 <= policyLimit <= 100:
+                        return policyLimit
+                except TypeError:
+                    pass
+        return carLimit
 
     def getScheduledAmpsEndHour(self):
         return self.settings.get("scheduledAmpsEndHour", -1)

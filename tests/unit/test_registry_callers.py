@@ -364,3 +364,40 @@ def test_the_history_api_shows_the_current_bucket_with_no_twc():
     assert len(rows) == 48 * 12
     assert rows[-1]["charger_power"] == 3840.0
     assert {r["charger_power"] for r in rows[:-1]} == {0}
+
+
+def test_flex_start_uses_scheduled_policy_limit_not_the_cars():
+    # issue #165: the Scheduled Charging policy can cap the charge limit below
+    # the car's own limit (e.g. config.scheduledLimit = 50 while the car is set
+    # to 80). Flex start must size the window off the level the policy will
+    # actually stop at, not the car's limit, or it starts far too early and the
+    # policy flaps in and out.
+    from types import SimpleNamespace
+
+    api, reg, s = _listed_car_slave()
+    m = _flex_master(s)
+    v = reg.get(VIN)
+    v.observe("chargeLimit", 80, "OwnerAPI")
+    v.observe("batteryLevel", 40, "OwnerAPI")
+
+    # With no policy module, flex start falls back to the car's 80% limit and
+    # computes the sibling test's start hour.
+    assert m.getScheduledAmpsTimeFlex()[0] == 1.54
+
+    # A Scheduled Charging policy capping at 50% must win: the car only has to
+    # reach 50 from 40, so charging starts much later than for an 80% target.
+    policy = SimpleNamespace(
+        getPolicyByName=lambda name: (
+            {"name": "Scheduled Charging", "charge_limit": "config.scheduledLimit"}
+            if name == "Scheduled Charging"
+            else None
+        ),
+        policyValue=lambda value: 50 if value == "config.scheduledLimit" else value,
+    )
+    m.getModuleByName = Mock(return_value=policy)
+    assert m.getScheduledAmpsTimeFlex()[0] == 5.45
+
+    # An unset policy limit (-1) is out of the 50-100 range, so the car's own
+    # limit is used and we are back to the 80% start hour.
+    policy.policyValue = lambda value: -1 if value == "config.scheduledLimit" else value
+    assert m.getScheduledAmpsTimeFlex()[0] == 1.54
