@@ -1,14 +1,17 @@
 # The charge-limit decision rules. decideChargeLimit is pure: no I/O, no
 # master. The reconciler's beforeWrite runs it on the worker after the read,
-# then saves, sends or settles as it says. The saved record is a HeldLimit (HeldLimits.py): None is nothing
-# held; a save with held None removes the record.
+# then saves, sends or settles as it says. The saved record is a HeldLimit
+# (HeldLimits.py): None is nothing held; a save with held None removes the
+# record.
 from typing import NamedTuple, Optional
 
 from .Desired import CHARGE_LIMIT, CHARGING, RELEASE
+from .Outcome import UNREAD_REASON
 from .HeldLimits import MAX_LIMIT, MIN_LIMIT, HeldLimit
 
-# Observations that never adopt and never stand for the car's own state
-VEHICLE_SOURCES_EXCLUDED = frozenset({"TWC", "Gen2TWC", "Gen3TWC"})
+# The TWC sources: their observations never adopt and never stand for the
+# car's own state
+TWC_SOURCES = frozenset({"TWC", "Gen2TWC", "Gen3TWC"})
 _CHARGING_LIKE = frozenset({"Charging", "Starting", "Complete"})
 _STOPPED_LIKE = frozenset({"Stopped", "Complete", "Disconnected", "NoPower"})
 
@@ -48,14 +51,14 @@ def _clamped(limit):
 
 
 def decideChargeLimit(
-    desired, restore: bool, current, held: Optional[HeldLimit]
+    desired, restore: bool, current, saved: Optional[HeldLimit]
 ) -> ChargeLimitDecision:
     """Decide how to apply `desired` (50-100), or with restore=True how to
     put back the normal limit.
 
     current: the car's limit now, or None if no source knows it: then
         nothing is decided or sent (the reconciler retries).
-    held: the HeldLimit saved for the car, or None.
+    saved: the HeldLimit saved for the car, or None.
 
     With the current limit known, a limit we don't hold is the car's normal
     one, and a held limit the car is no longer at was set by hand and is the
@@ -63,25 +66,23 @@ def decideChargeLimit(
     """
     # A release puts back the outside limit as a restore does
     restore = restore or desired == RELEASE
-    outside = _clamped(held.outside) if held is not None else None
-    ours = held.held if held is not None else None
+    outside = _clamped(saved.outside) if saved is not None else None
+    heldAt = saved.held if saved is not None else None
     target = None if restore else _clamped(desired)
 
     if current is None:
-        return ChargeLimitDecision(
-            None, None, None, False, "could not read the current limit; nothing sent"
-        )
+        return ChargeLimitDecision(None, None, None, False, UNREAD_REASON)
 
-    if restore and held is None:
+    if restore and saved is None:
         return ChargeLimitDecision(
             None, None, None, True, "no saved normal limit; nothing to restore"
         )
 
-    handSet = ours is not None and current != ours
-    normal = outside if ours is not None and not handSet else current
+    handSet = heldAt is not None and current != heldAt
+    normal = outside if heldAt is not None and not handSet else current
 
     if restore:
-        if ours is not None and not handSet and current != normal:
+        if heldAt is not None and not handSet and current != normal:
             return ChargeLimitDecision(
                 normal, None, HeldLimit(normal, None), False, "restore to %s%%" % normal
             )
@@ -111,14 +112,14 @@ def releases(desired) -> bool:
     return desired.restore or desired.value == RELEASE
 
 
-def needsLiveRead(restore: bool, telemetryCurrent, held: Optional[HeldLimit]) -> bool:
+def needsLiveRead(restore: bool, telemetryCurrent, saved: Optional[HeldLimit]) -> bool:
     """True when a restore hinges on a telemetry limit that can't be
     trusted: any value other than the held one may be hand-set or stale, and
     telemetry can't tell which. Applies keep the telemetry value."""
     return (
         restore
         and telemetryCurrent is not None
-        and held is not None
-        and held.held is not None
-        and telemetryCurrent != held.held
+        and saved is not None
+        and saved.held is not None
+        and telemetryCurrent != saved.held
     )

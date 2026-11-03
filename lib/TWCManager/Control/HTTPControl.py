@@ -211,7 +211,7 @@ def pendingCommands(master, vehicle):
         if rec is None:
             continue
         sent, last = rec.inFlight, rec.lastOutcome
-        why = master.reconciler.said(vehicle.key, aspect)
+        why = master.reconciler.blockedReason(vehicle.key, aspect)
         if sent:
             why = "sending via %s, started %s" % (
                 sourceName(sent.provider),

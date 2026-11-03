@@ -83,11 +83,11 @@ def test_a_failed_paid_wake_sets_no_retry():
 def test_a_new_desire_resets_the_per_desire_stamps():
     s = DesiredStore(); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
     r.lastFreeAt, r.paidAt, r.paidRetryDue, r.settledAt, r.lastSentAt = 1.0, 2.0, True, 3.0, 4.0
-    r.paidSends, r.paidSaw, r.lastOutcome, r.lastOutcomeAt = 1, 90, O.Outcome(O.UNREACHABLE, "wake held"), 5.0
+    r.paidSends, r.beliefAtPaidSend, r.lastOutcome, r.lastOutcomeAt = 1, 90, O.Outcome(O.UNREACHABLE, "wake held"), 5.0
     assert s.set(VIN, CHARGE_LIMIT, 50, "heartbeat") is False and r.paidAt == 2.0          # unchanged: nothing reset
     s.set(VIN, CHARGE_LIMIT, 60, "policy")
     assert (r.lastFreeAt, r.paidAt, r.paidRetryDue, r.settledAt, r.lastSentAt) == (0, None, False, None, 4.0)
-    assert (r.paidSends, r.paidSaw, r.lastOutcome, r.lastOutcomeAt) == (0, None, None, 0)   # the NOT_SENT hold is the old desire's (I1)
+    assert (r.paidSends, r.beliefAtPaidSend, r.lastOutcome, r.lastOutcomeAt) == (0, None, None, 0)   # the NOT_SENT hold is the old desire's (I1)
 
 def test_a_superseded_attempt_feeds_the_free_channel_but_never_the_new_desire():   # C1
     s = DesiredStore(clock=Clock(1000.0)); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
