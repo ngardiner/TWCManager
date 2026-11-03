@@ -2,9 +2,9 @@
 
 The following settings (outside of the configuration file) are available via the inbuilt Web Interface:
 
-## Web Interface Theme
+## Home Page Style
 
-Allows you to select which theme you'd like to use for the TWCManager interface.
+Chooses how the home page looks: Modern (the default) or Classic. Every other page looks the same in either style.
 
 ## Home Location
 

@@ -24,18 +24,19 @@
     <form method=POST action='/settings/save'>
       <table>
         <tr>
-          <th>Web Interface Theme</th>
+          <th>Home Page Style</th>
           <td>
             {{ optionList(
               [
-                ["Default", "Default Web Theme"],
-                ["Modern", "Modern Theme"],
+                ["Default", "Classic"],
+                ["Modern", "Modern"],
               ],
               {
                 "name": "webControlTheme",
                 "value": master.settings.get("webControlTheme", "Modern"),
               },
             )|safe }}
+            <br>Changes the home page only; every other page looks the same in either style.
           </td>
         </tr>
         <tr>
