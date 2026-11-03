@@ -279,9 +279,9 @@ class Vehicle:
     # Sync state is a feed's own latest "state" observation and its age.
 
     def telemetryState(self) -> Tuple[Optional[Observation], Optional[float]]:
-        reported = self.reported("state")
-        feeds = [obs for src, obs in reported.items() if src in TELEMETRY_SOURCES]
-        obs = max(feeds, key=lambda o: o.at, default=None)
+        # The newest telemetry reading
+        others = set(self.reported("state")) - TELEMETRY_SOURCES
+        obs = self.latestFrom("state", exclude=others)
         if obs is None:
             return self.latest("state"), None
         return obs, self._ageOf(obs, self._clock(), self._liveAt("state", obs))

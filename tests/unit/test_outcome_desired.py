@@ -174,7 +174,7 @@ def test_a_debug_one_shot_report_changes_nothing():
     assert s.noteOutcome(VIN, None, a, O.Outcome(O.DONE), 100.0, paid=True) is False and s.keys() == []
 
 
-@pytest.mark.parametrize("outcome", [O.Outcome(O.SATISFIED, "read"), O.Outcome(O.SATISFIED, "rules: limit unknown"), O.Outcome(O.UNREACHABLE, "rules: could not read")])
+@pytest.mark.parametrize("outcome", [O.Outcome(O.SATISFIED, "read"), O.Outcome(O.SATISFIED, "rules: limit unknown"), O.Outcome(O.UNREACHABLE, O.RULES + O.UNREAD_REASON)])
 def test_read_and_rules_outcomes_spend_no_send_gap(outcome):                 # deleted-test audit row 77
     c = Clock(0.0); s = DesiredStore(clock=c); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
     a = attempt("FleetAPI"); r.inFlight = a

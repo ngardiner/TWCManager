@@ -162,9 +162,9 @@ def runAttempt(reconciler, attempt) -> O.Outcome:
         # sleep-safe ping goes first to a car that may be away, or to one
         # that may be asleep and has not been seen awake lately.
         noWakeBle = bleCommand and not attempt.wake and state != NOT_HOME
-        asleepLately = asleep(vehicle, master.vehicleRegistry.now() - REACH_WINDOW)
-        pingFirst = state == PRESUMED or (noWakeBle and asleepLately is None)
-        if bleCommand and pingFirst and not (noWakeBle and asleepLately):
+        sleepInWindow = asleep(vehicle, master.vehicleRegistry.now() - REACH_WINDOW)
+        pingFirst = state == PRESUMED or (noWakeBle and sleepInWindow is None)
+        if bleCommand and pingFirst and not (noWakeBle and sleepInWindow is True):
             if not provider.module.ping(vin):
                 return O.Outcome(O.UNREACHABLE, "no BLE answer")
         if noWakeBle and asleep(vehicle):

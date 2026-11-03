@@ -24,14 +24,8 @@ from ..Providers import Capability as C
 from . import Run
 from .Desired import AMPS, CAPABILITY_FOR, CHARGE_LIMIT, CHARGING, FIELD_FOR, Attempt
 from . import Outcome as O
-from .Belief import (
-    known,
-    newerReading,
-    newerReadings,
-    reachedCar,
-    whyHandsOff,
-    whyQuiet,
-)
+from .Belief import known, newerReading, newerReadings, reachedCar
+from .Belief import whyHandsOff, whyQuiet
 from .Rules import TWC_SOURCES, decideChargeLimit, needsLiveRead, releases, satisfied
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
@@ -303,7 +297,7 @@ class VehicleReconciler(threading.Thread):
                     "%s charge limit set elsewhere to %s; adopted", key, adopted
                 )
                 return None
-        saved = self._held(vehicle)
+        saved = self._saved(vehicle)
         if satisfied(aspect, want.value, belief):
             if want.restore:
                 # Back at the outside limit: nothing is held, and nothing is
@@ -478,7 +472,7 @@ class VehicleReconciler(threading.Thread):
         return attempt
 
     @staticmethod
-    def _whyNoWake(want, p, quiet, blind) -> str:
+    def _whyNoWake(want, provider, quiet, blind) -> str:
         if blind:
             return "blind paid retry"
         if want.restore or want.value is False:
@@ -540,7 +534,7 @@ class VehicleReconciler(threading.Thread):
         due = now - max(rec.lastOutcomeAt, rec.checkedAt) >= gap
         return due and not Presence.covered(self.master, vehicle)
 
-    def _held(self, vehicle):
+    def _saved(self, vehicle):
         return self.master.heldLimits.get(vehicle.vin) if vehicle.vin else None
 
     def _save(self, vehicle, outside, held) -> None:
@@ -574,7 +568,7 @@ class VehicleReconciler(threading.Thread):
             attempt.value,
             attempt.restore,
             believed.value if believed is not None else None,
-            self._held(vehicle),
+            self._saved(vehicle),
         )
         if decision.saveNow is not None:
             self._save(vehicle, *decision.saveNow)

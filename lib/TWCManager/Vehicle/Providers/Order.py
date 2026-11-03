@@ -1,8 +1,7 @@
 # The fixed provider order: cheapest cost tier first, then the provider's
 # rank, then registration order (the sorts are stable). Every vehicle
-# operation walks it. Nothing
-# here holds a lock; the provider list is replaced, never mutated, so a walk
-# works on a snapshot.
+# operation walks it. Nothing here holds a lock; the provider list is
+# replaced, never mutated, so a walk works on a snapshot.
 import json
 import logging
 import time

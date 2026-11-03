@@ -67,7 +67,7 @@ def decideChargeLimit(
     # A release puts back the outside limit as a restore does
     restore = restore or desired == RELEASE
     outside = _clamped(saved.outside) if saved is not None else None
-    heldAt = saved.held if saved is not None else None
+    heldLimit = saved.held if saved is not None else None
     target = None if restore else _clamped(desired)
 
     if current is None:
@@ -78,11 +78,11 @@ def decideChargeLimit(
             None, None, None, True, "no saved normal limit; nothing to restore"
         )
 
-    handSet = heldAt is not None and current != heldAt
-    normal = outside if heldAt is not None and not handSet else current
+    handSet = heldLimit is not None and current != heldLimit
+    normal = outside if heldLimit is not None and not handSet else current
 
     if restore:
-        if heldAt is not None and not handSet and current != normal:
+        if heldLimit is not None and not handSet and current != normal:
             return ChargeLimitDecision(
                 normal, None, HeldLimit(normal, None), False, "restore to %s%%" % normal
             )
