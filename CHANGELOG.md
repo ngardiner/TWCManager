@@ -70,6 +70,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Read the car's reason from a Fleet API command refused through the Vehicle Command proxy, so a start for a car already charging (or a limit already set) counts as done instead of failing and being sent again
     * Fix: Each Powerwall2 instance keeps its own fetch cache; the class-level `lastFetch` was shared between instances (closes #691)
     * Fix: `python_requires` is now 3.8 (was 3.6), the oldest Python TWCManager installs on; the Gen3 log names the pymodbus and Python it needs (closes #723)
+    * (@MikeBishop) - With no saved choice, the home page is Modern, as the Settings page shows, so saving settings no longer switches it; the setting is now called "Home Page Style", since it changes only the home page (closes #747)
 
 ## v1.4.0 - 2026-10-26
 
