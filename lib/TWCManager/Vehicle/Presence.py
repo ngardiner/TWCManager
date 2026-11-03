@@ -16,8 +16,9 @@ HOME_RADIUS_FT = 1000
 HOME_FIX_MAX_AGE = 600.0
 REACH_WINDOW = 300.0
 # The least time between status checks of a car known asleep that no live
-# feed reports on, at home and anywhere else: the watch's defaults, and a
-# held cloud command's own check of a car the watch leaves alone
+# feed reports on, at home and anywhere else. The watch uses them as its
+# defaults, and a held cloud command uses them for its own check of a car
+# the watch leaves alone.
 HOME_ASLEEP_SECS, AWAY_ASLEEP_SECS = 900.0, 1800.0
 PILOT_MATCH_TOLERANCE, PLUGGED_JUST_NOW = 1, 120.0
 _BLE_CHARGE = ("chargingState", "availableCurrent", "actualCurrent")
@@ -84,16 +85,16 @@ def _plug(field, obs) -> Optional[bool]:
 def _awayCharger(v, obs) -> bool:
     # A fast charger, no cable, or more power than the car's own AC maximum
     # at its voltage: plugged in, but not to a home charger
-    def since(field):
-        o = v.reported(field).get(obs.source)
-        return o.value if o is not None and o.at >= obs.at else None
+    def sameReport(field):
+        reading = v.reported(field).get(obs.source)
+        return reading.value if reading is not None and reading.at >= obs.at else None
 
-    kind, amps = since("fastChargerType"), since("chargeCurrentRequestMax")
-    power, volts = since("chargerPower") or 0, max(v.value("voltage") or 0, 240)
+    kind, amps = sameReport("fastChargerType"), sameReport("chargeCurrentRequestMax")
+    power, volts = sameReport("chargerPower") or 0, max(v.value("voltage") or 0, 240)
     return (
-        since("fastChargerPresent") is True
+        sameReport("fastChargerPresent") is True
         or kind not in HOME_CHARGER_TYPES | {None}
-        or since("connChargeCable") in ("<invalid>", "")
+        or sameReport("connChargeCable") in ("<invalid>", "")
         or (bool(amps) and power * 1000 > amps * volts * 1.1)
     )
 
@@ -187,31 +188,32 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
                 master.attributePlugs()
 
 
-def pluggedNow(master, v, unknown=False, since=NEVER) -> Optional[bool]:
-    # The newest plug reading after since; unknown when nothing says
-    here, best = inside(master, v), None
+def pluggedNow(master, v, ifUnknown=False, since=NEVER) -> Optional[bool]:
+    # The newest plug reading after since; ifUnknown when nothing says
+    here, rank = inside(master, v), None
+    plugged, readBy, readAt = None, None, NEVER
     for field in _PLUGS:
         for obs in v.reported(field).values():
             value = _plugEvidence(v, field, obs, here)
             # A Gen2's plug counts only while it names the car, below
             value = None if value and obs.source == "Gen2TWC" else value
             key = (obs.at, obs.source in _STRONG)
-            if value is not None and obs.at > since and (best is None or key > best[0]):
-                best = (key, value, obs.source)
+            if value is not None and obs.at > since and (rank is None or key > rank):
+                rank, plugged, readBy, readAt = key, value, obs.source, obs.at
     # A charging point naming the car says plugged unless another source
     # read it unplugged since; a Gen2 re-plugged keeps its old naming
     named = twcVinAt(master, v)
     if named > NEVER and (
-        not best or best[1] or best[2] == "Gen2TWC" or best[0][0] <= named
+        plugged is not False or readBy == "Gen2TWC" or readAt <= named
     ):
         return True
     # A snapshot of the car plugged in since its unplug places it nowhere,
     # but the unplug is no longer known: a car that came back unseen
     cached = v.reported("chargingState").get(CACHED)
-    if best and best[1] is False and cached and cached.at > best[0][0]:
+    if plugged is False and cached and cached.at > readAt:
         if _plug("chargingState", cached):
-            return unknown
-    return unknown if best is None else best[1]
+            return ifUnknown
+    return ifUnknown if plugged is None else plugged
 
 
 def telemetryPlug(v, since=NEVER, seen=False) -> Optional[bool]:
@@ -240,12 +242,14 @@ def _doorClosed(v, since) -> bool:
 
 
 def checkPlug(master, v, since) -> Optional[bool]:
-    # Plugged in, after a charging point's status edge at since? Never wakes:
-    # a live feed reports a change in seconds (a retained copy is no report);
-    # an unplug wakes a sleeping car, and an awake car's door closes with it
-    # (a car with no key gets no range scan); else the read cascade, where a
-    # cloud API reads only a car its free online check finds awake, past the
-    # stored reading and online answer that an unplug just made stale
+    # Whether the car is plugged in after a charging point's status edge at
+    # since. It never wakes the car. A live feed reports a change within
+    # seconds, though a retained copy is no report. An unplug wakes a
+    # sleeping car, and an awake car's door closes with the cable; a car with
+    # no BLE key gets no range scan. Otherwise the read cascade answers: a
+    # cloud API reads only a car its free online check finds awake, and the
+    # read goes past the stored reading and online answer that an unplug
+    # just made stale.
     if (feed := telemetryPlug(v, since, seen=True)) is not None:
         return feed
     ble, now = _ble(master), master.vehicleRegistry.now()
@@ -262,13 +266,13 @@ def checkPlug(master, v, since) -> Optional[bool]:
     # since a snapshot's stamp can predate the unplug being checked
     reads = [p for p in master.providerOrder.providers() if p.name != CACHED]
     v.read("chargingState", 0, force=True, since=since, wait=False, providers=reads)
-    return pluggedNow(master, v, None, since)
+    return pluggedNow(master, v, ifUnknown=None, since=since)
 
 
 def drivingNow(v) -> bool:
-    # The feed's own state: a provider's sleep check never masks a drive. A
-    # car plugged in, named by a TWC or drawing current since that reading
-    # has stopped, whether or not the drive's end was reported
+    # The feed's own state, so a provider's sleep check never masks a drive.
+    # A car plugged in, named by a TWC or drawing current since that reading
+    # has stopped driving, whether or not the drive's end was reported.
     state, shift = v.telemetryState()[0], v.latest("shiftState")
     if shift is not None and (state is None or shift.at >= state.at):
         driving = shift if shift.value in _MOVING else None
@@ -334,19 +338,19 @@ def decide(master, v) -> Tuple[str, str, float]:
     # Parked: in P, or with no gear known, not driving
     shift = v.value("shiftState")
     parked = shift == "P" if shift is not None else not drivingNow(v)
-    home = max(
+    homeAt, homeWhy = max(
         (twcVinAt(master, v), "named by its charging point"),
         (v.markAt("plugIn"), "plugged in"),
         (v.markAt("contact"), "BLE contact"),
         (fixAt if here and parked else NEVER, "parked inside the radius"),
     )
-    if here is False and fixAt > home[0]:
+    if here is False and fixAt > homeAt:
         return NOT_HOME, "a fix outside the radius", fixAt
     if drivingNow(v):
         return PRESUMED, "driving", NEVER
-    if home[0] > max(v.markAt("driveStart"), v.markAt("absent"), v.markAt("unplug")):
-        return HOME, home[1], home[0]
-    if v.markAt("unplug") > home[0]:
+    if homeAt > max(v.markAt("driveStart"), v.markAt("absent"), v.markAt("unplug")):
+        return HOME, homeWhy, homeAt
+    if v.markAt("unplug") > homeAt:
         return NOT_HOME, "unplug", v.markAt("unplug")
     return PRESUMED, "no newer evidence", NEVER
 
@@ -359,15 +363,15 @@ def pluggedHere(master, v) -> bool:
     return presence(master, v) == HOME and pluggedNow(master, v)
 
 
-def leaving(v) -> float:
+def leftAt(v) -> float:
     return max(v.markAt("unplug"), v.markAt("driveStart"))
 
 
-def arriving(v) -> float:
+def arrivedAt(v) -> float:
     return max(v.markAt("outside"), v.markAt("driveEnd"))
 
 
-def returned(v) -> float:
+def returnedAt(v) -> float:
     # When the car last came back: parked inside the radius, or plugged in
     return max(v.markAt("driveEnd"), v.markAt("plugIn"))
 
@@ -378,33 +382,34 @@ def departed(master, v) -> Optional[float]:
     state, _, at = decide(master, v)
     if state == NOT_HOME:
         return at
-    away = state == HOME or drivingNow(v) and returned(v) > NEVER
-    away = away and leaving(v) > arriving(v) and not pluggedNow(master, v)
-    return leaving(v) if away else None
+    wasHere = state == HOME or (drivingNow(v) and returnedAt(v) > NEVER)
+    leftHome = wasHere and leftAt(v) > arrivedAt(v) and not pluggedNow(master, v)
+    return leftAt(v) if leftHome else None
 
 
 def applicable(master, v, capability) -> Tuple[str, str]:
     # Whether a message, a stop or a restore aside (those always go), still
     # fits where the car is, and the cell that says so. Missing event times
     # are NEVER; a tie holds
-    state, plugged = presence(master, v), pluggedNow(master, v, None)
+    state, plugged = presence(master, v), pluggedNow(master, v, ifUnknown=None)
     if state == NOT_HOME:
         return NOT_HERE, "away"
     if capability != SET_CHARGE_LIMIT:
         # A start or a rate needs the plug. A naming outlasts a Gen2 00 until
         # the car leaves or reads unplugged; a held car never unplugged stays
-        named = v.latest("twcVin")
-        at = named.at if named is not None and named.value else NEVER
-        named = at > leaving(v) and pluggedNow(master, v, True, since=at)
-        presumed = state == PRESUMED or plugged is None
-        presumed = presumed and v.markAt("unplug") == NEVER
-        if plugged or named or presumed and v.vin in master.heldLimits.holding():
+        twcVin = v.latest("twcVin")
+        namedAt = twcVin.at if twcVin is not None and twcVin.value else NEVER
+        named = namedAt > leftAt(v)
+        named = named and pluggedNow(master, v, ifUnknown=True, since=namedAt)
+        neverUnplugged = v.markAt("unplug") == NEVER
+        presumed = (state == PRESUMED or plugged is None) and neverUnplugged
+        if plugged or named or (presumed and v.vin in master.heldLimits.holding()):
             return SEND, "plugged in"
         return (NOT_HERE if state == HOME else HOLD), "not plugged in"
     if state == HOME:
         if departed(master, v) is not None:
             return NOT_HERE, "leaving"
-        tie = not plugged and leaving(v) == arriving(v) > NEVER
+        tie = not plugged and leftAt(v) == arrivedAt(v) > NEVER
         return (HOLD, "tie") if tie else (SEND, "home")
     if drivingNow(v):
         return HOLD, "driving"
@@ -443,17 +448,17 @@ def _reached(master, v) -> bool:
     return reach < v.markAt("contact")
 
 
-def pick(master, offered=None, actual=0, read=False, since=NEVER):
+def pick(master, offerSource=None, actual=0, read=False, since=NEVER):
     # A VIN-less plug's car (plugged in at since): plugged in just now, else
     # BLE-read at this pilot and draw (given an offer, or a function giving
     # the offer now), else reached or inside
     now, pool = master.vehicleRegistry.now(), candidates(master)
-    offer = offered if callable(offered) else lambda: offered
+    offer = offerSource if callable(offerSource) else lambda: offerSource
     offered = offer()
 
     def fresh(v, field, source="TeslaBLE", window=REACH_WINDOW):
-        o = v.reported(field).get(source) if source else v.latest(field)
-        return o if o is not None and now - o.at <= window else None
+        reading = v.reported(field).get(source) if source else v.latest(field)
+        return reading if reading is not None and now - reading.at <= window else None
 
     just = [(v, fresh(v, "pluggedIn", None, PLUGGED_JUST_NOW)) for v in pool]
     just = [v for v, o in just if o and _plugEvidence(v, "pluggedIn", o, True)]
@@ -462,9 +467,9 @@ def pick(master, offered=None, actual=0, read=False, since=NEVER):
         return just[0]
 
     def fits(v):
-        # BLE says: False not plugged in here, True at this pilot and draw;
-        # a live feed saying unplugged since the plug, or an unplug just
-        # before it, rules the car out
+        # False: not plugged in here. True: BLE reads it at this pilot and
+        # draw. None: nothing says either way. A live feed saying unplugged
+        # since the plug, or an unplug just before it, rules the car out
         if telemetryPlug(v, since) is False:
             return False
         if v.markAt("unplug") > since - REACH_WINDOW > NEVER:
@@ -479,15 +484,21 @@ def pick(master, offered=None, actual=0, read=False, since=NEVER):
         if stale and "TeslaBLE" in v.claims and asleep(v, now - REACH_WINDOW) is False:
             v.read("chargingState", 0, providers=("TeslaBLE",), force=True)
         state, pilot, amps = (fresh(v, f) for f in _BLE_CHARGE)
-        plugged = state and _plug("chargingState", state)
+        plugged = None if state is None else _plug("chargingState", state)
+        if plugged is False:
+            return False
         if not (plugged and pilot and offered is not None):
-            return None if plugged else plugged
+            # No fresh plugged reading, or no pilot or offer to match
+            return None
         # The offer may have changed during the read
         gap = min(abs(pilot.value - o) for o in (offered, offer()))
         if gap > PILOT_MATCH_TOLERANCE:
             return False
-        drawing = actual >= 1 and amps
-        return not drawing or abs(amps.value - actual) <= PILOT_MATCH_TOLERANCE or None
+        if actual < 1 or not amps:
+            # No draw to compare: the pilot match says so
+            return True
+        # A draw that differs from the car's own reading says nothing
+        return True if abs(amps.value - actual) <= PILOT_MATCH_TOLERANCE else None
 
     fit = [(v, fits(v)) for v in pool]
     left = [v for v, f in fit if f is not False]
@@ -499,7 +510,8 @@ def pick(master, offered=None, actual=0, read=False, since=NEVER):
 def attribute(master, pointId, source, offered=None, actual=0) -> Optional[str]:
     # Names an anonymous session's car, plugged in there. Given an offer it
     # may read over BLE, so it runs on the BLE worker
-    if not getattr(anon := master.vehicleRegistry.vehicleAt(pointId), "isAnonymous", 0):
+    anon = master.vehicleRegistry.vehicleAt(pointId)
+    if not getattr(anon, "isAnonymous", 0):
         return None
     read, plugIn = offered is not None, anon.markAt("plugIn")
     v = pick(master, offered, actual, read, plugIn)

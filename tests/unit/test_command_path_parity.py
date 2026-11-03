@@ -1512,7 +1512,7 @@ def test_a_20_s_drive_inside_the_radius_between_policy_passes_is_seen(
     c.t = t0 + 30
     m.setPolicyLimit(50, transition=False)
     r.pass_()
-    assert Presence.arriving(v) == t0 + 25 > Presence.leaving(v) == t0 + 5
+    assert Presence.arrivedAt(v) == t0 + 25 > Presence.leftAt(v) == t0 + 5
     assert bleCommands(b) == ["charging-set-limit"] and b.runs[-1][2] == 50
     assert requests_mock.call_count == 0
 
