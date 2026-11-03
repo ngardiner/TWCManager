@@ -527,14 +527,24 @@ class Watch:
         if want and not want.exempt and (named or (state == HOME_AWAKE and recent)):
             self._take(v.vin, want)
             want = None
+        quiet = False
         if fleetOnly(self.master, v, deaf):
-            # Its charge is polled for free: it pays only to learn where it
-            # is, and to try such a read again once it failed
+            # Its charge is polled for free: it pays to learn where it is, to
+            # try such a read again once it failed, and for a charge the
+            # snapshots went quiet on, a charging cadence after the last one.
+            # A car that uploads as it charges is never paid for; one that
+            # uploads only at the end is still seen plugged in and drawing
             with self._lock:
                 locate = v.vin in self._locate
                 self._locate.discard(v.vin)
+            said = (v.reported("chargingState").get(s) for s in ("FleetAPI", CACHED))
+            said = max((o for o in said if o), key=lambda o: o.at, default=None)
             if not (want and (forPosition or locate or readAnswer in RETRY)):
-                return
+                if state != HOME_CHARGING or not said or said.value != "Charging":
+                    return
+                want, quiet, readAt = None, True, max(readAt, said.at)
+            # Each pays: a snapshot carries no position, and the poll takes
+            # any newer one
             forPosition = True
         flowing = getattr(twcChargingState(v), "value", None) == "Charging"
         if not want and not (flowing if named else state == HOME_CHARGING):
@@ -556,10 +566,12 @@ class Watch:
         price = found[0].cost(READ_CHARGE).price or 0.0
         secs = self._settings["cloudChargingReadSecs" if price else "chargingReadSecs"]
         # Nothing can act on the amps of a car no provider can set. A paid
-        # read buys the battery level, worth it only where a policy reads it:
-        # the car's sleep says when its charge ended
+        # read buys the battery level, worth it only where a policy reads it
+        # or no snapshot shows the charge: the car's sleep says when it ended
         policy = self.master.getModuleByName("Policy")
-        due = now >= readAt + secs and (not price or policy and policy.readsBattery())
+        due = now >= readAt + secs and (
+            not price or quiet or policy and policy.readsBattery()
+        )
         if not want and not (due and order.candidates(v, SET_AMPS)):
             return
         self._take(v.vin, want)
@@ -614,7 +626,8 @@ class Watch:
             # and so does a paid read since: a charge a lowered limit ends at
             # once may show only in the read that found it
             self.master.providerOrder.read(v, "chargingState", False, [CACHED], cutoff=cutoff)
-            snaps = sorted(s for s in (snapshot(v, cutoff, f) for f in ("FleetAPI", CACHED)) if s)
+            snaps = (snapshot(v, cutoff, f) for f in ("FleetAPI", CACHED))
+            snaps = sorted((s for s in snaps if s), key=lambda s: s.stamp)
             if not snaps:
                 return None
             with self._lock:

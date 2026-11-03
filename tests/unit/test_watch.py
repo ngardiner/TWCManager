@@ -601,16 +601,17 @@ def test_an_api_only_car_leaving_while_awake_is_seen_within_a_courtesy_window(re
     readsAt(requests_mock, m, v, c, w, r, c.t + gone)
     assert paid(requests_mock)[0] == 2 and P.presence(m, v) == P.NOT_HOME
 
-def test_an_api_only_car_charging_is_not_read_for_a_battery_no_policy_reads(requests_mock):
+def test_an_api_only_car_charging_is_read_only_while_no_snapshot_shows_it(requests_mock):
+    # No policy reads its battery: no snapshot, so read on the cloud charging cadence
     m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v, battery=False)
     v.observe("state", "online", "FleetAPI"); v.observe("chargingState", "Charging", "FleetAPI")
     w = Watch(m, clock=c); w.pass_()                                     # charging before the start
     for _ in range(12): later(m, v, c, 300); w.pass_(); runPending(r.cloud)
-    assert paid(requests_mock) == (0, 0, 0) and situation(m, v) == HOME_CHARGING
+    assert paid(requests_mock) == (3600 // DEFAULTS["cloudChargingReadSecs"], 0, 0) and situation(m, v) == HOME_CHARGING
     requests_mock.get(FLEET + VIN, json={"response": {"state": "asleep", "vin": VIN}})
     later(m, v, c, 300); w.pass_(); runPending(r.cloud)                  # the charge ended: it sleeps
     e = VehicleEndpoint(v, m.providerOrder, m)
-    assert situation(m, v) == HOME_ASLEEP and not e.wantsToCharge and paid(requests_mock)[0] == 0
+    assert situation(m, v) == HOME_ASLEEP and not e.wantsToCharge and paid(requests_mock)[0] == 4    # asleep: no more
 
 def test_a_policy_reads_the_battery_where_it_names_it_or_overrides_the_limit():
     m, r, v, c = setup(here=False); batteryPolicy(m); assert m.getModuleByName("Policy").readsBattery()

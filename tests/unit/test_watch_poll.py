@@ -116,6 +116,15 @@ def test_a_paid_read_alone_opens_a_session(requests_mock):
     assert w.ledger.isOpen(VIN) and w.ledger.toJSON()[VIN]["segments"][0][:2] == [S, S + 100]
     assert VIN not in w._suspect and paid(requests_mock) == (0, 0, 0)
 
+def test_a_paid_read_and_a_snapshot_of_the_same_moment_are_both_taken(requests_mock):
+    m, r, v, c, w, saved, car = start(requests_mock); S = c.t
+    w.suspect(VIN, S, "load step up", step=True)
+    for f, x in dict(chargingState="Charging", actualCurrent=48, voltage=240, phases=1).items():
+        v.observe(f, x, "FleetAPI", at=S + 100)                                            # no energy: the snapshot's sorts after it
+    upload(requests_mock, **dict(CHARGING, stamp=S + 100, charge_energy_added=0.15))
+    run(m, v, c, w, r, 3)
+    assert w.ledger.isOpen(VIN) and VIN not in w._suspect
+
 def test_an_asleep_car_is_never_polled_and_its_session_ends(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock); T = c.t
     upload(requests_mock, **dict(CHARGING, stamp=T + 5, charge_energy_added=0.1)); w.suspect(VIN, T, "command")
@@ -125,13 +134,26 @@ def test_an_asleep_car_is_never_polled_and_its_session_ends(requests_mock):
     w.suspect(VIN, c.t, "load step up"); run(m, v, c, w, r, 10)
     assert counts(requests_mock)["cached"] == n and paid(requests_mock) == (0, 0, 0)
 
-def test_no_routine_paid_read_while_a_fleet_only_car_charges(requests_mock):
-    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)                  # a policy reads the battery
+def charging(requests_mock):
+    # A Fleet-only car charging, no policy reading its battery, its last snapshot at T
+    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v, battery=False)
     v.observe("state", "online", "FleetAPI"); v.observe("chargingState", "Charging", "FleetAPI")
     w = Watch(m, clock=c); m.queue_background_task = lambda task, delay=0: None; w.pass_(); runPending(r.cloud)
-    upload(requests_mock, **dict(CHARGING, stamp=c.t, charge_energy_added=0.1)); w.suspect(VIN, c.t, "wake")
-    run(m, v, c, w, r, 30)                                                                # believed charging: polled from the first pass
+    snap = upload(requests_mock, **dict(CHARGING, stamp=c.t, charge_energy_added=0.1)); w.suspect(VIN, c.t, "wake")
+    return m, r, v, c, w, snap
+
+def test_a_fleet_only_car_uploading_as_it_charges_is_never_paid_for(requests_mock):
+    m, r, v, c, w, snap = charging(requests_mock)
+    for _ in range(30): snap.update(stamp=c.t); run(m, v, c, w, r, 1)                    # a new snapshot each minute
     assert counts(requests_mock)["cached"] == 31 and paid(requests_mock) == (0, 0, 0)
+
+def test_a_charge_the_snapshots_go_quiet_on_is_read_a_cadence_after_the_last(requests_mock):
+    m, r, v, c, w, snap = charging(requests_mock); T = c.t; quiet = DEFAULTS["cloudChargingReadSecs"]
+    run(m, v, c, w, r, 10); snap.update(stamp=c.t)                                         # one upload at T+600
+    for f, x in zip(("lat", "lon"), HOME): v.observe(f, x, "FleetAPI")                     # no read due for its position
+    run(m, v, c, w, r, quiet // 60 - 1); assert paid(requests_mock) == (0, 0, 0)          # T+1440
+    run(m, v, c, w, r, 1); assert paid(requests_mock) == (1, 0, 0) and c.t == T + 600 + quiet
+    run(m, v, c, w, r, quiet // 60); assert paid(requests_mock) == (2, 0, 0)              # the read resets it too
 
 def test_an_away_car_is_not_polled(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock, at=AWAY); T = c.t
