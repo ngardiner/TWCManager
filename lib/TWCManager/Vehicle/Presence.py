@@ -148,7 +148,11 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
             # The drive start plans the restore while BLE is still in range
             Targets._restoreDeparted(master)
         elif (
-            wasMoving and not moving and here and (field == "state" or obs.value == "P")
+            # A parked car's read reports no gear: P only while it is in use
+            wasMoving
+            and not moving
+            and here
+            and (field == "state" or obs.value in ("P", None))
         ):
             vehicle.mark("driveEnd", at)
     elif field == "actualCurrent":
