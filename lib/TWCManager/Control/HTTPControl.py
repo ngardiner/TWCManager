@@ -858,6 +858,50 @@ def CreateHTTPHandlerClass(master):
                 except BrokenPipeError:
                     self.debugLogAPI("Connection Error: Broken Pipe")
 
+            elif self.url.path == "/api/getPricingForecast":
+                # Forward price forecast from each Pricing module that supports
+                # it. Optional ?hours=N (1-48, default 24) bounds the horizon.
+                hours = 24
+                try:
+                    qs = urllib.parse.parse_qs(self.url.query)
+                    if "hours" in qs:
+                        hours = int(qs["hours"][0])
+                except (ValueError, TypeError, IndexError):
+                    hours = 24
+                if hours < 1:
+                    hours = 1
+                if hours > 48:
+                    hours = 48
+
+                data = {"hoursRequested": hours, "modules": {}}
+                for module in master.getModulesByType("Pricing"):
+                    ref = module["ref"]
+                    name = module["name"]
+                    try:
+                        if not ref.getCapabilities("Forecasting"):
+                            continue
+                        data["modules"][name] = {
+                            "currency": getattr(ref, "currency", ""),
+                            "forecast": ref.getPriceForecast(hours),
+                            "cheapWindowActive": getattr(
+                                ref, "cheapWindowActive", 0
+                            ),
+                            "cheapWindowStart": getattr(
+                                ref, "cheapWindowStart", None
+                            ),
+                        }
+                    except Exception:
+                        continue
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+
+                json_data = json.dumps(data)
+                try:
+                    self.wfile.write(json_data.encode("utf-8"))
+                except BrokenPipeError:
+                    self.debugLogAPI("Connection Error: Broken Pipe")
+
             elif self.url.path == "/api/getHistory":
                 output = []
                 now = datetime.now().replace(second=0, microsecond=0).astimezone()

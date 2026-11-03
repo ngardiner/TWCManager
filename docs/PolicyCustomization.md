@@ -277,6 +277,11 @@ The values in a policy definition are:
     - `exportPrice`:  The current export (feed-in) price, in currency per kWh.
     - `spikeStatus` / `renewables` (Amber only):  The wholesale spike state and
       the current renewables percentage.
+    - `cheapWindowActive` (forecasting modules, e.g. Amber):  `1` while the
+      current time is inside the cheapest forecast window (requires a
+      `cheapWindow` to be configured on the module), otherwise `0`.
+    - `forecastMinPrice` / `forecastMaxPrice` (forecasting modules):  The lowest
+      and highest import price across the forecast horizon.
 - Sub-lists
 
 (Policies see only these aggregate properties of all vehicles at home, not
@@ -387,6 +392,40 @@ a ceiling you set in `config.maxImportPrice`:
 Price rules fail safe: if the pricing module is not loaded, the `modules.*`
 reference does not resolve to a number and the comparison will not match, so
 charging is unaffected.
+
+#### Charging in the cheapest forecast window
+
+A pricing module that offers the `Forecasting` capability (e.g. Amber) can look
+ahead over the price forecast and tell policy when the current time is inside
+the cheapest contiguous block of the day.  Configure a `cheapWindow` on the
+module (the number of hours you need, with optional local-time bounds), then
+reference `modules.<Module>.cheapWindowActive` in a policy:
+
+    "pricing": {
+      "Amber": {
+        "enabled": true,
+        "token": "...",
+        "cheapWindow": { "hours": 5, "startHour": 22, "endHour": 7 }
+      }
+    }
+
+    "extend": {
+      "before": [
+        { "name": "Charge in cheapest window",
+          "match": [ "modules.AmberPricing.cheapWindowActive" ],
+          "condition": [ "eq" ],
+          "value": [ 1 ],
+          "charge_amps": "settings.scheduledAmpsMax",
+          "charge_limit": -1
+        }
+      ]
+    }
+
+With the example above, the module finds the cheapest 5-hour block between 10pm
+and 7am and sets `cheapWindowActive` to `1` while the car is in it, so charging
+only runs during the cheapest part of the overnight window.  As with the current
+price, if forecasting is not available the reference does not resolve and the
+rule simply does not match.
 
 ## Policy Replacement
 

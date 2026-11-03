@@ -298,6 +298,24 @@ class Policy:
             if alwaysPoll or maxAmps or self.policyIsGreen():
                 self.master.queue_background_task({"cmd": "checkGreenEnergy"})
 
+        # If any Pricing module is active, refresh pricing in the background so
+        # price attributes (e.g. importPrice) are current before the next policy
+        # evaluation reads them. If a module also offers Forecasting, warm the
+        # forecast too so cheapWindowActive is up to date. This is only a
+        # refresh trigger; it adds nothing to the policy macro language.
+        pricingModules = self.master.getModulesByType("Pricing")
+        if pricingModules:
+            self.master.queue_background_task({"cmd": "getPricing"})
+            for module in pricingModules:
+                try:
+                    if module["ref"].getCapabilities("Forecasting"):
+                        self.master.queue_background_task(
+                            {"cmd": "getPricingForecast"}
+                        )
+                        break
+                except Exception:
+                    continue
+
         # If a charge limit is defined for this policy, apply it
         limit = limit = self.policyValue(policy.get("charge_limit", -1))
         # limitOverride lowers the charge limit below current SOC to force the car

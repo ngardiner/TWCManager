@@ -383,6 +383,23 @@ def background_tasks_thread(master):
                     g = master.getModuleByName("Gen3TWCs")
                     if g:
                         g.refreshVitals()
+                elif task["cmd"] == "getPricing":
+                    # Refresh current price for each loaded Pricing module so
+                    # policy reads fresh importPrice/exportPrice attributes.
+                    for module in master.getModulesByType("Pricing"):
+                        try:
+                            module["ref"].update()
+                        except Exception:
+                            continue
+                elif task["cmd"] == "getPricingForecast":
+                    # Warm the forward forecast for any Pricing module that
+                    # advertises Forecasting, so cheapWindowActive is current.
+                    for module in master.getModulesByType("Pricing"):
+                        try:
+                            if module["ref"].getCapabilities("Forecasting"):
+                                module["ref"].updateForecast()
+                        except Exception:
+                            continue
 
         except Exception as e:
             logger.error(

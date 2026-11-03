@@ -386,6 +386,16 @@
         ],
         # Rules in the before section here are evaluated after the Charge Now rule
         "before":[
+          # Example: charge at the scheduled rate while we are inside the
+          # cheapest forecast window. Requires a Pricing module with the
+          # Forecasting capability (e.g. Amber) and a "cheapWindow" configured
+          # in the "pricing" section below. Uncomment to enable.
+          # { "name": "Charge in cheapest window",
+          #   "match": [ "modules.AmberPricing.cheapWindowActive" ],
+          #   "condition": [ "eq" ],
+          #   "value": [ 1 ],
+          #   "charge_amps": "settings.scheduledAmpsMax",
+          #   "charge_limit": -1 },
         ],
         # Rules in the after section here are evaluated before the Unscheduled Charging
         # rule at the end of the policy.
@@ -481,7 +491,17 @@
         # Obtain an API token from the Amber app; siteId is auto-discovered.
         "Amber":{
           "enabled": false,
-          "token": ""
+          "token": "",
+          # Optional cheapest-window forecasting. When "hours" is set, Amber's
+          # forward price forecast is scanned for the cheapest contiguous block
+          # of that many hours; the module exposes cheapWindowActive = 1 while
+          # now falls inside it (see the "Charge in cheapest window" example
+          # policy above). Omit this block to leave forecasting inactive.
+          #"cheapWindow":{
+          #  "hours": 5,
+          #  "startHour": 22,
+          #  "endHour": 7
+          #}
         }
     },
     "logging":{

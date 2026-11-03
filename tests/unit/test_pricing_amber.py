@@ -33,7 +33,7 @@ class TestAmberInit:
         p = AmberPricing(master)
         master.releaseModule.assert_not_called()
         assert p.status is True
-        assert p.getCapabilities("Forecasting") is False
+        assert p.getCapabilities("Forecasting") is True
         assert p.getCapabilities("SpikeDetection") is True
 
 
@@ -92,3 +92,118 @@ class TestAmberUpdate:
         p = AmberPricing(_master({"enabled": True, "token": "abc"}))
         assert p.getImportPrice() == 0.30
         assert p.siteId == "siteX"
+
+
+def _interval(start_dt, end_dt, perKwh, channel="general"):
+    return {
+        "channelType": channel,
+        "startTime": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "endTime": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "perKwh": perKwh,
+        "descriptor": "neutral",
+        "spikeStatus": "none",
+        "renewables": 40,
+    }
+
+
+class TestAmberForecast:
+    def _forecast_response(self):
+        # Build a forward series of 30-min general intervals starting now.
+        # Make the block 2-4 hours out clearly the cheapest.
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime.now(timezone.utc)
+        intervals = []
+        for slot in range(0, 24):  # 12 hours of 30-min slots
+            start = now + timedelta(minutes=30 * slot)
+            end = start + timedelta(minutes=30)
+            # slots 4..11 (2h..5.5h out) are cheap; rest expensive
+            price = 10.0 if 4 <= slot < 12 else 40.0
+            intervals.append(_interval(start, end, price))
+        return intervals
+
+    @patch("TWCManager.Pricing.AmberPricing.requests")
+    def test_forecast_parsed_and_min_max(self, mock_requests):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = self._forecast_response()
+        mock_requests.get.return_value = resp
+        mock_requests.exceptions.ConnectionError = Exception
+        mock_requests.exceptions.HTTPError = Exception
+
+        p = AmberPricing(
+            _master({"enabled": True, "token": "abc", "siteId": "s1"})
+        )
+        fc = p.getPriceForecast(12)
+        assert len(fc) > 0
+        # forecast entries are JSON-serialisable (timestamp is a string)
+        assert isinstance(fc[0]["timestamp"], str)
+        assert p.forecastMinPrice == 0.10
+        assert p.forecastMaxPrice == 0.40
+
+    @patch("TWCManager.Pricing.AmberPricing.requests")
+    def test_cheapest_window_found(self, mock_requests):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = self._forecast_response()
+        mock_requests.get.return_value = resp
+        mock_requests.exceptions.ConnectionError = Exception
+        mock_requests.exceptions.HTTPError = Exception
+
+        p = AmberPricing(
+            _master({"enabled": True, "token": "abc", "siteId": "s1"})
+        )
+        best = p.getCheapestWindow(2)  # cheapest contiguous 2h block
+        assert best is not None
+        assert best["avgPrice"] == 0.10  # the cheap block
+
+    @patch("TWCManager.Pricing.AmberPricing.requests")
+    def test_cheap_window_inactive_without_config(self, mock_requests):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = self._forecast_response()
+        mock_requests.get.return_value = resp
+        mock_requests.exceptions.ConnectionError = Exception
+        mock_requests.exceptions.HTTPError = Exception
+
+        # No cheapWindow configured -> cheapWindowActive stays 0 (inert)
+        p = AmberPricing(
+            _master({"enabled": True, "token": "abc", "siteId": "s1"})
+        )
+        p.updateForecast()
+        assert p.cheapWindowActive == 0
+
+    @patch("TWCManager.Pricing.AmberPricing.requests")
+    def test_cheap_window_active_now(self, mock_requests):
+        # A window starting now for the next few hours; "now" is inside it.
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime.now(timezone.utc)
+        intervals = []
+        for slot in range(0, 24):
+            start = now + timedelta(minutes=30 * slot)
+            end = start + timedelta(minutes=30)
+            # Cheapest block is the first 2 hours (starting now)
+            price = 5.0 if slot < 4 else 50.0
+            intervals.append(_interval(start, end, price))
+
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = intervals
+        mock_requests.get.return_value = resp
+        mock_requests.exceptions.ConnectionError = Exception
+        mock_requests.exceptions.HTTPError = Exception
+
+        # cheapWindow with no hour bounds: cheapest 2h block is right now
+        p = AmberPricing(
+            _master(
+                {
+                    "enabled": True,
+                    "token": "abc",
+                    "siteId": "s1",
+                    "cheapWindow": {"hours": 2},
+                }
+            )
+        )
+        p.updateForecast()
+        assert p.cheapWindowActive == 1

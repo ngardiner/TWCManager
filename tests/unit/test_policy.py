@@ -438,6 +438,69 @@ class TestPolicySelection:
         ]
         assert ("checkGreenEnergy" in queued) is wants
 
+    def test_no_pricing_refresh_queued_without_pricing_modules(self, policy):
+        """With no Pricing modules loaded, enforcePolicy queues neither
+        getPricing nor getPricingForecast (behaviour unchanged for existing
+        users)."""
+        master = policy.master
+        master.getModuleByName = Mock(return_value=Mock(minBatteryLevelAtHome=70))
+        master.getMaxAmpsToDivideAmongSlaves = Mock(return_value=0)
+        master.vehicleRegistry.attached = Mock(return_value=[])
+        master.getModulesByType = Mock(return_value=[])
+        policy.enforcePolicy({"name": "Charge Now", "charge_amps": 6})
+        queued = [
+            c.args[0].get("cmd") for c in master.queue_background_task.call_args_list
+        ]
+        assert "getPricing" not in queued
+        assert "getPricingForecast" not in queued
+
+    def test_forecasting_module_queues_price_and_forecast_refresh(self, policy):
+        """When a Forecasting-capable Pricing module is loaded, enforcePolicy
+        queues both a price refresh and a forecast refresh so the attributes
+        are current before the next evaluation."""
+        master = policy.master
+        master.getModuleByName = Mock(return_value=Mock(minBatteryLevelAtHome=70))
+        master.getMaxAmpsToDivideAmongSlaves = Mock(return_value=0)
+        master.vehicleRegistry.attached = Mock(return_value=[])
+
+        forecastModule = Mock()
+        forecastModule.getCapabilities = Mock(
+            side_effect=lambda c: c == "Forecasting"
+        )
+
+        def _modulesByType(t):
+            return [{"name": "AmberPricing", "ref": forecastModule}] if t == "Pricing" else []
+
+        master.getModulesByType = Mock(side_effect=_modulesByType)
+        policy.enforcePolicy({"name": "Charge Now", "charge_amps": 6})
+        queued = [
+            c.args[0].get("cmd") for c in master.queue_background_task.call_args_list
+        ]
+        assert "getPricing" in queued
+        assert "getPricingForecast" in queued
+
+    def test_non_forecasting_module_queues_price_refresh_only(self, policy):
+        """A Pricing module without Forecasting triggers a price refresh but no
+        forecast refresh."""
+        master = policy.master
+        master.getModuleByName = Mock(return_value=Mock(minBatteryLevelAtHome=70))
+        master.getMaxAmpsToDivideAmongSlaves = Mock(return_value=0)
+        master.vehicleRegistry.attached = Mock(return_value=[])
+
+        staticModule = Mock()
+        staticModule.getCapabilities = Mock(return_value=False)
+
+        def _modulesByType(t):
+            return [{"name": "StaticPricing", "ref": staticModule}] if t == "Pricing" else []
+
+        master.getModulesByType = Mock(side_effect=_modulesByType)
+        policy.enforcePolicy({"name": "Charge Now", "charge_amps": 6})
+        queued = [
+            c.args[0].get("cmd") for c in master.queue_background_task.call_args_list
+        ]
+        assert "getPricing" in queued
+        assert "getPricingForecast" not in queued
+
 
 class TestPolicyInitialization:
     """Test policy initialization and configuration."""
