@@ -131,7 +131,7 @@ class ChargingPoint(EVSEInstance):
         # A car member's rate goes through its endpoint; a car only the TWC
         # names gets the "heartbeat" rate
         desired, members = self.master.desired, {e.vehicleKey for e in cars}
-        mine = [k for k in self.carKeys if k not in members]
+        heartbeatKeys = [k for k in self.carKeys if k not in members]
 
         def withdraw(keys):
             # Only our own rate: never a lift, nor a car endpoint's
@@ -140,25 +140,25 @@ class ChargingPoint(EVSEInstance):
                 if d is not None and d.by == "heartbeat":
                     desired.clearIf(k, AMPS, d.value)
 
-        def own(amps, by, lift=False):
+        def rateHeartbeatCars(amps, by, lift=False):
             # A car that left the set keeps no rate of ours
-            withdraw([k for k in local._lastKeys if k not in mine])
-            local._lastKeys = mine
-            for k in mine:
+            withdraw([k for k in local._lastKeys if k not in heartbeatKeys])
+            local._lastKeys = heartbeatKeys
+            for k in heartbeatKeys:
                 desired.set(k, AMPS, int(amps), by, lift=lift)
 
-        twc, car = self.carriers()
+        twcCarries, carCarries = self.carriers()
         if not watts:
             # A stop is the charging aspect; a pending lift still goes
             local.setTargetPower(0)
             for e in cars:
                 e.setTargetPower(0)
-            if car:
+            if carCarries:
                 withdraw(local._lastKeys)
             return
         amps = self.convertWattsToAmps(watts, self.currentVoltage)
         floor = local.layerFloorAmps()
-        if twc and (not car or amps >= floor):
+        if twcCarries and (not carCarries or amps >= floor):
             local.setTargetPower(watts)
             for e in cars:
                 # The TWC carries: the car keeps no rate of ours
@@ -168,11 +168,13 @@ class ChargingPoint(EVSEInstance):
             # Once per session; in mode 3 only for a car member that would
             # cap below the offer (undershoot is safe; unknown is left
             # alone), a car only the TWC names always
-            lifts = [e.vehicleKey for e in cars if not car or self._caps(e, amps)]
+            lifts = [
+                e.vehicleKey for e in cars if not carCarries or self._caps(e, amps)
+            ]
             for k in lifts:
                 desired.set(k, AMPS, local.wiringMaxAmps, "lift", lift=True)
-            own(local.wiringMaxAmps, "lift", lift=True)
-            if lifts or mine:
+            rateHeartbeatCars(local.wiringMaxAmps, "lift", lift=True)
+            if lifts or heartbeatKeys:
                 local.liftedSession = local.plugSessions
             return
         # The car carries: the next return to the TWC may lift again. With
@@ -185,7 +187,7 @@ class ChargingPoint(EVSEInstance):
         )
         for e in cars:
             e.setTargetPower(watts)
-        own(amps, "heartbeat")
+        rateHeartbeatCars(amps, "heartbeat")
 
     @staticmethod
     def _caps(member, amps) -> bool:
