@@ -190,7 +190,7 @@ def noteObservation(master, vehicle, field, obs, previous) -> None:
 
 def pluggedNow(master, v, ifUnknown=False, since=NEVER) -> Optional[bool]:
     # The newest plug reading after since; ifUnknown when nothing says
-    here, rank = inside(master, v), None
+    here, bestKey = inside(master, v), None
     plugged, readBy, readAt = None, None, NEVER
     for field in _PLUGS:
         for obs in v.reported(field).values():
@@ -198,8 +198,9 @@ def pluggedNow(master, v, ifUnknown=False, since=NEVER) -> Optional[bool]:
             # A Gen2's plug counts only while it names the car, below
             value = None if value and obs.source == "Gen2TWC" else value
             key = (obs.at, obs.source in _STRONG)
-            if value is not None and obs.at > since and (rank is None or key > rank):
-                rank, plugged, readBy, readAt = key, value, obs.source, obs.at
+            newer = bestKey is None or key > bestKey
+            if value is not None and obs.at > since and newer:
+                bestKey, plugged, readBy, readAt = key, value, obs.source, obs.at
     # A charging point naming the car says plugged unless another source
     # read it unplugged since; a Gen2 re-plugged keeps its old naming
     named = twcVinAt(master, v)

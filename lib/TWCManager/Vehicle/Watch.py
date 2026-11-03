@@ -104,14 +104,15 @@ class LoadStep:
         self.threshold, self._base, self._pending = thresholdWatts, None, None
 
     def sample(self, watts: float) -> Optional[str]:
-        moved = 0.0 if self._base is None else watts - self._base
+        # The first sample is its own base, and a NaN reading stays NaN
+        moved = watts - (watts if self._base is None else self._base)
         step = None if abs(moved) < self.threshold else "up" if moved > 0 else "down"
-        held = step == self._pending
+        confirmed = step == self._pending
         # A step reported is no longer pending; a new one waits for the next
-        self._pending = None if held else step
-        if step is None or held:
+        self._pending = None if confirmed else step
+        if step is None or confirmed:
             self._base = watts
-        return step if held else None
+        return step if confirmed else None
 
 
 class Watch:
@@ -121,8 +122,8 @@ class Watch:
         # The least a car draws, or the meter's noise; the step's state is the
         # background-tasks thread's alone, where (vin, step) -> its last read
         volts, phases = master.getVoltageMeasurement()
-        carMinAmps = 5 if phases < 3 else 1
-        least = max(self._settings["emsNoiseWatts"], carMinAmps * volts * phases)
+        minAmpsPerPhase = 5 if phases < 3 else 1
+        least = max(self._settings["emsNoiseWatts"], minAmpsPerPhase * volts * phases)
         self._step, self._triggered = LoadStep(least), {}
         # A leaf: never held across a registry or provider call, or a submit
         self._lock = threading.Lock()
@@ -469,15 +470,12 @@ class Watch:
         source = self._source(v, where, ble, checked[0])
         # A lost car nothing else asks is listened for on the radio's back-off
         scan = None if source else self._listen(v, where, ble, now)
-        if scan is not None:
-            via, scanSecs = scan
-        else:
-            via = None if source is None else source[0]
+        via = scan[0] if scan else (source[0] if source else None)
         why = notWatched(self.master, v) or ("" if via else NO_SOURCE)
         last, at = scanned if scan else checked
         nextAt = None
         if at is not None and seen is not None:
-            secs = scanSecs if scan else self._cadence(seen[0])
+            secs = scan[1] if scan else self._cadence(seen[0])
             back = self._backAt(v, now) if where != HOME else NEVER
             nextAt = max(at + secs, back)
         watched = why in ("", NO_SOURCE)
