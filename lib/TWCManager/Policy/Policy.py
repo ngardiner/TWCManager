@@ -309,9 +309,7 @@ class Policy:
             for module in pricingModules:
                 try:
                     if module["ref"].getCapabilities("Forecasting"):
-                        self.master.queue_background_task(
-                            {"cmd": "getPricingForecast"}
-                        )
+                        self.master.queue_background_task({"cmd": "getPricingForecast"})
                         break
                 except Exception:
                     continue

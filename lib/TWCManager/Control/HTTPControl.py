@@ -883,12 +883,8 @@ def CreateHTTPHandlerClass(master):
                         data["modules"][name] = {
                             "currency": getattr(ref, "currency", ""),
                             "forecast": ref.getPriceForecast(hours),
-                            "cheapWindowActive": getattr(
-                                ref, "cheapWindowActive", 0
-                            ),
-                            "cheapWindowStart": getattr(
-                                ref, "cheapWindowStart", None
-                            ),
+                            "cheapWindowActive": getattr(ref, "cheapWindowActive", 0),
+                            "cheapWindowStart": getattr(ref, "cheapWindowStart", None),
                         }
                     except Exception:
                         continue
