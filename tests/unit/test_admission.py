@@ -398,7 +398,7 @@ def test_a_failed_split_leaves_no_room():
     m, r, v, c, p = finished(limit=90, state="Stopped")
     m.setMaxAmpsToDivideAmongSlaves(32)
     m.controlPass(now=c())
-    assert VIN in m.admission and VIN in m._held
+    assert VIN in m.admission and VIN in m._steady
     points = m.chargingPoints()
     for point in points:
         point.setTargetPower = lambda watts: 1 / 0
@@ -646,7 +646,7 @@ def test_a_car_that_unplugs_while_cut_comes_back_with_its_share():
     assert rates(f) == [16, 5] and VIN in m._cut
     leave(v)
     run(m, r, c, 10)
-    assert VIN not in m._cut and VIN not in m._held
+    assert VIN not in m._cut and VIN not in m._steady
     c.t += 600
     v.observe("pluggedIn", True, "Gen3TWC")
     m.setMaxAmpsToDivideAmongSlaves(16)

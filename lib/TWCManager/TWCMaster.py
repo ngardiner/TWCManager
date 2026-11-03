@@ -89,7 +89,8 @@ def _drawAmps(point) -> float:
     return max((v.value("actualCurrent") or 0 for v in charging), default=0)
 
 
-def _draws(point, budgets) -> set:
+def _budgetsOf(point, budgets) -> set:
+    # The names of the budgets the point draws from
     return budgets.keys() & {"all", *point.controllers}
 
 
@@ -208,8 +209,9 @@ class TWCMaster:
         self.vehicleRegistry.removed = self._vehicleRemoved
         self.reconciler = VehicleReconciler(self)
         # The control tick's admission (the cars with room), the cars that
-        # would charge, and each car's (room, state, draw, roomSince, since)
-        self.admission, self._willing, self._held = frozenset(), set(), {}
+        # would charge, and each car's last steady reading:
+        # (room, chargingState, draw, roomSince, steadySince)
+        self.admission, self._willing, self._steady = frozenset(), set(), {}
         # The policy's charge limit: None while it sets none, UNDECIDED before
         # its first pass
         self.policyLimit = UNDECIDED
@@ -630,21 +632,22 @@ class TWCMaster:
         self._followAdmission(self.admission - placed, None, now)
         # A car no point serves has gone: it comes back with no hold or cut
         self._cut &= placed
-        for key in self._held.keys() - placed - self.admission:
-            del self._held[key]
+        for key in self._steady.keys() - placed - self.admission:
+            del self._steady[key]
 
     def _followAdmission(self, keys, point, now) -> None:
-        # Wanted charging follows admission, each change once it has held
-        # startStopDelay with the draw steady: the EMS may read low once, a
-        # cut mid-negotiation could strand a car, and power at the edge must
-        # not toggle a command each pass. A fixed policy has no such noise,
-        # so it waits for nothing. Only a first start, or a Gen2's (its offer
-        # drops our stop), goes at once. At a Gen2 only protocol 2 stops, and
-        # only a draw over 4 A (one ramping or finishing is left alone); an
-        # anonymous car is left to its Gen2, as elsewhere it would fan out
+        # Wanted charging follows admission. Each change waits until the
+        # car's room, state and draw have held steady for startStopDelay:
+        # the EMS may read low once, a cut mid-negotiation could strand a
+        # car, and power at the edge must not toggle a command each pass.
+        # A fixed policy has no such noise, so it waits for nothing. Only a
+        # first start, or a start at a Gen2 (whose offer drops our stop),
+        # goes at once. At a Gen2 only protocol 2 stops, and only a draw
+        # over 4 A; a car ramping or finishing is left alone. An anonymous
+        # car is left to its Gen2, as anywhere else it would fan out.
         policy = self.getModuleByName("Policy")
         green = policy is None or policy.policyIsGreen()
-        hold = self.config["config"].get("startStopDelay", 60) if green else -1
+        delaySecs = self.config["config"].get("startStopDelay", 60) if green else -1
         ends = getattr(point, "localEndpoints", ())
         gen2 = [e for e in ends if hasattr(e, "pointAmps")]
         drawing = point is not None and _drawing(point)
@@ -653,20 +656,23 @@ class TWCMaster:
                 continue
             # The car's own readings, the same at each point it may be on
             room = v.key in self.admission
-            seen = (room, v.value("chargingState"), v.value("actualCurrent") or 0)
-            last = self._held.get(v.key)
-            if not last or last[:2] != seen[:2] or abs(last[2] - seen[2]) > 0.8:
-                begun = last[3] if last and last[0] == room else now
-                last = self._held[v.key] = (*seen, begun, now)
-            held = now - last[4] > hold
-            if room and now - last[3] > hold:
+            state, draw = v.value("chargingState"), v.value("actualCurrent") or 0
+            wasRoom, wasState, wasDraw, roomSince, steadySince = self._steady.get(
+                v.key, (None, None, 0, now, now)
+            )
+            if (wasRoom, wasState) != (room, state) or abs(wasDraw - draw) > 0.8:
+                roomSince = roomSince if wasRoom == room else now
+                steadySince = now
+                self._steady[v.key] = (room, state, draw, roomSince, steadySince)
+            settled = now - steadySince > delaySecs
+            if room and now - roomSince > delaySecs:
                 # Its cut ends on room alone: a draw at the minimum may wander
                 self._cut -= {v.key}
             want = getattr(self.desired.get(v.key, CHARGING), "value", None)
             if (
                 room
                 and v.key in self._willing
-                and (want is None or want is False and held)
+                and (want is None or (want is False and settled))
             ):
                 if not satisfied(CHARGING, True, known(v, CHARGING, True)):
                     self.cancelStopCarsCharging(v.key)
@@ -681,7 +687,7 @@ class TWCMaster:
                 # Each pass: in mode 1 a stop that has not taken lowers the
                 # limit. Until then the stop waits, and one undelivered is moot
                 sent = self.desired.record(v.key, CHARGING).lastSentAt
-                if held:
+                if settled:
                     self.stopCarsCharging(v.key)
                 elif want is not False or sent < self.desired.get(v.key, CHARGING).at:
                     self.cancelStopCarsCharging(v.key)
@@ -719,24 +725,27 @@ class TWCMaster:
         """
         try:
             points = self.chargingPoints()
-            pool, given, left, budgets = self._admit(points)
-            # The admitted points share what the held ones leave at one water
+            seated, held, shared, budgets = self._admit(points)
+            # The seated points share what the held ones leave at one water
             # level. Where a budget would be exceeded, its points share it
             # alone, the rest what remains
-            while pool:
-                share = waterLevel(pool, left["all"])
+            given = dict(held)
+            while seated:
+                share = waterLevel(seated, shared["all"])
                 spent = {
-                    c: sum(w for p, w in share.items() if c in _draws(p, left))
-                    for c in left
+                    b: sum(w for p, w in share.items() if b in _budgetsOf(p, shared))
+                    for b in shared
                 }
-                over = next((c for c in left if spent[c] > left[c]), None)
-                group = [p for p in pool if over in _draws(p, left)] if over else pool
-                share = waterLevel(group, left[over]) if over else share
+                over = next((b for b in shared if spent[b] > shared[b]), None)
+                group = seated
+                if over:
+                    group = [p for p in seated if over in _budgetsOf(p, shared)]
+                    share = waterLevel(group, shared[over])
                 for p in group:
                     given[p] = share[p]
-                    for c in _draws(p, left):
-                        left[c] -= share[p]
-                pool = [p for p in pool if p not in group]
+                    for budget in _budgetsOf(p, shared):
+                        shared[budget] -= share[p]
+                seated = [p for p in seated if p not in group]
             # A car comes up to a new share at once, but another comes down
             # to its own only as it ramps: each point gets no more than what
             # the others' shares, or their draws where higher, leave in each
@@ -747,13 +756,13 @@ class TWCMaster:
                 if not p.isReadOnly
             }
             for p, watts in list(given.items()):
-                for c in _draws(p, budgets):
+                for budget in _budgetsOf(p, budgets):
                     others = sum(
                         w
                         for q, w in taken.items()
-                        if q is not p and c in _draws(q, budgets)
+                        if q is not p and budget in _budgetsOf(q, budgets)
                     )
-                    watts = min(watts, max(budgets[c] - others, p.minPower))
+                    watts = min(watts, max(budgets[budget] - others, p.minPower))
                 given[p] = watts
             # Points neither admitted nor held get a target of 0. For an idle Gen2 TWC that
             # 0 goes out as its hardware minimum (the TWC treats an offer of 0
@@ -778,24 +787,34 @@ class TWCMaster:
         return points
 
     def _admit(self, points) -> tuple:
-        # Drawing points first, so a charging car keeps its seat; then, in
-        # point order, those that want power or whose car would charge, each
-        # while its minimum fits what is left in every budget it draws from.
-        # self.admission names their cars, then in turn those at other points
-        # whose minimum fits what is left (two never share it): the room a
-        # start would find. The policy's amps convert at the voltage the TWCs
-        # measure, as they convert back. A point drawing without a seat is
-        # held at its minimum, counted, while the hold decides whether the
-        # want of room lasts (a Gen2's 0 offer is its minimum already)
+        # Points that want power come first, and among those the ones already
+        # drawing, so a charging car keeps its seat and admission does not
+        # flap; ties keep point order. Each is admitted while its minimum
+        # fits every budget it draws from: seated if it wants power, else on
+        # standby, its minimum kept as the room a start would find. A point
+        # whose car was cut goes on standby, held at its minimum. A drawing
+        # point that does not fit is held at its minimum too, unless it is a
+        # Gen2, while the start and stop delay decides whether the want of
+        # room lasts.
+        # Returns the seated, the held (each at its minimum, in watts), what
+        # the budgets leave the seated to share, and the budgets.
+        # The policy's amps convert at the voltage the TWCs measure, as they
+        # convert back
         available = self.convertAmpsToWatts(self.getMaxAmpsToDivideAmongSlaves())
         budgets = dict(self._budgets(), all=available)
         cars = self.vehicleRegistry.vehicles()
         willing = {v.key for v in cars if v.vin and wouldCharge(self, v)}
-        left, seated, room, self._willing = dict(budgets), [], [], willing
-        held, shared = {}, dict(budgets)
+        self._willing = willing
+        left, shared, seated, standby, held = dict(budgets), dict(budgets), [], [], {}
 
         def wanted(p):
             return p.wantsToCharge or _carsAt(p) & willing
+
+        def hold(p, need):
+            # At its minimum, which the seated do not share
+            held[p] = need
+            for budget in _budgetsOf(p, shared):
+                shared[budget] -= need
 
         for p in sorted(points, key=lambda p: (not wanted(p), not _drawing(p))):
             if p.isReadOnly:
@@ -803,22 +822,28 @@ class TWCMaster:
             need = p.minPower
             if p.maxPower < need <= left["all"] and wanted(p):
                 self._noteRefusedPoint(p, left["all"])
-            elif need <= p.maxPower and all(need <= left[c] for c in _draws(p, left)):
+            elif need <= p.maxPower and all(
+                need <= left[b] for b in _budgetsOf(p, left)
+            ):
                 # One cut to its minimum stays there until room has held, or
                 # power at the edge would re-rate it each pass
                 cut = _carsAt(p) & self._cut
-                (seated if wanted(p) and not cut else room).append(p)
-                held.update({p: need} if cut else {})
-                for c in _draws(p, left):
-                    left[c] -= need
-                    shared[c] -= need if cut else 0
+                if cut:
+                    hold(p, need)
+                if wanted(p) and not cut:
+                    seated.append(p)
+                else:
+                    standby.append(p)
+                for budget in _budgetsOf(p, left):
+                    left[budget] -= need
             elif need <= p.maxPower and _drawing(p) and "Gen2TWCs" not in p.controllers:
-                # An anonymous car is never stopped, so never held back
-                held[p] = need
+                # A Gen2's 0 offer is its minimum already. An anonymous car is
+                # never stopped, so never held back
+                hold(p, need)
                 self._cut |= {k for k in _carsAt(p) if not isAnonKey(k)}
-                for c in _draws(p, left):
-                    left[c], shared[c] = left[c] - need, shared[c] - need
-        admission = set().union(*map(_carsAt, room + seated))
+                for budget in _budgetsOf(p, left):
+                    left[budget] -= need
+        admission = set().union(*map(_carsAt, standby + seated))
         if left["all"] >= self.convertAmpsToWatts(VehicleEndpoint.MIN_AMPS):
             # A car on no point of ours may start on what is left
             admission |= {v.key for v in cars}.difference(*map(_carsAt, points))
