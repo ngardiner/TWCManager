@@ -263,8 +263,9 @@ def test_fleet_start_sends_the_limit_first(requests_mock, monkeypatch):     # Ta
     assert sent == ["set_charge_limit", "charge_start"]                     # the limit before the start, no wake (online)
     assert requests_mock.request_history[0].url == FLEET_CAR                # the free online check comes first
 
-def test_fleet_wake_comes_after_a_free_online_check(requests_mock):         # paid counted
+def test_fleet_wake_comes_after_a_free_online_check(requests_mock, monkeypatch):   # paid counted
     m, r, v, c, api = fleetOnTwc(requests_mock, state="asleep"); car = v.attachment("TeslaAPI")
+    monkeypatch.setattr(time, "sleep", lambda s: None)                  # the car never wakes: all 45 s of polls would be real time
     requests_mock.post(re.compile(r".*/wake_up"), json={"response": {"state": "asleep"}})
     car.firstChargeNeededTime = time.time() - 600; car.lastChargeNeededTime = time.time()                            # the wake hold is over
     m.startCarsCharging(VIN); r.pass_()
