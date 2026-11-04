@@ -10,6 +10,7 @@ import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Pricing.Forecast import (
     cheapestWindow,
+    latchedWindow,
     priceRange,
     serialise,
     windowActive,
@@ -280,16 +281,21 @@ class AmberPricing:
             self.priceForecast
         ) or (0, 0)
 
-        best = None
+        now = datetime.now(timezone.utc)
+        previous, self.cheapWindowStart = self.cheapWindowStart, None
         if self.cheapWindowHours and self.cheapWindowHours > 0:
-            best = self.getCheapestWindow(
+            self.cheapWindowStart = latchedWindow(
+                previous,
                 self.cheapWindowHours,
-                self.cheapWindowStartHour,
-                self.cheapWindowEndHour,
+                now,
+                lambda: self.getCheapestWindow(
+                    self.cheapWindowHours,
+                    self.cheapWindowStartHour,
+                    self.cheapWindowEndHour,
+                ),
             )
-        self.cheapWindowStart = best["startTimestamp"] if best else None
         self.cheapWindowActive = windowActive(
-            self.cheapWindowStart, self.cheapWindowHours, datetime.now(timezone.utc)
+            self.cheapWindowStart, self.cheapWindowHours, now
         )
 
     def getPriceForecast(self, hoursAhead=24):

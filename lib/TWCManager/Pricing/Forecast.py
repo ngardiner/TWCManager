@@ -75,3 +75,13 @@ def serialise(forecast, hoursAhead, slotMinutes=30):
         entry["timestamp"] = entry["timestamp"].isoformat()
         out.append(entry)
     return out
+
+
+def latchedWindow(previousStart, hours, now, search):
+    """The cheapest window's start: the one already under way, if now is in
+    it, else search()'s. A forecast only looks ahead, so once a window has
+    begun a fresh search would find a later one and cut it short."""
+    if windowActive(previousStart, hours, now):
+        return previousStart
+    best = search()
+    return best["startTimestamp"] if best else None

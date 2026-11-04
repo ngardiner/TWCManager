@@ -8,6 +8,7 @@ import pytest
 
 from TWCManager.Pricing.Forecast import (
     cheapestWindow,
+    latchedWindow,
     priceRange,
     serialise,
     windowActive,
@@ -94,3 +95,12 @@ def test_window_spans_dst_change():
     ]
     best = cheapestWindow(fc, 6, tz=ny)
     assert best["startTimestamp"] == "2026-11-01T00:00:00-04:00"
+
+
+def test_latched_window_holds_until_it_ends():
+    prev = "2026-07-15T01:00:00+00:00"
+    inside = datetime(2026, 7, 15, 3, 0, tzinfo=timezone.utc)
+    assert latchedWindow(prev, 4, inside, lambda: {"startTimestamp": "x"}) == prev
+    after = datetime(2026, 7, 15, 5, 0, tzinfo=timezone.utc)
+    assert latchedWindow(prev, 4, after, lambda: {"startTimestamp": "x"}) == "x"
+    assert latchedWindow(None, 4, after, lambda: None) is None
