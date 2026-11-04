@@ -38,12 +38,19 @@ def _inWindow(window, now):
     return start <= minute < end if start < end else minute >= start or minute < end
 
 
-def touPeriodAt(tariff, now):
-    """The period label (ON_PEAK, OFF_PEAK, ...) a Tesla tariff gives for now,
-    a datetime in the site's local time; "" if no season covers it."""
+def siteZone(zone):
+    """The site's time zone, or None to use the host's clock."""
+    try:
+        return ZoneInfo(zone)
+    except (KeyError, TypeError, ValueError):  # no zoneinfo, no zone, unknown zone
+        return None
+
+
+def activeSeason(tariff, now):
+    """(name, season) of the tariff season covering now, or None."""
     seasons = tariff.get("seasons") if isinstance(tariff, dict) else None
     best = None
-    for season in seasons.values() if isinstance(seasons, dict) else ():
+    for name, season in seasons.items() if isinstance(seasons, dict) else ():
         try:
             span = _seasonSpan(season, now)
         except (AttributeError, TypeError):
@@ -51,10 +58,37 @@ def touPeriodAt(tariff, now):
         # Seasons should not overlap, but a single-day season added inside its
         # parent (a critical-peak day) must win while it lasts
         if span is not None and (best is None or span < best[0]):
-            best = (span, season)
-    if best is None:
+            best = (span, name, season)
+    return best[1:] if best else None
+
+
+def tariffPriceAt(tariff, now):
+    """The energy price a tariff (or its sell_tariff) gives for now, in its
+    currency per kWh; None if it prices nothing then. ALL rates apply to
+    every period, so they add to the period's own rate."""
+    found = activeSeason(tariff, now)
+    charges = tariff.get("energy_charges") if found else None
+    if not isinstance(charges, dict):
+        return None
+    label = touPeriodAt(tariff, now)
+    parts = []
+    for season in dict.fromkeys((found[0], "ALL")):  # a season may be named ALL
+        rates = charges.get(season)
+        rates = rates.get("rates") if isinstance(rates, dict) else None
+        if isinstance(rates, dict):
+            parts += [rates[key] for key in {label, "ALL"} if key in rates]
+    if not parts or not all(isinstance(p, (int, float)) for p in parts):
+        return None
+    return float(sum(parts))
+
+
+def touPeriodAt(tariff, now):
+    """The period label (ON_PEAK, OFF_PEAK, ...) a Tesla tariff gives for now,
+    a datetime in the site's local time; "" if no season covers it."""
+    found = activeSeason(tariff, now)
+    if found is None:
         return ""
-    periods = best[1].get("tou_periods")
+    periods = found[1].get("tou_periods")
     for label, windows in periods.items() if isinstance(periods, dict) else ():
         if isinstance(windows, dict):  # tariff_content_v2 wraps each list
             windows = windows.get("periods")
@@ -174,15 +208,7 @@ class TeslaPowerwall2:
         tariff, zone = self.getTariff()
         if not isinstance(tariff, dict):
             return ""
-        try:
-            now = datetime.now(ZoneInfo(zone))
-        except (
-            KeyError,
-            TypeError,
-            ValueError,
-        ):  # no zoneinfo (None) or an unknown zone
-            now = datetime.now()
-        return touPeriodAt(tariff, now)
+        return touPeriodAt(tariff, datetime.now(siteZone(zone)))
 
     @property
     def stormWatch(self):

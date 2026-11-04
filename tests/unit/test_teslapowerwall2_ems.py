@@ -57,6 +57,35 @@ DUKE_V1 = {"seasons": {
     for name, season in DUKE["seasons"].items()
 }}
 
+# DUKE with buy and sell prices; sell is half of buy
+_CHARGES = {
+    "ALL": {"rates": {"ALL": 0}},
+    "Summer": {"rates": {"OFF_PEAK": 0.158036, "SUPER_OFF_PEAK": 0.146273}},
+    "Winter": {"rates": {"OFF_PEAK": 0.158036, "ON_PEAK": 0.30, "SUPER_OFF_PEAK": 0.146273}},
+}
+DUKE_PRICED = dict(
+    copy.deepcopy(DUKE),
+    currency="USD",
+    energy_charges=copy.deepcopy(_CHARGES),
+    sell_tariff={
+        "seasons": copy.deepcopy(DUKE["seasons"]),
+        "energy_charges": {
+            season: {"rates": {k: v / 2 for k, v in c["rates"].items()}}
+            for season, c in _CHARGES.items()
+        },
+    },
+)
+
+# A one-day critical-peak season inside Winter, with its own rates
+CPP_SEASON = {
+    "fromMonth": 7, "fromDay": 16, "toMonth": 7, "toDay": 16,
+    "tou_periods": {
+        "ON_PEAK": {"periods": [{"toDayOfWeek": 6, "fromHour": 6, "toHour": 9}]},
+        "OFF_PEAK": {"periods": [{"toDayOfWeek": 6, "fromHour": 9, "toHour": 6}]},
+    },
+}
+CPP_RATES = {"rates": {"ON_PEAK": 0.90, "OFF_PEAK": 0.158036}}
+
 
 class TestTeslaPowerwall2Initialization:
     """Test TeslaPowerwall2 module initialization."""
@@ -382,6 +411,78 @@ class TestTouPeriodAt:
             {"seasons": {"S": dict(year, fromMonth="x")}},
         ):
             assert self._at(bad, 2026, 7, 15, 15, 0) in ("", "OFF_PEAK")
+
+
+class TestTariffPriceAt:
+    """The price a tariff's energy_charges give for a moment in site time."""
+
+    def _at(self, tariff, *when):
+        from TWCManager.EMS.TeslaPowerwall2 import tariffPriceAt
+
+        return tariffPriceAt(tariff, datetime(*when))
+
+    def test_peak_price(self):
+        assert self._at(DUKE_PRICED, 2026, 7, 15, 15, 0) == 0.30
+
+    def test_season_wrap_price(self):
+        assert self._at(DUKE_PRICED, 2026, 1, 10, 3, 0) == 0.146273
+
+    def test_all_rates_add(self):
+        t = copy.deepcopy(DUKE_PRICED)
+        t["energy_charges"]["ALL"]["rates"] = {"ALL": 0.01, "ON_PEAK": 0.02}
+        t["energy_charges"]["Winter"]["rates"]["ALL"] = 0.04
+        assert self._at(t, 2026, 7, 15, 15, 0) == pytest.approx(0.37)
+        assert self._at(t, 2026, 7, 15, 21, 0) == pytest.approx(0.208036)
+
+    def test_flat_tariff_prices_every_hour(self):
+        flat = {
+            "seasons": {"Year": {"fromMonth": 1, "fromDay": 1, "toMonth": 12,
+                                 "toDay": 31, "tou_periods": {}}},
+            "energy_charges": {"ALL": {"rates": {"ALL": 0.25}}},
+        }
+        assert self._at(flat, 2026, 3, 3, 17, 0) == 0.25
+
+    def test_label_without_rate_is_unknown(self):
+        t = copy.deepcopy(DUKE_PRICED)
+        del t["energy_charges"]["Winter"]["rates"]["ON_PEAK"]
+        del t["energy_charges"]["ALL"]
+        assert self._at(t, 2026, 7, 15, 15, 0) is None
+
+    def test_cpp_season_uses_its_own_rates(self):
+        t = copy.deepcopy(DUKE_PRICED)
+        t["seasons"]["CPP"] = CPP_SEASON
+        t["energy_charges"]["CPP"] = CPP_RATES
+        assert self._at(t, 2026, 7, 16, 7, 0) == 0.90
+        assert self._at(t, 2026, 7, 17, 7, 0) == 0.158036
+
+    def test_sell_tariff_resolves_on_its_own_seasons(self):
+        assert self._at(DUKE_PRICED["sell_tariff"], 2026, 7, 15, 15, 0) == 0.15
+
+    def test_no_charges_or_malformed_is_unknown(self):
+        for bad in (
+            {},
+            None,
+            DUKE,
+            dict(DUKE, energy_charges=None),
+            dict(DUKE, energy_charges={"Winter": "x"}),
+            dict(DUKE, energy_charges={"Winter": {"rates": {"ON_PEAK": "x"}}}),
+        ):
+            assert self._at(bad, 2026, 7, 15, 15, 0) is None
+
+    def test_season_named_all_counts_once(self):
+        flat = {
+            "seasons": {"ALL": {"fromMonth": 1, "fromDay": 1, "toMonth": 12,
+                                "toDay": 31, "tou_periods": {}}},
+            "energy_charges": {"ALL": {"rates": {"ALL": 0.2}}},
+        }
+        assert self._at(flat, 2026, 3, 3, 17, 0) == 0.2
+
+    def test_site_zone(self):
+        from TWCManager.EMS.TeslaPowerwall2 import siteZone
+
+        assert siteZone(None) is None and siteZone("Not/AZone") is None
+        pytest.importorskip("zoneinfo")
+        assert siteZone("America/New_York") is not None
 
 
 class TestTouPeriodProperty:
