@@ -247,6 +247,17 @@ class TestPricingPolicyValue:
             "modules.StaticPricing.importPrice", "gt", "config.maxImportPrice", False
         ) is False
 
+    def test_bool_still_compares_numerically(self, policy):
+        assert policy.doesConditionMatch(True, "gte", 1, False) is True
+
+    def test_unresolved_module_never_matches_numeric(self, policy):
+        # An unloaded module leaves the macro text; comparing it with a number
+        # must not match, nor raise and abort the whole evaluation
+        for cond in ("gt", "gte", "lt", "lte"):
+            assert policy.doesConditionMatch(
+                "modules.AmberPricing.importPrice", cond, 0.5, False
+            ) is False
+
 
 class TestCheckConditions:
     """Test multiple condition checking (AND/OR logic)."""
