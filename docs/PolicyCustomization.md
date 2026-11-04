@@ -270,14 +270,15 @@ The values in a policy definition are:
     - `minBatteryLevelAtHome`:  The lowest battery level (0-100) of any Tesla
       currently believed to be at home (probably-home cars included); `10000` if
       unknown / no cars are home.
-  - From a Pricing module (`StaticPricing`, `aWATTarPricing`, `AmberPricing`;
+  - From a Pricing module (`StaticPricing`, `aWATTarPricing`, `AmberPricing`,
+    `TeslaPricing`;
     see `docs/modules/Pricing_*.md`), when one is configured:
     - `importPrice`:  The current electricity import price, in currency per kWh.
       With wholesale providers this can be negative.
     - `exportPrice`:  The current export (feed-in) price, in currency per kWh.
     - `spikeStatus` / `renewables` (Amber only):  The wholesale spike state and
       the current renewables percentage.
-    - `cheapWindowActive` (forecasting modules, e.g. Amber):  `1` while the
+    - `cheapWindowActive` (forecasting modules: Amber, Tesla):  `1` while the
       current time is inside the cheapest forecast window (requires a
       `cheapWindow` to be configured on the module), otherwise `0`.
     - `forecastMinPrice` / `forecastMaxPrice` (forecasting modules):  The lowest
@@ -395,7 +396,8 @@ charging is unaffected.
 
 #### Charging in the cheapest forecast window
 
-A pricing module that offers the `Forecasting` capability (e.g. Amber) can look
+A pricing module that offers the `Forecasting` capability (Amber, or Tesla for
+the rate plan set in the Tesla app) can look
 ahead over the price forecast and tell policy when the current time is inside
 the cheapest contiguous block of the day.  Configure a `cheapWindow` on the
 module (the number of hours you need, with optional local-time bounds), then

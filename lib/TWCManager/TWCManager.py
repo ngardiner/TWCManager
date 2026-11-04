@@ -120,6 +120,7 @@ modules_available = [
     "Pricing.StaticPricing",
     "Pricing.aWATTarPricing",
     "Pricing.AmberPricing",
+    "Pricing.TeslaPricing",
     "Status.HASSStatus",
     "Status.MQTTStatus",
 ]
