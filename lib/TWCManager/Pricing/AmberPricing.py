@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 import requests
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
+from TWCManager.Pricing.Forecast import (
+    cheapestWindow,
+    priceRange,
+    serialise,
+    windowActive,
+)
 
 logger = LoggerFactory.get_logger("Amber", "Pricing")
 
@@ -270,55 +276,28 @@ class AmberPricing:
         # Derive min/max price across the horizon and whether we are currently
         # inside the cheapest contiguous window. All attributes are plain
         # numbers so the policy engine can read them directly.
-        if not self.priceForecast:
-            self.forecastMinPrice = 0
-            self.forecastMaxPrice = 0
-            self.cheapWindowActive = 0
-            self.cheapWindowStart = None
-            return
+        self.forecastMinPrice, self.forecastMaxPrice = priceRange(
+            self.priceForecast
+        ) or (0, 0)
 
-        prices = [entry["importPrice"] for entry in self.priceForecast]
-        self.forecastMinPrice = min(prices)
-        self.forecastMaxPrice = max(prices)
-
-        if not self.cheapWindowHours or self.cheapWindowHours <= 0:
-            # No window configured: nothing drives charging, stay inert.
-            self.cheapWindowActive = 0
-            self.cheapWindowStart = None
-            return
-
-        best = self.getCheapestWindow(
-            self.cheapWindowHours,
-            self.cheapWindowStartHour,
-            self.cheapWindowEndHour,
+        best = None
+        if self.cheapWindowHours and self.cheapWindowHours > 0:
+            best = self.getCheapestWindow(
+                self.cheapWindowHours,
+                self.cheapWindowStartHour,
+                self.cheapWindowEndHour,
+            )
+        self.cheapWindowStart = best["startTimestamp"] if best else None
+        self.cheapWindowActive = windowActive(
+            self.cheapWindowStart, self.cheapWindowHours, datetime.now(timezone.utc)
         )
-        if not best:
-            self.cheapWindowActive = 0
-            self.cheapWindowStart = None
-            return
-
-        self.cheapWindowStart = best["startTimestamp"]
-        # Are we inside the window right now?
-        start_dt = datetime.fromisoformat(best["startTimestamp"])
-        window_seconds = self.cheapWindowHours * 3600
-        now_utc = datetime.now(timezone.utc)
-        delta = (now_utc - start_dt).total_seconds()
-        if 0 <= delta < window_seconds:
-            self.cheapWindowActive = 1
-        else:
-            self.cheapWindowActive = 0
 
     def getPriceForecast(self, hoursAhead=24):
         # Return a JSON-serialisable copy of the forecast for the API/UI.
         if not self.status:
             return []
         self._updateForecast(max(hoursAhead, self.cheapWindowHours or 0))
-        out = []
-        for entry in self.priceForecast[: int(hoursAhead) * 2]:
-            serialised = dict(entry)
-            serialised["timestamp"] = entry["timestamp"].isoformat()
-            out.append(serialised)
-        return out
+        return serialise(self.priceForecast, hoursAhead)
 
     def getCheapestWindow(self, numHours, startHour=None, endHour=None):
         # Find the cheapest contiguous numHours window within an optional local
@@ -326,55 +305,5 @@ class AmberPricing:
         # avgPrice, totalCost) or None.
         if not self.status:
             return None
-
         self._updateForecast(48)
-
-        if not self.priceForecast:
-            return None
-
-        if numHours <= 0 or numHours > 24:
-            return None
-
-        local_hours = [
-            entry["timestamp"].astimezone().hour for entry in self.priceForecast
-        ]
-        window_slots = int(numHours) * 2
-
-        best = None
-        for i, entry in enumerate(self.priceForecast):
-            entry_hour = local_hours[i]
-
-            # Apply an explicit time-of-day filter only when bounds are given.
-            if startHour is not None:
-                if endHour is not None:
-                    if startHour <= endHour:
-                        if not (startHour <= entry_hour < endHour):
-                            continue
-                    else:
-                        if not (entry_hour >= startHour or entry_hour < endHour):
-                            continue
-                else:
-                    if entry_hour < startHour:
-                        continue
-
-            if i + window_slots > len(self.priceForecast):
-                break
-
-            window = self.priceForecast[i : i + window_slots]
-            if len(window) < window_slots:
-                continue
-
-            total = 0
-            for e in window:
-                total += e["importPrice"]
-            avg_price = total / len(window)
-
-            if best is None or avg_price < best["avgPrice"]:
-                best = {
-                    "startHour": entry_hour,
-                    "startTimestamp": entry["timestamp"].isoformat(),
-                    "avgPrice": avg_price,
-                    "totalCost": avg_price * numHours,
-                }
-
-        return best
+        return cheapestWindow(self.priceForecast, numHours, startHour, endHour)
