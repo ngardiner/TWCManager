@@ -347,7 +347,7 @@ class VehicleReconciler(threading.Thread):
         paid = [p for p in cands if _tier(p, capability) >= C.TIER_BILLED]
         freeChannel = self.desired.free(key)
         # Free failures from before the car came back say nothing of it here
-        returnedAt = Presence.returned(vehicle)
+        returnedAt = Presence.returnedAt(vehicle)
         freeFailed = not free or (
             freeChannel.failingSince is not None
             and freeChannel.lastAttemptAt >= returnedAt

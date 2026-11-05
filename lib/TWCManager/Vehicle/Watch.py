@@ -9,6 +9,7 @@ import logging
 import math
 import threading
 import time
+from collections import namedtuple
 from typing import Optional
 
 from .Presence import HOME, NEVER, _ble, _fix, _FT_PER_DEGREE, asleep, decide, lastLife
@@ -35,7 +36,10 @@ _CADENCE_OF = {HOME_CHARGING: HOME_AWAKE, UNKNOWN: AWAY_AWAKE}
 NO_SOURCE, NAMED, COVERED = "no status source", "named by TWC ", "covered by "
 MISS, AWAKE = "no answer", (HOME_AWAKE, HOME_CHARGING, AWAY_AWAKE)
 # A failed read asked for, retried as its ask was: courtesy-bounded or not
-RETRY, TWICE = ("failed, asking again later", "failed, asking again"), "no answer twice"
+RETRY_COURTEOUS, RETRY_EXEMPT = "failed, asking again later", "failed, asking again"
+RETRY, TWICE = (RETRY_COURTEOUS, RETRY_EXEMPT), "no answer twice"
+# A read asked for: its budget class, and whether the courtesy window yields
+Ask = namedtuple("Ask", "cls exempt")
 KINDS = ("status", "read", "scan")
 
 
@@ -97,15 +101,18 @@ class LoadStep:
     # A rise or fall of at least the threshold, reported once the next sample
     # holds it: a spike that falls back says nothing
     def __init__(self, thresholdWatts: float):
-        self.threshold, self._base, self._held = thresholdWatts, None, None
+        self.threshold, self._base, self._pending = thresholdWatts, None, None
 
     def sample(self, watts: float) -> Optional[str]:
+        # The first sample is its own base, and a NaN reading stays NaN
         moved = watts - (watts if self._base is None else self._base)
         step = None if abs(moved) < self.threshold else "up" if moved > 0 else "down"
-        held, self._held = self._held, None if step == self._held else step
-        if step is None or step == held:
+        confirmed = step == self._pending
+        # A step reported is no longer pending; a new one waits for the next
+        self._pending = None if confirmed else step
+        if step is None or confirmed:
             self._base = watts
-        return step if step == held else None
+        return step if confirmed else None
 
 
 class Watch:
@@ -114,15 +121,15 @@ class Watch:
         self._settings = settingsOf(master.config)
         # The least a car draws, or the meter's noise; the step's state is the
         # background-tasks thread's alone, where (vin, step) -> its last read
-        volts, n = master.getVoltageMeasurement()
-        least = max(self._settings["emsNoiseWatts"], (5 if n < 3 else 1) * volts * n)
+        volts, phases = master.getVoltageMeasurement()
+        minAmpsPerPhase = 5 if phases < 3 else 1
+        least = max(self._settings["emsNoiseWatts"], minAmpsPerPhase * volts * phases)
         self._step, self._triggered = LoadStep(least), {}
         # A leaf: never held across a registry or provider call, or a submit
         self._lock = threading.Lock()
         # (vin, job kind) queued or running, and its last answer and time,
         # which with the car's situation now sets the next; vin -> what the
-        # last pass saw; a read asked for: (budget class, whether the
-        # courtesy window yields to it)
+        # last pass saw; vin -> the read asked for, an Ask
         self._inflight, self._last, self._seen, self._want = set(), {}, {}, {}
         # Cars at home the radio stopped hearing, already read for it
         self._unheard = set()
@@ -138,8 +145,8 @@ class Watch:
         # a second miss is settled by the ping's scan whatever the car last
         # said; where none can run, away by the miss itself, at home by a read
         getModule, again = self.master.getModuleByName, last in (MISS, TWICE)
-        api = v.attachment("TeslaAPI") is not None and ble is None
-        api, deaf = api and getModule("TeslaAPI"), again and not scans(ble)
+        useApi = v.attachment("TeslaAPI") is not None and ble is None
+        api, deaf = useApi and getModule("TeslaAPI"), again and not scans(ble)
         if ble is not None and not lost(v, where):
 
             def ping():
@@ -176,8 +183,9 @@ class Watch:
 
     def _ask(self, vin, cls, exempt) -> None:
         # Under the lock; an event outranks a routine ask
-        was = self._want.get(vin, (cls, False))
-        self._want[vin] = (EVENT if EVENT in (cls, was[0]) else cls, exempt or was[1])
+        was = self._want.get(vin, Ask(cls, False))
+        cls = EVENT if EVENT in (cls, was.cls) else cls
+        self._want[vin] = Ask(cls, exempt or was.exempt)
 
     def _watched(self):
         for v in self.master.vehicleRegistry.vehicles():
@@ -250,25 +258,27 @@ class Watch:
     def _visit(self, v, now) -> None:
         vin, (where, _, since) = v.vin, decide(self.master, v)
         state, door = situation(self.master, v, where), v.value("chargePortOpen")
-        seen = (state, where, v.markAt("plugIn"), door)
+        plugIn = v.markAt("plugIn")
+        seen = (state, where, plugIn, door)
         why = notWatched(self.master, v)
         named, ble = bool(why) and why.startswith(NAMED), radio(self.master)
         with self._lock:
             # What a car was before a restart is no news: the first pass
             # only learns it. A car first seen later has arrived
             fresh = seen if not self._started else (None, None, NEVER, None)
-            was, self._seen[vin] = self._seen.get(vin, fresh), seen
+            wasState, wasWhere, wasPlugIn, wasDoor = self._seen.get(vin, fresh)
+            self._seen[vin] = seen
             busy = {kind for key, kind in self._inflight if key == vin}
-            (last, at), (tried, lastRead), (_, scanAt) = (
+            (statusAnswer, statusAt), (readAnswer, readAt), (_, scanAt) = (
                 self._last.get((vin, kind), ("", NEVER)) for kind in KINDS
             )
             # An arrival by any route, a wake, a plug-in (one a read made by
             # reporting it is already read), or an awake car's door opening,
             # which only a car in BLE range, so here, reports
-            woke = was[0] in (HOME_ASLEEP, AWAY_ASLEEP) and seen[0] in AWAKE
-            if woke or where == HOME and was[1] != HOME and since > lastRead:
+            woke = wasState in (HOME_ASLEEP, AWAY_ASLEEP) and state in AWAKE
+            if woke or (where == HOME and wasWhere != HOME and since > readAt):
                 self._ask(vin, EVENT, False)
-            if seen[2] > max(was[2], lastRead) or door and not was[3]:
+            if plugIn > max(wasPlugIn, readAt) or (door and not wasDoor):
                 self._ask(vin, EVENT, True)
             if why and not named:
                 # Covered or not watched: an old ask must not fire later
@@ -282,46 +292,53 @@ class Watch:
         # Only the cloud sees an awake car free to leave go, or come back once
         # it could: it is read once its fix is a courtesy window old
         fixAt, wait = _fix(self.master, v)[1], self._settings["sleepCourtesySecs"]
-        late = now >= max(fixAt, lastRead) + wait and cloudOnly(self.master, v)
-        if late and seen[0] in (HOME_AWAKE, AWAY_AWAKE):
-            want = want or (EVENT, False)
+        late = now >= max(fixAt, readAt) + wait and cloudOnly(self.master, v)
+        if late and state in (HOME_AWAKE, AWAY_AWAKE):
+            want = want or Ask(EVENT, False)
         # That read, and one on its wake, is for where the car is
-        fix = late or woke and cloudOnly(self.master, v)
+        forPosition = late or (woke and cloudOnly(self.master, v))
         if "read" not in busy and (why is None or named):
+            deaf = statusAnswer == TWICE
             self._read(
-                v, seen[0], named, want, tried, lastRead, now, last == TWICE, fix
+                v, state, named, want, readAnswer, readAt, now, deaf, forPosition
             )
-        if "status" not in busy and now >= at + self._cadence(seen[0]):
+        if "status" not in busy and now >= statusAt + self._cadence(state):
             # Coverage counts for the check only when it is due: a feed
             # blip between checks changes nothing
-            source = None if why else self._source(v, where, ble, last)
+            source = None if why else self._source(v, where, ble, statusAnswer)
             if source is None:
                 self._settle(vin, "status", now)
             else:
-                self._submit(v, "status", source[1], source[0])
-        if why is not None:
+                worker, check = source
+                self._submit(v, "status", check, worker)
+        if why is not None or "scan" in busy:
             return
-        listen = "scan" not in busy and self._listen(v, where, ble, now)
-        if listen and now >= scanAt + listen[1]:
-            if listen[0] == "scan":
+        listen = self._listen(v, where, ble, now)
+        if listen is None:
+            return
+        how, secs = listen
+        if now >= scanAt + secs:
+            if how == "scan":
                 ble.requestRangeScan(vin)
                 self._settle(vin, "scan", now)
             else:
                 self._submit(v, "scan", lambda: ble.ping(vin, scan=False), "ble")
 
-    def _read(self, v, state, named, want, tried, lastRead, now, deaf, fix) -> None:
+    def _read(
+        self, v, state, named, want, readAnswer, readAt, now, deaf, forPosition
+    ) -> None:
         # The charge read due now, if any; deaf: the radio missed it twice;
-        # fix: the read is for the car's position.
+        # forPosition: the read is for the car's position.
         # A TWC-named car is touched only for its plug-in, on request, and
         # while its TWC reports current
         if state in (HOME_ASLEEP, AWAY_ASLEEP):
             # Never woken for a read: an arrival waits for the wake
             return
-        if tried in RETRY and now >= lastRead + self._settings["chargingReadSecs"]:
+        if readAnswer in RETRY and now >= readAt + self._settings["chargingReadSecs"]:
             # A failed read asked for, once more, a charging read's cadence on
-            want = want or (EVENT, bool(RETRY.index(tried)))
-        recent = now < lastRead + self._settings["sleepCourtesySecs"]
-        if want and not want[1] and (named or state == HOME_AWAKE and recent):
+            want = want or Ask(EVENT, readAnswer == RETRY_EXEMPT)
+        recent = now < readAt + self._settings["sleepCourtesySecs"]
+        if want and not want.exempt and (named or (state == HOME_AWAKE and recent)):
             self._take(v.vin, want)
             want = None
         flowing = getattr(twcChargingState(v), "value", None) == "Charging"
@@ -347,12 +364,15 @@ class Watch:
         # read buys the battery level, worth it only where a policy reads it:
         # the car's sleep says when its charge ended
         policy = self.master.getModuleByName("Policy")
-        due = now >= lastRead + secs and (not price or policy and policy.readsBattery())
+        due = now >= readAt + secs and (not price or policy and policy.readsBattery())
         if not want and not (due and order.candidates(v, SET_AMPS)):
             return
         self._take(v.vin, want)
-        cls = want[0] if want else ROUTINE
-        miss = RETRY[want[1]] if cls == EVENT and tried not in RETRY else MISS
+        cls = want.cls if want else ROUTINE
+        if cls == EVENT and readAnswer not in RETRY:
+            miss = RETRY_EXEMPT if want.exempt else RETRY_COURTEOUS
+        else:
+            miss = MISS
         worker = "ble" if found[0].local else "cloud"
 
         def read():
@@ -362,9 +382,9 @@ class Watch:
             # when there is none; a snapshot carries no location, so a read
             # for the position pays. A refusal waits its cadence as a settled
             # read, not a miss
-            if price and not fix:
+            if price and not forPosition:
                 snapshot = order.read(
-                    v, "chargingState", False, ["FleetAPICached"], cutoff=lastRead
+                    v, "chargingState", False, ["FleetAPICached"], cutoff=readAt
                 )
                 if snapshot is not None:
                     return True
@@ -449,8 +469,8 @@ class Watch:
             seen = self._seen.get(v.vin)
         source = self._source(v, where, ble, checked[0])
         # A lost car nothing else asks is listened for on the radio's back-off
-        scan = not source and self._listen(v, where, ble, now)
-        via = (scan or source or (None,))[0]
+        scan = None if source else self._listen(v, where, ble, now)
+        via = scan[0] if scan else (source[0] if source else None)
         why = notWatched(self.master, v) or ("" if via else NO_SOURCE)
         last, at = scanned if scan else checked
         nextAt = None

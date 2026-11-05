@@ -103,7 +103,7 @@ def test_an_unplug_event_newer_than_home_evidence_is_a_departure():
     v.observe("pluggedIn", True, TM)
     later(c)
     v.observe("pluggedIn", False, TM)
-    assert P.decide(m, v) == (P.NOT_HOME, "unplug", c.t) and P.leaving(v) == c.t
+    assert P.decide(m, v) == (P.NOT_HOME, "unplug", c.t) and P.leftAt(v) == c.t
 
 
 def twcNames(m, v, c, state=0x03):
@@ -193,7 +193,7 @@ def test_marks_record_events_when_observed_not_when_evaluated():
     started = c.t
     later(c, 20)  # a 20 s drive, never evaluated in between
     v.observe("shiftState", "P", TM)
-    assert (P.leaving(v), P.arriving(v)) == (started, c.t)
+    assert (P.leftAt(v), P.arrivedAt(v)) == (started, c.t)
     assert P.presence(m, v) == P.PRESUMED  # the drive was seen
 
 
@@ -879,7 +879,7 @@ def test_a_restores_own_ble_reply_re_applies_nothing():
     assert p.calls == [("setChargeLimit", VIN, 90)] and m.heldLimits.get(VIN) is None
     later(c)
     v.observe("bleReach", True, "TeslaBLE")  # the restore's own reply
-    assert P.presence(m, v) == P.HOME and P.leaving(v) > P.arriving(v)
+    assert P.presence(m, v) == P.HOME and P.leftAt(v) > P.arrivedAt(v)
     for _ in range(3):
         later(c, 60)
         m.setPolicyLimit(50, transition=False)
@@ -1615,7 +1615,7 @@ def scanOnly(life):
 @pytest.mark.parametrize("life", [False, True])
 def test_an_attribution_never_reads_a_car_the_scan_alone_answered_for(life):
     m, v, c, b = scanOnly(life)
-    P.pick(m, offered=32, read=True, since=c.t)
+    P.pick(m, offerSource=32, read=True, since=c.t)
     assert b.pings == [VIN] and b.fetched == []
 
 
@@ -1776,7 +1776,7 @@ def test_a_closed_charge_port_while_awake_marks_an_unplug():
 def test_an_open_charge_port_is_not_plug_evidence():
     m, v, c = placed()
     v.observe("chargePortOpen", True, "TeslaBLE")
-    assert v.markAt("plugIn") == P.NEVER and P.pluggedNow(m, v, None) is None
+    assert v.markAt("plugIn") == P.NEVER and P.pluggedNow(m, v, ifUnknown=None) is None
 
 
 def test_check_plug_answers_from_an_awake_closed_door_without_a_read():
@@ -1842,10 +1842,10 @@ def test_a_cached_plug_after_an_unplug_leaves_the_plug_unknown():
     # It places the car on no EVSE, but the unplug is no longer known
     m, v, c = placed()
     v.observe("chargingState", "Disconnected", "FleetAPI")
-    assert P.pluggedNow(m, v, None) is False
+    assert P.pluggedNow(m, v, ifUnknown=None) is False
     later(c, 3600)
     v.observe("chargingState", "Complete", "FleetAPICached")
-    assert P.pluggedNow(m, v, None) is None and P.pluggedNow(m, v) is False
+    assert P.pluggedNow(m, v, ifUnknown=None) is None and P.pluggedNow(m, v) is False
     assert v.markAt("plugIn") == P.NEVER
 
 

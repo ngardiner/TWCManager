@@ -134,7 +134,7 @@ def _wontCharge(master, vehicle) -> Optional[str]:
     elif pending is not None and saved is not None:
         limit = saved.outside
     # Unplugged is known only by a reading
-    plugged = pluggedNow(master, vehicle, None)
+    plugged = pluggedNow(master, vehicle, ifUnknown=None)
     if presence(master, vehicle) == NOT_HOME or plugged is False:
         return "not plugged in here"
     if limit and battery and limit <= battery:
