@@ -214,7 +214,7 @@ def calls(m):
 
 def age(m, seconds):
     # The car has been without room, its draw steady, seconds longer
-    m._held = {key: (*h[:-1], h[-1] - seconds) for key, h in m._held.items()}
+    m._steady = {key: (*h[:-1], h[-1] - seconds) for key, h in m._steady.items()}
 
 
 def test_a_car_drawing_over_4a_offered_zero_is_stopped_after_60s():

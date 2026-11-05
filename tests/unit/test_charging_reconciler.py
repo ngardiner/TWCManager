@@ -27,7 +27,7 @@ def slave(m):
 
 def ready_to_stop(m):
     # The 60 s hold has run: each car without room drew this much for a minute
-    m._held = {k: (*h[:-1], h[-1] - 61) for k, h in m._held.items()}
+    m._steady = {k: (*h[:-1], h[-1] - 61) for k, h in m._steady.items()}
 
 # The heartbeat and the master
 
