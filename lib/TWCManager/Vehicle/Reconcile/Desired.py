@@ -85,16 +85,16 @@ class AttemptRecord:
         paidSends=0,
         paidReached=False,  # one of them got an answer other than UNREACHABLE
         paidAt=None,
-        paidSaw=None,
+        beliefAtPaidSend=None,
         paidRetryDue=False,  # that request failed and its one blind retry is unused
         rearmed=False,  # the desire's one re-arm of its paid sends is used
         # The provider whose wake the car did not answer on the last paid
         # send: the command never went (Reconciler's WAKE_CHECK)
         wakeCheckBy=None,
         settledAt=None,
-        heldAt=None,  # a hold: when, and the paid requests attempts that held made
+        heldAt=None,  # when the last attempt held, sending nothing
         checkedAt=0,  # a cloud hold's last free online check
-        paidSpent=0,
+        paidSpent=0,  # the paid requests (wake, read) that attempts which held made
         unread=0,  # sends that found the current value unreadable (a limit's backstop)
         clearedValue=None,  # the value a clearIf withdrew; set() may take the record back
     )
@@ -315,7 +315,8 @@ class DesiredStore:
                 record.lastOutcome = outcome
                 record.lastOutcomeAt = now
                 record.lastProvider = attempt.provider
-                record.unread += outcome.detail.startswith("rules: could not read")
+                if outcome.detail == O.RULES + O.UNREAD_REASON:
+                    record.unread += 1
             sent = not O.isNotSent(outcome)
             if sent and outcome.kind not in O.EXCLUDING:
                 # Even for a replaced desire: a start still in flight when
@@ -342,19 +343,18 @@ class DesiredStore:
                     record.paidAt = now
             if current and outcome.kind in O.SETTLED and not held:
                 record.settledAt = now
-            if paid or held:
-                pass
-            elif outcome.kind in O.SETTLED or outcome.detail == "pairing":
-                # Inside the pairing window the car answers, refusing the key
-                # until the card is tapped: the channel works, and the paid
-                # fallback waits
-                state.free.success(now)
-            elif sent and (
-                # A failure of the free channel needs a request to it
-                outcome.kind in O.RETRYABLE
-                or outcome.kind == O.REFUSED
-            ):
-                state.free.failure(now)
+            if not (paid or held):
+                if outcome.kind in O.SETTLED or outcome.detail == "pairing":
+                    # Inside the pairing window the car answers, refusing the
+                    # key until the card is tapped: the channel works, and the
+                    # paid fallback waits
+                    state.free.success(now)
+                elif sent and (
+                    # A failure of the free channel needs a request to it
+                    outcome.kind in O.RETRYABLE
+                    or outcome.kind == O.REFUSED
+                ):
+                    state.free.failure(now)
             if outcome.kind == O.REFUSED or (current and outcome.kind in O.EXCLUDING):
                 # UNSUPPORTED can depend on the value: a superseded one's not
                 record.exclude(attempt.provider, outcome.kind)

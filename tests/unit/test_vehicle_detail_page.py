@@ -303,9 +303,9 @@ def test_pending_says_what_the_reconciler_said_over_the_last_outcome():
     m.desired.set(VIN, CHARGING, False, "distributor")
     rec = m.desired.record(VIN, CHARGING)
     rec.lastOutcome, rec.lastOutcomeAt = Outcome(UNREACHABLE), time.time() - 5
-    m.reconciler._said[(VIN, CHARGING)] = "hands off: battery below minChargeLevel"
+    m.reconciler._blockedReasons[(VIN, CHARGING)] = "hands off: battery below minChargeLevel"
     assert pending(m) == {CHARGING: "hands off: battery below minChargeLevel"}
-    m.reconciler._said[(VIN, CHARGING)] = "no provider can deliver"
+    m.reconciler._blockedReasons[(VIN, CHARGING)] = "no provider can deliver"
     assert pending(m) == {CHARGING: "no provider can deliver"}
 
 

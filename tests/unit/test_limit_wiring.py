@@ -69,7 +69,7 @@ def test_no_module_holds_a_copy_of_the_policy_limit():
 # Wiring
 
 def test_master_wires_store_and_reconciler_on_one_clock():
-    m, s = make(); assert m.reconciler.master is m and m.desired._clock is time.time and m.desired.changed == m.reconciler.wake
+    m, s = make(); assert m.reconciler.master is m and m.desired._clock is time.time and m.desired.changed == m.reconciler.nudge
     m.vehicleRegistry.getOrCreate(VIN, "t"); m.desired.set(VIN, CHARGE_LIMIT, 50, "policy"); m.vehicleRegistry.forget(VIN)
     assert m.desired.peek(VIN) is None                                     # registry.removed wired
     assert m.policyLimit is UNDECIDED and m.reconciler.desired is m.desired

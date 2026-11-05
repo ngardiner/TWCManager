@@ -13,8 +13,8 @@ from ..Presence import NOT_HOME, PRESUMED, REACH_WINDOW, asleep, drivingNow, pre
 from ..Providers import Capability as C
 from .Desired import AMPS, CHARGE_LIMIT, CHARGING, FIELD_FOR
 from . import Outcome as O
-from .Belief import uncompleted
-from .Rules import VEHICLE_SOURCES_EXCLUDED, satisfied
+from .Belief import unlessLimitRaised
+from .Rules import TWC_SOURCES, satisfied
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Reconcile")
 
@@ -152,22 +152,22 @@ def runAttempt(reconciler, attempt) -> O.Outcome:
     # unknown, and a billed write never goes blind
     wakeFirst = attempt.wake and not provider.local and provider.declares(C.WAKE)
     try:
-        ble = provider.name == "TeslaBLE" and aspect and not isStop(attempt)
+        bleCommand = provider.name == "TeslaBLE" and aspect and not isStop(attempt)
         state = presence(master, vehicle)
         if provider.module is not None and (state == NOT_HOME or drivingNow(vehicle)):
             early = reconciler.inapplicable(vehicle, attempt)
             if early is not None:
                 return early
         # A message that may not wake leaves a sleeping car alone. The
-        # sleep-safe ping first for a car that may be away, or asleep and not
-        # seen awake lately
-        quiet = ble and not attempt.wake and state != NOT_HOME
-        known = asleep(vehicle, master.vehicleRegistry.now() - REACH_WINDOW)
-        check = state == PRESUMED or quiet and known is None
-        if ble and check and not (quiet and known):
+        # sleep-safe ping goes first to a car that may be away, or to one
+        # that may be asleep and has not been seen awake lately.
+        noWakeBle = bleCommand and not attempt.wake and state != NOT_HOME
+        sleepInWindow = asleep(vehicle, master.vehicleRegistry.now() - REACH_WINDOW)
+        pingFirst = state == PRESUMED or (noWakeBle and sleepInWindow is None)
+        if bleCommand and pingFirst and not (noWakeBle and sleepInWindow is True):
             if not provider.module.ping(vin):
                 return O.Outcome(O.UNREACHABLE, "no BLE answer")
-        if quiet and asleep(vehicle):
+        if noWakeBle and asleep(vehicle):
             return O.ASLEEP
         if wakeFirst:
             early = _wake(provider, vehicle, attempt.capability)
@@ -197,11 +197,9 @@ def runAttempt(reconciler, attempt) -> O.Outcome:
                 force=attempt.force,
                 since=event if recent else None,
             )
-        believed = (
-            vehicle.believed(field, exclude=VEHICLE_SOURCES_EXCLUDED) if field else None
-        )
+        believed = vehicle.believed(field, exclude=TWC_SOURCES) if field else None
         if aspect == CHARGING:
-            believed = uncompleted(vehicle, believed)
+            believed = unlessLimitRaised(vehicle, believed)
         if read and satisfied(aspect, attempt.value, believed):
             return O.Outcome(O.SATISFIED, "read")
         if not (provider.local or attempt.wake or isStop(attempt)):

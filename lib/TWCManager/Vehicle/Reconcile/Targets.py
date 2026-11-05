@@ -37,9 +37,9 @@ def _apply(master, vehicle, limit, decision, restore=False) -> None:
     if limit is None and vehicle.vin not in master.heldLimits.holding():
         master.desired.clear(vehicle.key, CHARGE_LIMIT)
     elif restore:
-        held = master.heldLimits.get(vehicle.vin)
+        saved = master.heldLimits.get(vehicle.vin)
         master.desired.set(
-            vehicle.key, CHARGE_LIMIT, held.outside, "restore", decision, restore=True
+            vehicle.key, CHARGE_LIMIT, saved.outside, "restore", decision, restore=True
         )
     else:
         value = RELEASE if limit is None else limit
@@ -79,6 +79,6 @@ def _restoreDeparted(master) -> None:
         write = vehicle.lastWrite("chargeLimit")
         # <= on purpose: a retained MQTT position redelivered after our write
         # is stamped with that write's time, and is not a new fix
-        if at is None or write is not None and at <= write.at:
+        if at is None or (write is not None and at <= write.at):
             continue
         _apply(master, vehicle, None, True, restore=True)

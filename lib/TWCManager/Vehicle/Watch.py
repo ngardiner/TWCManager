@@ -15,7 +15,7 @@ from .Presence import HOME, NEVER, _ble, _fix, _FT_PER_DEGREE, asleep, decide, l
 from .Presence import AWAY_ASLEEP_SECS, HOME_ASLEEP_SECS, NOT_HOME, covered, presence
 from .Presence import twcVinAt
 from .Providers.Capability import READ_CHARGE, SET_AMPS
-from .Reconcile.Belief import standIn
+from .Reconcile.Belief import twcChargingState
 from .WatchBudget import EVENT, ROUTINE
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Watch")
@@ -324,7 +324,7 @@ class Watch:
         if want and not want[1] and (named or state == HOME_AWAKE and recent):
             self._take(v.vin, want)
             want = None
-        flowing = getattr(standIn(v), "value", None) == "Charging"
+        flowing = getattr(twcChargingState(v), "value", None) == "Charging"
         if not want and not (flowing if named else state == HOME_CHARGING):
             return
         order = self.master.providerOrder

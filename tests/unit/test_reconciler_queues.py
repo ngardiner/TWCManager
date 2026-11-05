@@ -407,7 +407,7 @@ def test_no_callback_lists_or_test_modes_in_lib():
     assert not hasattr(C, "RateLimit") and "rateLimit" not in C.Cost._fields
 
 def test_the_store_and_the_registry_each_call_one_callable_outside_their_locks():
-    m, r = reconciler(); woke = []; r.wake = lambda *a: woke.append(a)
+    m, r = reconciler(); woke = []; r.nudge = lambda *a: woke.append(a)
     assert m.desired.changed.__self__ is r                                   # bound at construction
     m.desired.changed = lambda key, aspect: woke.append((key, aspect, m.desired._lock.locked()))
     m.desired.set(VIN, CHARGING, True, "test"); assert woke == [(VIN, CHARGING, False)]

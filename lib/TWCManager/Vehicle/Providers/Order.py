@@ -1,7 +1,7 @@
 # The fixed provider order: cheapest cost tier first, then the provider's
-# rank, then registration order. Every vehicle operation walks it. Nothing
-# here holds a lock; the provider list is replaced, never mutated, so a walk
-# works on a snapshot.
+# rank, then registration order (the sorts are stable). Every vehicle
+# operation walks it. Nothing here holds a lock; the provider list is
+# replaced, never mutated, so a walk works on a snapshot.
 import json
 import logging
 import time
@@ -40,18 +40,12 @@ class ProviderOrder:
                 return p
         return None
 
-    def _indexed(self):
-        return list(enumerate(self._providers))
-
     def providers(self) -> List[Provider]:
-        return [p for _, p in sorted(self._indexed(), key=lambda e: (e[1].rank, e[0]))]
-
-    def _key(self, provider, capability, index) -> tuple:
-        return (provider.cost(capability).tier, provider.rank, index)
+        return sorted(self._providers, key=lambda p: p.rank)
 
     def ordered(self, capability) -> List[Provider]:
         found = []
-        for index, p in self._indexed():
+        for p in self._providers:
             if capability not in p.declarations():
                 continue
             if self.suppressions.suppressed(p, capability):
@@ -62,8 +56,8 @@ class ProviderOrder:
             except Exception as e:
                 logger.debug("%s available() raised %s", p.name, type(e).__name__)
                 continue
-            found.append((self._key(p, capability, index), p))
-        return [p for _, p in sorted(found, key=lambda e: e[0])]
+            found.append(p)
+        return sorted(found, key=lambda p: (p.cost(capability).tier, p.rank))
 
     def _ready(self, provider, vehicle, capability) -> bool:
         try:

@@ -83,11 +83,11 @@ def test_a_failed_paid_wake_sets_no_retry():
 def test_a_new_desire_resets_the_per_desire_stamps():
     s = DesiredStore(); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
     r.lastFreeAt, r.paidAt, r.paidRetryDue, r.settledAt, r.lastSentAt = 1.0, 2.0, True, 3.0, 4.0
-    r.paidSends, r.paidSaw, r.lastOutcome, r.lastOutcomeAt = 1, 90, O.Outcome(O.UNREACHABLE, "wake held"), 5.0
+    r.paidSends, r.beliefAtPaidSend, r.lastOutcome, r.lastOutcomeAt = 1, 90, O.Outcome(O.UNREACHABLE, "wake held"), 5.0
     assert s.set(VIN, CHARGE_LIMIT, 50, "heartbeat") is False and r.paidAt == 2.0          # unchanged: nothing reset
     s.set(VIN, CHARGE_LIMIT, 60, "policy")
     assert (r.lastFreeAt, r.paidAt, r.paidRetryDue, r.settledAt, r.lastSentAt) == (0, None, False, None, 4.0)
-    assert (r.paidSends, r.paidSaw, r.lastOutcome, r.lastOutcomeAt) == (0, None, None, 0)   # the NOT_SENT hold is the old desire's (I1)
+    assert (r.paidSends, r.beliefAtPaidSend, r.lastOutcome, r.lastOutcomeAt) == (0, None, None, 0)   # the NOT_SENT hold is the old desire's (I1)
 
 def test_a_superseded_attempt_feeds_the_free_channel_but_never_the_new_desire():   # C1
     s = DesiredStore(clock=Clock(1000.0)); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
@@ -174,7 +174,7 @@ def test_a_debug_one_shot_report_changes_nothing():
     assert s.noteOutcome(VIN, None, a, O.Outcome(O.DONE), 100.0, paid=True) is False and s.keys() == []
 
 
-@pytest.mark.parametrize("outcome", [O.Outcome(O.SATISFIED, "read"), O.Outcome(O.SATISFIED, "rules: limit unknown"), O.Outcome(O.UNREACHABLE, "rules: could not read")])
+@pytest.mark.parametrize("outcome", [O.Outcome(O.SATISFIED, "read"), O.Outcome(O.SATISFIED, "rules: limit unknown"), O.Outcome(O.UNREACHABLE, O.RULES + O.UNREAD_REASON)])
 def test_read_and_rules_outcomes_spend_no_send_gap(outcome):                 # deleted-test audit row 77
     c = Clock(0.0); s = DesiredStore(clock=c); s.set(VIN, CHARGE_LIMIT, 50, "policy"); r = s.record(VIN, CHARGE_LIMIT)
     a = attempt("FleetAPI"); r.inFlight = a

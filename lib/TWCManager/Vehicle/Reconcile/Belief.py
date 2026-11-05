@@ -6,7 +6,7 @@ from typing import Optional
 from ..Registry.Fields import FEED_LAG
 from ..Presence import NOT_HOME, pluggedNow, presence
 from .Desired import AMPS, CHARGE_LIMIT, CHARGING, FIELD_FOR
-from .Rules import releases, VEHICLE_SOURCES_EXCLUDED
+from .Rules import releases, TWC_SOURCES
 
 # Sources whose every reading came from the car itself. Exact source
 # names; Fleet Telemetry always counts
@@ -17,21 +17,19 @@ LIVE_READ_SOURCES = frozenset(
 POWER_FLOWING_AMPS = 1.0
 
 
-def _newer(vehicle, field, since, twc=False):
+def newerReadings(vehicle, field, since, twc=False):
     # Each vehicle (or TWC) source's own newest reading of field after since:
     # a republish by one source never hides another's live read
     return [
         obs
         for source, obs in vehicle.reported(field).items()
-        if (source in VEHICLE_SOURCES_EXCLUDED) == twc
-        and obs.at > since
-        and obs.value is not None
+        if (source in TWC_SOURCES) == twc and obs.at > since and obs.value is not None
     ]
 
 
-def standIn(vehicle):
+def twcChargingState(vehicle):
     # The newest TWC current, as the car's charging state
-    reads = _newer(vehicle, "actualCurrent", float("-inf"), twc=True)
+    reads = newerReadings(vehicle, "actualCurrent", float("-inf"), twc=True)
     if not reads:
         return None
     obs = max(reads, key=lambda r: r.at)
@@ -39,7 +37,7 @@ def standIn(vehicle):
     return obs._replace(value="Charging" if flowing else "Stopped")
 
 
-def uncompleted(vehicle, obs):
+def unlessLimitRaised(vehicle, obs):
     # "Complete" read before our last limit write above the battery level
     # (or with the level unknown) is no longer true: the car can charge again
     write = vehicle.lastWrite(FIELD_FOR[CHARGE_LIMIT])
@@ -51,17 +49,17 @@ def uncompleted(vehicle, obs):
 
 
 def known(vehicle, aspect, desired=None):
-    obs = vehicle.believed(FIELD_FOR[aspect], exclude=VEHICLE_SOURCES_EXCLUDED)
+    obs = vehicle.believed(FIELD_FOR[aspect], exclude=TWC_SOURCES)
     if aspect != CHARGING:
         return obs
-    obs, twc = uncompleted(vehicle, obs), standIn(vehicle)
+    obs, twc = unlessLimitRaised(vehicle, obs), twcChargingState(vehicle)
     if obs is None:
         # A car no vehicle source describes (anonymous, non-Tesla): the TWC
         # current stands in. It never adopts
         return twc
-    # For a start, current at the car's TWC now (a heartbeat within
-    # FEED_LAG) and since its last reading is the car charging: without a
-    # live feed that reading may be stale
+    # For a start, the TWC current wins when it is recent (a heartbeat
+    # within FEED_LAG), newer than the car's last reading, and flowing.
+    # Without a live feed the car's reading may be stale.
     fresh = twc and twc.at > max(obs.at, vehicle._clock() - FEED_LAG)
     if desired is True and fresh and twc.value == "Charging":
         return twc
@@ -70,12 +68,12 @@ def known(vehicle, aspect, desired=None):
 
 def newerReading(vehicle, aspect, since) -> bool:
     field = FIELD_FOR[aspect]
-    if aspect == CHARGING and vehicle.believed(field, VEHICLE_SOURCES_EXCLUDED) is None:
-        # Only while known uses the stand-in: for a car a vehicle source
-        # describes, the heartbeat's readings are never evidence
-        obs = standIn(vehicle)
+    if aspect == CHARGING and vehicle.believed(field, TWC_SOURCES) is None:
+        # Only while known uses the TWC's charging state: for a car a vehicle
+        # source describes, the heartbeat's readings are never evidence
+        obs = twcChargingState(vehicle)
         return obs is not None and obs.at > since
-    return bool(_newer(vehicle, field, since))
+    return bool(newerReadings(vehicle, field, since))
 
 
 def reachedCar(vehicle, field, since, beliefAtSend) -> bool:
@@ -83,11 +81,11 @@ def reachedCar(vehicle, field, since, beliefAtSend) -> bool:
     # TeslaMate republishing an unchanged value is no evidence
     return any(
         obs.source in LIVE_READ_SOURCES or obs.value != beliefAtSend
-        for obs in _newer(vehicle, field, since)
+        for obs in newerReadings(vehicle, field, since)
     )
 
 
-def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
+def whyHandsOff(vehicle, aspect, desired, believed, config=None) -> Optional[str]:
     if aspect != CHARGING:
         return None
     config = config or {}
@@ -98,18 +96,18 @@ def handsOff(vehicle, aspect, desired, known, config=None) -> Optional[str]:
             return "battery below minChargeLevel"
         return None
     # Our own write counts until a newer reading
-    limit = vehicle.believed("chargeLimit", VEHICLE_SOURCES_EXCLUDED)
+    limit = vehicle.believed("chargeLimit", TWC_SOURCES)
     limit = limit.value if limit is not None else None
     if battery and limit and battery >= limit:
         # The car would refuse the start
         return "battery at its charge limit"
-    return _refusesStart(vehicle, known, config)
+    return _refusesStart(vehicle, believed, config)
 
 
-def _refusesStart(vehicle, known, config) -> Optional[str]:
+def _refusesStart(vehicle, believed, config) -> Optional[str]:
     # Whatever its limit, the car cannot take a start, or must not get one
-    if known is not None and known.value in ("Disconnected", "NoPower"):
-        return "the car cannot charge (%s)" % known.value
+    if believed is not None and believed.value in ("Disconnected", "NoPower"):
+        return "the car cannot charge (%s)" % believed.value
     if vehicle.value("scheduledChargingPending") is True and config.get(
         "respectVehicleSchedule", True
     ):
@@ -123,12 +121,18 @@ def _wontCharge(master, vehicle) -> Optional[str]:
     # is applied; None when it would (unknown limit or battery: it would)
     key, desired = vehicle.key, master.desired
     pending = desired.get(key, CHARGE_LIMIT)
-    held = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
-    limit, battery = known(vehicle, CHARGE_LIMIT), vehicle.value("batteryLevel")
-    limit = believed = limit and limit.value
+    saved = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
+    battery = vehicle.value("batteryLevel")
+    belief = known(vehicle, CHARGE_LIMIT)
+    believed = belief.value if belief is not None else None
     state = known(vehicle, CHARGING)
-    if pending is not None and not (releases(pending) and not held):
-        limit = held.outside if releases(pending) else pending.value
+    # The limit once pending is applied: a release puts back the saved
+    # outside limit, and with none saved leaves the car's own
+    limit = believed
+    if pending is not None and not releases(pending):
+        limit = pending.value
+    elif pending is not None and saved is not None:
+        limit = saved.outside
     # Unplugged is known only by a reading
     plugged = pluggedNow(master, vehicle, None)
     if presence(master, vehicle) == NOT_HOME or plugged is False:
@@ -146,8 +150,9 @@ def wouldCharge(master, vehicle) -> bool:
 
 
 def whyQuiet(master, vehicle) -> Optional[str]:
-    # Why the car is expected to quiesce, or None when it will charge. Room
-    # is the control tick's admission, a set swapped whole
+    # Why the car is expected to stay quiet, or None when it will charge.
+    # Room to start is the control tick's admission set, which the tick
+    # replaces whole rather than changing in place.
     reason = _wontCharge(master, vehicle)
     if reason or vehicle.key not in getattr(master, "admission", ()):
         return reason or "no room to start"

@@ -54,6 +54,8 @@ NOT_SENT = QUEUE_DETAILS | {
 RULES = "rules: "
 # A message the car's whereabouts hold back: kept, not settled
 HELD = RULES + "held: "
+# The rules could not read the car's current limit, so sent nothing
+UNREAD_REASON = "could not read the current limit; nothing sent"
 
 
 class Outcome(NamedTuple):
