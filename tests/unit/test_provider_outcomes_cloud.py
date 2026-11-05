@@ -173,9 +173,11 @@ def test_an_unrefreshable_expired_token_is_retired(requests_mock):   # M1
     assert len(calls(requests_mock, "charge_stop")) == 1 and not api.fleetSlot.usable("command")
     assert api.fleetSlot.refreshToken == "rt" and api.master.tasks == []                 # refused, never cleared or saved
 
-def test_an_ended_need_gets_a_fresh_grace_through_wake_outcome(requests_mock):   # M3/c4
+def test_an_ended_need_gets_a_fresh_grace_through_wake_outcome(requests_mock, monkeypatch):   # M3/c4
+    import TWCManager.Vehicle.TeslaAPI as T
     from tests.unit.reconcile_helpers import Clock
     clk = Clock(5000.0); api, reg, p = fleet(requests_mock); p.clock = clk; api.now = clk      # wakeDelayMins 3
+    monkeypatch.setattr(T.time, "sleep", Mock())                        # the car never wakes: all 45 s of polls would be real time
     requests_mock.get(re.compile(r".*/api/1/vehicles/%s$" % VIN), json={"response": {"state": "asleep"}})
     wake = requests_mock.post(re.compile(r".*/wake_up$"), json={"response": {"state": "asleep"}})
     car = api.registry.get(VIN).attachment("TeslaAPI")
