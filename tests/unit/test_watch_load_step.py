@@ -9,6 +9,7 @@ from tests.unit.test_presence import VIN2, VIN3
 def test_a_step_held_for_two_samples_is_reported_once():
     s = LoadStep(1200.0)
     assert [s.sample(w) for w in ([500, 500, 2000, 2000, 2000, 700, 700])] == [None, None, None, "up", None, None, "down"]
+    assert s.size == 1300
 
 def test_a_dryer_with_no_awake_watched_car_triggers_no_read(caplog):
     m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "asleep", "TeslaBLE")
@@ -25,13 +26,6 @@ def test_a_step_up_reads_the_awake_home_car_and_a_step_down_reads_the_charging_o
     reads.charging = "Complete"
     m.setConsumption("t", 500); w.loadSample(); c.t += 30; w.loadSample(); w.pass_(); runPending(r.ble)
     assert reads.count == 2 and v.value("chargingState") == "Complete"
-
-def test_known_draw_is_subtracted_only_when_configured():
-    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
-    v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("actualCurrent", 20, "TeslaBLE")
-    w = m.watch = Watch(m, clock=c); m.setConsumption("t", 6000)
-    m.subtractChargerLoad = False; assert w.unexplainedWatts() == 6000
-    m.subtractChargerLoad = True;  assert w.unexplainedWatts() == pytest.approx(6000 - 20 * 240)
 
 def step(m, w, c, before, after):
     # A step held for the next sample
@@ -81,7 +75,7 @@ def test_the_charger_load_counts_gen3_units_and_watched_cars_charging_at_home():
     m.watch = Watch(m, clock=c)
     assert m.getChargerLoad() == pytest.approx((16 + 20) * 240)
     m.subtractChargerLoad = True; m.setConsumption("t", 9000)
-    assert m.watch.unexplainedWatts() == pytest.approx(9000 - 36 * 240)
+    assert m.getChargerLoad() == pytest.approx(36 * 240)
 
 
 def test_the_charger_load_counts_a_feed_covered_car_once_and_a_twc_named_car_not_at_all():
@@ -204,3 +198,60 @@ def test_a_watch_made_after_the_settings_load_restores_the_saved_ledger():
     first = Watch(m, clock=c); first.ledger.observe(VIN, Snapshot(c.t, "Charging", 1.0, 9000.0), startHint=c.t - 60)
     m.settings["chargeLedger"] = first.ledger.toJSON()
     assert Watch(m, clock=c).ledger.toJSON() == first.ledger.toJSON() and first.ledger.toJSON()
+
+
+def metered(requests_mock):
+    # The meter sees the EVSE; the watch's belief is the charger load
+    m, r, v, c, w, car = fleetStep(requests_mock)
+    m.watch = w; m.subtractChargerLoad = True; m.getRealPowerFactor = lambda amps: 1
+    return m, r, v, c, w, car
+
+def feed(m, w, c, *watts):
+    for x in watts: c.t += 30; m.setConsumption("t", x); w.loadSample()
+
+def charging(v, amps):
+    v.observe("chargingState", "Charging" if amps else "Complete", "FleetAPI"); v.observe("actualCurrent", amps, "FleetAPI")
+
+def stepped(w):
+    # The time of the load step a suspicion carries, if any
+    return w._suspect.get(VIN, (None, None))[1]
+
+def command(v):
+    v.noteWrite("chargingState", "Charging", "FleetAPI"); v.noteWrite("chargeCurrentRequest", 32, "FleetAPI")
+
+def test_a_belief_clearing_after_the_meter_fell_is_no_rise(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock); charging(v, 32)
+    feed(m, w, c, 8200, 8200, 500, 500); assert stepped(w)                          # the stop's own fall
+    w._suspect.clear(); charging(v, 0); feed(m, w, c, 500, 500, 500)
+    assert stepped(w) is None
+
+def test_a_belief_arriving_after_the_meter_rose_is_no_fall(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock); feed(m, w, c, 500, 500)
+    T = c.t + 30; feed(m, w, c, 8200, 8200); assert stepped(w) == T                 # an unexplained start acts
+    w._suspect.clear(); charging(v, 32); feed(m, w, c, 8200, 8200, 8200)
+    assert stepped(w) is None
+
+def test_a_start_the_belief_leads_makes_no_step(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock); feed(m, w, c, 500, 500)
+    command(v); feed(m, w, c, 500, 8200, 8200); assert stepped(w) is None
+
+def test_a_belief_change_older_than_the_window_explains_nothing(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock); feed(m, w, c, 500, 500)
+    command(v); feed(m, w, c, 500, 500, 500, 500, 500); feed(m, w, c, 8200, 8200); assert stepped(w)
+
+def test_a_belief_falling_never_explains_a_rise(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock)
+    other = m.vehicleRegistry.getOrCreate(VIN2, "t"); placeAt(m, other, HOME)
+    for f, x in (("state", "online"), ("chargingState", "Charging"), ("actualCurrent", 32)): other.observe(f, x, "TeslaBLE")
+    feed(m, w, c, 8200, 8200); w._suspect.clear()
+    other.observe("actualCurrent", 0, "TeslaBLE"); other.observe("chargingState", "Complete", "TeslaBLE")
+    feed(m, w, c, 15900, 15900); assert stepped(w)                                  # VIN plugged in as VIN2 stopped
+
+def test_without_subtracting_charger_load_a_leading_belief_explains_nothing(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock); m.subtractChargerLoad = False; feed(m, w, c, 500, 500)
+    command(v); feed(m, w, c, 500, 8200, 8200); assert stepped(w)
+
+def test_a_belief_from_before_the_clock_went_back_explains_nothing(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock); feed(m, w, c, 500, 500)
+    command(v); c.t -= 600
+    feed(m, w, c, 500, 500, 500, 500, 500); feed(m, w, c, 8200, 8200); assert stepped(w)

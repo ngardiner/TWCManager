@@ -11,7 +11,7 @@ import logging
 import math
 import threading
 import time
-from collections import namedtuple
+from collections import deque, namedtuple
 from typing import Optional
 
 from .ChargeLedger import CHARGING, ChargeLedger, Snapshot
@@ -38,6 +38,11 @@ DEFAULTS.update(pollSecs=60, pollGiveUpSecs=600)
 # A charging car is awake; a car of unknown state is asked as an awake one
 # away: until it answers, nothing says it cannot move
 _CADENCE_OF = {HOME_CHARGING: HOME_AWAKE, UNKNOWN: AWAY_AWAKE}
+# A step the believed draw moved through, the same way by half the step,
+# within this is the belief. A commanded start counts at once and reaches
+# the meter over its ramp, under half a minute, then a sample holds it. Any
+# two cars starting within it may hide one until its own next check
+BELIEF_SECS = 120
 NO_SOURCE, NAMED, COVERED = "no status source", "named by TWC ", "covered by "
 MISS, AWAKE = "no answer", (HOME_AWAKE, HOME_CHARGING, AWAY_AWAKE)
 # A failed read asked for, retried as its ask was: courtesy-bounded or not
@@ -142,9 +147,10 @@ def lost(v, where) -> bool:
 
 class LoadStep:
     # A rise or fall of at least the threshold, reported once the next sample
-    # holds it: a spike that falls back says nothing
+    # holds it: a spike that falls back says nothing. A reported step's size
+    # is how far it moved
     def __init__(self, thresholdWatts: float):
-        self.threshold, self._base, self._pending = thresholdWatts, None, None
+        self.threshold, self._base, self._pending, self.size = thresholdWatts, None, None, 0.0
 
     def sample(self, watts: float) -> Optional[str]:
         # The first sample is its own base, and a NaN reading stays NaN
@@ -154,7 +160,7 @@ class LoadStep:
         # A step reported is no longer pending; a new one waits for the next
         self._pending = None if confirmed else step
         if step is None or confirmed:
-            self._base = watts
+            self._base, self.size = watts, abs(moved)
         return step if confirmed else None
 
 
@@ -167,7 +173,7 @@ class Watch:
         volts, phases = master.getVoltageMeasurement()
         minAmpsPerPhase = 5 if phases < 3 else 1
         least = max(self._settings["emsNoiseWatts"], minAmpsPerPhase * volts * phases)
-        self._step, self._triggered = LoadStep(least), {}
+        self._step, self._triggered, self._belief = LoadStep(least), {}, deque()
         # vin -> a rise that may be the car, away by its last fix, come home:
         # the step's thread writes it, a pass reads one key
         self._backStep = {}
@@ -318,24 +324,21 @@ class Watch:
         if v is not None and self._fleet(v):
             self.suspect(vin, sentAt, "command")
 
-    def unexplainedWatts(self) -> float:
-        # Consumption less the charging known of, where the meter sees it
-        m = self.master
-        if not m.subtractChargerLoad:
-            return m.getConsumption()
-        return m.getConsumption() - m.getChargerLoad()
-
     def loadSample(self, now: Optional[float] = None) -> None:
-        # A step nothing known explains may be a car starting or ending a
-        # charge; a dryer looks the same, so it only asks for a read, or a
-        # poll. With no meter, the known draw alone would step with every
-        # charge. A step began at the sample before the one that held it
+        # A step in the meter may be a car starting or ending a charge; a
+        # dryer looks the same, so it only asks for a read, or a poll. Where
+        # the meter sees the EVSE, a step the believed charger load moved
+        # through is that belief, not news. A step began at the sample
+        # before the one that held it
         if not (self._settings["emsTrigger"] and self.master.consumptionValues):
             return
         now = self._clock() if now is None else now
         first, self._sampleAt = self._sampleAt or now, now
         self._stale(now)
-        step = self._step.sample(self.unexplainedWatts())
+        step = self._step.sample(self.master.getConsumption())
+        rose = self._noteBelief(now)
+        if step and rose * (1 if step == "up" else -1) >= self._step.size / 2:
+            step = None
         maybe = (HOME_AWAKE, AWAY_AWAKE, UNKNOWN) if step == "up" else (HOME_CHARGING,)
         if step == "up":
             self._mayBeBack(now)
@@ -372,6 +375,16 @@ class Watch:
                 # Its online check at the next pass, not on its cadence
                 with self._lock:
                     self._waking[v.vin] = first
+
+    def _noteBelief(self, now) -> float:
+        # Keeps each sample's believed draw, none with nothing to subtract;
+        # returns how far it rose over the window. A clock set back leaves
+        # samples after now, which say nothing of the last BELIEF_SECS
+        b, m = self._belief, self.master
+        b.append((now, m.getChargerLoad() if m.subtractChargerLoad else 0.0))
+        while not now - BELIEF_SECS <= b[0][0] <= now:
+            b.popleft()
+        return b[-1][1] - b[0][1]
 
     def _stale(self, now) -> None:
         # More charging believed than the meter sees, twice running (once is
