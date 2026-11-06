@@ -365,6 +365,9 @@ class Watch:
                     with self._lock:
                         self._waking[v.vin] = first
                 continue
+            # A fall under half what the car is believed drawing is the house
+            if step == "down" and self._step.size < self.liveWatts(v.vin) / 2:
+                continue
             if not self._fleet(v):
                 if state in maybe and calm:
                     self._triggered[key] = now

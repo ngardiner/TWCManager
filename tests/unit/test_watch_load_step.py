@@ -251,6 +251,20 @@ def test_without_subtracting_charger_load_a_leading_belief_explains_nothing(requ
     m, r, v, c, w, car = metered(requests_mock); m.subtractChargerLoad = False; feed(m, w, c, 500, 500)
     command(v); feed(m, w, c, 500, 8200, 8200); assert stepped(w)
 
+def test_a_fall_too_small_to_be_the_charging_car_is_ignored(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock); charging(v, 32)
+    feed(m, w, c, 8200, 8200, 6700, 6700); assert stepped(w) is None                # 1500 W < 3840 W
+
+def test_a_car_sized_fall_while_charging_acts(requests_mock):
+    m, r, v, c, w, car = metered(requests_mock); charging(v, 32)
+    feed(m, w, c, 8200, 8200, 4000, 4000); assert stepped(w)                        # 4200 W >= 3840 W
+
+def test_a_small_fall_reads_no_ble_car(caplog):
+    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
+    v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("actualCurrent", 32, "TeslaBLE")
+    w = m.watch = Watch(m, clock=c); m.getRealPowerFactor = lambda amps: 1
+    step(m, w, c, 8200, 6700); assert " asked" not in caplog.text
+
 def test_a_belief_from_before_the_clock_went_back_explains_nothing(requests_mock):
     m, r, v, c, w, car = metered(requests_mock); feed(m, w, c, 500, 500)
     command(v); c.t -= 600
