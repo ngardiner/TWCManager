@@ -470,6 +470,10 @@ class Policy:
         if condition in ("gt", "gte", "lt", "lte"):
             matchValue = to_number(matchValue)
             value = to_number(value)
+            # An unresolved reference (a module not loaded, a price not known)
+            # never matches a numeric comparison
+            if not all(isinstance(v, (int, float)) for v in (matchValue, value)):
+                return False
 
         # Perform comparison
         if condition == "gt":

@@ -207,3 +207,27 @@ class TestAmberForecast:
         )
         p.updateForecast()
         assert p.cheapWindowActive == 1
+
+
+class TestAmberLatchedWindow:
+    def test_window_holds_once_started(self):
+        # Inside the chosen window, a later forecast whose cheapest block has
+        # moved on does not move the window
+        from datetime import datetime, timezone, timedelta
+
+        p = AmberPricing(
+            _master({"enabled": True, "token": "abc", "siteId": "s1",
+                     "cheapWindow": {"hours": 4}})
+        )
+        now = datetime.now(timezone.utc)
+        started = (now - timedelta(hours=1)).isoformat()
+        p.cheapWindowStart = started
+        p.priceForecast = [
+            {"timestamp": now + timedelta(minutes=30 * i),
+             "importPrice": 0.5 if i < 4 else 0.1}
+            for i in range(24)
+        ]
+        p.lastForecastFetch = int(now.timestamp())
+        p._recomputeDerived()
+        assert p.cheapWindowStart == started
+        assert p.cheapWindowActive == 1

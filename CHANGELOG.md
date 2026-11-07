@@ -24,6 +24,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - The Vehicles page and each vehicle's page show a picture of the car (model, paint and wheels), drawn by Tesla's image service; clicking the picture in the list opens the car's page. Its looks come from TeslaMate or a Tesla API read, are saved across restarts, and are read once at most for a car a telemetry feed covers. A car whose looks are unknown is drawn from its VIN
     * (@MikeBishop) - The Vehicles page fits a phone: on a narrow screen each row of its tables shows as a card, with each value labelled
     * (@MikeBishop) - Expose the Powerwall's current rate-plan period to policies (`modules.TeslaPowerwall2.touPeriod`, such as `ON_PEAK`), read from the tariff set in the Tesla app with a free read on either a Fleet or an Owner API token
+    * (@MikeBishop) - Report electricity prices and the cheapest charging window from the rate plan set in the Tesla app, for policies and the pricing API ([details](docs/modules/Pricing_Tesla.md))
     * (@MikeBishop) - Read each car's last reported charge state for free with a Fleet API token, even while the car sleeps, before paying for a live read ([details](docs/modules/Vehicle_TeslaAPI.md#owner-api-and-fleet-api))
 * Architecture
     * (@MikeBishop) - The watch sets when cars are read, in place of the Tesla API deferral ladder (300/1800/3600 s of paid `vehicle_data`) and the half-hourly battery refresh of cars at home, both removed; a read stays fresh for 5 minutes for every caller. `cloudUpdateInterval` no longer sets how often cars are read (the Powerwall module uses it as its cloud cache time)
@@ -71,6 +72,7 @@ This document logs the changes per release of TWCManager.
     * Fix: Each Powerwall2 instance keeps its own fetch cache; the class-level `lastFetch` was shared between instances (closes #691)
     * Fix: `python_requires` is now 3.8 (was 3.6), the oldest Python TWCManager installs on; the Gen3 log names the pymodbus and Python it needs (closes #723)
     * (@MikeBishop) - With no saved choice, the home page is Modern, as the Settings page shows, so saving settings no longer switches it; the setting is now called "Home Page Style", since it changes only the home page (closes #747)
+    * (@MikeBishop) - A policy condition comparing a module's value with a number (`gt`, `gte`, `lt`, `lte`) no longer stops every policy from being evaluated when that module isn't loaded; the condition just doesn't match
 
 ## v1.4.0 - 2026-10-26
 

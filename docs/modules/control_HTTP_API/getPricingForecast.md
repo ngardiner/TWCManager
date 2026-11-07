@@ -48,4 +48,4 @@ curl -X GET "http://192.168.1.1:8080/api/getPricingForecast?hours=24"
 `cheapWindowActive` is `1` while the current time is inside the cheapest window
 the module found for its configured `cheapWindow`; it is `0` (and
 `cheapWindowStart` is `null`) when no `cheapWindow` is configured. See
-`docs/modules/Pricing_Amber.md`.
+`docs/modules/Pricing_Amber.md` and `docs/modules/Pricing_Tesla.md`.

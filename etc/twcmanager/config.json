@@ -502,6 +502,12 @@
           #  "startHour": 22,
           #  "endHour": 7
           #}
+        },
+        # Tesla: prices from the rate plan set for your Powerwall in the Tesla
+        # app. Needs the Powerwall2 source and Tesla API access to energy data.
+        # Takes the same optional "cheapWindow" block as Amber.
+        "Tesla":{
+          "enabled": false
         }
     },
     "logging":{
