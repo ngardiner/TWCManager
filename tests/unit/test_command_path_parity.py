@@ -1493,6 +1493,32 @@ def test_arrive_park_ble_sets_the_limit_before_the_plug(requests_mock):
     assert not Presence.pluggedNow(m, v) and paid(requests_mock) == (0, 0, 0)
 
 
+def test_2026_11_02_a_fleet_read_parked_with_no_gear_sets_the_limit_before_the_plug(
+    requests_mock,
+):
+    # Fleet only: the read as it drove off said D; the read once back finds
+    # it home, its gear empty (parked), plugged in seconds later. No read
+    # follows the plug-in, so the policy limit goes on that read; one command
+    m, r, v, c, api = install(fleet=True, located=False)
+    m.settings.update(homeLat=HOME[0], homeLon=HOME[1])
+    car = FleetCar(requests_mock, state="online", limit=90, charging="Disconnected")
+    policy = cycles(m, 50)
+
+    def read(shift):
+        c.t += 1
+        for field, value in (("lat", HOME[0]), ("lon", HOME[1]), ("shiftState", shift),
+                             ("chargingState", "Disconnected"),
+                             ("chargeLimit", car.charge["charge_limit_soc"])):
+            v.observe(field, value, "FleetAPI")
+
+    read("D")
+    c.t += 1200
+    read(None)
+    passes(r, c, 60, each=policy)
+    assert Presence.departed(m, v) is None
+    assert commands(requests_mock) == ["set_charge_limit"] and car.charge["charge_limit_soc"] == 50
+
+
 def test_a_20_s_drive_inside_the_radius_between_policy_passes_is_seen(
     requests_mock,
 ):
