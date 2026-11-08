@@ -658,6 +658,14 @@ def test_a_rise_reads_an_api_only_car_still_away_once_a_window(requests_mock):
         later(m, v, c, 300); rise(m, w, c, 12000, 500); rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
     assert paid(requests_mock)[0] == 1                                   # a cycling load: the window's read only
 
+def test_a_house_sized_rise_leaves_the_back_window_for_the_plug_in(requests_mock):
+    # 2026-11-07: an oven at 21:12, the car plugging in at 21:26
+    m, r, v, c, car = apiOnly(requests_mock, at=HOME); northOfHome(m, v, 5, c.t); v.observe("state", "online", "FleetAPI")
+    v.noteHomeAmps(48, since=0); w = Watch(m, clock=c); w.pass_(); runPending(r.cloud); later(m, v, c, 400)
+    rise(m, w, c, 500, 3000); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 0
+    later(m, v, c, 840); rise(m, w, c, 3000, 14400); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1 and P.presence(m, v) == P.HOME
+
 def test_a_rise_checks_an_api_only_car_that_slept_away_once_it_could_be_back(requests_mock):
     # It slept away, then woke and drove home between its checks: only a
     # check says it woke, and the wake's read says where it is

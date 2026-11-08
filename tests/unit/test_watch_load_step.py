@@ -1,5 +1,6 @@
 import pytest
 
+from TWCManager.Vehicle.Presence import NOT_HOME, presence
 from TWCManager.Vehicle.Watch import HOME_CHARGING, LoadStep, Watch, situation
 from tests.unit.reconcile_helpers import AWAY, HOME, bleAnswers, bleReads, placeAt, runPending
 from tests.unit.test_limit_reconciler import VIN, setup
@@ -269,3 +270,108 @@ def test_a_belief_from_before_the_clock_went_back_explains_nothing(requests_mock
     m, r, v, c, w, car = metered(requests_mock); feed(m, w, c, 500, 500)
     command(v); c.t -= 600
     feed(m, w, c, 500, 500, 500, 500, 500); feed(m, w, c, 8200, 8200); assert stepped(w)
+
+
+def plugIn(v, c, amps, source="TeslaBLE"):
+    # Unplugged, then a minute on plugged in, read at amps
+    v.observe("chargingState", "Disconnected", source); c.t += 60
+    v.observe("chargingState", "Charging", source); v.observe("chargeCurrentRequest", amps, source)
+
+def test_a_reading_while_plugged_in_but_idle_is_no_sample():
+    # Plugged in and waiting, the car reports what the charger offers idle;
+    # only once it charges does the reading show the rate it starts at
+    m, v, c, w = homeCar(None); v.observe("chargingState", "Disconnected", "TeslaBLE"); c.t += 60
+    v.observe("chargingState", "Stopped", "TeslaBLE"); v.observe("chargeCurrentRequest", 6, "TeslaBLE")
+    w.pass_(); assert v.homeAmps() == {"amps": [], "since": None, "held": None}
+    c.t += 600; v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("chargeCurrentRequest", 48, "TeslaBLE")
+    w.pass_(); assert v.homeAmps()["amps"] == [48] and v.homeAmps()["held"] == 48
+
+def test_the_first_home_plug_in_reading_is_the_expected_rate():
+    m, v, c, w = homeCar(None); plugIn(v, c, 48); w.pass_()
+    assert v.homeAmps()["amps"] == [48] and w.expectedWatts() == pytest.approx(48 * 240)
+    c.t += 60; v.observe("chargeCurrentRequest", 32, "TeslaBLE"); w.pass_()
+    assert v.homeAmps()["amps"] == [48]                                          # the same plug-in
+    plugIn(v, c, 32); w.pass_(); assert w.expectedWatts() == pytest.approx(32 * 240)
+
+def test_with_no_plug_in_seen_the_expected_rate_is_none():
+    m, v, c, w = homeCar(None); assert w.expectedWatts() == 0
+
+def test_a_rate_after_an_amps_command_is_no_sample():
+    m, v, c, w = homeCar(None); v.observe("chargingState", "Disconnected", "TeslaBLE"); c.t += 60
+    v.observe("chargingState", "Stopped", "TeslaBLE"); c.t += 5; v.noteWrite("chargeCurrentRequest", 6, "TeslaBLE")
+    v.observe("chargeCurrentRequest", 6, "TeslaBLE"); w.pass_(); assert v.homeAmps()["amps"] == []
+
+def test_an_unplugged_or_away_reading_is_no_sample():
+    m, v, c, w = homeCar(None); v.observe("chargingState", "Disconnected", "TeslaBLE")
+    v.observe("chargeCurrentRequest", 48, "TeslaBLE"); w.pass_(); assert v.homeAmps()["amps"] == []   # its own maximum
+    c.t += 60; placeAt(m, v, AWAY); v.observe("bleReach", False, "TeslaBLE"); assert presence(m, v) == NOT_HOME
+    plugIn(v, c, 16, "FleetAPI"); w.pass_(); assert v.homeAmps()["amps"] == []                         # an away charger
+
+def test_an_away_chargers_rate_read_before_arrival_is_no_sample():
+    # Plugged in away, then home with no reading of its amps since it parked
+    m, v, c, w = homeCar(None); c.t += 60; placeAt(m, v, AWAY); v.observe("bleReach", False, "TeslaBLE")
+    plugIn(v, c, 16, "FleetAPI"); v.observe("shiftState", "D", "FleetAPI"); c.t += 600
+    placeAt(m, v, HOME); v.observe("shiftState", "P", "FleetAPI"); v.observe("chargingState", "Charging", "TeslaBLE")
+    w.pass_(); assert presence(m, v) != NOT_HOME and v.homeAmps()["amps"] == []
+    c.t += 60; v.observe("chargeCurrentRequest", 48, "FleetAPI"); w.pass_(); assert v.homeAmps()["amps"] == [48]
+
+
+def test_a_rise_too_small_for_the_car_opens_no_suspicion(requests_mock):
+    m, r, v, c, w, car = fleetStep(requests_mock); v.noteHomeAmps(48, since=0)
+    step(m, w, c, 500, 3000); assert VIN not in w._suspect                          # 2.5 kW < half 11.5 kW
+    step(m, w, c, 3000, 500); T = c.t; step(m, w, c, 500, 12000); assert w._suspect[VIN][0] == T
+
+def test_with_no_samples_a_small_rise_suspects_as_before(requests_mock):
+    m, r, v, c, w, car = fleetStep(requests_mock); step(m, w, c, 500, 3000); assert VIN in w._suspect
+
+def test_every_cars_plug_ins_set_the_rate_for_all(caplog):
+    # The charger caps the rate more often than the car: one car's plug-ins
+    # speak for another with none, and the least of them sets the cutoff
+    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
+    other = m.vehicleRegistry.getOrCreate(VIN2, "t"); placeAt(m, other, HOME); other.observe("state", "online", "TeslaBLE")
+    w = Watch(m, clock=c); w.pass_(); runPending(r.ble); bleAnswers(m, answer=None); v.noteHomeAmps(48, since=0)
+    step(m, w, c, 500, 3000); assert " asked" not in caplog.text
+    other.noteHomeAmps(16, since=0); assert w.expectedWatts() == pytest.approx(16 * 240)
+    c.t += 30; step(m, w, c, 3000, 500); step(m, w, c, 500, 3000)
+    assert VIN2 + " asked" in caplog.text and VIN + " asked" in caplog.text
+
+def test_a_small_rise_reads_no_ble_car_with_a_known_rate():
+    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
+    w = Watch(m, clock=c); w.pass_(); runPending(r.ble); reads = bleReads(m); v.noteHomeAmps(48, since=0)
+    step(m, w, c, 500, 3000); w.pass_(); runPending(r.ble); assert reads.count == 0
+    c.t += 1200; step(m, w, c, 3000, 500); step(m, w, c, 500, 12000); w.pass_(); runPending(r.ble)
+    assert reads.count == 1
+
+
+def test_an_away_reading_is_no_sample_when_only_ble_contact_says_home():
+    # The away read's own fix marks it outside; contact alone brings it home
+    m, v, c, w = homeCar(None); c.t += 60; v.observe("bleReach", False, "TeslaBLE")
+    v.observe("lat", AWAY[0], "FleetAPI"); v.observe("lon", AWAY[1], "FleetAPI")
+    v.observe("chargingState", "Charging", "FleetAPI"); v.observe("chargeCurrentRequest", 48, "FleetAPI")
+    c.t += 600; v.observe("bleReach", True, "TeslaBLE"); w.pass_()
+    assert presence(m, v) != NOT_HOME and v.homeAmps()["amps"] == []
+    c.t += 60; v.observe("chargeCurrentRequest", 16, "TeslaBLE"); w.pass_(); assert v.homeAmps()["amps"] == [16]
+
+def test_the_amps_a_command_leaves_the_car_holding_is_its_next_start():
+    # The car keeps a commanded rate for home, so its next plug-in begins there
+    m, v, c, w = homeCar(None); plugIn(v, c, 48); w.pass_(); c.t += 60
+    v.noteWrite("chargeCurrentRequest", 8, "TeslaBLE"); w.pass_()
+    assert v.homeAmps()["amps"] == [48] and w.expectedWatts() == pytest.approx(8 * 240)
+
+def test_a_held_rate_survives_a_restart():
+    from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+    m, v, c, w = homeCar(None); plugIn(v, c, 48); w.pass_(); c.t += 60
+    v.noteWrite("chargeCurrentRequest", 8, "TeslaBLE"); w.pass_()
+    again = VehicleRegistry({}, clock=c); again.load(m.vehicleRegistry.toJSON())
+    assert again.get(VIN).homeAmps()["held"] == 8
+
+def test_a_small_rise_suspects_a_car_holding_a_low_rate(requests_mock):
+    m, r, v, c, w, car = fleetStep(requests_mock); v.noteHomeAmps(48, since=0); v.noteHomeHeld(8)
+    step(m, w, c, 500, 2500); assert VIN in w._suspect
+
+def test_a_car_a_feed_covers_still_teaches_the_rate():
+    from tests.unit.reconcile_helpers import liveFeed
+    m, r, v, c = setup(here=False); placeAt(m, v, HOME); liveFeed(m, "TeslaMateVehicle")
+    v.observe("state", "online", "TeslaMateVehicle"); v.observe("chargingState", "Disconnected", "TeslaMateVehicle")
+    w = Watch(m, clock=c); c.t += 60; plugIn(v, c, 32, "TeslaMateVehicle"); w.pass_()
+    assert w.expectedWatts() == pytest.approx(32 * 240)

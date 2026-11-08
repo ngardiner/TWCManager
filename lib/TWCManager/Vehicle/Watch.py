@@ -17,7 +17,7 @@ from typing import Optional
 from .ChargeLedger import CHARGING, ChargeLedger, Snapshot
 from .Presence import HOME, NEVER, _ble, _fix, _FT_PER_DEGREE, asleep, decide, lastLife
 from .Presence import AWAY_ASLEEP_SECS, HOME_ASLEEP_SECS, NOT_HOME, covered, presence
-from .Presence import twcVinAt
+from .Presence import arrivedAt, pluggedNow, twcVinAt
 from .Providers.Capability import READ_CHARGE, SET_AMPS
 from .Providers.Provider import vehicleMaxAmps
 from .Reconcile.Belief import twcChargingState
@@ -304,6 +304,40 @@ class Watch:
             deaf = self._last.get((v.vin, "status"), ("",))[0] == TWICE
         return fleetOnly(self.master, v, deaf)
 
+    def expectedWatts(self) -> float:
+        # The least a car starts at here with nothing commanding it. The
+        # charger caps it more often than the car, so every car's plug-ins,
+        # and the amps each now keeps for home, speak for all; none known,
+        # nothing
+        amps = []
+        for v in self.master.vehicleRegistry.vehicles():
+            home = v.homeAmps()
+            amps += home["amps"] + ([home["held"]] if home["held"] else [])
+        return self.master.convertAmpsToWatts(min(amps)) if amps else 0.0
+
+    def _noteHomeAmps(self, v, where) -> None:
+        # A plug-in at home begins at the amps the car keeps for home, which
+        # its first reading while charging shows, unless a command changed
+        # them; the car keeps the newest for its next. A car not plugged in
+        # reports its own maximum, one plugged in but idle what the charger
+        # offers idle, and one plugged in away that charger's: a reading from
+        # before arrival, or with a fix away, may be any of these
+        if where != HOME or not pluggedNow(self.master, v):
+            return
+        since, away = max(v.markAt("plugIn"), arrivedAt(v)), v.markAt("outside")
+        obs, sent = v.latest("chargeCurrentRequest"), v.lastWrite("chargeCurrentRequest")
+        state = v.latest("chargingState")
+        if obs and not (state and state.value == "Charging" and state.at <= obs.at):
+            obs = None
+        here = [o for o in (obs, sent) if o is not None and o.at >= since and o.at > away]
+        changed = False
+        if obs in here and sent not in here:
+            changed = v.noteHomeAmps(obs.value, since)
+        if here:
+            changed = v.noteHomeHeld(max(here, key=lambda o: o.at).value) or changed
+        if changed:
+            self.master.queue_background_task({"cmd": "saveSettings"})
+
     def liveWatts(self, vin: str) -> float:
         # An open session's draw since its last snapshot
         v = self.master.vehicleRegistry.get(vin)
@@ -343,6 +377,8 @@ class Watch:
         if step == "up":
             self._mayBeBack(now)
         for v, where, state in self._watched() if step else ():
+            if self._house(v, step):
+                continue
             # A car not home is asked only once it could be back. A rise reads
             # a car once a courtesy window, so a cycling load never keeps it
             # awake; a fall, once in five minutes. A poll keeps no car awake
@@ -365,9 +401,6 @@ class Watch:
                     with self._lock:
                         self._waking[v.vin] = first
                 continue
-            # A fall under half what the car is believed drawing is the house
-            if step == "down" and self._step.size < self.liveWatts(v.vin) / 2:
-                continue
             if not self._fleet(v):
                 if state in maybe and calm:
                     self._triggered[key] = now
@@ -378,6 +411,13 @@ class Watch:
                 # Its online check at the next pass, not on its cadence
                 with self._lock:
                     self._waking[v.vin] = first
+
+    def _house(self, v, step) -> bool:
+        # A step under half what a car would start at, or what this one is
+        # believed drawing, is the house: a spent window would hold back the
+        # car's own start behind it
+        watts = self.expectedWatts() if step == "up" else self.liveWatts(v.vin)
+        return self._step.size < watts / 2
 
     def _noteBelief(self, now) -> float:
         # Keeps each sample's believed draw, none with nothing to subtract;
@@ -425,6 +465,7 @@ class Watch:
         why = notWatched(self.master, v)
         named, ble = bool(why) and why.startswith(NAMED), radio(self.master)
         fleet = self._fleet(v)
+        self._noteHomeAmps(v, where)
         with self._lock:
             # What a car was before a restart is no news: the first pass
             # only learns it. A car first seen later has arrived
@@ -702,6 +743,8 @@ class Watch:
         # window, so a cycling load adds at most one read a window
         wait = self._settings["sleepCourtesySecs"]
         for v, where, state in self._watched():
+            if self._house(v, "up"):
+                continue
             if where == NOT_HOME and state == AWAY_AWAKE and cloudOnly(self.master, v):
                 if now >= self._backStep.get(v.vin, NEVER) + wait:
                     self._backStep[v.vin] = now

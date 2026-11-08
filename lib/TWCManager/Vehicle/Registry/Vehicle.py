@@ -1,6 +1,7 @@
 # One vehicle in the registry: identity (VIN, or an anonymous plug session),
 # provider claims, observed/managed tier, attachments and a summary.
 import logging
+import math
 import threading
 import time
 from typing import Any, Callable, Collection, Dict, List, Optional, Tuple, Union
@@ -15,6 +16,14 @@ from .Fields import (
 )
 
 logger = logging.getLogger(__name__.split(".")[0] + ".Vehicle.Registry")
+
+HOME_AMPS_KEPT = 5
+
+
+def _number(value: Any, above: float = -math.inf) -> bool:
+    # A finite number greater than above; a bool is no number here
+    real = isinstance(value, (int, float)) and not isinstance(value, bool)
+    return real and math.isfinite(value) and value > above
 
 
 class Claim:
@@ -89,6 +98,9 @@ class Vehicle:
         self._attachments: Dict[str, Any] = {}
         # Presence events by name: the newest time each was seen, in memory
         self._marks: Dict[str, float] = {}
+        # The amps the last few plug-ins at home began at, when the last of
+        # them began, and the amps the car keeps for home now
+        self._home: Dict[str, Any] = {"amps": [], "since": -math.inf, "held": None}
 
     # Fields
 
@@ -158,6 +170,41 @@ class Vehicle:
     def markAt(self, name: str) -> float:
         with self._lock:
             return self._marks.get(name, float("-inf"))
+
+    def noteHomeAmps(self, amps: Any, since: float) -> bool:
+        # The amps a plug-in at home began at, once per plug-in: since, when
+        # it began, must be newer than the last one's
+        with self._lock:
+            home = self._home
+            if not _number(amps, 0) or since <= home["since"]:
+                return False
+            home["amps"], home["since"] = (home["amps"] + [amps])[-HOME_AMPS_KEPT:], since
+        return True
+
+    def noteHomeHeld(self, amps: Any) -> bool:
+        # The amps the car now keeps for home, which its next plug-in here
+        # begins at; True when that changed
+        with self._lock:
+            changed = _number(amps, 0) and amps != self._home["held"]
+            self._home["held"] = amps if changed else self._home["held"]
+        return changed
+
+    def homeAmps(self) -> dict:
+        # {"amps": the plug-ins' amps, oldest first, "since", "held"}, as
+        # saved: no plug-in yet is a since of None, which JSON can hold
+        with self._lock:
+            amps, since, held = list(self._home["amps"]), self._home["since"], self._home["held"]
+        return {"amps": amps, "since": since if _number(since) else None, "held": held}
+
+    def restoreHomeAmps(self, state: Any) -> None:
+        # A saved blob, unreadable parts dropped
+        state = state if isinstance(state, dict) else {}
+        amps, since, held = state.get("amps"), state.get("since"), state.get("held")
+        amps = [a for a in amps if _number(a, 0)] if isinstance(amps, list) else []
+        since = since if _number(since) else -math.inf
+        held = held if _number(held, 0) else None
+        with self._lock:
+            self._home = {"amps": amps[-HOME_AMPS_KEPT:], "since": since, "held": held}
 
     def latest(self, field: str) -> Optional[Observation]:
         with self._fieldLock:

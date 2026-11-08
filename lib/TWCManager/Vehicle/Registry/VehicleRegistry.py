@@ -319,6 +319,10 @@ class VehicleRegistry:
             appearance = v.appearance()
             if appearance:
                 out[v.vin]["appearance"] = appearance
+            # Plug-ins are rare: a restart must not lose what they began at
+            home = v.homeAmps()
+            if home["amps"] or home["held"]:
+                out[v.vin]["homeAmps"] = home
         return {"version": 1, "vehicles": out}
 
     def load(self, data: Any) -> None:
@@ -361,6 +365,7 @@ class VehicleRegistry:
         name = entry.get("name")
         if isinstance(name, str) and name:
             v.observe("name", name, "persisted", at=last, seen=False)
+        v.restoreHomeAmps(entry.get("homeAmps"))
         appearance = entry.get("appearance")
         if isinstance(appearance, dict):
             for key, field in APPEARANCE.items():
