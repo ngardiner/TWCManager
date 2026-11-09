@@ -221,13 +221,29 @@ class TestAmberLatchedWindow:
         )
         now = datetime.now(timezone.utc)
         started = (now - timedelta(hours=1)).isoformat()
-        p.cheapWindowStart = started
+        p._cheapStart = started
         p.priceForecast = [
             {"timestamp": now + timedelta(minutes=30 * i),
              "importPrice": 0.5 if i < 4 else 0.1}
             for i in range(24)
         ]
-        p.lastForecastFetch = int(now.timestamp())
-        p._recomputeDerived()
         assert p.cheapWindowStart == started
         assert p.cheapWindowActive == 1
+
+
+class TestAmberForecastAttributes:
+    @patch("TWCManager.Pricing.AmberPricing.requests")
+    def test_policy_reads_do_not_fetch(self, mock_requests):
+        # Policy reads these on the main loop; only updateForecast fetches
+        p = AmberPricing(
+            _master({"enabled": True, "token": "abc", "siteId": "s1",
+                     "cheapWindow": {"hours": 2}})
+        )
+        assert p.cheapWindowActive == 0
+        assert p.cheapWindowStart is None
+        mock_requests.get.assert_not_called()
+
+    def test_range_absent_before_forecast(self):
+        p = AmberPricing(_master({"enabled": True, "token": "abc", "siteId": "s1"}))
+        assert not hasattr(p, "forecastMinPrice")
+        assert not hasattr(p, "forecastMaxPrice")

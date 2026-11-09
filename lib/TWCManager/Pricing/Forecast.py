@@ -85,3 +85,81 @@ def latchedWindow(previousStart, hours, now, search):
         return previousStart
     best = search()
     return best["startTimestamp"] if best else None
+
+
+class ForecastingPricing:
+    """Base for Pricing modules with the Forecasting capability. It reads the
+    module's config section and its cheapWindow, and gives policy the
+    forecast attributes. A subclass supplies its prices, updateForecast() to
+    refresh its forecast, and _forecast(), which returns (slots, now, tz)
+    without blocking: policy reads these attributes on the main loop."""
+
+    capabilities = {"AdvancePricing": True, "Forecasting": True}
+    status = False
+
+    def __init__(self, master):
+        self.master = master
+        name = type(self).__name__
+        self.configPricing = (
+            master.config.get("pricing", {}).get(name.replace("Pricing", ""), {})
+        )
+        window = self.configPricing.get("cheapWindow", {})
+        self.cheapWindowHours = window.get("hours", 0)
+        self.cheapWindowStartHour = window.get("startHour")
+        self.cheapWindowEndHour = window.get("endHour")
+        self._cheapStart = None
+        self.status = self.configPricing.get("enabled", False)
+        if not self.status:
+            master.releaseModule("lib.TWCManager.Pricing", name)
+
+    def getCapabilities(self, capability):
+        return self.capabilities.get(capability, False)
+
+    @staticmethod
+    def _known(price):
+        # Absent, so policy's modules.* lookup falls back to an unresolved
+        # reference instead of a number
+        if price is None:
+            raise AttributeError("price unknown")
+        return price
+
+    def getPriceForecast(self, hoursAhead=24):
+        self.updateForecast()
+        return serialise(self._forecast()[0], hoursAhead)
+
+    def getCheapestWindow(self, numHours, startHour=None, endHour=None):
+        self.updateForecast()
+        forecast, _, tz = self._forecast()
+        return cheapestWindow(forecast, numHours, startHour, endHour, tz=tz)
+
+    @property
+    def forecastMinPrice(self):
+        return self._known((priceRange(self._forecast()[0]) or (None,))[0])
+
+    @property
+    def forecastMaxPrice(self):
+        return self._known((priceRange(self._forecast()[0]) or (None, None))[1])
+
+    @property
+    def cheapWindowStart(self):
+        if not self.cheapWindowHours or self.cheapWindowHours <= 0:
+            return None
+        forecast, now, tz = self._forecast()
+        self._cheapStart = latchedWindow(
+            self._cheapStart,
+            self.cheapWindowHours,
+            now,
+            lambda: cheapestWindow(
+                forecast,
+                self.cheapWindowHours,
+                self.cheapWindowStartHour,
+                self.cheapWindowEndHour,
+                tz=tz,
+            ),
+        )
+        return self._cheapStart
+
+    @property
+    def cheapWindowActive(self):
+        start = self.cheapWindowStart
+        return windowActive(start, self.cheapWindowHours, self._forecast()[1])
