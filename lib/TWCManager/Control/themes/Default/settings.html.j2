@@ -24,7 +24,7 @@
     <form method=POST action='/settings/save'>
       <table>
         <tr>
-          <th>Home Page Style</th>
+          <th class="align-top pt-2">Home Page Style</th>
           <td>
             {{ optionList(
               [
@@ -36,7 +36,7 @@
                 "value": master.settings.get("webControlTheme", "Modern"),
               },
             )|safe }}
-            <br>Changes the home page only; every other page looks the same in either style.
+            <small class="form-text text-muted mt-n3 mb-3">Changes the home page only; every other page looks the same in either style.</small>
           </td>
         </tr>
         <tr>
