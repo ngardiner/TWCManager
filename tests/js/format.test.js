@@ -163,7 +163,7 @@ test("home", () => {
   assert.equal(F.volts([240, 0, 0]), "240 / 0 / 0");
   assert.equal(F.fixed2(null), "0.00");
   assert.equal(F.secondsSince(now - 1.234, ctx()), "1.23");
-  assert.equal(F.pluralS([1, 2]), "s"); assert.equal(F.pluralS([1]), "");
+  assert.equal(F.pluralS([1, 2]), "s"); assert.equal(F.pluralS([1]), ""); assert.equal(F.pluralS([]), "s");
   assert.equal(F.scheduledStart(null, ctx({ scheduledChargingStartHour: 22, scheduledChargingFlexStart: 21 })), "22(Flex 21)");
   assert.equal(F.scheduledStart(null, ctx({ scheduledChargingStartHour: 22, scheduledChargingFlexStart: 22 })), "22");
   assert.equal(F.powerValue(1500) + " " + F.powerUnit(1500), "1.50 kW");
@@ -174,4 +174,16 @@ test("home", () => {
   const n = ctx({ generationWatts: "100", consumptionWatts: "500", generationAmps: "1", consumptionAmps: "2" });
   assert.equal(F.surplusWatts(null, n) + " " + F.surplusUnit(null, n), "0 Watt");
   assert.equal(F.surplusAmps(null, n), "0.00");
+});
+
+test("round2 matches Python round(v, 2) as the old page showed it", () => {
+  assert.equal(F.round2(16.333333333333332), "16.33");
+  assert.equal(F.round2(16.0), "16");
+  assert.equal(F.round2(null), "");
+});
+
+test("whole rounds one voltage", () => {
+  assert.equal(F.whole(239.6), "240");
+  assert.equal(F.whole(230), "230");
+  assert.equal(F.whole(undefined), "");
 });

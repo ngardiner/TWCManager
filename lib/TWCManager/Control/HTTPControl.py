@@ -1267,11 +1267,6 @@ def CreateHTTPHandlerClass(master):
                 # token, so an Owner-only user can still log in.
                 teslaapi = master.getModuleByName("TeslaAPI")
                 self.apiAvailable = bool(teslaapi and not teslaapi.fleetSlot.empty())
-                self.scheduledAmpsMax = master.getScheduledAmpsMax()
-
-                self.activeAction = master.getModuleByName(
-                    "Policy"
-                ).getActivePolicyAction()
 
                 # Send the html message
                 page = self.template.render(vars(self))
