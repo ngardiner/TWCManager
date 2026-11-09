@@ -10,28 +10,15 @@ negative.
 Obtain an API token from the Amber app (Settings > Developers). The site ID is
 discovered automatically from the token; you may also set it explicitly.
 
-Prices are exposed to charging policy as `modules.AmberPricing.importPrice` and
-`modules.AmberPricing.exportPrice` (see `docs/PolicyCustomization.md`).
+Prices are available to charging policy as `modules.AmberPricing.importPrice`
+and `modules.AmberPricing.exportPrice`, along with `spikeStatus` (Amber's
+wholesale spike state) and `renewables` (the grid's current renewables
+percentage).
 
-### Forecasting
-
-Amber's API returns a forward price series, so this module also offers the
-`Forecasting` capability. When a `cheapWindow` is configured, the module scans
-the forecast for the cheapest contiguous block of the requested number of hours
-and exposes:
-
-- `cheapWindowActive`: `1` while the current time falls inside the cheapest
-  window, otherwise `0`. Use this in policy to charge only during the cheapest
-  part of the day.
-- `forecastMinPrice` / `forecastMaxPrice`: the lowest and highest import price
-  across the forecast horizon.
-- `cheapWindowStart`: ISO 8601 start time of the chosen window (for display).
-
-The forecast is also available over the HTTP API at `/api/getPricingForecast`
-(see `docs/modules/control_HTTP_API/getPricingForecast.md`). If no `cheapWindow`
-is configured, the forecast is still fetched for the API/UI but no window is
-computed and `cheapWindowActive` stays `0`, leaving charging behaviour
-unchanged.
+Amber publishes prices ahead of time, so this module can also find the
+cheapest hours to charge in; see [Pricing Modules](Pricing.md) for this, and
+for what happens before the first price arrives. The forecast is refreshed
+every 15 minutes.
 
 ### Status
 
@@ -50,10 +37,7 @@ unchanged.
 | token     | *required* Amber API token. |
 | siteId    | *optional* Amber site ID. Auto-discovered from the token if omitted. |
 | cacheTime | *optional* Minimum seconds between current-price API fetches (default 300). |
-| cheapWindow | *optional* Object enabling cheapest-window forecasting. |
-| cheapWindow.hours | Number of consecutive hours the window should span (e.g. `5`). |
-| cheapWindow.startHour | *optional* Earliest local hour (0-23) the window may start. |
-| cheapWindow.endHour | *optional* Latest local hour (0-23) the window may run to; if less than `startHour`, the range crosses midnight. |
+| cheapWindow | *optional* Cheapest-window charging; see [Pricing Modules](Pricing.md#charging-in-the-cheapest-window). |
 
 ### JSON Configuration Example
 

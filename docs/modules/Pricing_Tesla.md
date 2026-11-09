@@ -6,14 +6,10 @@ The Tesla pricing module reports electricity prices from the rate plan set for
 your Powerwall in the Tesla app (its utility rate plan). Both time-of-use and
 flat-rate plans work.
 
-Prices are exposed to charging policy as `modules.TeslaPricing.importPrice` and
-`modules.TeslaPricing.exportPrice` (see `docs/PolicyCustomization.md`), in the
-plan's currency per kWh. The export price comes from the plan's sell rates;
-if the plan has none, there is no export price.
-
-When a price is not known (the plan has not been read yet, or gives no rate
-for the current time), the price is left out rather than shown as 0, so a
-policy comparing it does not match.
+Prices are available to charging policy as `modules.TeslaPricing.importPrice`
+and `modules.TeslaPricing.exportPrice`, in the plan's currency per kWh. The
+export price comes from the plan's sell rates; if the plan has none, there is
+no export price.
 
 ### Requirements
 
@@ -29,21 +25,9 @@ the Powerwall site's time zone.
 
 ### Forecasting
 
-A rate plan is a fixed schedule, so this module knows the price for the next
-48 hours without asking anyone, and offers the `Forecasting` capability. When a
-`cheapWindow` is configured, it finds the cheapest block of the requested
-number of hours and exposes:
-
-- `cheapWindowActive`: `1` while the current time falls inside the cheapest
-  window, otherwise `0`. Use this in policy to charge only during the cheapest
-  part of the day.
-- `forecastMinPrice` / `forecastMaxPrice`: the lowest and highest import price
-  over the next 48 hours.
-- `cheapWindowStart`: start time of the chosen window (for display).
-
-On a time-of-use plan several blocks are often equally cheap; the earliest one
-is chosen. The forecast is also available over the HTTP API at
-`/api/getPricingForecast` (see `docs/modules/control_HTTP_API/getPricingForecast.md`).
+A rate plan is a fixed schedule, so this module knows the next 48 hours of
+prices and can find the cheapest hours to charge in; see
+[Pricing Modules](Pricing.md).
 
 ### Status
 
@@ -59,10 +43,7 @@ is chosen. The forecast is also available over the HTTP API at
 | Parameter | Value |
 | --------- | ----- |
 | enabled   | *required* Boolean, `true` or `false`. |
-| cheapWindow | *optional* Object enabling cheapest-window charging. |
-| cheapWindow.hours | Number of consecutive hours the window should span (e.g. `4`). |
-| cheapWindow.startHour | *optional* Earliest local hour (0-23) the window may start. |
-| cheapWindow.endHour | *optional* Latest local hour (0-23) the window may run to; if less than `startHour`, the range crosses midnight. |
+| cheapWindow | *optional* Cheapest-window charging; see [Pricing Modules](Pricing.md#charging-in-the-cheapest-window). |
 
 ### JSON Configuration Example
 

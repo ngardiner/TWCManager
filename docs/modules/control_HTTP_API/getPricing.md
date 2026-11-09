@@ -3,7 +3,7 @@
 ## Introduction
 
 The getPricing API command returns the current import and export electricity
-price from each loaded Pricing module (see `docs/modules/Pricing_*.md`). If no
+price from each loaded Pricing module (see [Pricing Modules](../Pricing.md)). If no
 Pricing module is configured, the module list is empty.
 
 ## Format of request

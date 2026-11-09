@@ -9,8 +9,8 @@ EUR per kWh (converted from the API's EUR/MWh).
 aWATTar asks that the API be queried no more than once every 15 minutes; the
 module caches accordingly.
 
-Prices are exposed to charging policy as `modules.aWATTarPricing.importPrice`
-(see `docs/PolicyCustomization.md`).
+The price is available to charging policy as
+`modules.aWATTarPricing.importPrice`; see [Pricing Modules](Pricing.md).
 
 ### Status
 
