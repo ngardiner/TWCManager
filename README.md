@@ -118,7 +118,7 @@ Pricing interfaces report the current electricity price, so charging policy can 
 | Module                                      | Details                                  |
 | ------------------------------------------- | ---------------------------------------- |
 | [Amber](docs/modules/Pricing_Amber.md)      | Amber Electric wholesale prices (Australia), with forecast |
-| [aWATTar](docs/modules/Pricing_aWATTar.md)  | aWATTar spot-market prices (Austria / Germany) |
+| [aWATTar](docs/modules/Pricing_aWATTar.md)  | aWATTar spot-market prices (Austria / Germany), with forecast |
 | [Static](docs/modules/Pricing_Static.md)    | Fixed prices you set                     |
 | [Tesla](docs/modules/Pricing_Tesla.md)      | The rate plan set in the Tesla app, with forecast |
 

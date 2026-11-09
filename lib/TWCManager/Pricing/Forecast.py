@@ -95,6 +95,7 @@ class ForecastingPricing:
     without blocking: policy reads these attributes on the main loop."""
 
     capabilities = {"AdvancePricing": True, "Forecasting": True}
+    slotMinutes = 30
     status = False
 
     def __init__(self, master):
@@ -125,12 +126,14 @@ class ForecastingPricing:
 
     def getPriceForecast(self, hoursAhead=24):
         self.updateForecast()
-        return serialise(self._forecast()[0], hoursAhead)
+        return serialise(self._forecast()[0], hoursAhead, self.slotMinutes)
 
     def getCheapestWindow(self, numHours, startHour=None, endHour=None):
         self.updateForecast()
         forecast, _, tz = self._forecast()
-        return cheapestWindow(forecast, numHours, startHour, endHour, tz=tz)
+        return cheapestWindow(
+            forecast, numHours, startHour, endHour, self.slotMinutes, tz
+        )
 
     @property
     def forecastMinPrice(self):
@@ -154,7 +157,8 @@ class ForecastingPricing:
                 self.cheapWindowHours,
                 self.cheapWindowStartHour,
                 self.cheapWindowEndHour,
-                tz=tz,
+                self.slotMinutes,
+                tz,
             ),
         )
         return self._cheapStart

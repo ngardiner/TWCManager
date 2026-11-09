@@ -10,7 +10,7 @@ charge in.
 | Module                          | Prices from                              | Export price | Forecast |
 | ------------------------------- | ---------------------------------------- | ------------ | -------- |
 | [Amber](Pricing_Amber.md)       | Amber Electric (Australia)               | Yes          | Yes      |
-| [aWATTar](Pricing_aWATTar.md)   | aWATTar spot market (Austria / Germany)  | No           | No       |
+| [aWATTar](Pricing_aWATTar.md)   | aWATTar spot market (Austria / Germany)  | No           | Yes      |
 | [Static](Pricing_Static.md)     | Fixed prices you set                     | Yes          | No       |
 | [Tesla](Pricing_Tesla.md)       | The rate plan set in the Tesla app       | Yes          | Yes      |
 
@@ -30,14 +30,15 @@ example policies.
 | `exportPrice`       | The current price paid for electricity sent to the grid, in currency per kWh. |
 | `cheapWindowActive` | Forecasting modules: `1` while the current time is inside the cheapest window, otherwise `0`. |
 | `cheapWindowStart`  | Forecasting modules: when the cheapest window starts (ISO 8601), for display. |
-| `forecastMinPrice` / `forecastMaxPrice` | Forecasting modules: the lowest and highest import price over the next 48 hours. |
+| `forecastMinPrice` / `forecastMaxPrice` | Forecasting modules: the lowest and highest import price in the forecast. |
 
 Some modules offer more; see their pages.
 
 ## Charging in the cheapest window
 
-A module with a forecast can look over the next 48 hours of prices and find the
-cheapest unbroken run of the number of hours you need. Add a `cheapWindow` to
+A module with a forecast can look over the prices it knows ahead of time (up to
+48 hours; each module's page says how far) and find the cheapest unbroken run of
+the number of hours you need. Add a `cheapWindow` to
 the module's configuration:
 
 | Parameter             | Value |

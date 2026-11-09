@@ -17,8 +17,8 @@ percentage).
 
 Amber publishes prices ahead of time, so this module can also find the
 cheapest hours to charge in; see [Pricing Modules](Pricing.md) for this, and
-for what happens before the first price arrives. The forecast is refreshed
-every 15 minutes.
+for what happens before the first price arrives. The forecast covers up to 48
+hours and is refreshed every 15 minutes.
 
 ### Status
 

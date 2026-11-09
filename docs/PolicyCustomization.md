@@ -278,7 +278,7 @@ The values in a policy definition are:
     - `exportPrice`:  The current export (feed-in) price, in currency per kWh.
     - `spikeStatus` / `renewables` (Amber only):  The wholesale spike state and
       the current renewables percentage.
-    - `cheapWindowActive` (forecasting modules: Amber, Tesla):  `1` while the
+    - `cheapWindowActive` (forecasting modules: Amber, aWATTar, Tesla):  `1` while the
       current time is inside the cheapest forecast window (requires a
       `cheapWindow` to be configured on the module), otherwise `0`.
     - `forecastMinPrice` / `forecastMaxPrice` (forecasting modules):  The lowest
@@ -396,8 +396,8 @@ charging is unaffected.
 
 #### Charging in the cheapest forecast window
 
-A pricing module that offers the `Forecasting` capability (Amber, or Tesla for
-the rate plan set in the Tesla app) can look
+A pricing module that offers the `Forecasting` capability (Amber, aWATTar, or
+Tesla for the rate plan set in the Tesla app) can look
 ahead over the price forecast and tell policy when the current time is inside
 the cheapest contiguous block of the day.  Configure a `cheapWindow` on the
 module (the number of hours you need, with optional local-time bounds), then

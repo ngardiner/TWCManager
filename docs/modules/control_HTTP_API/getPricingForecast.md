@@ -3,7 +3,7 @@
 ## Introduction
 
 The getPricingForecast API command returns the forward price forecast from each
-loaded Pricing module that can forecast prices (Amber, Tesla).
+loaded Pricing module that can forecast prices (Amber, aWATTar, Tesla).
 Modules without forecasting are omitted from the response.
 
 ## Format of request
