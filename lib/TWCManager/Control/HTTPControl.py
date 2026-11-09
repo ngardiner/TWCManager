@@ -591,6 +591,12 @@ def CreateHTTPHandlerClass(master):
                 )
             )
             self.templateEnv.globals.update(
+                policyTree=Views.policyTree,
+                policyLayout=lambda: Views.policyLayout(
+                    master.getModuleByName("Policy")
+                ),
+            )
+            self.templateEnv.globals.update(
                 canForget=lambda vin: canForgetVehicle(master, vin)
             )
             bleModule = master.getModuleByName("TeslaBLE")
@@ -733,6 +739,9 @@ def CreateHTTPHandlerClass(master):
 
             elif self.url.path == "/api/getChargingPoints":
                 self.sendJSON(Views.chargingPointsView(master))
+
+            elif self.url.path == "/api/getPolicyState":
+                self.sendJSON(Views.policyStateView(master))
 
             elif self.url.path == "/api/getVehicles":
                 self.sendJSON(Views.vehiclesView(master))

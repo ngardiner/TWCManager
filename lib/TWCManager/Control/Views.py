@@ -193,6 +193,12 @@ def _vehiclesFingerprint(vehicles, groups, historyKeys, fleet, telemetry) -> str
     return fingerprint("vehicles", keys, groups, historyKeys, fleet or telemetry)
 
 
+def _policyFingerprint(policies) -> str:
+    # The one definition of the Policy page's shape: policy names in
+    # charge_policy order
+    return fingerprint("policy", [p.get("name") for p in policies])
+
+
 def pageFingerprint(master, page, vin=None) -> str:
     # The fingerprint a live page carries; equals its API response's
     if page == "home":
@@ -208,8 +214,7 @@ def pageFingerprint(master, page, vin=None) -> str:
         exists = master.vehicleRegistry.get(vin) is not None
         return fingerprint("vehicle", vin.upper(), exists, groups)
     if page == "policy":
-        names = [p.get("name") for p in master.getModuleByName("Policy").charge_policy]
-        return fingerprint("policy", names)
+        return _policyFingerprint(master.getModuleByName("Policy").charge_policy)
     raise ValueError("no live page " + repr(page))
 
 
@@ -369,4 +374,114 @@ def vehicleView(master, vin):
             ble=ble.bleStatus(vehicle.vin) if ble and vehicle.vin else None,
             chargeSessions=sessions,
         ),
+    }
+
+
+def policyTree(policy) -> dict:
+    # A policy's conditions as nested groups; ids index the raw nesting, so a
+    # one-item group keeps its own id
+    def group(nodeId, op, matches, conditions, values):
+        children = []
+        for i, (m, c, v) in enumerate(zip(matches, conditions, values)):
+            childId = nodeId + "-" + str(i)
+            if all(isinstance(x, list) for x in (m, c, v)):
+                flipped = "OR" if op == "AND" else "AND"
+                children.append(group(childId, flipped, m, c, v))
+            else:
+                children.append(
+                    {
+                        "id": childId,
+                        "kind": "leaf",
+                        "match": m,
+                        "condition": c,
+                        "value": v,
+                    }
+                )
+        return {"id": nodeId, "kind": "group", "op": op, "children": children}
+
+    return group("g", "AND", policy["match"], policy["condition"], policy["value"])
+
+
+def policyState(mod_policy, tree) -> dict:
+    # Node id -> live state: each leaf's resolved sides and truth, each
+    # group's truth
+    state = {}
+
+    def walk(node):
+        if node["kind"] == "leaf":
+            m, c, v = node["match"], node["condition"], node["value"]
+            truth = bool(mod_policy.doesConditionMatch(m, c, v, False))
+            state[node["id"]] = {
+                "match": mod_policy.policyValue(m),
+                "value": mod_policy.policyValue(v),
+                "truth": truth,
+            }
+            return truth
+        truths = [walk(child) for child in node["children"]]
+        truth = all(truths) if node["op"] == "AND" else any(truths)
+        state[node["id"]] = {"truth": truth}
+        return truth
+
+    walk(tree)
+    return state
+
+
+def policyLayout(mod_policy) -> list:
+    # The Policy page's blocks: each policy with its category, extension
+    # policies bucketed into the extension point they were inserted at
+    insertion_points = {0: "Emergency", 1: "Before", 3: "After"}
+    defaults = mod_policy.default_policy
+    replaced = all(x not in defaults for x in mod_policy.charge_policy)
+
+    def conditions_match(a, b):
+        return (
+            a.get("match") == b.get("match")
+            and a.get("condition") == b.get("condition")
+            and a.get("value") == b.get("value")
+        )
+
+    blocks, bucket, j = [], [], 0
+
+    def flush(ext_name):
+        if not ext_name:
+            blocks.extend(bucket)
+        else:
+            blocks.append({"type": "ext", "name": ext_name, "items": list(bucket)})
+        del bucket[:]
+
+    for i, policy in enumerate(mod_policy.charge_policy):
+        default_slot = defaults[j] if j < len(defaults) else None
+        is_default_slot = (
+            not replaced
+            and default_slot is not None
+            and policy["name"] == default_slot["name"]
+        )
+        if is_default_slot:
+            flush(insertion_points.get(j))
+            same = conditions_match(policy, default_slot)
+            category = "Default" if same else "Default, Modified"
+            blocks.append({"type": "policy", "index": i, "category": category})
+            j += 1
+        elif replaced:
+            blocks.append({"type": "policy", "index": i, "category": "Custom"})
+        else:
+            bucket.append({"type": "policy", "index": i, "category": None})
+
+    if not replaced:
+        flush(insertion_points.get(j))
+    return blocks
+
+
+def policyStateView(master) -> dict:
+    # /api/getPolicyState: every policy's live node states, for the Policy page
+    mod = master.getModuleByName("Policy")
+    policies = list(mod.charge_policy)
+    return {
+        "fingerprint": _policyFingerprint(policies),
+        "now": time.time(),
+        "active": str(mod.active_policy),
+        "policies": [
+            {"name": p.get("name"), "nodes": policyState(mod, policyTree(p))}
+            for p in policies
+        ],
     }
