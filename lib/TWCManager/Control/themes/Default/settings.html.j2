@@ -17,6 +17,11 @@
         width: 50%;
         height: 50%;
       }
+      /* Offsets: span the column, buttons at its right edge, and the unit
+         drop-down's form-group margin would lift it off the row's centre */
+      #consumptionOffsets { width: 100%; }
+      #consumptionOffsets td { vertical-align: middle; }
+      #consumptionOffsets .form-group { margin-bottom: 0; }
     </style>
   </head>
   <body>
@@ -155,7 +160,8 @@
                 <tr>
                   <th>Offset Name</th>
                   <th>Offset</th>
-                  <th>Actions</th>
+                  <th></th>
+                  <th class="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -174,7 +180,7 @@
                         "name": "offsetUnit",
                     })|safe }}
                     </td>
-                    <td>
+                    <td class="text-right">
                     {{ addButton(
                       ["addOffset", "Add / Edit", { "buttonType": "button" }],
                       "class='btn btn-outline-success'",
@@ -193,10 +199,14 @@
           <th>{{ label }}:</th>
           <td>
             {% if status.holdsToken %}
+            <div class="d-flex align-items-center">
+              <span class="mr-3">
               expires {{ status.expires }}
               ({{ {"synced": "synced from TeslaMate", "pasted": "pasted", "login": "Fleet API login"}.get(status.source, status.source) }})
               {% if status.paused %}<em>paused for reads</em>{% endif %}
-              <button class='btn btn-outline-danger btn-sm' type='submit' form='removeToken-{{ slotName }}'>Remove token</button>
+              </span>
+              <button class='btn btn-outline-danger btn-sm ml-auto' type='submit' form='removeToken-{{ slotName }}'>Remove token</button>
+            </div>
             {% else %}
               none
             {% endif %}
