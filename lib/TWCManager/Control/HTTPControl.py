@@ -19,6 +19,7 @@ import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Control.APIValidator import APIValidator
+from TWCManager.Control import Views
 from TWCManager.Control.Views import jsonSafe
 from TWCManager.Vehicle.Registry.VIN import (
     isWellFormedVIN,
@@ -27,7 +28,6 @@ from TWCManager.Vehicle.Registry.VIN import (
 )
 from TWCManager.Vehicle.Presence import HOME, NOT_HOME, PRESUMED, presence
 from TWCManager.Vehicle.Reconcile.Belief import known, newerReading
-from TWCManager.Vehicle.Reconcile.Desired import AMPS
 from TWCManager.Vehicle.Reconcile.Outcome import RULES
 from TWCManager.Vehicle.Reconcile.Rules import satisfied
 from TWCManager.Vehicle.Watch import COVERED
@@ -726,15 +726,11 @@ def CreateHTTPHandlerClass(master):
                 json_data = json.dumps(master.getModuleByName("Policy").charge_policy)
                 self.wfile.write(json_data.encode("utf-8"))
 
+            elif self.url.path == "/api/getChargingPoints":
+                self.sendJSON(Views.chargingPointsView(master))
+
             elif self.url.path == "/api/getSlaveTWCs":
                 data = {}
-                totals = {
-                    "carsCharging": 0,
-                    "lastAmpsOffered": 0,
-                    "lifetimekWh": 0,
-                    "maxAmps": 0,
-                    "reportedAmpsActual": 0,
-                }
                 for slaveTWC in master.getSlaveTWCs():
                     TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
                     data[TWCID] = {
@@ -775,30 +771,7 @@ def CreateHTTPHandlerClass(master):
                             "timeToFullCharge", 0.0
                         )
 
-                    totals["carsCharging"] += slaveTWC.isCharging
-                    totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
-                    totals["lifetimekWh"] += slaveTWC.lifetimekWh
-                    totals["maxAmps"] += slaveTWC.maxAmps
-                    totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
-
-                # A car on a charger no TWC reports is offered its share as
-                # its own charge rate (its desired amps), which no slave
-                # carries; a car on a TWC is already in that TWC's offer
-                for point in master.chargingPoints():
-                    if point.localEndpoints:
-                        continue
-                    for endpoint in point.vehicleEndpoints:
-                        d = master.desired.get(endpoint.vehicle.key, AMPS)
-                        totals["lastAmpsOffered"] += d.value if d else 0
-
-                data["total"] = {
-                    "carsCharging": totals["carsCharging"],
-                    "lastAmpsOffered": round(totals["lastAmpsOffered"], 2),
-                    "lifetimekWh": totals["lifetimekWh"],
-                    "maxAmps": totals["maxAmps"],
-                    "reportedAmpsActual": round(totals["reportedAmpsActual"], 2),
-                    "TWCID": "total",
-                }
+                data["total"] = Views.slaveTotals(master)
 
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
