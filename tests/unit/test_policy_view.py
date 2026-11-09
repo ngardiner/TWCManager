@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -171,3 +172,78 @@ def test_policy_fingerprint_follows_names(policy_mod):
     policy_mod.charge_policy[0]["name"] = "Charge Right Now"
     after = policyStateView(m)["fingerprint"]
     assert after != before and after == pageFingerprint(m, "policy")
+
+
+@pytest.fixture
+def policy_page(policy_mod):
+    # The Policy page as the handler renders it, over policy_mod's master
+    from http.server import BaseHTTPRequestHandler
+    from unittest.mock import patch
+
+    from TWCManager.Control.HTTPControl import CreateHTTPHandlerClass
+
+    master = policy_mod.master
+    master.settings["webControlTheme"] = "Default"
+    master.checkForUpdates = Mock(return_value=False)
+    master.version = "1.4.0"
+    cls = CreateHTTPHandlerClass(master)
+    with patch.object(BaseHTTPRequestHandler, "__init__", lambda *a, **k: None):
+        handler = cls()
+    handler.path = "/policy"
+
+    def render():
+        tmpl = handler.templateEnv.get_template("policy.html.j2")
+        return tmpl.render(handler.__dict__)
+
+    return render
+
+
+def test_policy_page_renders_structure_only(policy_mod, policy_page):
+    html = policy_page()
+    assert html.count('class="policy-box') == len(policy_mod.charge_policy)
+    assert "Emergency Extension Point" in html and 'data-format="resolved"' in html
+    body = html.split("<style>")[-1].split("</style>")[-1]
+    # No server-side truth: the truth classes appear only as hook values
+    body = re.sub(r'data-class-(true|false)="[^"]*"', "", body)
+    for truth in ("leaf-true", "leaf-false", "group-true", "group-false"):
+        assert truth not in body
+    assert "policy-box active" not in body and " hidden>Active" in body
+    assert "Live.start" in html and "/api/getPolicyState" in html
+
+
+def test_policy_page_hooks_match_state_paths(policy_mod, policy_page):
+    html = policy_page()
+    nodes = policyStateView(policy_mod.master)["policies"][1]["nodes"]
+    for nodeId, node in nodes.items():
+        if "match" in node:
+            assert 'data-field="policies.1.nodes.%s.match"' % nodeId in html
+            assert 'data-field="policies.1.nodes.%s.value"' % nodeId in html
+    # Charge Now's leaves carry their literals as JSON
+    assert 'data-literal="&#34;settings.chargeNowAmps&#34;"' in html
+    assert 'data-class-if="policies.0.nodes.g-0.truth"' in html
+    assert 'data-class-true="leaf-true" data-class-false="leaf-false"' in html
+    assert "(Default)" in html and "Active</span>" in html
+
+
+def test_policy_page_escapes_names_and_marks_categories(policy_mod, policy_page):
+    custom = {
+        "name": 'Mine <b>"x"',
+        "match": ["none"],
+        "condition": ["none"],
+        "value": [0],
+    }
+    policy_mod.charge_policy.insert(1, custom)
+    policy_mod.charge_policy[3]["condition"] = ["gt", "lt", "lte", "eq"]
+    html = policy_page()
+    assert "<b>" not in html and 'data-policy="Mine &lt;b&gt;&#34;x&#34;"' in html
+    assert '<div class="ext-title">Before Extension Point</div>' in html
+    assert "(Default, Modified)" in html
+    assert "Emergency Extension Point (no policies)" in html
+    policy_mod.charge_policy = [custom]
+    assert "(Custom)" in policy_page()
+
+
+def test_do_get_policy_is_gone():
+    from TWCManager.Control.HTTPControl import CreateHTTPHandlerClass
+
+    assert not hasattr(CreateHTTPHandlerClass(Mock()), "do_get_policy")
