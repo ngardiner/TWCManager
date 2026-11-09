@@ -7,10 +7,10 @@ from datetime import datetime, timedelta
 def cheapestWindow(
     forecast, numHours, startHour=None, endHour=None, slotMinutes=30, tz=None
 ):
-    """The cheapest run of numHours of contiguous slots, optionally starting
-    between startHour and endHour (local hours in tz; None is the host's
-    zone). Returns {startHour, startTimestamp, avgPrice, totalCost} or None.
-    Ties keep the earliest."""
+    """The cheapest run of numHours of contiguous slots, starting no earlier
+    than startHour and, with endHour, finished by endHour (local hours in tz;
+    None is the host's zone). Returns {startHour, startTimestamp, avgPrice,
+    totalCost} or None. Ties keep the earliest."""
     if not forecast or numHours <= 0 or numHours > 24:
         return None
 
@@ -19,15 +19,16 @@ def cheapestWindow(
     best = None
     for i in range(len(forecast) - size + 1):
         window = forecast[i : i + size]
-        hour = window[0]["timestamp"].astimezone(tz).hour
+        hours = [e["timestamp"].astimezone(tz).hour for e in window]
+        hour = hours[0]
 
         if startHour is not None:
             if endHour is None:
                 allowed = hour >= startHour
             elif startHour <= endHour:
-                allowed = startHour <= hour < endHour
+                allowed = all(startHour <= h < endHour for h in hours)
             else:
-                allowed = hour >= startHour or hour < endHour
+                allowed = all(h >= startHour or h < endHour for h in hours)
             if not allowed:
                 continue
 
