@@ -590,3 +590,100 @@ def test_fingerprint_template_global(monkeypatch):
     assert fp("vehicles") == pageFingerprint(m, "vehicles")
     assert fp("vehicle", CAR) == pageFingerprint(m, "vehicle", CAR)
     assert fp("home") == fingerprint("home")
+
+
+# Vehicles and Vehicle details pages: every hook resolves against its API
+
+import re
+
+_MISSING = object()
+GEN3_ANON = "anon:Gen3TWC-192.168.1.50"  # a Gen3 point's ID holds dots
+
+
+def _lookup(node, path):
+    # live.js's rule: a segment on an array selects the element whose key
+    # (else id) equals it, else a numeric index; on an object, its member
+    for seg in path.split("."):
+        if isinstance(node, list):
+            keyed = [
+                e for e in node
+                if isinstance(e, dict)
+                and str(e["key"] if e.get("key") is not None else e.get("id")) == seg
+            ]
+            if keyed:
+                node = keyed[0]
+            elif seg.isdigit() and int(seg) < len(node):
+                node = node[int(seg)]
+            else:
+                return _MISSING
+        elif isinstance(node, dict) and seg in node:
+            node = node[seg]
+        else:
+            return _MISSING
+    return node
+
+
+def _checkHooks(html, data):
+    paths = re.findall(r"data-(?:field|show|list|keyed-list)=['\"]([^'\"]+)['\"]", html)
+    assert paths
+    for path in paths:
+        assert not path.startswith("."), path  # no keyed-list templates here
+        assert _lookup(data, path) is not _MISSING, path
+    src = open("lib/TWCManager/Control/static/js/format.js").read()
+    names = re.findall(r"data-(?:format|show-if|row)=['\"]([^'\"]+)['\"]", html)
+    assert names
+    for name in names:
+        assert "F." + name + " = function" in src, name
+
+
+def dottedMaster():
+    from tests.unit.test_vehicles_page import master as vehiclesMaster
+
+    m = vehiclesMaster()
+    m.vehicleRegistry.beginPlugSession("Gen3TWC-192.168.1.50")
+    m.settings["Vehicles"]["legacy.record"] = {"chargeSessions": 1, "totalkWh": 2}
+    s = spending(m, telemetry=True)
+    s.request(CAR, "vehicle_data", 0.30)
+    s.signal(CAR, "BatteryLevel")
+    return m
+
+
+def test_vehicles_hooks_match_the_api_with_dotted_keys():
+    from tests.unit.test_vehicles_page import render
+
+    m = dottedMaster()
+    html = render(m)
+    data = vehiclesView(m)
+    keys = [e["key"] for e in data["vehicles"]]
+    assert GEN3_ANON in keys and "Fleet this month" in html
+    _checkHooks(html, data)
+    # each row's hooks address that row's own vehicle
+    rows = re.findall(r"<tr>(.*?)</tr>", html, re.S)
+    anonRow = next(r for r in rows if "Unknown car on TWC Gen3TWC-192.168.1.50" in r)
+    carRow = next(r for r in rows if f"/vehicleDetail/{CAR}" in r and "data-field" in r)
+    for row, key in ((anonRow, GEN3_ANON), (carRow, CAR)):
+        idx = set(re.findall(r'data-field="vehicles\.(\d+)', row))
+        assert len(idx) == 1 and keys[int(idx.pop())] == key
+    histRow = next(r for r in rows if ">legacy.record<" in r)
+    entry = _lookup(data, re.search(r'data-field="(history\.\d+)\.', histRow).group(1))
+    assert entry["key"] == "legacy.record"
+
+
+def test_vehicle_detail_hooks_match_the_api():
+    from tests.unit.test_vehicle_detail_page import render
+
+    m = dottedMaster()
+    ble = Mock()
+    ble.bleStatus.return_value = {
+        "status": "paired", "since": 1.0, "label": "Paired", "sinceAge": 5.0,
+        "inRange": True, "scannedAt": 1.0, "lastScanAge": 5.0,
+        "scanPending": False, "canScan": True, "scanBlocked": None,
+        "attempt": {"at": 1.0, "age": 5.0},
+    }
+    mods = {"TeslaAPI": m.getModuleByName("TeslaAPI"), "TeslaBLE": ble}
+    m.getModuleByName = mods.get
+    m.modules = {"TeslaBLE": ble}
+    m.vehicleRegistry.get(CAR).observe("name", "x.y", "OwnerAPI")
+    html = render(m)
+    assert "BLE Control" in html
+    _checkHooks(html, vehicleView(m, CAR))

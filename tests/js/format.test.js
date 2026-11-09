@@ -129,6 +129,15 @@ test("ble", () => {
   const why = "Bluetooth adapter is powered off or blocked (rfkill)";
   assert.equal(F.bleScanBlocked(b({ canScan: false, scanBlocked: why })), "No range scan: " + why);
   assert.equal(F.bleScanBlocked(b()), "");
+  // the scan button shows instead: never both
+  assert.equal(F.bleScanBlocked(b({ canScan: true, scanBlocked: "bluetoothctl not installed (install the bluez package)" })), "");
+});
+test("ble formatters tolerate no BLE status", () => {
+  for (const name of ["bleLabel", "bleSince", "bleAttempt", "bleLastScan", "bleScanBlocked"]) {
+    assert.equal(F[name](null, ctx()), "", name);
+  }
+  assert.equal(F.bleRepair(null), false);
+  assert.equal(F.bleNotRepair(null), false);
 });
 test("predicates", () => {
   assert.equal(F.isEmpty([]), true); assert.equal(F.isEmpty([1]), false);

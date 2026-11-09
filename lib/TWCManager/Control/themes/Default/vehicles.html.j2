@@ -5,13 +5,20 @@
     {% include 'bootstrap.html.j2' %}
     <script type="text/javascript" src="/static/js/compositor.js"></script>
     <script type="text/javascript" src="/static/js/vehicleImage.js"></script>
+    <script type="text/javascript" src="/static/js/format.js"></script>
+    <script type="text/javascript" src="/static/js/live.js"></script>
+    <script type="text/javascript">
+      Live.start({urls: ["/api/getVehicles"], interval: 5000, fingerprint: {{ fingerprint("vehicles")|tojson }}});
+    </script>
   </head>
   <body>
     {% include 'navbar.html.j2' %}
     <p>&nbsp;</p>
     <h3>Vehicles</h3>
-    {% set spend = spendLines() %}
-    {% for line in spend %}<p>{{ line }}</p>{% endfor %}
+    {% set fleet, telemetry = spendShown() %}
+    {% set spend = fleet or telemetry %}
+    <p data-field="spend" data-format="fleetLine" data-show="spend.fleet" hidden></p>
+    <p data-field="spend" data-format="telemetryLine" data-show="spend.telemetry" hidden></p>
     <table class="stack">
       <tr>
         <th></th>
@@ -37,13 +44,13 @@
             {% if row.anonymous %}Unknown car on TWC {{ row.point }}
             {% else %}<a href="/vehicleDetail/{{ row.vin }}">{{ row.vin }}</a>{% endif %}
           </td>
-          <td data-label="Name">{{ row.name }}</td>
-          <td data-label="Presence">{{ presence(v) }}</td>
-          <td data-label="Watch">{{ watchLine(v) }}</td>
-          <td data-label="Providers">{% for line in providerLines(v) %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
-          <td data-label="Last seen">{{ ageText(row.lastSeenAge) }} via {{ sourceName(row.lastSeenSource) }}</td>
-          <td data-label="Charge limit (car's own)">{{ heldLimitText(v) }}</td>
-          {% if spend %}<td data-label="Fleet this month">{% if not row.anonymous %}{{ carSpend(row.vin).cell }}{% endif %}</td>{% endif %}
+          <td data-label="Name" data-field="vehicles.{{ loop.index0 }}.name"></td>
+          <td data-label="Presence" data-field="vehicles.{{ loop.index0 }}.presence" data-format="presence"></td>
+          <td data-label="Watch" data-field="vehicles.{{ loop.index0 }}.watch" data-format="watchLine"></td>
+          <td data-label="Providers" data-field="vehicles.{{ loop.index0 }}.providers" data-format="providerLines" style="white-space: pre-line"></td>
+          <td data-label="Last seen" data-field="vehicles.{{ loop.index0 }}" data-format="lastSeen"></td>
+          <td data-label="Charge limit (car's own)" data-field="vehicles.{{ loop.index0 }}.heldLimit" data-format="heldLimit"></td>
+          {% if spend %}<td data-label="Fleet this month" data-field="vehicles.{{ loop.index0 }}" data-format="spendCell"></td>{% endif %}
         </tr>
       {% endfor %}
     </table>
@@ -69,8 +76,8 @@
         {% for vehicle in master.settings["Vehicles"].keys()|sort %}
             <tr>
               <td data-label="VIN"><a href="/vehicleDetail/{{ vehicle }}">{{ vehicle }}</a></td>
-              <td data-label="Charges">{{ master.settings["Vehicles"][vehicle]["chargeSessions"] }}</td>
-              <td data-label="Total kWh">{{ master.settings["Vehicles"][vehicle]["totalkWh"] }}</td>
+              <td data-label="Charges" data-field="history.{{ loop.index0 }}.chargeSessions"></td>
+              <td data-label="Total kWh" data-field="history.{{ loop.index0 }}.totalkWh"></td>
             </tr>
         {% endfor %}
       {% endif %}
