@@ -5,7 +5,12 @@ import time
 
 from TWCManager.EVSEInstance.Gen2TWC import Gen2TWC
 from TWCManager.EVSEInstance.Gen3TWC import Gen3TWC
+from TWCManager.Vehicle.Presence import presence
+from TWCManager.Vehicle.Reconcile.Belief import known, newerReading
 from TWCManager.Vehicle.Reconcile.Desired import AMPS
+from TWCManager.Vehicle.Reconcile.Outcome import RULES
+from TWCManager.Vehicle.Reconcile.Rules import satisfied
+from TWCManager.Vehicle.Registry.VIN import vehicleRecordKey
 
 # Service start; folded into every fingerprint so a restart invalidates pages
 STARTED = time.time()
@@ -155,8 +160,206 @@ def chargingPointsView(master) -> dict:
     # /api/getChargingPoints: every charging point, for the home pages
     points = [_pointView(master, p) for p in master.chargingPoints()]
     return {
-        "fingerprint": fingerprint("home"),
+        "fingerprint": pageFingerprint(master, "home"),
         "now": time.time(),
         "points": points,
         "total": pointsTotal(points),
+    }
+
+
+def _settingsShape(master):
+    # Vehicle group and charge history names, read under the settings lock
+    with master.settingsLock:
+        groups = sorted(master.settings.get("VehicleGroups", {}))
+        history = master.settings.get("Vehicles", {})
+        historyKeys = sorted(history)
+        # A list in VIN order, so the page addresses rows by position: a
+        # settings key may hold a "." that a hook path cannot
+        rows = [
+            {
+                "key": k,
+                "chargeSessions": history[k].get("chargeSessions", 0),
+                "totalkWh": history[k].get("totalkWh", 0),
+            }
+            for k in historyKeys
+        ]
+    return groups, historyKeys, rows
+
+
+def pageFingerprint(master, page, vin=None) -> str:
+    # The fingerprint a live page carries; equals its API response's
+    if page == "home":
+        return fingerprint("home")
+    if page == "vehicles":
+        keys = [v.key for v in master.vehicleRegistry.vehicles()]
+        groups, historyKeys, _ = _settingsShape(master)
+        fleet, telemetry = spendShown(master)
+        return fingerprint("vehicles", keys, groups, historyKeys, fleet or telemetry)
+    if page == "vehicle":
+        vin = str(vin or "")
+        groups, _, _ = _settingsShape(master)
+        exists = master.vehicleRegistry.get(vin) is not None
+        return fingerprint("vehicle", vin.upper(), exists, groups)
+    if page == "policy":
+        names = [p.get("name") for p in master.getModuleByName("Policy").charge_policy]
+        return fingerprint("policy", names)
+    raise ValueError("no live page " + repr(page))
+
+
+def spendShown(master):
+    # (fleet, telemetry): Fleet API spend only with a Fleet token, telemetry
+    # only with its module
+    api = master.getModuleByName("TeslaAPI")
+    fleet = bool(api and getattr(api.fleetSlot, "accessToken", ""))
+    return fleet, master.getModuleByName("FleetTelemetryMQTT") is not None
+
+
+def providerClaims(master, vehicle) -> list:
+    # One entry per provider claim, in claim order; whether it can command
+    # the car and, when it cannot, why (if known)
+    api = master.getModuleByName("TeslaAPI")
+    # The account listing claims the car for both APIs; without its token an
+    # API can neither read nor command it
+    held = {"OwnerAPI": "ownerTokenHeld", "FleetAPI": "fleetTokenHeld"}
+    out = []
+    for name, claim in vehicle.claims.items():
+        if api and name in held and not getattr(api, held[name])():
+            continue
+        can = bool(claim.commands)
+        why = None
+        if not can and api and name == "OwnerAPI":
+            why = api.ownerReadOnlyReason(vehicle.attachment("TeslaAPI"))
+        elif not can and api and name == "FleetAPI":
+            why = api.fleetReadOnlyReason()
+        out.append(
+            {
+                "provider": name,
+                "status": claim.status,
+                "commands": can,
+                "readOnlyReason": why or None,
+            }
+        )
+    return out
+
+
+def pendingCommandData(master, vehicle) -> list:
+    # Each desire the car has not reached: what is in flight, what the
+    # reconciler said, and the last outcome. Reads only: never creates state
+    state, rows = master.desired.peek(vehicle.key), []
+    for aspect, d in list(state.desired.items()) if state else []:
+        rec = state.records.get(aspect)
+        if rec is None:
+            continue
+        sent, last = rec.inFlight, rec.lastOutcome
+        if not sent and (
+            satisfied(aspect, d.value, known(vehicle, aspect, d.value))
+            or (
+                # Settled, the reconciler waits for a reading saying otherwise
+                rec.settledAt is not None
+                and not newerReading(vehicle, aspect, rec.settledAt)
+            )
+        ):
+            continue
+        rows.append(
+            {
+                "aspect": aspect,
+                "value": d.value,
+                "inFlight": (
+                    {"provider": sent.provider, "since": sent.since} if sent else None
+                ),
+                "said": master.reconciler.blockedReason(vehicle.key, aspect),
+                "lastOutcome": (
+                    {
+                        "kind": last.kind,
+                        "detail": last.detail.replace(RULES, ""),
+                        "provider": rec.lastProvider,
+                        "at": rec.lastOutcomeAt,
+                    }
+                    if last
+                    else None
+                ),
+            }
+        )
+    return rows
+
+
+def vehicleEntry(master, vehicle, fleet, telemetry, now=None) -> dict:
+    # One vehicle from cached state only
+    now = time.time() if now is None else now
+    row = vehicle.summary()
+    limit = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
+    return {
+        "key": vehicle.key,
+        "vin": row["vin"],
+        "name": row["name"],
+        "anonymous": row["anonymous"],
+        "point": row["point"],
+        "appearance": row["appearance"],
+        "presence": presence(master, vehicle),
+        "watch": (
+            master.watch.status(vehicle)
+            if master.watch
+            else {"watched": False, "why": "off"}
+        ),
+        "providers": providerClaims(master, vehicle),
+        "lastSeenAt": now - row["lastSeenAge"],
+        "lastSeenSource": row["lastSeenSource"],
+        "heldLimit": (
+            {"held": limit.held, "outside": limit.outside}
+            if limit is not None
+            else None
+        ),
+        "spend": (
+            master.fleetSpend.car(vehicle.vin)
+            if (fleet or telemetry) and not row["anonymous"]
+            else None
+        ),
+    }
+
+
+def vehiclesView(master) -> dict:
+    # /api/getVehicles: every vehicle, for the Vehicles page
+    now = time.time()
+    fleet, telemetry = spendShown(master)
+    vehicles = master.vehicleRegistry.vehicles()
+    groups, historyKeys, history = _settingsShape(master)
+    return {
+        "fingerprint": fingerprint(
+            "vehicles", [v.key for v in vehicles], groups, historyKeys, fleet or telemetry
+        ),
+        "now": now,
+        "budget": master.watchBudget.tokens(),
+        "spend": {
+            "fleet": fleet,
+            "telemetry": telemetry,
+            "month": master.fleetSpend.month() if fleet or telemetry else None,
+        },
+        "vehicles": [vehicleEntry(master, v, fleet, telemetry, now) for v in vehicles],
+        "history": history,
+    }
+
+
+def vehicleView(master, vin):
+    # /api/getVehicle/<VIN>: one vehicle, for its details page; None if unknown
+    vehicle = master.vehicleRegistry.get(vin)
+    if vehicle is None:
+        return None
+    now = time.time()
+    fleet, telemetry = spendShown(master)
+    ble = master.getModuleByName("TeslaBLE")
+    with master.settingsLock:
+        history = master.settings.get("Vehicles", {})
+        rec = history.get(vehicleRecordKey(history, vehicle.vin or vin), {})
+        sessions = rec.get("chargeSessions", 0)
+    return {
+        "fingerprint": pageFingerprint(master, "vehicle", vin),
+        "now": now,
+        "budget": master.watchBudget.tokens(),
+        "spend": {"fleet": fleet, "telemetry": telemetry},
+        "vehicle": dict(
+            vehicleEntry(master, vehicle, fleet, telemetry, now),
+            pending=pendingCommandData(master, vehicle),
+            ble=ble.bleStatus(vehicle.vin) if ble and vehicle.vin else None,
+            chargeSessions=sessions,
+        ),
     }

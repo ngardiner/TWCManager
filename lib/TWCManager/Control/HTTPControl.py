@@ -586,6 +586,11 @@ def CreateHTTPHandlerClass(master):
             )
             self.templateEnv.globals.update(registry=master.vehicleRegistry)
             self.templateEnv.globals.update(
+                fingerprint=lambda page, vin=None: Views.pageFingerprint(
+                    master, page, vin
+                )
+            )
+            self.templateEnv.globals.update(
                 canForget=lambda vin: canForgetVehicle(master, vin)
             )
             bleModule = master.getModuleByName("TeslaBLE")
@@ -728,6 +733,19 @@ def CreateHTTPHandlerClass(master):
 
             elif self.url.path == "/api/getChargingPoints":
                 self.sendJSON(Views.chargingPointsView(master))
+
+            elif self.url.path == "/api/getVehicles":
+                self.sendJSON(Views.vehiclesView(master))
+
+            elif self.url.path.startswith("/api/getVehicle/"):
+                vin = urllib.parse.unquote(
+                    self.url.path[len("/api/getVehicle/") :]
+                ).strip("/")
+                data = Views.vehicleView(master, vin)
+                if data is None:
+                    self.sendJSON({"error": "unknown vehicle"}, 404)
+                else:
+                    self.sendJSON(data)
 
             elif self.url.path == "/api/getSlaveTWCs":
                 data = {}
