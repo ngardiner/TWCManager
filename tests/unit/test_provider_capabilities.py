@@ -50,8 +50,38 @@ def test_provider_defaults_and_declarations():
 def test_vehicle_max_amps_falls_back_to_wiring():
     v = VehicleRegistry({}).getOrCreate(VIN, "t")
     assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 40}) == 40
-    # The charger's pilot is not the car's limit: on our TWC it is our offer
-    v.observe("availableCurrent", 6, "TeslaBLE")
-    assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 40}) == 40
+    assert vehicleMaxAmps(v, {}) == 32
+    v.observe("availableCurrent", None, "TeslaMate")
+    v.observe("chargeCurrentRequestMax", None, "TeslaMate")
+    assert vehicleMaxAmps(v, {}) == 32
+
+
+def test_a_request_maximum_at_the_pilot_is_the_chargers_limit_not_the_cars():
+    # Read as a Gen2 offers 6 A going idle, the car's request maximum is that
+    # offer, and says nothing about the car
+    v = VehicleRegistry({}).getOrCreate(VIN, "t")
+    v.observe("availableCurrent", 6, "FleetAPI")
+    v.observe("chargeCurrentRequestMax", 6, "FleetAPI")
+    assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 48}) == 48
+
+
+def test_a_request_maximum_below_the_pilot_is_the_cars_own():
+    v = VehicleRegistry({}).getOrCreate(VIN, "t")
+    v.observe("availableCurrent", 48, "TeslaBLE")
+    v.observe("chargeCurrentRequestMax", 32, "TeslaBLE")
+    assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 48}) == 32
+    # The car's own limit holds under a lower pilot another source reads later
+    v.observe("availableCurrent", 6, "FleetAPI")
+    v.observe("chargeCurrentRequestMax", 6, "FleetAPI")
+    assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 48}) == 32
+
+
+def test_a_pilot_and_maximum_pair_only_within_one_sources_reading():
+    v = VehicleRegistry({}).getOrCreate(VIN, "t")
+    v.observe("availableCurrent", 48, "TeslaBLE")
     v.observe("chargeCurrentRequestMax", 16, "OwnerAPI")
-    assert vehicleMaxAmps(v, {}) == 16
+    assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 48}) == 48
+    # A pilot newer than the maximum: the maximum may be from the old pilot
+    v.observe("chargeCurrentRequestMax", 6, "TeslaMate", at=100)
+    v.observe("availableCurrent", 48, "TeslaMate", at=101)
+    assert vehicleMaxAmps(v, {"wiringMaxAmpsPerTWC": 48}) == 48
