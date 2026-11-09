@@ -19,6 +19,7 @@ import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Control.APIValidator import APIValidator
+from TWCManager.Control.Views import jsonSafe
 from TWCManager.Vehicle.Registry.VIN import (
     isWellFormedVIN,
     storedBleStatus,
@@ -2340,6 +2341,17 @@ def CreateHTTPHandlerClass(master):
             except BrokenPipeError:
                 logger.debug("Connection Error: Broken Pipe")
             return
+
+        def sendJSON(self, data, code=200):
+            body = json.dumps(jsonSafe(data), allow_nan=False).encode("utf-8")
+            try:
+                self.send_response(code)
+                self.send_header("Content-type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except BrokenPipeError:
+                self.debugLogAPI("Connection Error: Broken Pipe")
 
         def debugLogAPI(self, message):
             logger.debug(
