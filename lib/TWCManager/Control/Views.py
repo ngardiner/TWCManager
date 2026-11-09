@@ -186,15 +186,22 @@ def _settingsShape(master):
     return groups, historyKeys, rows
 
 
+def _vehiclesFingerprint(vehicles, groups, historyKeys, fleet, telemetry) -> str:
+    # The one definition of the Vehicles page's shape; callers pass one
+    # snapshot so a view's fingerprint matches the list it returns
+    keys = [v.key for v in vehicles]
+    return fingerprint("vehicles", keys, groups, historyKeys, fleet or telemetry)
+
+
 def pageFingerprint(master, page, vin=None) -> str:
     # The fingerprint a live page carries; equals its API response's
     if page == "home":
         return fingerprint("home")
     if page == "vehicles":
-        keys = [v.key for v in master.vehicleRegistry.vehicles()]
         groups, historyKeys, _ = _settingsShape(master)
-        fleet, telemetry = spendShown(master)
-        return fingerprint("vehicles", keys, groups, historyKeys, fleet or telemetry)
+        return _vehiclesFingerprint(
+            master.vehicleRegistry.vehicles(), groups, historyKeys, *spendShown(master)
+        )
     if page == "vehicle":
         vin = str(vin or "")
         groups, _, _ = _settingsShape(master)
@@ -324,8 +331,8 @@ def vehiclesView(master) -> dict:
     vehicles = master.vehicleRegistry.vehicles()
     groups, historyKeys, history = _settingsShape(master)
     return {
-        "fingerprint": fingerprint(
-            "vehicles", [v.key for v in vehicles], groups, historyKeys, fleet or telemetry
+        "fingerprint": _vehiclesFingerprint(
+            vehicles, groups, historyKeys, fleet, telemetry
         ),
         "now": now,
         "budget": master.watchBudget.tokens(),
