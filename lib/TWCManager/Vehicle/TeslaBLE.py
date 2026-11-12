@@ -701,6 +701,7 @@ class TeslaBLE:
             "phases": cs.get("chargerPhases"),
             "scheduledChargingPending": cs.get("scheduledChargingPending"),
             "timeToFullCharge": cs.get("timeToFullCharge"),
+            "chargeEnergyAdded": cs.get("chargeEnergyAdded"),
         }
 
     def get_location_state(self, vin):

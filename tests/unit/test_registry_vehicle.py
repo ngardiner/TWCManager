@@ -373,3 +373,45 @@ def test_a_true_fetch_with_a_stale_value_ends_the_walk():
     )
     assert v.read("chargingState", 300).value == "Stored"
     assert calls == []
+
+
+def test_home_amps_keep_the_last_five_one_per_plug_in():
+    from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+    v = VehicleRegistry({}, clock=Clock()).getOrCreate(VIN, "t")
+    for i, amps in enumerate((48, 32, 48, 16, 48, 40)):
+        assert v.noteHomeAmps(amps, since=100 + i)
+    assert v.homeAmps()["amps"] == [32, 48, 16, 48, 40]
+    assert not v.noteHomeAmps(6, since=105)  # the same plug-in
+    assert not v.noteHomeAmps(0, since=200)
+
+
+def test_home_amps_survive_a_save_and_load_and_keep_their_plug_in():
+    from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+    reg = VehicleRegistry({}, clock=Clock())
+    reg.getOrCreate(VIN, "t").noteHomeAmps(48, since=500)
+    again = VehicleRegistry({}, clock=Clock())
+    again.load(reg.toJSON())
+    v = again.get(VIN)
+    # A restart forgets the unplug, so its plug-in reads as NEVER
+    assert v.homeAmps()["amps"] == [48] and not v.noteHomeAmps(6, since=float("-inf"))
+
+
+def test_unreadable_saved_home_amps_are_dropped():
+    from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+    amps = ["x", -3, True, 32, 32, 32, 32, 32, 40]
+    blob = {"version": 1, "vehicles": {VIN: {"homeAmps": {"amps": amps, "since": "y"}}}}
+    reg = VehicleRegistry({}, clock=Clock())
+    reg.load(blob)
+    assert reg.get(VIN).homeAmps()["amps"] == [32, 32, 32, 32, 40]
+    assert VehicleRegistry({}, clock=Clock()).getOrCreate(VIN, "t").homeAmps()["amps"] == []
+
+
+def test_a_held_rate_with_no_plug_in_saves_as_strict_json():
+    import json
+    from TWCManager.Vehicle.Registry.VehicleRegistry import VehicleRegistry
+    reg = VehicleRegistry({}, clock=Clock())
+    reg.getOrCreate(VIN, "t").noteHomeHeld(8)
+    text = json.dumps(reg.toJSON(), allow_nan=False)
+    again = VehicleRegistry({}, clock=Clock())
+    again.load(json.loads(text))
+    assert again.get(VIN).homeAmps() == {"amps": [], "since": None, "held": 8}

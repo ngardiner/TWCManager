@@ -319,3 +319,12 @@ def test_a_car_asleep_after_charging_keeps_its_seat_while_it_would_charge():
     v.observe("batteryLevel", 80, "OwnerAPI"); v.observe("chargeLimit", 80, "OwnerAPI")
     m.distributeEVSEPower()
     assert setAmps(m) == []
+
+def test_a_second_car_gets_its_full_share_only_once_the_first_reads_lower():
+    # A car lowered to its share keeps its old draw until a newer reading, so the other waits under it
+    m = real(); a = car(m, VIN, "Charging"); b = car(m, VIN2, "Charging"); budget(m, 48)
+    a.observe("actualCurrent", 40, "OwnerAPI"); b.observe("actualCurrent", 0, "OwnerAPI")
+    m.distributeEVSEPower(); first = {x["vin"]: x["amps"] for x in setAmps(m)}
+    assert first[VIN2] <= 8
+    a.observe("actualCurrent", 24, "OwnerAPI"); m.distributeEVSEPower()
+    assert {x["vin"]: x["amps"] for x in setAmps(m)}[VIN2] == 24

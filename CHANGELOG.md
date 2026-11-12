@@ -26,6 +26,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Expose the Powerwall's current rate-plan period to policies (`modules.TeslaPowerwall2.touPeriod`, such as `ON_PEAK`), read from the tariff set in the Tesla app with a free read on either a Fleet or an Owner API token
     * (@MikeBishop) - Report electricity prices and the cheapest charging window from the rate plan set in the Tesla app, for policies and the pricing API ([details](docs/modules/Pricing_Tesla.md))
     * (@MikeBishop) - Read each car's last reported charge state for free with a Fleet API token, even while the car sleeps, before paying for a live read ([details](docs/modules/Vehicle_TeslaAPI.md#owner-api-and-fleet-api))
+    * (@MikeBishop) - Show a Fleet-only car's charging in the charge history a few minutes late, at no API cost ([details](docs/modules/Vehicle_TeslaAPI.md#why-is-my-cars-charging-in-the-history-a-few-minutes-late))
 * Architecture
     * (@MikeBishop) - The watch sets when cars are read, in place of the Tesla API deferral ladder (300/1800/3600 s of paid `vehicle_data`) and the half-hourly battery refresh of cars at home, both removed; a read stays fresh for 5 minutes for every caller. `cloudUpdateInterval` no longer sets how often cars are read (the Powerwall module uses it as its cloud cache time)
     * (@MikeBishop) - Serialise settings.json saves under a settings lock so a save no longer races writers on other threads

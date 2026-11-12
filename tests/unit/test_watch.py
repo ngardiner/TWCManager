@@ -127,6 +127,16 @@ def chargingFleetCar(requests_mock, m, v, battery=True, **kw):
     m.watchBudget = WatchBudget(3.0, clock=lambda: 1000.0)
     return car
 
+def namedFleetCar(requests_mock, m, v, **kw):
+    # Charging on a TWC that names it: the cloud read is paid, as only a
+    # Fleet-only car's charge is polled for free instead
+    car = chargingFleetCar(requests_mock, m, v, **kw); twcNames(m, v)
+    v.observe("actualCurrent", 24, "Gen2TWC", seen=False)
+    return car
+
+def twcNames(m, v):
+    m.vehicleRegistry.observeTwcVin("8244", VIN); gen2Slave(m, "8244", state=0x03); v.observe("pluggedIn", True, "Gen2TWC")
+
 def test_arrival_by_twc_plug_in_reads_the_battery_once():
     m, r, v, c = setup(here=False, ble=True); w = Watch(m, clock=c); reads = bleReads(m, soc=18)
     w.pass_()                                                        # the start: nothing is news yet
@@ -192,7 +202,7 @@ def test_a_charging_car_is_read_on_the_cadence_and_released_when_it_sleeps():
     c.t += 300; w.pass_(); runPending(r.ble); assert reads.count == 2
 
 def test_cloud_reads_draw_from_the_budget_and_stop_at_the_floor(requests_mock):
-    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    m, r, v, c = setup(here=False); namedFleetCar(requests_mock, m, v)
     w = Watch(m, clock=c); w.readNow(VIN, "start"); w.pass_(); runPending(r.cloud)   # status check, then the event read
     paidBefore = paid(requests_mock)[0]; assert paidBefore == 1
     for _ in range(40): later(m, v, c, 900); w.pass_(); runPending(r.cloud)
@@ -201,7 +211,7 @@ def test_cloud_reads_draw_from_the_budget_and_stop_at_the_floor(requests_mock):
     assert m.watchBudget.tokens() >= 0.05 - 0.002
 
 def test_a_refused_read_waits_the_routine_cadence(requests_mock, caplog):
-    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    m, r, v, c = setup(here=False); namedFleetCar(requests_mock, m, v)
     m.watchBudget.spend(0.049, EVENT)                                 # one event read above the floor
     w = Watch(m, clock=c); w.readNow(VIN, "start"); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 1
     spend, asked = m.watchBudget.spend, []
@@ -264,12 +274,12 @@ def test_a_covered_car_keeps_no_ask_for_later(requests_mock):
     feed.down = True; later(m, v, c, 60); w.pass_(); runPending(r.cloud)
     assert paid(requests_mock) == (0, 0, 0)
 
-def test_cloud_reads_while_charging_run_on_the_slower_cadence(requests_mock):
+def test_a_fleet_only_car_charging_is_polled_instead_of_read_on_the_cloud_cadence(requests_mock):
     m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
-    w = Watch(m, clock=c); w.readNow(VIN, "start"); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 1
-    later(m, v, c, DEFAULTS["chargingReadSecs"]); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 1
+    w = Watch(m, clock=c); w.suspect(VIN, c.t, "start"); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 0
+    later(m, v, c, DEFAULTS["chargingReadSecs"]); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 0
     later(m, v, c, DEFAULTS["cloudChargingReadSecs"] - DEFAULTS["chargingReadSecs"]); w.pass_(); runPending(r.cloud)
-    assert paid(requests_mock)[0] == 2
+    assert paid(requests_mock)[0] == 0 and counts(requests_mock)["cached"] == 2  # no newer snapshot: given up at 600 s
 
 def awayLong(m, v, c, ago=6000):
     # Away, the fix old enough that the car could be home by now
@@ -485,6 +495,7 @@ def test_a_charge_port_opening_on_an_awake_car_at_home_reads_it_once():
 
 def test_a_failed_read_asked_for_is_tried_once_more_a_cadence_later(requests_mock):
     m, r, v, c = setup(here=False); attachFleet(m, v, FleetCar(requests_mock, state="online", at=HOME)); placeAt(m, v, HOME)
+    twcNames(m, v)                                                         # a Fleet-only car would be polled instead
     requests_mock.get(FLEET + VIN + "/vehicle_data", status_code=500, json={})
     w = Watch(m, clock=c); w.pass_(); runPending(r.cloud)
     w.readNow(VIN, "test"); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 1
@@ -590,16 +601,17 @@ def test_an_api_only_car_leaving_while_awake_is_seen_within_a_courtesy_window(re
     readsAt(requests_mock, m, v, c, w, r, c.t + gone)
     assert paid(requests_mock)[0] == 2 and P.presence(m, v) == P.NOT_HOME
 
-def test_an_api_only_car_charging_is_not_read_for_a_battery_no_policy_reads(requests_mock):
+def test_an_api_only_car_charging_is_read_only_while_no_snapshot_shows_it(requests_mock):
+    # No policy reads its battery: no snapshot, so read on the cloud charging cadence
     m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v, battery=False)
     v.observe("state", "online", "FleetAPI"); v.observe("chargingState", "Charging", "FleetAPI")
     w = Watch(m, clock=c); w.pass_()                                     # charging before the start
     for _ in range(12): later(m, v, c, 300); w.pass_(); runPending(r.cloud)
-    assert paid(requests_mock) == (0, 0, 0) and situation(m, v) == HOME_CHARGING
+    assert paid(requests_mock) == (3600 // DEFAULTS["cloudChargingReadSecs"], 0, 0) and situation(m, v) == HOME_CHARGING
     requests_mock.get(FLEET + VIN, json={"response": {"state": "asleep", "vin": VIN}})
     later(m, v, c, 300); w.pass_(); runPending(r.cloud)                  # the charge ended: it sleeps
     e = VehicleEndpoint(v, m.providerOrder, m)
-    assert situation(m, v) == HOME_ASLEEP and not e.wantsToCharge and paid(requests_mock)[0] == 0
+    assert situation(m, v) == HOME_ASLEEP and not e.wantsToCharge and paid(requests_mock)[0] == 4    # asleep: no more
 
 def test_a_policy_reads_the_battery_where_it_names_it_or_overrides_the_limit():
     m, r, v, c = setup(here=False); batteryPolicy(m); assert m.getModuleByName("Policy").readsBattery()
@@ -623,6 +635,46 @@ def test_a_lost_car_in_a_ble_install_gets_no_cloud_status_checks(requests_mock):
     lostAway(m, v, c); w = Watch(m, clock=c); bleAnswers(m, answer=None); scans = bleScans(m, inRange=False)
     for _ in range(40): later(m, v, c, 150); w.pass_(); runPending(r.ble); runPending(r.cloud)
     assert scans.count > 1 and requests_mock.request_history == []
+
+def rise(m, w, c, before, after):
+    # A step held for the next sample, 30 s on
+    m.setConsumption("t", before); w.loadSample(); m.setConsumption("t", after); w.loadSample(); c.t += 30; w.loadSample()
+
+def test_a_rise_reads_an_api_only_car_away_once_it_could_be_back(requests_mock):
+    # Home and plugging in, but its last fix was on the road: only a fix says it is back
+    m, r, v, c, car = apiOnly(requests_mock, at=HOME); northOfHome(m, v, 5, c.t); v.observe("state", "online", "FleetAPI")
+    w = Watch(m, clock=c); w.pass_(); runPending(r.cloud)
+    rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 0                                   # it could not be back yet
+    later(m, v, c, 400); rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1 and P.presence(m, v) == P.HOME   # well inside the courtesy window
+
+def test_a_rise_reads_an_api_only_car_still_away_once_a_window(requests_mock):
+    m, r, v, c, car = apiOnly(requests_mock, at=AWAY); northOfHome(m, v, 5, c.t); v.observe("state", "online", "FleetAPI")
+    w = Watch(m, clock=c); w.pass_(); runPending(r.cloud); later(m, v, c, 400)
+    rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1 and P.presence(m, v) == P.NOT_HOME
+    for _ in range(3):
+        later(m, v, c, 300); rise(m, w, c, 12000, 500); rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1                                   # a cycling load: the window's read only
+
+def test_a_house_sized_rise_leaves_the_back_window_for_the_plug_in(requests_mock):
+    # 2026-11-07: an oven at 21:12, the car plugging in at 21:26
+    m, r, v, c, car = apiOnly(requests_mock, at=HOME); northOfHome(m, v, 5, c.t); v.observe("state", "online", "FleetAPI")
+    v.noteHomeAmps(48, since=0); w = Watch(m, clock=c); w.pass_(); runPending(r.cloud); later(m, v, c, 400)
+    rise(m, w, c, 500, 3000); w.pass_(); runPending(r.cloud); assert paid(requests_mock)[0] == 0
+    later(m, v, c, 840); rise(m, w, c, 3000, 14400); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1 and P.presence(m, v) == P.HOME
+
+def test_a_rise_checks_an_api_only_car_that_slept_away_once_it_could_be_back(requests_mock):
+    # It slept away, then woke and drove home between its checks: only a
+    # check says it woke, and the wake's read says where it is
+    m, r, v, c, car = apiOnly(requests_mock, state="asleep", at=AWAY); northOfHome(m, v, 5, c.t)
+    w = Watch(m, clock=c); later(m, v, c, 400); w.pass_(); runPending(r.cloud); later(m, v, c, 300)
+    assert situation(m, v) == AWAY_ASLEEP and counts(requests_mock)["free"] == 1
+    car.state, car.at = "online", HOME
+    rise(m, w, c, 500, 12000); w.pass_(); runPending(r.cloud); later(m, v, c, 1); w.pass_(); runPending(r.cloud)
+    assert paid(requests_mock)[0] == 1 and P.presence(m, v) == P.HOME   # long before its 1800 s check
 
 def test_a_failed_read_of_an_api_only_car_away_waits_a_window(requests_mock):
     # A failed read leaves the fix as old as it was: the last read, not the

@@ -388,6 +388,38 @@ class TestTWCMasterHistory:
         assert master.historyWatts() == 0
         master.queue_background_task.assert_called_once_with({"cmd": "saveSettings"})
 
+    def test_history_buckets_leave_out_fleet_only_cars_but_keep_live_ones(self, master):
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[Mock(currentAmps=16)]))
+        master.getRealPowerFactor = lambda amps: 1
+        amps = {True: 24, False: 16}
+        master.watch = Mock(chargingAmps=Mock(side_effect=lambda ledgered=True: amps[ledgered]))
+        assert master.getChargerLoad() == master.convertAmpsToWatts(40)
+        master.advanceHistorySnap()
+        master.sampleHistory()
+        assert master.historyWatts() == master.convertAmpsToWatts(32)
+
+    def test_the_ledger_survives_save_and_load(self, master, tmp_path):
+        from TWCManager.Vehicle.ChargeLedger import ChargeLedger, Snapshot
+        master.config["config"]["settingsPath"] = str(tmp_path)
+        master.getModuleByName = Mock(return_value=None)
+        old = time.time() - 3 * 86400
+        master.watch = Mock(ledger=ChargeLedger())
+        master.watch.ledger.observe("V", Snapshot(old, "Charging", 1.0, 9000.0), startHint=old - 600)
+        master.watch.ledger.observe("V", Snapshot(old + 300, "Stopped", 1.2, 0.0))
+        now = time.time()
+        master.watch.ledger.observe("W", Snapshot(now - 600, "Charging", 2.0, 9000.0), startHint=now - 900)
+        master.saveSettings()
+        kept = ChargeLedger.fromJSON(master.settings["chargeLedger"])
+        assert kept.cars["V"]["segments"] == [] and kept.isOpen("W")      # pruned at save, open session kept
+
+        other = type(master)("AB", master.config)
+        other.registerModule = Mock()
+        other.getModuleByName = Mock(return_value=None)
+        other.watch = Mock(ledger=ChargeLedger())
+        live = other.watch.ledger
+        other.loadSettings()
+        assert other.watch.ledger is live and live.toJSON() == kept.toJSON()
+
     def test_an_idle_bucket_keeps_no_history(self, master):
         master.queue_background_task = Mock()
         master.sampleHistory()

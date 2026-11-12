@@ -76,6 +76,18 @@ def test_state_read_success_proves_key():
     )
 
 
+def test_charge_read_reports_the_session_energy():
+    ble, reg, master = make()
+    ble._run_command_with_timeout = Mock(
+        return_value=(b'{"chargeState": {"chargeEnergyAdded": 3.5}}', b"", 0)
+    )
+    assert ble.get_charge_state(VIN)["chargeEnergyAdded"] == 3.5
+    (p,) = ble.providers()
+    v = reg.getOrCreate(VIN, "t")
+    p.fetch(v, "chargingState")
+    assert v.value("chargeEnergyAdded") == 3.5
+
+
 def test_charge_read_reports_the_cars_own_ac_maximum():
     ble, reg, master = make()
     ble._run_command_with_timeout = Mock(

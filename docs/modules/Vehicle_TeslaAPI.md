@@ -238,6 +238,14 @@ Not yet confirmed:
 - [TeslaMate](Vehicle_TeslaMate.md) token sync.
 - [TeslaBLE](Vehicle_TeslaBLE.md) for local, account-free control.
 
+## FAQ
+
+### Why is my car's charging in the history a few minutes late?
+
+With only a Fleet API token for a car (no TWC or Gen3 Wall Connector reporting it, no BLE, and no Fleet Telemetry or TeslaMate), TWCManager fills in the car's charging in the history graph a few minutes after it happens, from the car's own reports and at no extra API cost. It can be a few minutes late noticing that a charge started or stopped.
+
+For live data, such as green-energy tracking that follows the sun minute by minute, use Fleet Telemetry, BLE, or an EVSE that reports current (a Gen2 TWC or a Gen3 Wall Connector). Cabin preconditioning drawn from the EVSE is not shown for a car seen only through the Fleet API.
+
 ## Troubleshooting
 
 - "Tesla FleetAPI is not configured": `teslaApiClientID` or `teslaApiRedirectUri` is

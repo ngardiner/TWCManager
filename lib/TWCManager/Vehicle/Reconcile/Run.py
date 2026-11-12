@@ -227,6 +227,7 @@ def runAttempt(reconciler, attempt) -> O.Outcome:
                 attempt.capability,
                 attempt.wakeSkipped,
             )
+        attempt = attempt._replace(sentAt=master.vehicleRegistry.now())
         outcome = checked(
             provider,
             attempt.capability,

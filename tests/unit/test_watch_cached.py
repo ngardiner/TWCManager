@@ -8,7 +8,7 @@ from TWCManager.Vehicle.WatchBudget import EVENT
 from tests.unit.reconcile_helpers import AWAY, HOME, listApi, placeAt, runPending
 from tests.unit.test_command_path_parity import FLEET, OWNER, FleetCar, counts, paid
 from tests.unit.test_limit_reconciler import VIN, setup
-from tests.unit.test_watch import apiOnly, chargingFleetCar, later, passes, readsAt
+from tests.unit.test_watch import apiOnly, chargingFleetCar, later, namedFleetCar, passes, readsAt
 
 
 def snapshotAt(requests_mock, stamp):
@@ -26,7 +26,7 @@ def snapshotAt(requests_mock, stamp):
 
 def firstRead(requests_mock, snapshot):
     # A charging car whose first (paid) read is done: the snapshot is absent then
-    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    m, r, v, c = setup(here=False); namedFleetCar(requests_mock, m, v)
     w = Watch(m, clock=c); w.readNow(VIN, "start"); w.pass_(); runPending(r.cloud)
     assert paid(requests_mock)[0] == 1
     snapshotAt(requests_mock, snapshot)
@@ -34,7 +34,7 @@ def firstRead(requests_mock, snapshot):
 
 
 def test_watch_cadence_ignores_the_cached_provider(requests_mock):
-    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    m, r, v, c = setup(here=False); namedFleetCar(requests_mock, m, v)
     assert any(p.name == "FleetAPICached" for p in m.providerOrder.candidates(v, C.READ_CHARGE))
     w = Watch(m, clock=c); w.readNow(VIN, "start"); w.pass_(); runPending(r.cloud)
     spent = m.watchBudget.spend; asked = []
@@ -117,3 +117,10 @@ def test_a_cloud_only_car_is_read_on_its_wake_past_a_fresh_snapshot(requests_moc
     snapshotAt(requests_mock, lambda: c.t)                               # posted on the wake
     car.state = "online"
     assert readsAt(requests_mock, m, v, c, w, r, 2160) == [360]          # paid, not the snapshot
+
+def test_a_snapshot_carries_the_session_energy(requests_mock):
+    m, r, v, c = setup(here=False); chargingFleetCar(requests_mock, m, v)
+    requests_mock.get(FLEET + VIN + "/vehicle_data_cached", json={"response": {"charge_state": {
+        "timestamp": 1_000_000, "charging_state": "Charging", "charge_energy_added": 1.02}, "vehicle_state": {}}})
+    m.getModuleByName("TeslaAPI").read_cached(v)
+    obs = v.latest("chargeEnergyAdded"); assert obs.value == 1.02 and obs.at == 1000.0 and obs.source == "FleetAPICached"

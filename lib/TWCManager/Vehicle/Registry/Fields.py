@@ -39,6 +39,8 @@ FIELDS = (
     # Charging power (kW) and the car's own AC current maximum (amps)
     "chargerPower",
     "chargeCurrentRequestMax",
+    # Battery-side kWh added this charge session (the car's own count)
+    "chargeEnergyAdded",
     # The charge-port door, which VCSEC reports only while the car is awake
     "chargePortOpen",
     # How the car looks, for the Vehicles pages' picture
