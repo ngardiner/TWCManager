@@ -118,12 +118,18 @@ def suppressedFor(provider, condition) -> FrozenSet[str]:
 
 
 def vehicleMaxAmps(vehicle, configConfig: dict) -> float:
-    # VehicleEndpoint.maxPower's rule: the car's own AC maximum. Never the
-    # charger's pilot: on our own TWC the pilot is our last offer, so a car
-    # read under a low offer would hold its charging point there for good.
-    return vehicle.value("chargeCurrentRequestMax") or configConfig.get(
-        "wiringMaxAmpsPerTWC", 32
-    )
+    # VehicleEndpoint.maxPower's rule: the car's own AC maximum where it is
+    # known, else the wiring's. The car reports its request maximum capped
+    # at the charger's pilot, so the maximum is the car's own only when one
+    # reading has it below the pilot; at the pilot it is the charger's, and
+    # on our own TWC the pilot is our last offer, so a car read under a low
+    # offer would hold its charging point there for good.
+    pilots, own = vehicle.reported("availableCurrent"), []
+    for source, most in vehicle.reported("chargeCurrentRequestMax").items():
+        pilot = pilots.get(source)
+        if pilot is not None and most.at >= pilot.at and 0 < (most.value or 0) < (pilot.value or 0):
+            own.append(most.value)
+    return min(own, default=configConfig.get("wiringMaxAmpsPerTWC", 32))
 
 
 def carAmpsRange(vehicle, master) -> Optional[Tuple[float, float]]:
