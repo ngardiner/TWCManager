@@ -40,10 +40,10 @@ wcmanager/settings.json and try saving your settings again.</b>
                 <div class="d-flex flex-row justify-content-center">
                     <div class="d-flex flex-column">
                         <div class="d-flex flex-row justify-content-center display-5 fw-light">
-                            <span id="generationWatts">0.0</span>
+                            <span data-field="generationWatts" data-format="powerValue">0.0</span>&nbsp;<span class="text-secondary" data-field="generationWatts" data-format="powerUnit"></span>
                         </div>
                         <div class="d-flex flex-row justify-content-center">
-                            <span id="generationAmps">0.00</span>&nbsp;<span class="text-muted">A</span>
+                            <span data-field="generationAmps">0.00</span>&nbsp;<span class="text-muted">A</span>
                         </div>
                     </div>
                 </div>
@@ -65,10 +65,10 @@ wcmanager/settings.json and try saving your settings again.</b>
                 <div class="d-flex flex-row justify-content-center">
                     <div class="d-flex flex-column">
                         <div class="d-flex flex-row justify-content-center display-5 fw-light">
-                            <span id="consumptionWatts">0.0</span>
+                            <span id="consumptionWatts" data-field="consumptionWatts" data-format="powerValue">0.0</span>&nbsp;<span class="text-secondary" data-field="consumptionWatts" data-format="powerUnit"></span>
                         </div>
                         <div class="d-flex flex-row justify-content-center">
-                            <span id="consumptionAmps">0.00</span>&nbsp;<span class="text-muted">A</span>
+                            <span data-field="consumptionAmps">0.00</span>&nbsp;<span class="text-muted">A</span>
                         </div>
                     </div>
                 </div>
@@ -94,10 +94,10 @@ wcmanager/settings.json and try saving your settings again.</b>
                 <div class="d-flex flex-row justify-content-center">
                     <div class="d-flex flex-column">
                         <div class="d-flex flex-row justify-content-center display-5 fw-light">
-                            <span id="surplusWatts">0.0</span>
+                            <span data-field="generationWatts" data-format="surplusWatts">0.0</span>&nbsp;<span class="text-secondary" data-field="generationWatts" data-format="surplusUnit"></span>
                         </div>
                         <div class="d-flex flex-row justify-content-center">
-                            <span id="surplusAmps">0.00</span>&nbsp;<span class="text-muted">A</span>
+                            <span data-field="generationAmps" data-format="surplusAmps">0.00</span>&nbsp;<span class="text-muted">A</span>
                         </div>
                     </div>
                 </div>
@@ -108,7 +108,7 @@ wcmanager/settings.json and try saving your settings again.</b>
             <div class="d-flex flex-column">
                 <div class="d-flex flex-row justify-content-center align-items-center">
                     <div class="p-1">Charging
-                        <div class="badge rounded-pill badge-grey position-absolute ms-1 mt-0" id="carsCharging">0</div>
+                        <div class="badge rounded-pill badge-grey position-absolute ms-1 mt-0" data-field="carsCharging">0</div>
                     </div>
                     <div class="p-1 ms-3">
                         <svg width="1.5em" height="1.5em" viewBox="0 0 16 16" class="bi bi-plug" fill="limegreen" xmlns="http://www.w3.org/2000/svg">
@@ -119,10 +119,10 @@ wcmanager/settings.json and try saving your settings again.</b>
                 <div class="d-flex flex-row justify-content-center">
                     <div class="d-flex flex-column">
                         <div class="d-flex flex-row justify-content-center display-5 fw-light">
-                            <span id="chargerLoadWatts">0.0</span>
+                            <span data-field="chargerLoadWatts" data-format="powerValue">0.0</span>&nbsp;<span class="text-secondary" data-field="chargerLoadWatts" data-format="powerUnit"></span>
                         </div>
                         <div class="d-flex flex-row justify-content-center">
-                            <span class="text-muted" id="chargerLoadAmps">0.0</span>&nbsp;A&nbsp;|&nbsp;<span class="text-muted" id="chargerAvailAmps">0</span>&nbsp;A&nbsp;offered
+                            <span class="text-muted" data-field="chargerLoadAmps">0.0</span>&nbsp;A&nbsp;|&nbsp;<span class="text-muted" data-field="total.ampsOffered" data-format="fixed2">0</span>&nbsp;A&nbsp;offered
                         </div>
                     </div>
                 </div>
@@ -138,18 +138,18 @@ wcmanager/settings.json and try saving your settings again.</b>
                     <div class="form-group row" style="margin-bottom: -1em!important;">
                         <label for="colBtns" class="col-lg-2 col-sm-12 col-form-label display-6">Charge Policy</label>
                         <div class="col-lg-10 col-sm-12 btn-group" id="colBtns" role="group" style="flex-wrap: wrap;">
-                            <button id="policy_solar" type="button" class="btn btn-{% if activeAction != 3 %}outline-{% endif %}primary" role="button" aria-describedby="helpTextSolar">Solar Surplus</button>
-                            <button id="policy_fixed" type="button" class="btn btn-{% if activeAction != 1 %}outline-{% endif %}primary" role="button" aria-describedby="helpTextFixed">Fixed Rate/Amps</button>
-                            <button id="policy_dont" type="button" class="btn btn-{% if activeAction != 2 %}outline-{% endif %}primary" role="button" aria-describedby="helpTextDont">Don't charge</button>
+                            <button id="policy_solar" type="button" class="btn btn-outline-primary" role="button" aria-describedby="helpTextSolar">Solar Surplus</button>
+                            <button id="policy_fixed" type="button" class="btn btn-outline-primary" role="button" aria-describedby="helpTextFixed">Fixed Rate/Amps</button>
+                            <button id="policy_dont" type="button" class="btn btn-outline-primary" role="button" aria-describedby="helpTextDont">Don't charge</button>
                         </div>
                         <div class="col-lg-10 col-sm-12 offset-lg-2 offset-sm-0">
-                            <small id="helpTextFixed" class="form-text text-muted" {% if activeAction != 1 %}style="display: none;"{% endif %}>
+                            <small id="helpTextFixed" class="form-text text-muted" style="display: none;">
                                 Charges a vehicle at a fixed rate of x Amps whenever it is plugged in
                             </small>
-                            <small id="helpTextDont" class="form-text text-muted" {% if activeAction != 2 %}style="display: none;"{% endif %}>
+                            <small id="helpTextDont" class="form-text text-muted" style="display: none;">
                                 Doesn't charge a vehicle when plugged in unless manually started (e.g. in the Tesla App)
                             </small>
-                            <small id="helpTextSolar" class="form-text text-muted" {% if activeAction != 3 %}style="display: none;"{% endif %}>
+                            <small id="helpTextSolar" class="form-text text-muted" style="display: none;">
                                 Charges a vehicle if Solar production is at least {{ master.config["config"].get("minAmpsPerTWC", 5) }} Amps higher than the current consumption
                             </small>
                         </div>
@@ -164,68 +164,81 @@ wcmanager/settings.json and try saving your settings again.</b>
 <!-- Charge points -->
 <div class="container-fluid pt-4">
     <div class="row border-bottom mb-4">
-        <h1 class="display-4">Charge Point{% if (slaves|count > 1) %}s{% endif %}</h1>
+        <h1 class="display-4">Charge Point<span data-field="points" data-format="pluralS"></span></h1>
     </div>
-    {% set slaves = master.getSlaveTWCs() %}
-    {% for charger in slaves %}
-    {% set twcid = '%02x%02x' % (charger.TWCID[0], charger.TWCID[1]) %}
-
+    <p class="text-muted" data-show="points" data-show-if="not">None yet: a charge point appears when a TWC links or a car arrives home.</p>
+    <div data-keyed-list="points" data-template="point-card"></div>
+    <template id="point-card">
     <!-- charge point data in row -->
     <div class="row mb-3 align-center">
 
-        <!-- TWC icon -->
+        <!-- TWC icon, or the car on a point without one -->
         <div class="col-1 text-center">
-            <svg height="4em" viewBox="0 0 78 142" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:1.5;">
-                <g transform="matrix(1,0,0,1,-58.6302,-49.9425)">
-                    <g transform="matrix(1.25227,0,0,0.981636,-34.4875,13.0036)">
-                        <path d="M116.037,39.022C115.797,38.575 83.43,38.476 83.096,39.022C77.024,48.944 74.984,83.654 75.169,97.089C75.28,105.116 76.478,144.135 81.364,153.398C82.664,155.861 94.199,157.333 100.289,157.333C106.306,157.333 116.891,155.968 117.891,153.398C121.673,143.672 123.219,107.967 123.512,97.089C124.026,77.966 121.313,48.87 116.037,39.022Z" style="fill:none;"/>
-                        <clipPath id="_clip1">
-                            <path d="M116.037,39.022C115.797,38.575 83.43,38.476 83.096,39.022C77.024,48.944 74.984,83.654 75.169,97.089C75.28,105.116 76.478,144.135 81.364,153.398C82.664,155.861 94.199,157.333 100.289,157.333C106.306,157.333 116.891,155.968 117.891,153.398C121.673,143.672 123.219,107.967 123.512,97.089C124.026,77.966 121.313,48.87 116.037,39.022Z"/>
-                        </clipPath>
-                        <g clip-path="url(#_clip1)">
-                            <g transform="matrix(0.988571,0,0,0.987743,1.07957,1.38293)">
-                                <path d="M100,107.668L100,146.78" style="fill:none;stroke:rgb(94,159,40);stroke-width:1.8px;"/>
+            <div data-show=".hasTWC">
+                <svg height="4em" viewBox="0 0 78 142" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:1.5;">
+                    <g transform="matrix(1,0,0,1,-58.6302,-49.9425)">
+                        <g transform="matrix(1.25227,0,0,0.981636,-34.4875,13.0036)">
+                            <path d="M116.037,39.022C115.797,38.575 83.43,38.476 83.096,39.022C77.024,48.944 74.984,83.654 75.169,97.089C75.28,105.116 76.478,144.135 81.364,153.398C82.664,155.861 94.199,157.333 100.289,157.333C106.306,157.333 116.891,155.968 117.891,153.398C121.673,143.672 123.219,107.967 123.512,97.089C124.026,77.966 121.313,48.87 116.037,39.022Z" style="fill:none;"/>
+                            <clipPath id="_clip1">
+                                <path d="M116.037,39.022C115.797,38.575 83.43,38.476 83.096,39.022C77.024,48.944 74.984,83.654 75.169,97.089C75.28,105.116 76.478,144.135 81.364,153.398C82.664,155.861 94.199,157.333 100.289,157.333C106.306,157.333 116.891,155.968 117.891,153.398C121.673,143.672 123.219,107.967 123.512,97.089C124.026,77.966 121.313,48.87 116.037,39.022Z"/>
+                            </clipPath>
+                            <g clip-path="url(#_clip1)">
+                                <g transform="matrix(0.988571,0,0,0.987743,1.07957,1.38293)">
+                                    <path d="M100,107.668L100,146.78" style="fill:none;stroke:rgb(94,159,40);stroke-width:1.8px;"/>
+                                </g>
                             </g>
+                            <path d="M116.037,39.022C115.797,38.575 83.43,38.476 83.096,39.022C77.024,48.944 74.984,83.654 75.169,97.089C75.28,105.116 76.478,144.135 81.364,153.398C82.664,155.861 94.199,157.333 100.289,157.333C106.306,157.333 116.891,155.968 117.891,153.398C121.673,143.672 123.219,107.967 123.512,97.089C124.026,77.966 121.313,48.87 116.037,39.022Z" style="fill:none;stroke:black;stroke-width:1.78px;"/>
                         </g>
-                        <path d="M116.037,39.022C115.797,38.575 83.43,38.476 83.096,39.022C77.024,48.944 74.984,83.654 75.169,97.089C75.28,105.116 76.478,144.135 81.364,153.398C82.664,155.861 94.199,157.333 100.289,157.333C106.306,157.333 116.891,155.968 117.891,153.398C121.673,143.672 123.219,107.967 123.512,97.089C124.026,77.966 121.313,48.87 116.037,39.022Z" style="fill:none;stroke:black;stroke-width:1.78px;"/>
+                        <g transform="matrix(1,0,0,1,0.475625,-8.83563)">
+                            <path d="M122.47,116.245C122.47,116.245 126.137,118.829 126.928,121.411C128.504,126.554 129.718,145.816 129.718,145.816L132.341,145.816C132.341,145.816 136.379,125.697 134.366,118.836C132.574,112.732 122.177,105.674 122.177,105.674C122.177,105.674 122.47,109.197 122.47,110.891L122.47,116.245Z" style="fill:none;stroke:black;stroke-width:2px;"/>
+                        </g>
+                        <g transform="matrix(1.01098,0,0,1.20996,-0.993229,-39.451)">
+                            <path d="M90.658,170.995C92.296,189.853 129.911,210.487 131.271,145.981" style="fill:none;stroke:black;stroke-width:1.79px;stroke-linejoin:bevel;"/>
+                        </g>
                     </g>
-                    <g transform="matrix(1,0,0,1,0.475625,-8.83563)">
-                        <path d="M122.47,116.245C122.47,116.245 126.137,118.829 126.928,121.411C128.504,126.554 129.718,145.816 129.718,145.816L132.341,145.816C132.341,145.816 136.379,125.697 134.366,118.836C132.574,112.732 122.177,105.674 122.177,105.674C122.177,105.674 122.47,109.197 122.47,110.891L122.47,116.245Z" style="fill:none;stroke:black;stroke-width:2px;"/>
-                    </g>
-                    <g transform="matrix(1.01098,0,0,1.20996,-0.993229,-39.451)">
-                        <path d="M90.658,170.995C92.296,189.853 129.911,210.487 131.271,145.981" style="fill:none;stroke:black;stroke-width:1.79px;stroke-linejoin:bevel;"/>
-                    </g>
-                </g>
-            </svg>
+                </svg>
+            </div>
+            <div data-show=".hasTWC" data-show-if="not">
+                <img class="vehicleImage" data-image hidden alt="" style="width: 100%; height: auto;">
+            </div>
         </div>
 
         <!-- TWC status -->
         <div class="col-lg-1 col-md-2 col-2 text-center">
-            <div class="row">
-                <small>ID {{ twcid }}</small>
+            <div data-show=".gen2">
+                <div class="row">
+                    <small>ID <span data-field=".gen2.twcid" data-format="blank"></span></small>
+                </div>
+                <div class="row">
+                    <small>Version <span data-field=".gen2.version" data-format="blank"></span></small>
+                </div>
+                <div class="row">
+                    <small>State <span data-field=".gen2.state" data-format="blank"></span></small>
+                </div>
             </div>
-            <div class="row">
-                <small>Version <span id="{{ twcid }}_version"></span></small>
-            </div>
-            <div class="row">
-                <small>State <span id="{{ twcid }}_state"></span></small>
+            <div data-show=".gen3">
+                <div class="row">
+                    <small>State <span data-field=".gen3.state" data-format="blank"></span></small>
+                </div>
             </div>
         </div>
 
         <!-- Charge timer -->
         <div class="col-lg-2 col-md-3 col-5 text-center">
-            <div class="row-inline display-6 fw-light">
-                <span id="{{ twcid }}_chargeTime">--:--:--</span>
-            </div>
-            <div class="row">
-                <span class="text-muted">Charge time</span>
+            <div data-show=".gen2">
+                <div class="row-inline display-6 fw-light">
+                    <span data-field=".gen2.chargingSince" data-format="chargeTime">--:--:--</span>
+                </div>
+                <div class="row">
+                    <span class="text-muted">Charge time</span>
+                </div>
             </div>
         </div>
 
         <!-- Amps offered -->
         <div class="col-lg-1 col-md-3 col-2 text-center">
             <div class="row display-6 fw-light">
-                <span class="text-body me-1" id="{{ twcid }}_lastAmpsOffered">0.0</span>
+                <span class="text-body me-1" data-field=".ampsOffered" data-format="round2">0.0</span>
             </div>
             <div class="row">
                 <span class="text-muted">Amps offered</span>
@@ -235,7 +248,7 @@ wcmanager/settings.json and try saving your settings again.</b>
         <!-- Amps in used -->
         <div class="col-lg-1 col-md-3 col-2 text-center">
             <div class="row display-6 fw-light">
-                <span class="text-body me-1" id="{{ twcid }}_reportedAmpsActual">0.0</span>
+                <span class="text-body me-1" data-field=".ampsDrawn">0.0</span>
             </div>
             <div class="row">
                 <span class="text-muted">Amps in use</span>
@@ -244,24 +257,26 @@ wcmanager/settings.json and try saving your settings again.</b>
 
         <!-- Lifetime Amps -->
         <div class="col-lg-2 pt-lg-0 col-md-4 pt-3 col-4 text-center">
-            <div class="row-inline display-6 fw-light">
-                <span class="text-body me-1" id="{{ twcid }}_lifetimekWh">0000</span>
-            </div>
-            <div class="row">
-                <span class="text-muted">Lifetime kWh</span>
+            <div data-show=".gen2">
+                <div class="row-inline display-6 fw-light">
+                    <span class="text-body me-1" data-field=".gen2.lifetimekWh" data-format="blank">0000</span>
+                </div>
+                <div class="row">
+                    <span class="text-muted">Lifetime kWh</span>
+                </div>
             </div>
         </div>
 
         <!-- Phase/Voltage -->
         <div class="col-lg-auto pt-lg-0 col-md-4 pt-3 col-4 text-center">
             <div class="row">
-                <span class="text-muted">L<sub>1</sub> <span class="text-body me-1" id="{{ twcid }}_voltsPhaseA">230</span>V</span>
+                <span class="text-muted">L<sub>1</sub> <span class="text-body me-1" data-field=".volts.0" data-format="whole">230</span>V</span>
             </div>
             <div class="row">
-                <span class="text-muted">L<sub>2</sub> <span class="text-body me-1" id="{{ twcid }}_voltsPhaseB">230</span>V</span>
+                <span class="text-muted">L<sub>2</sub> <span class="text-body me-1" data-field=".volts.1" data-format="whole">230</span>V</span>
             </div>
             <div class="row">
-                <span class="text-muted">L<sub>3</sub> <span class="text-body me-1" id="{{ twcid }}_voltsPhaseC">230</span>V</span>
+                <span class="text-muted">L<sub>3</sub> <span class="text-body me-1" data-field=".volts.2" data-format="whole">230</span>V</span>
             </div>
             <div class="row">
                 <small class="text-muted">Phase/Voltage</small>
@@ -271,23 +286,20 @@ wcmanager/settings.json and try saving your settings again.</b>
         <!-- Vehicle/VIN -->
         <div class="col-lg-2 pt-lg-0 col-md-4 pt-3 col-4 text-muted">
             <div class="lh-sm">
-                <small>VIN: <span id="{{ twcid }}_currentVIN" class='VINClick' onClick="loadVIN('{{ twcid }}','current');"></span></small>
+                <small>VIN: <span class='VINClick' data-field=".gen2.currentVIN" data-format="blank"></span><span class='VINClick' data-show=".gen2" data-show-if="not" data-field=".vin" data-format="blank"></span></small>
+            </div>
+            <div class="lh-sm" data-show=".gen2">
+                <small>Last VIN: <span class='VINClick' data-field=".gen2.lastVIN" data-format="blank"></span></small>
             </div>
             <div class="lh-sm">
-                <small>Last VIN: <span id="{{ twcid }}_lastVIN" class='VINClick' onClick="loadVIN('{{ twcid }}','last');"></span></small>
+                <small>SoC: <span data-field=".soc"></span></small>
             </div>
             <div class="lh-sm">
-                <small>SoC: <span id="{{ twcid }}_socState"></span></small>
-            </div>
-            <div class="lh-sm">
-                <small>Last SoC: <span id="{{ twcid }}_lastBatterySOC"></span></small>
-            </div>
-            <div class="lh-sm">
-                <small>Last Limit: <span id="{{ twcid }}_lastChargeLimit"></span>%</small>
+                <small>Last Limit: <span data-field=".chargeLimit"></span>%</small>
             </div>
         </div>
     </div>
-    {% endfor %}
+    </template>
 </div>
 <!-- end Charge Points -->
 
@@ -330,4 +342,10 @@ wcmanager/settings.json and try saving your settings again.</b>
 </div>
 <!-- end Global Actions -->
 {% endblock %}
-{% block javascripts %}{% include "jsrefresh.html.j2" %}{% endblock %}
+{% block javascripts %}
+<script type="text/javascript" src="/static/js/compositor.js"></script>
+<script type="text/javascript" src="/static/js/vehicleImage.js"></script>
+<script type="text/javascript" src="/static/js/format.js"></script>
+<script type="text/javascript" src="/static/js/live.js"></script>
+{% include "jsrefresh.html.j2" %}
+{% endblock %}

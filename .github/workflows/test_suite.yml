@@ -258,6 +258,22 @@ jobs:
           name: test-results-unit-${{ matrix.python-version }}
           path: test-results/
 
+  js-tests:
+    name: JavaScript Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Node's built-in runner; the tests need no npm packages
+      - name: Run JavaScript tests
+        run: node --test "tests/js/*.test.js"
+
   venv-install-tests:
     name: Venv Install - Python ${{ matrix.python-version }}
     # setup-python has no 3.8 or 3.9 build for Ubuntu 26.04

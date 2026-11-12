@@ -1,0 +1,1 @@
+Keep the home, Policy, Vehicles and vehicle pages current while they are open, and list every charging point on the home page, including Gen3 Wall Connectors and EVSEs controlled through the car. New APIs (`getChargingPoints`, `getVehicles`, `getVehicle`, `getPolicyState`) return what those pages show ([details](docs/modules/Control_HTTP.md#using-the-api-interface)).

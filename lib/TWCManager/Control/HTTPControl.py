@@ -19,218 +19,16 @@ import urllib.parse
 import uuid
 from TWCManager.Logging.LoggerFactory import LoggerFactory
 from TWCManager.Control.APIValidator import APIValidator
+from TWCManager.Control import Views
+from TWCManager.Control.Views import jsonSafe
 from TWCManager.Vehicle.Registry.VIN import (
     isWellFormedVIN,
     storedBleStatus,
     vehicleRecordKey,
 )
-from TWCManager.Vehicle.Presence import HOME, NOT_HOME, PRESUMED, presence
-from TWCManager.Vehicle.Reconcile.Belief import known, newerReading
-from TWCManager.Vehicle.Reconcile.Desired import AMPS
-from TWCManager.Vehicle.Reconcile.Outcome import RULES
-from TWCManager.Vehicle.Reconcile.Rules import satisfied
-from TWCManager.Vehicle.Watch import COVERED
+from TWCManager.Vehicle.Presence import HOME, presence
 
 logger = LoggerFactory.get_logger("HTTP", "Control")
-
-
-def ageText(seconds):
-    if seconds is None:
-        return "never"
-    seconds = int(seconds)
-    if seconds < 60:
-        return "%d s ago" % seconds
-    if seconds < 3600:
-        return "%d min ago" % (seconds // 60)
-    if seconds < 86400:
-        return "%d h ago" % (seconds // 3600)
-    return "%d d ago" % (seconds // 86400)
-
-
-SOURCE_NAMES = {
-    "TeslaMateVehicle": "TeslaMate",
-    "FleetTelemetryMQTT": "Fleet Telemetry",
-    "TeslaBLE": "BLE",
-    "OwnerAPI": "Owner API",
-    "FleetAPI": "Fleet API",
-    "FleetAPICached": "Fleet API (cached)",
-    "HomeAssistant": "Home Assistant",
-    "Gen2TWC": "TWC",
-    "Gen3TWC": "Gen3 Wall Connector",
-}
-
-
-def sourceName(raw):
-    # Display only: internal names, logs and settings keep the class names.
-    return SOURCE_NAMES.get(raw, raw)
-
-
-def providerLines(master, vehicle):
-    """One line per provider claim: its source, any informative status, and
-    whether it can command the car or only read it (and why not, if known)."""
-    api = master.getModuleByName("TeslaAPI")
-    # The account listing claims the car for both APIs, live so a token added
-    # later manages it; until then that API can neither read nor command it
-    held = {"OwnerAPI": "ownerTokenHeld", "FleetAPI": "fleetTokenHeld"}
-    lines = []
-    for name, claim in vehicle.claims.items():
-        if api and name in held and not getattr(api, held[name])():
-            continue
-        can = claim.commands
-        why = None
-        if not can and api and name == "OwnerAPI":
-            why = api.ownerReadOnlyReason(vehicle.attachment("TeslaAPI"))
-        elif not can and api and name == "FleetAPI":
-            why = api.fleetReadOnlyReason()
-        cap = "commands" if can else "read-only" + (" (%s)" % why if why else "")
-        if claim.status in ("paired", "unproven") and can == (claim.status == "paired"):
-            cap = ""  # the status already says it
-        status = "" if claim.status == "listed" else claim.status
-        lines.append(
-            "%s: %s" % (sourceName(name), ", ".join(filter(None, (status, cap))))
-        )
-    return lines
-
-
-def heldLimitText(master, vehicle):
-    # Held limits are keyed by VIN; TeslaAPI's listing adopts a legacy
-    # numeric-ID entry under the VIN.
-    limit = master.heldLimits.get(vehicle.vin) if vehicle.vin else None
-    if limit is None:
-        return "\u2014"
-    # The held limit, then the car's own one a release puts back
-    return "%s%% (%s%%)" % (limit.held, limit.outside)
-
-
-def watchLine(master, vehicle):
-    s = master.watch.status(vehicle) if master.watch else dict(watched=False, why="off")
-    if not s["watched"] or s["via"] is None:
-        why = s["why"]
-        if why.startswith(COVERED):
-            why = COVERED + sourceName(why[len(COVERED) :])
-        return "Not watched: " + why
-    now, at = time.time(), s["nextAt"]
-    last = ageText(None if s["lastAt"] is None else now - s["lastAt"])
-    # Nothing is due for a lost car known asleep
-    due = "" if at is None else ", next in %d min" % max(0, math.ceil((at - now) / 60))
-    return "Watched: %s %s via %s%s; budget $%.2f" % (
-        s["last"] or "no answer",
-        last,
-        s["via"],
-        due,
-        master.watchBudget.tokens(),
-    )
-
-
-def _spendShown(master):
-    # Fleet API spend only with a Fleet token, telemetry only with its module
-    api = master.getModuleByName("TeslaAPI")
-    fleet = bool(api and getattr(api.fleetSlot, "accessToken", ""))
-    return fleet, master.getModuleByName("FleetTelemetryMQTT") is not None
-
-
-def _usd(amount):
-    # Small amounts keep a third decimal so a few hundred signals aren't $0.00
-    return ("$%.3f" if 0 < amount < 0.01 else "$%.2f") % amount
-
-
-def _lastMonth(amount):
-    return " · Last month: %s" % _usd(amount) if amount else ""
-
-
-def _teleText(signals, usd):
-    # Counts what reached TWCManager; Tesla bills what the car sent
-    return "Fleet Telemetry this month: approx. {:,} signals, {}".format(
-        signals, _usd(usd)
-    )
-
-
-def spendLines(master):
-    fleet, telemetry = _spendShown(master)
-    m = master.fleetSpend.month() if fleet or telemetry else None
-    pace, lines = m and m["pace"], []
-    if fleet:
-        by = " · on pace for %s by %s" % (_usd(pace["api"]), pace["by"]) if pace else ""
-        lines.append(
-            "Fleet API this month: %s" % _usd(m["api"])
-            + by
-            + _lastMonth(m["last"]["api"])
-        )
-    if telemetry:
-        by = " · on pace for %s" % _usd(pace["telemetry"]) if pace else ""
-        lines.append(
-            _teleText(m["signals"], m["telemetry"])
-            + by
-            + _lastMonth(m["last"]["telemetry"])
-        )
-    return lines
-
-
-def carSpend(master, vin):
-    fleet, telemetry = _spendShown(master)
-    if not (fleet or telemetry):
-        return None
-    c = master.fleetSpend.car(vin)
-    shows = telemetry and (c["signals"] or c["last"]["telemetry"])
-    tele = (
-        "approx. %s telemetry" % _usd(c["telemetry"])
-        if telemetry and c["signals"]
-        else ""
-    )
-    n = c["requests"]
-    return {
-        "cell": " + ".join(filter(None, (_usd(c["api"]) if fleet else "", tele))),
-        "heading": (
-            "Fleet API this month: %s in %d %s"
-            % (_usd(c["api"]), n, "request" if n == 1 else "requests")
-            + _lastMonth(c["last"]["api"])
-            if fleet
-            else ""
-        ),
-        "types": [
-            dict(t, cost=_usd(t["cost"]), age=time.time() - t["last"])
-            for t in c["types"]
-        ],
-        "telemetry": (
-            _teleText(c["signals"], c["telemetry"]) + _lastMonth(c["last"]["telemetry"])
-            if shows
-            else ""
-        ),
-        "fields": c["fields"],
-    }
-
-
-PRESENCE_TEXT = {HOME: "Home", PRESUMED: "Probably home", NOT_HOME: "Away"}
-
-
-def pendingCommands(master, vehicle):
-    """Each desire the car has not reached: in flight, or why it is not."""
-    state, now, rows = master.desired.peek(vehicle.key), time.time(), []
-    for aspect, d in list(state.desired.items()) if state else []:
-        rec = state.records.get(aspect)
-        if rec is None:
-            continue
-        sent, last = rec.inFlight, rec.lastOutcome
-        why = master.reconciler.blockedReason(vehicle.key, aspect)
-        if sent:
-            why = "sending via %s, started %s" % (
-                sourceName(sent.provider),
-                ageText(now - sent.since),
-            )
-        elif satisfied(aspect, d.value, known(vehicle, aspect, d.value)) or (
-            # Settled, the reconciler waits for a reading saying otherwise
-            rec.settledAt is not None
-            and not newerReading(vehicle, aspect, rec.settledAt)
-        ):
-            continue
-        elif last and not why:
-            why = "%s via %s, %s" % (
-                last.detail.replace(RULES, "") or last.kind,
-                sourceName(rec.lastProvider),
-                ageText(now - rec.lastOutcomeAt),
-            )
-        rows.append({"aspect": aspect, "value": d.value, "why": why or "not tried yet"})
-    return rows
 
 
 def vehicleLocalMgmt(master, op, vin):
@@ -568,28 +366,21 @@ def CreateHTTPHandlerClass(master):
             self.templateEnv.globals.update(
                 vehicles=lambda: master.vehicleRegistry.vehicles()
             )
-            self.templateEnv.globals.update(ageText=ageText)
-            self.templateEnv.globals.update(
-                heldLimitText=lambda v: heldLimitText(master, v)
-            )
-            self.templateEnv.globals.update(sourceName=sourceName)
-            self.templateEnv.globals.update(
-                presence=lambda v: PRESENCE_TEXT[presence(master, v)],
-                pendingCommands=lambda v: pendingCommands(master, v),
-            )
-            self.templateEnv.globals.update(
-                watchLine=lambda v: watchLine(master, v),
-                providerLines=lambda v: providerLines(master, v),
-                spendLines=lambda: spendLines(master),
-                carSpend=lambda vin: carSpend(master, vin),
-            )
             self.templateEnv.globals.update(registry=master.vehicleRegistry)
             self.templateEnv.globals.update(
-                canForget=lambda vin: canForgetVehicle(master, vin)
+                fingerprint=lambda page, vin=None: Views.pageFingerprint(
+                    master, page, vin
+                ),
+                spendShown=lambda: Views.spendShown(master),
             )
-            bleModule = master.getModuleByName("TeslaBLE")
             self.templateEnv.globals.update(
-                bleStatus=lambda vin: bleModule.bleStatus(vin) if bleModule else None
+                policyTree=Views.policyTree,
+                policyLayout=lambda: Views.policyLayout(
+                    master.getModuleByName("Policy")
+                ),
+            )
+            self.templateEnv.globals.update(
+                canForget=lambda vin: canForgetVehicle(master, vin)
             )
             self.templateEnv.globals.update(
                 locatedVehicles=lambda: [
@@ -725,15 +516,27 @@ def CreateHTTPHandlerClass(master):
                 json_data = json.dumps(master.getModuleByName("Policy").charge_policy)
                 self.wfile.write(json_data.encode("utf-8"))
 
+            elif self.url.path == "/api/getChargingPoints":
+                self.sendJSON(Views.chargingPointsView(master))
+
+            elif self.url.path == "/api/getPolicyState":
+                self.sendJSON(Views.policyStateView(master))
+
+            elif self.url.path == "/api/getVehicles":
+                self.sendJSON(Views.vehiclesView(master))
+
+            elif self.url.path.startswith("/api/getVehicle/"):
+                vin = urllib.parse.unquote(
+                    self.url.path[len("/api/getVehicle/") :]
+                ).strip("/")
+                data = Views.vehicleView(master, vin)
+                if data is None:
+                    self.sendJSON({"error": "unknown vehicle"}, 404)
+                else:
+                    self.sendJSON(data)
+
             elif self.url.path == "/api/getSlaveTWCs":
                 data = {}
-                totals = {
-                    "carsCharging": 0,
-                    "lastAmpsOffered": 0,
-                    "lifetimekWh": 0,
-                    "maxAmps": 0,
-                    "reportedAmpsActual": 0,
-                }
                 for slaveTWC in master.getSlaveTWCs():
                     TWCID = "%02X%02X" % (slaveTWC.TWCID[0], slaveTWC.TWCID[1])
                     data[TWCID] = {
@@ -774,30 +577,7 @@ def CreateHTTPHandlerClass(master):
                             "timeToFullCharge", 0.0
                         )
 
-                    totals["carsCharging"] += slaveTWC.isCharging
-                    totals["lastAmpsOffered"] += slaveTWC.lastAmpsOffered
-                    totals["lifetimekWh"] += slaveTWC.lifetimekWh
-                    totals["maxAmps"] += slaveTWC.maxAmps
-                    totals["reportedAmpsActual"] += slaveTWC.reportedAmpsActual
-
-                # A car on a charger no TWC reports is offered its share as
-                # its own charge rate (its desired amps), which no slave
-                # carries; a car on a TWC is already in that TWC's offer
-                for point in master.chargingPoints():
-                    if point.localEndpoints:
-                        continue
-                    for endpoint in point.vehicleEndpoints:
-                        d = master.desired.get(endpoint.vehicle.key, AMPS)
-                        totals["lastAmpsOffered"] += d.value if d else 0
-
-                data["total"] = {
-                    "carsCharging": totals["carsCharging"],
-                    "lastAmpsOffered": round(totals["lastAmpsOffered"], 2),
-                    "lifetimekWh": totals["lifetimekWh"],
-                    "maxAmps": totals["maxAmps"],
-                    "reportedAmpsActual": round(totals["reportedAmpsActual"], 2),
-                    "TWCID": "total",
-                }
+                data["total"] = Views.slaveTotals(master)
 
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
@@ -1412,189 +1192,6 @@ def CreateHTTPHandlerClass(master):
 
             self.debugLogAPI("Ending API POST")
 
-        def do_get_policy(self):
-            mod_policy = master.getModuleByName("Policy")
-
-            def render_leaf(match, condition, value):
-                match_result = mod_policy.policyValue(match)
-                value_result = mod_policy.policyValue(value)
-                result = mod_policy.doesConditionMatch(match, condition, value, False)
-
-                match_txt = str(match)
-                if match != match_result:
-                    match_txt += " (" + str(match_result) + ")"
-                value_txt = str(value)
-                if value != value_result:
-                    value_txt += " (" + str(value_result) + ")"
-
-                leaf = (
-                    '<div class="policy-leaf '
-                    + ("leaf-true" if result else "leaf-false")
-                    + '">'
-                    + '<span class="policy-match">'
-                    + match_txt
-                    + "</span>"
-                    + '<span class="policy-cond">'
-                    + str(condition)
-                    + "</span>"
-                    + '<span class="policy-value">'
-                    + value_txt
-                    + "</span>"
-                    + "</div>"
-                )
-                return leaf, result
-
-            def render_group(matches, conditions, values, exitOn):
-                items = []
-                results = []
-                for m, c, v in zip(matches, conditions, values):
-                    if all(isinstance(x, list) for x in (m, c, v)):
-                        sub_html, sub_result = render_group(m, c, v, not exitOn)
-                    else:
-                        sub_html, sub_result = render_leaf(m, c, v)
-                    items.append(sub_html)
-                    results.append(sub_result)
-                overall = all(results) if not exitOn else any(results)
-
-                if len(items) == 1:
-                    return items[0], overall
-
-                group = (
-                    '<div class="policy-group">'
-                    + '<div class="group-bar '
-                    + ("group-true" if overall else "group-false")
-                    + '">'
-                    + ("OR" if exitOn else "AND")
-                    + "</div>"
-                    + '<div class="group-body">'
-                    + "".join(items)
-                    + "</div>"
-                    + "</div>"
-                )
-                return group, overall
-
-            def render_policy_box(policy, cat=None):
-                is_active = str(policy["name"]) == str(mod_policy.active_policy)
-                box = (
-                    '<div class="policy-box active">'
-                    if is_active
-                    else '<div class="policy-box">'
-                )
-                box += '<div class="policy-header">' + policy["name"]
-                if cat:
-                    box += " (" + cat + ")"
-                if is_active:
-                    box += ' <span class="badge badge-primary">Active</span>'
-                box += "</div>"
-                group_html, _ = render_group(
-                    policy["match"], policy["condition"], policy["value"], False
-                )
-                box += group_html
-                box += "</div>"
-                return box
-
-            page = """
-      <style>
-        .policy-group { display: flex; align-items: stretch; margin: 4px 0; border: 1px solid #ccc;
-                        border-radius: 4px; max-width: 100%; }
-        .group-bar { writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
-                     display: flex; align-items: center; justify-content: center; padding: 6px 3px;
-                     font-weight: bold; color: #fff; min-width: 22px; flex-shrink: 0; }
-        .group-bar.group-true { background: #28a745; }
-        .group-bar.group-false { background: #dc3545; }
-        .group-body { flex: 1; display: flex; flex-direction: column; padding: 4px; min-width: 0; }
-        .policy-leaf { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; border-left: 6px solid;
-                        padding: 4px 8px; margin: 2px 0; border-radius: 3px; min-width: 0; }
-        .policy-leaf.leaf-true { border-color: #28a745; background: #eaf7ec; }
-        .policy-leaf.leaf-false { border-color: #dc3545; background: #fbeaea; }
-        .policy-match, .policy-value { word-break: break-word; overflow-wrap: anywhere; }
-        .policy-cond { font-style: italic; color: #666; }
-        .policy-box { border: 2px solid #ccc; border-radius: 6px; margin: 10px 0; padding: 8px;
-                      max-width: 100%; box-sizing: border-box; }
-        .policy-box.active { border-color: #28a745; box-shadow: 0 0 0 2px rgba(40, 167, 69, 0.35); }
-        .policy-header { font-weight: bold; margin-bottom: 4px; }
-        .ext-box { border: 2px dashed #999; border-radius: 6px; margin: 14px 0; padding: 8px;
-                   max-width: 100%; box-sizing: border-box; }
-        .ext-title { font-weight: bold; color: #555; margin-bottom: 6px; }
-        .ext-marker { color: #999; font-size: 0.85em; font-style: italic; margin: 6px 0;
-                      padding: 2px 8px; border-left: 3px solid #ddd; }
-        @media (max-width: 576px) {
-          .policy-leaf { flex-direction: column; align-items: stretch; gap: 2px; }
-          .policy-match, .policy-cond, .policy-value { width: 100%; }
-          .group-bar { writing-mode: horizontal-tb; transform: none; min-width: 0;
-                       width: 100%; padding: 3px 6px; }
-          .policy-group { flex-direction: column; }
-        }
-      </style>
-      <div>
-        """
-            j = 0
-            insertion_points = {0: "Emergency", 1: "Before", 3: "After"}
-            replaced = all(
-                x not in mod_policy.default_policy for x in mod_policy.charge_policy
-            )
-
-            def flush_bucket(ext_name, bucket):
-                if not ext_name:
-                    return "".join(bucket)
-                if bucket:
-                    return (
-                        '<div class="ext-box"><div class="ext-title">'
-                        + ext_name
-                        + " Extension Point</div>"
-                        + "".join(bucket)
-                        + "</div>"
-                    )
-                return (
-                    '<div class="ext-marker">'
-                    + ext_name
-                    + " Extension Point (no policies)</div>"
-                )
-
-            def conditions_match(a, b):
-                return (
-                    a.get("match") == b.get("match")
-                    and a.get("condition") == b.get("condition")
-                    and a.get("value") == b.get("value")
-                )
-
-            bucket = []
-            for policy in mod_policy.charge_policy:
-                default_slot = (
-                    mod_policy.default_policy[j]
-                    if j < len(mod_policy.default_policy)
-                    else None
-                )
-                is_default_slot = (
-                    not replaced
-                    and default_slot is not None
-                    and policy["name"] == default_slot["name"]
-                )
-                if is_default_slot and conditions_match(policy, default_slot):
-                    page += flush_bucket(insertion_points.get(j), bucket)
-                    bucket = []
-                    page += render_policy_box(policy, "Default")
-                    j += 1
-                elif is_default_slot:
-                    page += flush_bucket(insertion_points.get(j), bucket)
-                    bucket = []
-                    page += render_policy_box(policy, "Default, Modified")
-                    j += 1
-                elif replaced:
-                    page += render_policy_box(policy, "Custom")
-                else:
-                    bucket.append(render_policy_box(policy))
-
-            if not replaced:
-                page += flush_bucket(insertion_points.get(j), bucket)
-
-            page += """
-      </div>
-      </div>
-    </body>
-        """
-            return page
-
         def do_GET(self):
             self.url = urllib.parse.urlparse(self.path)
 
@@ -1670,11 +1267,6 @@ def CreateHTTPHandlerClass(master):
                 # token, so an Owner-only user can still log in.
                 teslaapi = master.getModuleByName("TeslaAPI")
                 self.apiAvailable = bool(teslaapi and not teslaapi.fleetSlot.empty())
-                self.scheduledAmpsMax = master.getScheduledAmpsMax()
-
-                self.activeAction = master.getModuleByName(
-                    "Policy"
-                ).getActivePolicyAction()
 
                 # Send the html message
                 page = self.template.render(vars(self))
@@ -1758,8 +1350,6 @@ def CreateHTTPHandlerClass(master):
                 # Load policy template and render
                 self.template = self.templateEnv.get_template("policy.html.j2")
                 page = self.template.render(self.__dict__)
-
-                page += self.do_get_policy()
                 self.wfile.write(page.encode("utf-8"))
                 return
 
@@ -2340,6 +1930,17 @@ def CreateHTTPHandlerClass(master):
             except BrokenPipeError:
                 logger.debug("Connection Error: Broken Pipe")
             return
+
+        def sendJSON(self, data, code=200):
+            body = json.dumps(jsonSafe(data), allow_nan=False).encode("utf-8")
+            try:
+                self.send_response(code)
+                self.send_header("Content-type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except BrokenPipeError:
+                self.debugLogAPI("Connection Error: Broken Pipe")
 
         def debugLogAPI(self, message):
             logger.debug(
