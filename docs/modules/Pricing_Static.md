@@ -6,8 +6,8 @@ The Static pricing module is for users on a fixed-rate electricity tariff who
 want their charging policy to be able to reference a price. It performs no
 network access; it simply reports the import and export prices you configure.
 
-Prices are exposed to charging policy as `modules.StaticPricing.importPrice` and
-`modules.StaticPricing.exportPrice` (see `docs/PolicyCustomization.md`).
+Prices are available to charging policy as `modules.StaticPricing.importPrice`
+and `modules.StaticPricing.exportPrice`; see [Pricing Modules](Pricing.md).
 
 ### Status
 

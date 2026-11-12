@@ -111,6 +111,17 @@ This can be useful if you would like to track charger activity and use it for gr
 | [Sentry](docs/modules/Logging_Sentry.md)   | Log data to a Sentry project  |
 | [SQLite](docs/modules/Logging_SQLite.md)   | Log data to a SQLite Database |
 
+### Pricing Interfaces
+
+Pricing interfaces report the current electricity price, so charging policy can favour cheap power. See [Pricing Modules](docs/modules/Pricing.md).
+
+| Module                                      | Details                                  |
+| ------------------------------------------- | ---------------------------------------- |
+| [Amber](docs/modules/Pricing_Amber.md)      | Amber Electric wholesale prices (Australia), with forecast |
+| [aWATTar](docs/modules/Pricing_aWATTar.md)  | aWATTar spot-market prices (Austria / Germany), with forecast |
+| [Static](docs/modules/Pricing_Static.md)    | Fixed prices you set                     |
+| [Tesla](docs/modules/Pricing_Tesla.md)      | The rate plan set in the Tesla app, with forecast |
+
 ### Status Interfaces
 
 Status interfaces publish TWCManager status information to external systems. Current Status interfaces are:
