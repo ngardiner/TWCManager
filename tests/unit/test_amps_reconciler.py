@@ -19,6 +19,15 @@ def point(m, v, mode, car=True):
 
 def prov(m, name): return m.providerOrder.provider(name)
 
+def test_a_lift_goes_to_the_twcs_maximum_whatever_the_car_takes():
+    # One command clears the car out of the way for the session: not the
+    # offer, which would lift it again at each rise, nor the car's own
+    # maximum, which it clamps to anyway
+    m, r, v, c = setup(ble(O.Outcome(O.DONE))); v.observe("chargeCurrentRequest", 16, "TeslaBLE")
+    v.observe("availableCurrent", 48, "TeslaBLE"); v.observe("chargeCurrentRequestMax", 24, "TeslaBLE"); pt, s = point(m, v, 1)
+    pt.setTargetPower(2400); d = m.desired.get(VIN, AMPS)
+    assert s.pointAmps == 10 and d.lift and d.value == s.wiringMaxAmps == 32
+
 def test_carriers_follow_charge_rate_control():
     m, r, v, c = setup(); pt, s = point(m, v, 1)
     for mode, carriers in ((1, (True, False)), (2, (False, True)), (3, (True, True))):
