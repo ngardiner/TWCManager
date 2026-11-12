@@ -83,7 +83,10 @@ class ChargeLedger:
         end = prev["stamp"]
         if prev["energy"] is not None and snap.energy is not None and prev["watts"] > 0:
             added = max(0.0, snap.energy - prev["energy"])
-            end = min(snap.stamp, end + added * JOULES_PER_KWH / (prev["watts"] * self.EFFICIENCY))
+            end = min(
+                snap.stamp,
+                end + added * JOULES_PER_KWH / (prev["watts"] * self.EFFICIENCY),
+            )
         self._write(car, prev["stamp"], end, prev["watts"])
         car["open"] = None
 
@@ -112,14 +115,27 @@ class ChargeLedger:
                 self._open(car, snap, startHint, last, ceiling)
             elif snap.energy is None or prev["energy"] is None:
                 # Nothing says what was drawn in between
-                car["open"] = {"stamp": snap.stamp, "energy": snap.energy, "watts": snap.watts}
+                car["open"] = {
+                    "stamp": snap.stamp,
+                    "energy": snap.energy,
+                    "watts": snap.watts,
+                }
             elif snap.energy < prev["energy"]:
                 car["open"] = None
                 self._open(car, snap, None, None)
             else:
                 span = snap.stamp - prev["stamp"]
-                self._write(car, prev["stamp"], snap.stamp, self._wall(snap.energy - prev["energy"], span))
-                car["open"] = {"stamp": snap.stamp, "energy": snap.energy, "watts": snap.watts}
+                self._write(
+                    car,
+                    prev["stamp"],
+                    snap.stamp,
+                    self._wall(snap.energy - prev["energy"], span),
+                )
+                car["open"] = {
+                    "stamp": snap.stamp,
+                    "energy": snap.energy,
+                    "watts": snap.watts,
+                }
             return True
 
     def end(self, vin: str) -> bool:
@@ -141,12 +157,17 @@ class ChargeLedger:
             car = self.cars.get(vin)
             return car["open"]["stamp"] if car and car["open"] else None
 
-    def wattsBetween(self, start: float, end: float, live: Callable[[str], float]) -> float:
+    def wattsBetween(
+        self, start: float, end: float, live: Callable[[str], float]
+    ) -> float:
         if end <= start:
             return 0.0
         with self.lock:
             cars = {
-                vin: (list(car["segments"]), car["open"]["stamp"] if car["open"] else None)
+                vin: (
+                    list(car["segments"]),
+                    car["open"]["stamp"] if car["open"] else None,
+                )
                 for vin, car in self.cars.items()
             }
         now = self.clock()
@@ -165,7 +186,11 @@ class ChargeLedger:
             for vin in list(self.cars):
                 car = self.cars[vin]
                 car["segments"] = [s for s in car["segments"] if s[1] >= cutoff]
-                if not car["segments"] and car["open"] is None and car["energy"] is None:
+                if (
+                    not car["segments"]
+                    and car["open"] is None
+                    and car["energy"] is None
+                ):
                     del self.cars[vin]
 
     def toJSON(self) -> dict:

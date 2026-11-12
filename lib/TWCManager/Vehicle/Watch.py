@@ -105,12 +105,21 @@ def snapshot(v, cutoff, source=CACHED) -> Optional[Snapshot]:
     # carries an older stamp, and counts as missing
     got = {
         f: v.reported(f).get(source)
-        for f in ("chargingState", "chargeEnergyAdded", "actualCurrent", "voltage", "phases")
+        for f in (
+            "chargingState",
+            "chargeEnergyAdded",
+            "actualCurrent",
+            "voltage",
+            "phases",
+        )
     }
     state = got.pop("chargingState")
     if state is None or state.at < cutoff:
         return None
-    of = {f: o.value if o is not None and o.at == state.at else None for f, o in got.items()}
+    of = {
+        f: o.value if o is not None and o.at == state.at else None
+        for f, o in got.items()
+    }
     watts = (of["actualCurrent"] or 0) * (of["voltage"] or 0) * (of["phases"] or 1)
     return Snapshot(state.at, state.value, of["chargeEnergyAdded"], watts)
 
@@ -150,7 +159,12 @@ class LoadStep:
     # holds it: a spike that falls back says nothing. A reported step's size
     # is how far it moved
     def __init__(self, thresholdWatts: float):
-        self.threshold, self._base, self._pending, self.size = thresholdWatts, None, None, 0.0
+        self.threshold, self._base, self._pending, self.size = (
+            thresholdWatts,
+            None,
+            None,
+            0.0,
+        )
 
     def sample(self, watts: float) -> Optional[str]:
         # The first sample is its own base, and a NaN reading stays NaN
@@ -283,11 +297,21 @@ class Watch:
         reading = v.value("actualCurrent") or 0 if where == HOME_CHARGING else 0
         seen = v.latest("actualCurrent")
         newer = lambda w: w is not None and (seen is None or w.at > seen.at)
-        started, rate = v.lastWrite("chargingState"), v.lastWrite("chargeCurrentRequest")
-        charging = started.value == "Charging" if newer(started) else where == HOME_CHARGING
-        if not (newer(started) or newer(rate)) or not charging or where not in (HOME_AWAKE, HOME_CHARGING):
+        started, rate = v.lastWrite("chargingState"), v.lastWrite(
+            "chargeCurrentRequest"
+        )
+        charging = (
+            started.value == "Charging" if newer(started) else where == HOME_CHARGING
+        )
+        if (
+            not (newer(started) or newer(rate))
+            or not charging
+            or where not in (HOME_AWAKE, HOME_CHARGING)
+        ):
             return reading
-        return max(reading, rate.value if rate else v.value("chargeCurrentRequestMax") or 0)
+        return max(
+            reading, rate.value if rate else v.value("chargeCurrentRequestMax") or 0
+        )
 
     def chargingAmps(self, ledgered: bool = True) -> float:
         # Cars charging at home on chargers that report to no TWC, watched or
@@ -325,11 +349,15 @@ class Watch:
         if where != HOME or not pluggedNow(self.master, v):
             return
         since, away = max(v.markAt("plugIn"), arrivedAt(v)), v.markAt("outside")
-        obs, sent = v.latest("chargeCurrentRequest"), v.lastWrite("chargeCurrentRequest")
+        obs, sent = v.latest("chargeCurrentRequest"), v.lastWrite(
+            "chargeCurrentRequest"
+        )
         state = v.latest("chargingState")
         if obs and not (state and state.value == "Charging" and state.at <= obs.at):
             obs = None
-        here = [o for o in (obs, sent) if o is not None and o.at >= since and o.at > away]
+        here = [
+            o for o in (obs, sent) if o is not None and o.at >= since and o.at > away
+        ]
         changed = False
         if obs in here and sent not in here:
             changed = v.noteHomeAmps(obs.value, since)
@@ -667,7 +695,9 @@ class Watch:
         vin, s = v.vin, self._settings
         with self._lock:
             since, stepAt = self._suspect.get(vin, (None, None))
-            if since is not None and (state in ASLEEP or now >= since + s["pollGiveUpSecs"]):
+            if since is not None and (
+                state in ASLEEP or now >= since + s["pollGiveUpSecs"]
+            ):
                 del self._suspect[vin]
                 since, self._spent[vin] = None, evidence(v)
         if state in ASLEEP:
@@ -682,7 +712,9 @@ class Watch:
             # A snapshot another read fetched counts as well as this one's,
             # and so does a paid read since: a charge a lowered limit ends at
             # once may show only in the read that found it
-            self.master.providerOrder.read(v, "chargingState", False, [CACHED], cutoff=cutoff)
+            self.master.providerOrder.read(
+                v, "chargingState", False, [CACHED], cutoff=cutoff
+            )
             snaps = (snapshot(v, cutoff, f) for f in ("FleetAPI", CACHED))
             snaps = sorted((s for s in snaps if s), key=lambda s: s.stamp)
             if not snaps:

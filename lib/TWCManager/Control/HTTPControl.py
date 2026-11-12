@@ -922,14 +922,19 @@ def CreateHTTPHandlerClass(master):
 
                 def ledgerWatts(timestamp):
                     start = datetime.fromisoformat(timestamp).timestamp()
-                    return watch.ledger.wattsBetween(
-                        start, min(start + 300, nowSecs), watch.liveWatts
-                    ) if watch else 0
+                    return (
+                        watch.ledger.wattsBetween(
+                            start, min(start + 300, nowSecs), watch.liveWatts
+                        )
+                        if watch
+                        else 0
+                    )
 
                 output = [
                     {
                         "timestamp": timestamp,
-                        "charger_power": data.get(timestamp, 0) + ledgerWatts(timestamp),
+                        "charger_power": data.get(timestamp, 0)
+                        + ledgerWatts(timestamp),
                     }
                     for timestamp in [
                         (startTime + timedelta(minutes=5 * i)).isoformat(

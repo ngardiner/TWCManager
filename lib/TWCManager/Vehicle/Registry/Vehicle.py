@@ -178,7 +178,9 @@ class Vehicle:
             home = self._home
             if not _number(amps, 0) or since <= home["since"]:
                 return False
-            home["amps"], home["since"] = (home["amps"] + [amps])[-HOME_AMPS_KEPT:], since
+            home["amps"], home["since"] = (home["amps"] + [amps])[
+                -HOME_AMPS_KEPT:
+            ], since
         return True
 
     def noteHomeHeld(self, amps: Any) -> bool:
@@ -193,7 +195,11 @@ class Vehicle:
         # {"amps": the plug-ins' amps, oldest first, "since", "held"}, as
         # saved: no plug-in yet is a since of None, which JSON can hold
         with self._lock:
-            amps, since, held = list(self._home["amps"]), self._home["since"], self._home["held"]
+            amps, since, held = (
+                list(self._home["amps"]),
+                self._home["since"],
+                self._home["held"],
+            )
         return {"amps": amps, "since": since if _number(since) else None, "held": held}
 
     def restoreHomeAmps(self, state: Any) -> None:
