@@ -127,7 +127,11 @@ def vehicleMaxAmps(vehicle, configConfig: dict) -> float:
     pilots, own = vehicle.reported("availableCurrent"), []
     for source, most in vehicle.reported("chargeCurrentRequestMax").items():
         pilot = pilots.get(source)
-        if pilot is not None and most.at >= pilot.at and 0 < (most.value or 0) < (pilot.value or 0):
+        if (
+            pilot is not None
+            and most.at >= pilot.at
+            and 0 < (most.value or 0) < (pilot.value or 0)
+        ):
             own.append(most.value)
     return min(own, default=configConfig.get("wiringMaxAmpsPerTWC", 32))
 
