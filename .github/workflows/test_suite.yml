@@ -34,7 +34,8 @@ jobs:
 
   integration-tests:
      name: Integration Tests - Python ${{ matrix.python-version }}
-     runs-on: ubuntu-latest
+     # setup-python has no 3.8 or 3.9 build for Ubuntu 26.04
+     runs-on: ubuntu-24.04
      needs: build-test-image
      strategy:
        fail-fast: false
@@ -216,7 +217,8 @@ jobs:
 
   unit-tests:
     name: Unit Tests - Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    # setup-python has no 3.8 or 3.9 build for Ubuntu 26.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -258,7 +260,8 @@ jobs:
 
   venv-install-tests:
     name: Venv Install - Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    # setup-python has no 3.8 or 3.9 build for Ubuntu 26.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

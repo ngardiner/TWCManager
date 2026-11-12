@@ -83,8 +83,9 @@ def _plug(field, obs) -> Optional[bool]:
 
 
 def _awayCharger(v, obs) -> bool:
-    # A fast charger, no cable, or more power than the car's own AC maximum
-    # at its voltage: plugged in, but not to a home charger
+    # A fast charger, no cable, or more power than the same reading's AC
+    # request maximum allows at its voltage: plugged in, but not to a home
+    # charger
     def sameReport(field):
         reading = v.reported(field).get(obs.source)
         return reading.value if reading is not None and reading.at >= obs.at else None

@@ -271,13 +271,19 @@ def asleepUnderSixAmps(m, twcVolts, carMax=None):
     m.config["config"].update(wiringMaxAmpsAllTWCs=48, wiringMaxAmpsPerTWC=48)
     s = stoppedTwc(m); s.reportedAmpsMax = 6; s.voltsPhaseA = twcVolts             # the TWC's 6 A sleep pilot
     v = car(m, VIN, "Stopped"); v.observe("availableCurrent", 6, "TeslaBLE"); v.observe("voltage", 2, "TeslaBLE")   # not charging: 240 V default
-    if carMax is not None: v.observe("chargeCurrentRequestMax", carMax, "TeslaBLE")
+    if carMax is not None: ownMax(v, carMax)
     budget(m, 48); return s
+
+def ownMax(v, amps):
+    # The car's own maximum shows as a request maximum below the pilot
+    v.observe("availableCurrent", 48, "OwnerAPI"); v.observe("chargeCurrentRequestMax", amps, "OwnerAPI")
 
 def test_a_car_read_under_the_sleep_pilot_still_gets_the_share():
     m = real(); s = asleepUnderSixAmps(m, 243)
     m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(48)
-    m.vehicleRegistry.get(VIN).observe("chargeCurrentRequestMax", 32, "TeslaBLE")    # the car's own maximum binds
+    v = m.vehicleRegistry.get(VIN); v.observe("chargeCurrentRequestMax", 6, "TeslaBLE")   # capped at the pilot: the TWC's, not the car's
+    m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(48)
+    ownMax(v, 32)                                                                       # the car's own maximum binds
     m.distributeEVSEPower(); assert s.pointAmps == pytest.approx(32)
 
 def test_members_are_compared_at_the_points_voltage():
