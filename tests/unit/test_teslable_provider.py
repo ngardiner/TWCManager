@@ -33,7 +33,10 @@ def test_amps_range_is_one_to_vehicle_max():
     # A car read under a 6 A pilot can still be lifted to the wiring max
     v.observe("availableCurrent", 6, "TeslaBLE")
     assert p.ampsRange(v) == (1, 48) and p.covers(v, 48)
-    v.observe("chargeCurrentRequestMax", 16, "TeslaBLE")
+    v.observe("chargeCurrentRequestMax", 6, "TeslaBLE")  # at the pilot: the charger's limit
+    assert p.ampsRange(v) == (1, 48)
+    v.observe("availableCurrent", 48, "TeslaBLE")
+    v.observe("chargeCurrentRequestMax", 16, "TeslaBLE")  # below it: the car's own
     assert p.ampsRange(v) == (1, 16)
 
 
@@ -47,6 +50,7 @@ def test_a_vehicle_rate_above_the_cars_maximum_still_reaches_it():
     v = reg.getOrCreate(VIN, "t")
     ble._claimUnproven(v)
     master.config = {"config": {"wiringMaxAmpsPerTWC": 48}}
+    v.observe("availableCurrent", 48, "TeslaBLE")
     v.observe("chargeCurrentRequestMax", 32, "TeslaBLE")
     assert order.candidates(v, C.SET_AMPS, amps=48, localRule=False) == [p]
     assert order.candidates(v, C.SET_AMPS, amps=48) == []

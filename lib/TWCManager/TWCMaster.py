@@ -1354,25 +1354,27 @@ class TWCMaster:
         fileName = self.config["config"]["settingsPath"] + "/settings.json"
         backupFileName = fileName + ".backup"
 
-        if not os.path.exists(fileName):
-            # No file yet: a fresh install
-            with self.settingsLock:
-                self.settings = dict(DEFAULT_SETTINGS)
-            return
-
         # Read and parse the file(s) into a local with no lock held; the
         # result is assigned under settingsLock below.
         loaded = None
         loadSuccess = False
-        with open(fileName, "r") as inconfig:
-            try:
-                loaded = json.load(inconfig)
-                loadSuccess = True
-            except Exception as e:
-                logger.info(
-                    "There was an exception whilst loading settings file " + fileName
-                )
-                logger.log(logging.DEBUG2, str(e))
+        if not os.path.exists(fileName):
+            # No file yet: a fresh install. Start from empty and fall
+            # through, so it gets the same defaults and normalisation as
+            # a loaded file (built-in vehicle groups, registry, tokens).
+            loaded = {}
+            loadSuccess = True
+        else:
+            with open(fileName, "r") as inconfig:
+                try:
+                    loaded = json.load(inconfig)
+                    loadSuccess = True
+                except Exception as e:
+                    logger.info(
+                        "There was an exception whilst loading settings file "
+                        + fileName
+                    )
+                    logger.log(logging.DEBUG2, str(e))
 
         # If main file failed to load, try the backup
         if not loadSuccess and os.path.exists(backupFileName):
