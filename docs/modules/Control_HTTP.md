@@ -68,14 +68,18 @@ The following API endpoints exist:
 | [chargeNow](control_HTTP_API/chargeNow.md)             | POST  | Instructs charger to start charging at specified rate |
 | [deleteConsumptionOffset](control_HTTP_API/deleteConsumptionOffset.md) | POST | Delete a Consumption Offset value |
 | getActivePolicyAction    | GET    | Provides the active policy's action: 1 charge at a fixed rate, 2 do not charge, 3 track green energy |
+| [getChargingPoints](control_HTTP_API/getChargingPoints.md) | GET | Provides every charging point (TWC or EVSE) with its offered and drawn amps and the car on it |
 | getConfig                | GET    | Provides the current configuration                |
 | [getConsumptionOffsets](control_HTTP_API/getConsumptionOffsets.md) | GET | List configured offsets               |
 | getHistory               | GET  | Provides the charging history of the last two days, in 5 minute steps |
 | getLastTWCResponse       | GET  | Provides the last response to a debug command      |
 | getPolicy                | GET  | Provides the policy configuration                 |
+| [getPolicyState](control_HTTP_API/getPolicyState.md) | GET | Provides the active policy and whether each policy's conditions hold now |
 | getSlaveTWCs             | GET  | Provides a list of connected Slave TWCs and their state |
 | getStatus                | GET  | Provides the current status (Charge Rate, Policy) |
 | getUUID                  | GET  | Provides a unique ID for this particular master, based on the physical MAC address |
+| [getVehicle](control_HTTP_API/getVehicle.md) | GET | Provides one vehicle, by VIN, as its page shows it |
+| [getVehicles](control_HTTP_API/getVehicles.md) | GET | Provides every known vehicle, as the Vehicles page shows them |
 | [saveSettings](control_HTTP_API/saveSettings.md)         | POST | Saves settings to settings file |
 | sendDebugCommand         | POST | Sends a debug command to the TWCs (used by the Debug page) |
 | [sendStartCommand](control_HTTP_API/sendStartCommand.md) | POST | Sends the Start command to all Slave TWCs    |
