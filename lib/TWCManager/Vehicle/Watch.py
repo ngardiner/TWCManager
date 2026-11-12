@@ -493,6 +493,8 @@ class Watch:
         why = notWatched(self.master, v)
         named, ble = bool(why) and why.startswith(NAMED), radio(self.master)
         fleet = self._fleet(v)
+        if where == NOT_HOME:
+            self._saved(self.ledger.end(vin, departed=True))
         self._noteHomeAmps(v, where)
         with self._lock:
             # What a car was before a restart is no news: the first pass
@@ -668,6 +670,8 @@ class Watch:
         worker = "ble" if found[0].local else "cloud"
 
         def read():
+            if situation(self.master, v) in ASLEEP:
+                return ""
             # None when the read failed, not the old value. A paid read first
             # takes a snapshot newer than this car's last read for free (a
             # free read is live, which beats one minutes old), and pays only
@@ -690,9 +694,14 @@ class Watch:
     def _poll(self, v, state, where, polled, now) -> None:
         # The free snapshot, a pollSecs apart while a charge at home may have
         # changed or one is open, never paid for: a poll given up leaves the
-        # next trigger or courtesy read to catch up. An asleep car is not
-        # charging, so its last snapshot stands and ends its session
+        # next trigger or courtesy read to catch up. Sleep gets one final
+        # cached-only attempt before ending at the last known energy
         vin, s = v.vin, self._settings
+        if where == NOT_HOME:
+            with self._lock:
+                self._suspect.pop(vin, None)
+            self._saved(self.ledger.end(vin, departed=True))
+            return
         with self._lock:
             since, stepAt = self._suspect.get(vin, (None, None))
             if since is not None and (
@@ -700,15 +709,28 @@ class Watch:
             ):
                 del self._suspect[vin]
                 since, self._spent[vin] = None, evidence(v)
-        if state in ASLEEP:
-            self._saved(self.ledger.end(vin))
-            return
+        closing = state in ASLEEP
         cutoff = self.ledger.lastStamp(vin) if since is None else since
         home = where == HOME or self.ledger.isOpen(vin)
-        if cutoff is None or not home or now < polled + s["pollSecs"]:
+        if cutoff is None or not home or (not closing and now < polled + s["pollSecs"]):
             return
+        paid = snapshot(v, _fix(self.master, v)[1], "FleetAPI")
+        if where == HOME and paid is not None:
+            cutoff = min(cutoff, paid.stamp)
 
         def poll():
+            if presence(self.master, v) == NOT_HOME:
+                self._saved(self.ledger.end(vin, departed=True))
+                return None
+            try:
+                return take()
+            finally:
+                # One free closing attempt, even on a stale answer or error.
+                # No live fallback and no open-session amps while asleep.
+                if closing or situation(self.master, v) in ASLEEP:
+                    self._saved(self.ledger.end(vin))
+
+        def take():
             # A snapshot another read fetched counts as well as this one's,
             # and so does a paid read since: a charge a lowered limit ends at
             # once may show only in the read that found it
@@ -728,8 +750,11 @@ class Watch:
             for snap in snaps:
                 # Charging away from home (a Supercharger) is no home session:
                 # the car may have left since the poll was asked
+                if presence(m, v) == NOT_HOME:
+                    self._saved(self.ledger.end(vin, departed=True))
+                    return None
                 opens = snap.state == CHARGING and not self.ledger.isOpen(vin)
-                if not opens or presence(m, v) == HOME:
+                if not opens or (presence(m, v) == HOME and not closing):
                     near = stepAt is not None and snap.stamp - stepAt <= STEP_SECS
                     hint = stepAt if near else None
                     self._saved(self.ledger.observe(vin, snap, hint, ceiling))

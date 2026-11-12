@@ -45,6 +45,7 @@ This document logs the changes per release of TWCManager.
     * (@MikeBishop) - Remove flex (`greenEnergyFlexAmps`, a policy's `allowed_flex`, `useFlexAmpsToStartCharge`); the keys are ignored. Installs with TeslaAPI enabled have ignored it since 1.4.0 (#710)
     * (@MikeBishop) - Remove Track Green dampening; `startStopDelay` still sets the 60 s start/stop gates that protect the TWC relay (#710)
 * Bugfixes
+    * Fix: Keep away charging out of home history, recover bounded sleep tails and short charges only from known counter growth
     * (@MikeBishop) - On a fresh install (no settings.json yet), the Vehicles page no longer fails to render and a car reporting its VIN no longer raises KeyError: settings are normalised as if read from an empty file, including the built-in Allow/Deny Charging groups (broken since v1.2.2)
     * (@MikeBishop) - Add Group on the Vehicles page creates the group; it posted to an address nothing handled. A blank name, one with /, or one already taken shows an error
     * (@MikeBishop) - Vehicle groups: adding a car to a group twice lists it once, so one Remove takes it out (a car listed twice by an earlier version is removed in one go); changing a group deleted since the page was drawn no longer crashes the request; the built-in Allow Charging and Deny Charging groups can no longer be deleted by URL

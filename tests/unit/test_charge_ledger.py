@@ -216,3 +216,67 @@ def test_the_last_energy_survives_a_restart():
     r = ChargeLedger.fromJSON(l.toJSON(), clock=lambda: T0 + 86400)
     r.observe(VIN, Snapshot(at, "Charging", 3.48, 11520.0), startHint=at - 300)
     assert r.wattsBetween(at - 300, at, never) == pytest.approx(wall(0.3, 300))
+
+
+@pytest.mark.parametrize("state", ["Complete", "Stopped"])
+def test_terminal_only_growth_uses_a_known_baseline(state):
+    l = ChargeLedger()
+    l.observe(VIN, Snapshot(T0, "Stopped", 2.0, 0))
+    l.observe(VIN, Snapshot(T0 + 300, state, 2.3, 0), startHint=T0 + 60)
+    assert not l.isOpen(VIN)
+    assert l.wattsBetween(T0 + 60, T0 + 300, never) == pytest.approx(wall(0.3, 240))
+
+
+@pytest.mark.parametrize("baseline,energy", [(None, 3), (3, 3), (3, 0.2)])
+def test_a_terminal_counter_and_load_hint_do_not_invent_a_charge(baseline, energy):
+    l = ChargeLedger()
+    if baseline is not None:
+        l.observe(VIN, Snapshot(T0, "Complete", baseline, 0))
+    l.observe(VIN, Snapshot(T0 + 300, "Complete", energy, 0), startHint=T0)
+    assert l.toJSON()[VIN]["segments"] == []
+
+
+@pytest.mark.parametrize("energy", [0.2, 8.0])
+def test_departure_breaks_counter_continuity_across_restart(energy):
+    l = ChargeLedger(clock=lambda: T0 + 100)
+    l.observe(VIN, Snapshot(T0, "Charging", 1, 7680), startHint=T0)
+    assert l.end(VIN, departed=True)
+    l = ChargeLedger.fromJSON(l.toJSON())
+    l.observe(VIN, Snapshot(T0 + 1000, "Charging", energy, 7680), startHint=T0 + 200)
+    assert l.toJSON()[VIN]["segments"] == []
+    l.observe(VIN, Snapshot(T0 + 1300, "Charging", energy + 0.5, 7680))
+    assert l.wattsBetween(T0 + 1000, T0 + 1300, never) == pytest.approx(wall(0.5, 300))
+
+
+def test_a_first_home_charge_after_known_away_is_not_backfilled():
+    l = ChargeLedger(clock=lambda: T0)
+    assert l.end(VIN, departed=True)
+    l.observe(VIN, Snapshot(T0 + 300, "Charging", 8, 7680), startHint=T0 + 100)
+    assert l.isOpen(VIN) and l.toJSON()[VIN]["segments"] == []
+
+
+def test_a_missing_counter_does_not_restore_departed_continuity():
+    l = ChargeLedger(clock=lambda: T0)
+    l.end(VIN, departed=True)
+    l.observe(VIN, Snapshot(T0 + 100, "Complete", None, 0))
+    l.observe(VIN, Snapshot(T0 + 300, "Charging", 8, 7680), startHint=T0 + 100)
+    assert l.toJSON()[VIN]["segments"] == []
+
+
+def test_terminal_growth_without_a_step_uses_the_ceiling_after_the_baseline():
+    l = ChargeLedger()
+    l.observe(VIN, Snapshot(T0, "Complete", 1, 0))
+    l.observe(VIN, Snapshot(T0 + 300, "Stopped", 1.1, 0), ceiling=7680)
+    [[start, end, watts]] = l.toJSON()[VIN]["segments"]
+    assert T0 <= start < end == T0 + 300
+    assert watts == pytest.approx(7680)
+
+
+def test_a_return_baseline_can_share_the_departure_pass_timestamp():
+    l = ChargeLedger(clock=lambda: T0)
+    l.end(VIN, departed=True)
+    l.observe(VIN, Snapshot(T0, "Charging", 8, 7680), startHint=T0 - 100)
+    assert l.isOpen(VIN) and l.toJSON()[VIN]["segments"] == []
+    l.observe(VIN, Snapshot(T0 + 300, "Complete", 8.1, 0))
+    assert not l.isOpen(VIN)
+    assert l.wattsBetween(T0, T0 + 300, never) == pytest.approx(wall(0.1, 300))

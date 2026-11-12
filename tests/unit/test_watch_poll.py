@@ -104,8 +104,8 @@ def test_a_charge_on_arrival_ended_by_the_read_that_found_it_is_counted(requests
     snap.update(stamp=R + 6, charging_state="Complete", charge_energy_added=0.16, charger_actual_current=0)
     run(m, v, c, w, r, 3)
     segs = w.ledger.toJSON()[VIN]["segments"]
-    assert not w.ledger.isOpen(VIN) and segs[0][0] == S and R < segs[-1][1] <= R + 6
-    assert sum((e - s) * x for s, e, x in segs) == pytest.approx(0.16 * 3.6e6 / 0.93)
+    assert not w.ledger.isOpen(VIN) and segs[0][0] == R and R < segs[-1][1] <= R + 6
+    assert sum((e - s) * x for s, e, x in segs) == pytest.approx(0.01 * 3.6e6 / 0.93)
 
 def test_a_paid_read_alone_opens_a_session(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock); S = c.t
@@ -125,7 +125,7 @@ def test_a_paid_read_and_a_snapshot_of_the_same_moment_are_both_taken(requests_m
     run(m, v, c, w, r, 3)
     assert w.ledger.isOpen(VIN) and VIN not in w._suspect
 
-def test_an_asleep_car_is_never_polled_and_its_session_ends(requests_mock):
+def test_an_asleep_car_gets_one_closing_poll_and_its_session_ends(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock); T = c.t
     upload(requests_mock, **dict(CHARGING, stamp=T + 5, charge_energy_added=0.1)); w.suspect(VIN, T, "command")
     run(m, v, c, w, r, 1); assert w.ledger.isOpen(VIN)
@@ -165,7 +165,7 @@ def test_a_snapshot_charging_away_opens_no_session(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock); T = c.t
     upload(requests_mock, **dict(CHARGING, stamp=T + 30, charge_energy_added=5.0)); w.suspect(VIN, T, "command")
     later(m, v, c, 60); w.pass_(); placeAt(m, v, AWAY); runPending(r.cloud)              # it left before the poll ran
-    assert counts(requests_mock)["cached"] == 1 and not w.ledger.isOpen(VIN) and saved == []
+    assert counts(requests_mock)["cached"] == 0 and not w.ledger.isOpen(VIN) and saved == [SAVE]
 
 def test_a_paused_fleet_slot_keeps_the_car_fleet_only_and_its_session(requests_mock):
     m, r, v, c, w, saved, car = start(requests_mock); T = c.t
@@ -302,3 +302,106 @@ def test_staleness_suspects_once_per_evidence(requests_mock):
     assert n == 9 and paid(requests_mock) == (0, 0, 0)                                   # one give-up window
     v.noteWrite("chargeCurrentRequest", 16, "FleetAPI"); minutes(40)                     # a command: new evidence
     assert counts(requests_mock)["cached"] == 2 * n
+
+
+@pytest.mark.parametrize("state", ["Charging", "Complete", "Stopped"])
+@pytest.mark.parametrize("energy", [0.01, 8.0])
+@pytest.mark.parametrize("queued", [False, True])
+def test_departure_never_consumes_away_counters(requests_mock, state, energy, queued):
+    m, r, v, c, w, saved, car = start(requests_mock); T = c.t
+    snap = upload(requests_mock, **dict(CHARGING, stamp=T + 5, charge_energy_added=0.1))
+    w.suspect(VIN, T, "command"); run(m, v, c, w, r, 1)
+    before = w.ledger.toJSON()[VIN]["segments"]
+    later(m, v, c, 60)
+    if queued:
+        w.pass_()
+    placeAt(m, v, AWAY)
+    snap.update(stamp=c.t, charging_state=state, charge_energy_added=energy)
+    if not queued:
+        w.pass_()
+    runPending(r.cloud)
+    assert not w.ledger.isOpen(VIN)
+    assert w.ledger.toJSON()[VIN]["segments"] == before
+    assert w.ledger.toJSON()[VIN]["energy"] is None
+    assert not w.ledger.toJSON()[VIN]["continuous"]
+
+
+@pytest.mark.parametrize("answer", ["Complete", "stale", "error", "refused", "Charging"])
+def test_sleep_closing_read_is_free_and_bounded(requests_mock, answer):
+    m, r, v, c, w, saved, car = start(requests_mock); T = c.t
+    snap = upload(requests_mock, **dict(CHARGING, stamp=T + 5, charge_energy_added=0.1))
+    w.suspect(VIN, T, "command"); run(m, v, c, w, r, 1)
+    n = counts(requests_mock)["cached"]
+    later(m, v, c, 10); v.observe("state", "asleep", "FleetAPI"); car.state = "asleep"
+    if answer == "error":
+        requests_mock.get(FLEET + VIN + "/vehicle_data_cached", exc=requests.exceptions.ConnectTimeout)
+    elif answer == "refused":
+        requests_mock.get(FLEET + VIN + "/vehicle_data_cached", status_code=403, json={})
+    elif answer != "stale":
+        snap.update(stamp=c.t - 1, charging_state=answer, charge_energy_added=0.15)
+    w.pass_()
+    assert w.believedAmps(v) == 0
+    runPending(r.cloud)
+    assert not w.ledger.isOpen(VIN)
+    assert counts(requests_mock)["cached"] == n + 1
+    if answer in ("Complete", "Charging"):
+        joules = sum((e - s) * watts for s, e, watts in w.ledger.toJSON()[VIN]["segments"])
+        assert joules == pytest.approx(0.15 * 3.6e6 / 0.93)
+    run(m, v, c, w, r, 20)
+    assert counts(requests_mock)["cached"] == n + 1 and paid(requests_mock) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("state", ["Complete", "Stopped"])
+def test_terminal_only_short_charge_needs_counter_growth(requests_mock, state):
+    m, r, v, c, w, saved, car = start(requests_mock); T = c.t
+    snap = upload(requests_mock, stamp=T + 5, charging_state=state, charge_energy_added=3.0)
+    w.suspect(VIN, T, "load step up", step=True); run(m, v, c, w, r, 1)
+    assert w.ledger.toJSON()[VIN]["segments"] == []
+    S = c.t; w.suspect(VIN, S, "load step up", step=True)
+    snap.update(stamp=S + 30); run(m, v, c, w, r, 1)
+    assert w.ledger.toJSON()[VIN]["segments"] == []
+    S = c.t; w.suspect(VIN, S, "load step up", step=True)
+    snap.update(stamp=S + 30, charge_energy_added=3.1); run(m, v, c, w, r, 1)
+    [seg] = w.ledger.toJSON()[VIN]["segments"]
+    assert seg[:2] == [S, S + 30]
+    assert seg[2] == pytest.approx(0.1 * 3.6e6 / 0.93 / 30)
+    assert not w.ledger.isOpen(VIN) and paid(requests_mock) == (0, 0, 0)
+
+
+def test_departure_during_cached_fetch_discards_the_answer(requests_mock):
+    m, r, v, c, w, saved, car = start(requests_mock); T = c.t
+    upload(requests_mock, **dict(CHARGING, stamp=T + 5, charge_energy_added=0.1))
+    w.suspect(VIN, T, "command"); run(m, v, c, w, r, 1)
+    before = w.ledger.toJSON()[VIN]["segments"]
+    def answer(req, ctx):
+        placeAt(m, v, AWAY)
+        return {"response": {"charge_state": {"timestamp": int(c.t * 1000), "charging_state": "Complete", "charge_energy_added": 8.0}, "vehicle_state": {}}}
+    requests_mock.get(FLEET + VIN + "/vehicle_data_cached", json=answer)
+    run(m, v, c, w, r, 1)
+    assert not w.ledger.isOpen(VIN) and w.ledger.toJSON()[VIN]["segments"] == before
+
+
+def test_a_live_read_queued_before_sleep_is_not_sent(requests_mock):
+    m, r, v, c, w, saved, car = start(requests_mock)
+    w.readNow(VIN, "locate"); w._locate.add(VIN)
+    later(m, v, c, 60); w.pass_()
+    assert (VIN, "read") in w._inflight
+    v.observe("state", "asleep", "FleetAPI"); car.state = "asleep"
+    runPending(r.cloud)
+    assert paid(requests_mock) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("energy", [0.2, 8.0])
+def test_return_establishes_a_baseline_without_importing_away_energy(requests_mock, energy):
+    m, r, v, c, w, saved, car = start(requests_mock); T = c.t
+    snap = upload(requests_mock, **dict(CHARGING, stamp=T + 5, charge_energy_added=0.1))
+    w.suspect(VIN, T, "command"); run(m, v, c, w, r, 1)
+    placeAt(m, v, AWAY); w.pass_()
+    before = w.ledger.toJSON()[VIN]["segments"]
+    later(m, v, c, 60); placeAt(m, v, HOME)
+    snap.update(stamp=c.t + 5, charge_energy_added=energy)
+    w.suspect(VIN, c.t, "arrival"); run(m, v, c, w, r, 1)
+    assert w.ledger.isOpen(VIN) and w.ledger.toJSON()[VIN]["segments"] == before
+    snap.update(stamp=c.t + 5, charge_energy_added=energy + 0.1)
+    run(m, v, c, w, r, 1)
+    assert len(w.ledger.toJSON()[VIN]["segments"]) == len(before) + 1

@@ -37,7 +37,14 @@ class ChargeLedger:
 
     def _car(self, vin):
         return self.cars.setdefault(
-            vin, {"open": None, "segments": [], "seen": None, "energy": None}
+            vin,
+            {
+                "open": None,
+                "segments": [],
+                "seen": None,
+                "energy": None,
+                "continuous": True,
+            },
         )
 
     def _wall(self, kwh, secs):
@@ -100,19 +107,53 @@ class ChargeLedger:
         # ceiling: the most wall watts the car could draw here
         with self.lock:
             car = self._car(vin)
-            if car["seen"] is not None and snap.stamp <= car["seen"]:
+            if car["seen"] is not None and (
+                snap.stamp < car["seen"]
+                or snap.stamp == car["seen"]
+                and car.get("continuous", True)
+            ):
                 return False
+            seen = car["seen"]
+            continuous = car.get("continuous", True)
             car["seen"] = snap.stamp
+            car["continuous"] = continuous or snap.energy is not None
             prev, last = car["open"], car["energy"]
             if snap.state == UNPLUGGED or snap.energy is not None:
                 car["energy"] = None if snap.state == UNPLUGGED else snap.energy
             if snap.state != CHARGING:
                 if prev is None:
+                    # A terminal-only charge needs a known counter, not just
+                    # a load step that could have belonged to another load.
+                    if (
+                        continuous
+                        and seen is not None
+                        and last is not None
+                        and snap.energy is not None
+                        and snap.energy > last
+                        and snap.state in ("Complete", "Stopped")
+                    ):
+                        added = snap.energy - last
+                        start = startHint
+                        if start is None and ceiling > 0:
+                            start = snap.stamp - added * JOULES_PER_KWH / (
+                                ceiling * self.EFFICIENCY
+                            )
+                        if start is not None:
+                            start = max(seen, start)
+                            if start < snap.stamp:
+                                self._write(
+                                    car,
+                                    start,
+                                    snap.stamp,
+                                    self._wall(added, snap.stamp - start),
+                                )
                     return car["energy"] != last
                 self._close(car, snap)
                 return True
             if prev is None:
-                self._open(car, snap, startHint, last, ceiling)
+                self._open(
+                    car, snap, startHint, last if continuous else snap.energy, ceiling
+                )
             elif snap.energy is None or prev["energy"] is None:
                 # Nothing says what was drawn in between
                 car["open"] = {
@@ -138,13 +179,20 @@ class ChargeLedger:
                 }
             return True
 
-    def end(self, vin: str) -> bool:
+    def end(self, vin: str, departed: bool = False) -> bool:
         with self.lock:
-            car = self.cars.get(vin)
-            if not car or car["open"] is None:
+            car = self._car(vin) if departed else self.cars.get(vin)
+            if not car:
                 return False
+            changed = car["open"] is not None
             car["open"] = None
-            return True
+            if departed:
+                # Keep the break across restarts: the first reading back is
+                # a baseline, never home energy inferred from an away counter.
+                changed |= car.get("continuous", True) or car["energy"] is not None
+                car["energy"], car["continuous"] = None, False
+                car["seen"] = max(car["seen"] or 0, self.clock())
+            return changed
 
     def isOpen(self, vin: str) -> bool:
         with self.lock:
@@ -190,6 +238,7 @@ class ChargeLedger:
                     not car["segments"]
                     and car["open"] is None
                     and car["energy"] is None
+                    and car.get("continuous", True)
                 ):
                     del self.cars[vin]
 
@@ -206,6 +255,7 @@ class ChargeLedger:
                 "segments": [list(s) for s in car.get("segments", [])],
                 "seen": car.get("seen"),
                 "energy": car.get("energy"),
+                "continuous": car.get("continuous", True),
             }
             for vin, car in (data or {}).items()
         }
