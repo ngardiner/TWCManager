@@ -88,6 +88,11 @@ class Gen2TWC(EVSEInstance, TWCSlave):
             phases = [default_v if i < count else 0 for i in range(3)]
         return phases
 
+    def getCurrentChargerLoad(self):
+        # At this TWC's own voltage, not the average of every TWC's
+        amps = self.reportedAmpsActual
+        return self.convertAmpsToWatts(amps) * self.master.getRealPowerFactor(amps)
+
     def _rangeOverride(self, key):
         # controller.Gen2TWCs.ranges.<twcid>.<key>, when a positive number
         controller = self.master.config.get("controller.Gen2TWCs", {})

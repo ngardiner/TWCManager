@@ -53,23 +53,8 @@ class VehicleEndpoint(EVSEInstance):
 
     @property
     def currentVoltage(self) -> list:
-        """Per-phase voltage [A, B, C].
-
-        Falls back to the configured default when the car reports an
-        implausibly low value (< 90 V), as it does asleep or before its first
-        charge-state read.
-        """
-        voltage = self.vehicle.value("voltage", 0) or 0
-        if voltage < 90:
-            voltage = self.configConfig.get("defaultVoltage", 240)
-        phases = self.vehicle.value("phases") or self.configConfig.get(
-            "numberOfPhases", 1
-        )
-        return [
-            voltage,
-            voltage if phases > 1 else 0,
-            voltage if phases > 2 else 0,
-        ]
+        """Per-phase voltage [A, B, C], as vehicleVoltage reads it."""
+        return vehicleVoltage(self.vehicle, self.configConfig)
 
     @property
     def minPower(self) -> float:
@@ -112,6 +97,24 @@ class VehicleEndpoint(EVSEInstance):
         amps = max(1, int(self.convertWattsToAmps(watts, self.currentVoltage)))
         # The reconciler sends it once; a newer reading that disagrees resends
         desired.set(key, AMPS, amps, "distributor")
+
+
+def vehicleVoltage(vehicle, configConfig) -> list:
+    """Per-phase voltage [A, B, C] of what the car reports it draws on.
+
+    Falls back to the configured default when the car reports an
+    implausibly low value (< 90 V), as it does asleep or before its first
+    charge-state read.
+    """
+    voltage = vehicle.value("voltage", 0) or 0
+    if voltage < 90:
+        voltage = configConfig.get("defaultVoltage", 240)
+    phases = vehicle.value("phases") or configConfig.get("numberOfPhases", 1)
+    return [
+        voltage,
+        voltage if phases > 1 else 0,
+        voltage if phases > 2 else 0,
+    ]
 
 
 def _unknownKey(key) -> bool:

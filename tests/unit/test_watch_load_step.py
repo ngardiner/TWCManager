@@ -68,7 +68,8 @@ def test_the_charger_load_counts_gen3_units_and_watched_cars_charging_at_home():
     from types import SimpleNamespace
     m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
     v.observe("chargingState", "Charging", "TeslaBLE"); v.observe("actualCurrent", 20, "TeslaBLE")
-    gen3 = SimpleNamespace(allEVSEs=[SimpleNamespace(currentAmps=16.0)])
+    unit = SimpleNamespace(currentAmps=16.0, convertAmpsToWatts=lambda amps: amps * 240)
+    gen3 = SimpleNamespace(allEVSEs=[unit])
     lookup = m.getModuleByName
     m.getModuleByName = lambda name: gen3 if name == "Gen3TWCs" else lookup(name)
     m.getRealPowerFactor = lambda amps: 1
@@ -375,3 +376,27 @@ def test_a_car_a_feed_covers_still_teaches_the_rate():
     v.observe("state", "online", "TeslaMateVehicle"); v.observe("chargingState", "Disconnected", "TeslaMateVehicle")
     w = Watch(m, clock=c); c.t += 60; plugIn(v, c, 32, "TeslaMateVehicle"); w.pass_()
     assert w.expectedWatts() == pytest.approx(32 * 240)
+
+
+def test_the_charger_load_prices_each_charger_at_its_own_voltage():
+    # A 120 V mobile connector beside a 240 V TWC: summing amps and pricing
+    # them at one voltage overstates the one and understates the other
+    from tests.unit.reconcile_helpers import gen2Slave
+    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
+    for field, value in (("chargingState", "Charging"), ("actualCurrent", 12), ("voltage", 120), ("phases", 1)):
+        v.observe(field, value, "TeslaBLE")
+    m.getRealPowerFactor = lambda amps: 1
+    m.watch = Watch(m, clock=c)
+    slave = gen2Slave(m, "8244", amps=32.0)
+    slave.voltsPhaseA = 240
+    assert m.getChargerLoad() == pytest.approx(32 * 240 + 12 * 120)
+    assert slave.getCurrentChargerLoad() == pytest.approx(32 * 240)
+
+
+def test_a_three_phase_car_on_a_watched_charger_counts_every_phase():
+    m, r, v, c = setup(here=False, ble=True); placeAt(m, v, HOME); v.observe("state", "online", "TeslaBLE")
+    for field, value in (("chargingState", "Charging"), ("actualCurrent", 16), ("voltage", 230), ("phases", 3)):
+        v.observe(field, value, "TeslaBLE")
+    m.getRealPowerFactor = lambda amps: 1
+    w = m.watch = Watch(m, clock=c)
+    assert w.chargingWatts() == pytest.approx(16 * 230 * 3)
