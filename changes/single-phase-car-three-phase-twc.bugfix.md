@@ -1,0 +1,1 @@
+Charge a single-phase car on a three-phase TWC at the power available, rather than a third of it, and show its load as one phase's: a Gen3 measures the phases in use itself, and a Gen2 relies on the car reporting them.

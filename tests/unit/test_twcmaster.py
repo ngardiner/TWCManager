@@ -370,8 +370,12 @@ class TestTWCMasterHistory:
 
     def test_history_counts_every_charger_without_a_gen2_twc(self, master):
         # A Gen3 unit and a watched car on another charger, no Gen2 slave
-        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[Mock(currentAmps=16)]))
-        master.watch = Mock(chargingAmps=Mock(return_value=8))
+        unit = Mock(currentAmps=16, convertAmpsToWatts=master.convertAmpsToWatts)
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[unit]))
+        master.watch = Mock(
+            chargingAmps=Mock(return_value=8),
+            chargingWatts=Mock(return_value=master.convertAmpsToWatts(8)),
+        )
         master.queue_background_task = Mock()
         master.advanceHistorySnap()
         master.sampleHistory()
@@ -389,10 +393,18 @@ class TestTWCMasterHistory:
         master.queue_background_task.assert_called_once_with({"cmd": "saveSettings"})
 
     def test_history_buckets_leave_out_fleet_only_cars_but_keep_live_ones(self, master):
-        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[Mock(currentAmps=16)]))
+        unit = Mock(currentAmps=16, convertAmpsToWatts=master.convertAmpsToWatts)
+        master.getModuleByName = Mock(return_value=Mock(allEVSEs=[unit]))
         master.getRealPowerFactor = lambda amps: 1
         amps = {True: 24, False: 16}
-        master.watch = Mock(chargingAmps=Mock(side_effect=lambda ledgered=True: amps[ledgered]))
+        master.watch = Mock(
+            chargingAmps=Mock(side_effect=lambda ledgered=True: amps[ledgered]),
+            chargingWatts=Mock(
+                side_effect=lambda ledgered=True: master.convertAmpsToWatts(
+                    amps[ledgered]
+                )
+            ),
+        )
         assert master.getChargerLoad() == master.convertAmpsToWatts(40)
         master.advanceHistorySnap()
         master.sampleHistory()
@@ -429,7 +441,10 @@ class TestTWCMasterHistory:
         master.queue_background_task.assert_not_called()
 
     def test_history_older_than_two_days_is_dropped_at_a_snap(self, master):
-        master.watch = Mock(chargingAmps=Mock(return_value=10))
+        master.watch = Mock(
+            chargingAmps=Mock(return_value=10),
+            chargingWatts=Mock(return_value=master.convertAmpsToWatts(10)),
+        )
         master.queue_background_task = Mock()
         old = (datetime.now().astimezone() - timedelta(days=3)).isoformat()
         master.settings["history"] = [(old, 1000.0)]
@@ -711,6 +726,7 @@ class TestSubtractChargerLoadGetMaxAmps:
         slave.voltsPhaseA = 0
         slave.voltsPhaseB = 0
         slave.voltsPhaseC = 0
+        slave.convertAmpsToWatts = master.convertAmpsToWatts
         slave.isCharging = 1
         master.slaveTWCRoundRobin.append(slave)
         return slave
