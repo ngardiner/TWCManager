@@ -99,3 +99,60 @@ def test_a_gen3_unit_asks_a_single_phase_car_for_one_phases_amps():
     ctl.setUnitTarget(u.ID, 16 * 240)
     # The headroom serves 16 A on its one phase, not 16 / 3
     assert u.fuseAmps - ctl.solve() == pytest.approx(16)
+
+
+def gen3Vitals(unit, a, b, c, phases=3):
+    import json
+    from unittest.mock import MagicMock, patch
+
+    unit._phases = phases
+    body = {"vehicle_connected": True, "vehicle_current_a": max(a, b, c), "grid_v": 230.0,
+            "evse_state": "charging", "currentA_a": a, "currentB_a": b, "currentC_a": c}
+    resp = MagicMock()
+    resp.__enter__.return_value.read.return_value = json.dumps(body).encode()
+    with patch("urllib.request.urlopen", return_value=resp):
+        assert unit.refreshVitals() is True
+
+
+def gen3():
+    from tests.unit.test_gen3twc_provider import make
+
+    m, ctl, p = make()
+    (u,) = ctl.devices()
+    return m, ctl, u
+
+
+@pytest.mark.parametrize(
+    "a,b,c,expected",
+    [
+        (16.0, 0.3, 0.2, [230, 0, 0]),       # a car the unit cannot name, on one phase
+        (16.0, 15.8, 16.1, [230, 230, 230]),
+        (0.0, 16.0, 0.0, [0, 230, 0]),       # the phase that carries it, not the first
+        (16.0, 16.0, 0.2, [230, 230, 0]),    # a two-phase charger
+        (0.2, 0.4, 0.2, [230, 230, 230]),    # idle readings say nothing
+    ],
+)
+def test_a_three_phase_gen3_counts_the_phases_it_measures_carrying_current(a, b, c, expected):
+    m, ctl, u = gen3()
+    gen3Vitals(u, a, b, c)
+    assert u.currentVoltage == expected
+
+
+def test_a_single_phase_gen3_is_never_measured():
+    # 240 V split-phase carries one phase's current on two legs
+    m, ctl, u = gen3()
+    gen3Vitals(u, 32.0, 32.0, 0.0, phases=1)
+    assert u.drawingPhases() is None and u.currentVoltage == [230, 0, 0]
+
+
+def test_the_measured_phases_outrank_the_cars_report():
+    from tests.unit.test_gen3twc_provider import VIN1
+
+    m, ctl, u = gen3()
+    car = m.vehicleRegistry.getOrCreate(VIN1, "TeslaMateVehicle")
+    car.observe("pluggedIn", True, "TeslaMateVehicle")
+    gen3Vitals(u, 0.2, 0.3, 0.2)
+    car.observe("phases", 1, "TeslaMateVehicle")
+    assert u.vehicleKey == VIN1 and u.currentVoltage == [230, 0, 0]    # idle: the car says
+    gen3Vitals(u, 16.0, 16.0, 16.0)
+    assert u.currentVoltage == [230, 230, 230]                         # drawing: the unit says

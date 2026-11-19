@@ -310,19 +310,42 @@ class Gen3TWC(EVSEInstance):
 
     @property
     def currentVoltage(self) -> list:
-        """Per-phase voltages [A, B, C] its car draws on."""
+        """Per-phase voltages [A, B, C] its car draws on: the phases the unit
+        measures carrying current, else the ones the car reports."""
         v = self.vitals
         voltage = float(v.get("grid_v", 0.0))
         if voltage < 90:
             voltage = float(self.configConfig.get("defaultVoltage", 240))
-        return carVoltage(
-            self,
-            [
-                voltage,
-                voltage if self._phases > 1 else 0.0,
-                voltage if self._phases > 2 else 0.0,
-            ],
-        )
+        supply = [voltage if i < self._phases else 0.0 for i in range(3)]
+        live = self.drawingPhases()
+        if live is not None:
+            return [v if on else 0.0 for v, on in zip(supply, live)]
+        return carVoltage(self, supply)
+
+    # A car drawing less than this on its busiest phase tells nothing apart
+    # from the idle readings, which show a few tenths of an amp per phase
+    PHASE_MIN_AMPS = 5.0
+
+    def drawingPhases(self) -> Optional[list]:
+        """Which of the supply's phases [A, B, C] carry the car's current, as
+        the unit measures them, or None when that says nothing.
+
+        A phase counts when it carries at least half the busiest phase's
+        current. Only a multi-phase supply is measured: one phase of 240 V
+        split-phase flows through two legs and would read as two.
+        """
+        if self._phases < 2:
+            return None
+        v = self.vitals
+        try:
+            amps = [float(v.get("current%s_a" % p, 0.0)) for p in "ABC"]
+        except (TypeError, ValueError):
+            return None
+        amps = amps[: self._phases] + [0.0] * (3 - self._phases)
+        busiest = max(amps)
+        if busiest < self.PHASE_MIN_AMPS:
+            return None
+        return [a >= busiest / 2 for a in amps]
 
     @property
     def minPower(self) -> float:
