@@ -4,6 +4,18 @@ ChargingPoint grouping them) shares: amps/watts conversion over the active
 phases, and defaults for an endpoint that cannot name or see its car.
 """
 
+from TWCManager.Vehicle.Phases import carPhases, maskPhases
+
+
+def carVoltage(endpoint, voltage: list) -> list:
+    # A local point's voltages on only the phases its car draws on, where
+    # the car says: a single-phase car on a three-phase TWC
+    registry = getattr(getattr(endpoint, "master", None), "vehicleRegistry", None)
+    key = getattr(endpoint, "vehicleKey", None) if registry is not None else None
+    if not key:
+        return voltage
+    return maskPhases(voltage, carPhases(registry.get(key)))
+
 
 class EVSEInstance:
     # The VIN of the connected car ("" if unknown), the registry key of the

@@ -333,7 +333,8 @@ class Gen3TWCs:
             for unit in devices:
                 watts = targets.get(unit.ID, 0.0)
                 if watts > 0:
-                    amps = watts / (voltage * max(unit.phases, 1))
+                    # At the phases its car draws on, not the unit's
+                    amps = unit.convertWattsToAmps(watts) or watts / voltage
                     active.append((unit.fuseAmps, self.demandAmps(unit), amps))
             if not active:
                 return round(maxFuse, 2)

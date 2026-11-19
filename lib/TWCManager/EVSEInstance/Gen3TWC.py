@@ -41,7 +41,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Optional
 
-from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance, carVoltage
 from TWCManager.Vehicle.Presence import attribute
 
 if TYPE_CHECKING:
@@ -310,16 +310,19 @@ class Gen3TWC(EVSEInstance):
 
     @property
     def currentVoltage(self) -> list:
-        """Per-phase voltages [A, B, C]."""
+        """Per-phase voltages [A, B, C] its car draws on."""
         v = self.vitals
         voltage = float(v.get("grid_v", 0.0))
         if voltage < 90:
             voltage = float(self.configConfig.get("defaultVoltage", 240))
-        return [
-            voltage,
-            voltage if self._phases > 1 else 0.0,
-            voltage if self._phases > 2 else 0.0,
-        ]
+        return carVoltage(
+            self,
+            [
+                voltage,
+                voltage if self._phases > 1 else 0.0,
+                voltage if self._phases > 2 else 0.0,
+            ],
+        )
 
     @property
     def minPower(self) -> float:

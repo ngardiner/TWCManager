@@ -8,6 +8,7 @@ car, so a rate is desired state that the reconciler delivers.
 from typing import List, Tuple
 
 from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.Vehicle.Phases import carPhases
 from TWCManager.Vehicle.Presence import asleep, pluggedHere, telemetryPlug
 from TWCManager.Vehicle.Providers.Capability import SET_AMPS
 from TWCManager.Vehicle.Providers.Provider import vehicleMaxAmps
@@ -109,7 +110,11 @@ def vehicleVoltage(vehicle, configConfig) -> list:
     voltage = vehicle.value("voltage", 0) or 0
     if voltage < 90:
         voltage = configConfig.get("defaultVoltage", 240)
-    phases = vehicle.value("phases") or configConfig.get("numberOfPhases", 1)
+    phases = (
+        carPhases(vehicle)
+        or vehicle.value("phases")
+        or configConfig.get("numberOfPhases", 1)
+    )
     return [
         voltage,
         voltage if phases > 1 else 0,
