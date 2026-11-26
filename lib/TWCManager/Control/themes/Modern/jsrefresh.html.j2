@@ -1,170 +1,64 @@
 <script>
 
-    // AJAJ refresh for getStatus API call
-    $(document).ready(function() {
-        function requestStatus() {
-            $.ajax({
-                url: "/api/getStatus",
-                dataType: "text",
-                cache: false,
-                success: function(data) {
-                    var json = $.parseJSON(data);
-                    var generation = parseFloat(json['generationWatts']);
-                    var consumption = parseFloat(json['consumptionWatts']);
-                    var surplus = 0;
+    // Live values: live.js fills the data-* hooks; this hook carries what is
+    // not plain text (colours, buttons, help texts) and the navbar's server time.
+    var POLICY_ACTIONS = {
+        3: ["#policy_solar", "#helpTextSolar"],
+        1: ["#policy_fixed", "#helpTextFixed"],
+        2: ["#policy_dont", "#helpTextDont"]
+    };
 
-                    Object.keys(json).forEach(function(key) {
-                        if (key === 'generationWatts' || key === 'consumptionWatts' || key === 'chargerLoadWatts') {
-                            let gen = json[key];
-                            if (gen > 1000) {
-                                gen = gen * 0.001;
-                                json[key] = gen.toFixed(2) + '&nbsp;<span class="text-secondary">kW</span>';
-                            } else {
-                                json[key] = Math.round(gen) + '&nbsp;<span class="text-secondary">Watt</span>';
-                            }
-                        }
-                        $('#'+key).html(json[key]);
-                    });
+    Live.onData(function (data) {
+        var generation = parseFloat(data.generationWatts);
+        var consumption = parseFloat(data.consumptionWatts);
 
-                    // calculate power surplus
-                    let surplusAmps = 0.0;
-                    if (generation > consumption) {
-                        surplus = generation - consumption;
-                        if (surplus > 1000) {
-                            surplus = surplus * 0.001;
-                            $('#surplusWatts').html(surplus.toFixed(2) + '&nbsp;<span class="text-secondary">kW</span>');
-                        } else {
-                            $('#surplusWatts').html(Math.round(surplus) + '&nbsp;<span class="text-secondary">Watt</span>');
-                            $('#surplusAmps').html();
-                        }
-                        surplusAmps = parseFloat(json['generationAmps']) - parseFloat(json['consumptionAmps']);
+        // color consumption green, as it is fully covered by solar
+        $('#consumptionWatts').css('color', generation > consumption ? 'green' : 'black');
 
-                        // color consumption green, as it is fully covered by solar
-                        $('#consumptionWatts').css('color', 'green');
-                    } else {
-                        $('#consumptionWatts').css('color', 'black');
-                    }
+        // Change the state of the Charge Now button based on Charge Policy
+        var chargeNow = data.currentPolicy == "Charge Now";
+        $("#start_chargenow").text(chargeNow ? "Update Charge Now" : "Charge Now");
+        $("#cancel_chargenow").prop("disabled", !chargeNow).toggleClass("disabled", !chargeNow);
 
-                    $('#surplusAmps').html(surplusAmps.toFixed(2));
-
-                    // Change the state of the Charge Now button based on Charge Policy
-                    if (json["currentPolicy"] == "Charge Now") {
-                        if ($("#start_chargenow").length) {
-                            $("#start_chargenow").html("Update Charge Now");
-                            $("#cancel_chargenow").prop("disabled", false);
-                            $("#cancel_chargenow").removeClass("disabled");
-                        }
-                    } else {
-                        if ($("#start_chargenow").length) {
-                            $("#start_chargenow").html("Charge Now");
-                            $("#cancel_chargenow").prop("disabled", true);
-                            $("#cancel_chargenow").addClass("disabled");
-                        }
-                    }
-                    if (json["chargeNowAmps"] !== "" && json["chargeNowAmps"] > 0) {
-                        $('#chargeNowAmpsText').text("Currently: " + json["chargeNowAmps"] + "A");
-                    } else {
-                        $('#chargeNowAmpsText').text("");
-                    }
-                    if (json["chargeNowTimeEnd"] !== "" && json["chargeNowTimeEnd"] > 0) {
-                        var endDTM = new Date(1000 * json["chargeNowTimeEnd"]);
-                        var endMinutes = Math.floor((endDTM - Date.now())/60000);
-                        $('#chargeNowTimeEndText').html("Ending: " + endDTM.toLocaleString() + "<br>(" + endMinutes + " minutes remaining)");
-                    } else {
-                        $('#chargeNowTimeEndText').text("");
-                    }
-                }
-            });
-            setTimeout(requestStatus, 3000);
+        if (data.chargeNowAmps !== "" && data.chargeNowAmps > 0) {
+            $('#chargeNowAmpsText').text("Currently: " + data.chargeNowAmps + "A");
+        } else {
+            $('#chargeNowAmpsText').text("");
         }
-        requestStatus();
+        var endText = $('#chargeNowTimeEndText').empty();
+        if (data.chargeNowTimeEnd !== "" && data.chargeNowTimeEnd > 0) {
+            var endDTM = new Date(1000 * data.chargeNowTimeEnd);
+            var endMinutes = Math.floor((data.chargeNowTimeEnd - data.now) / 60);
+            endText.append(
+                document.createTextNode("Ending: " + endDTM.toLocaleString()),
+                document.createElement("br"),
+                document.createTextNode("(" + endMinutes + " minutes remaining)")
+            );
+        }
+
+        // change the state of the Charge Policy display buttons based on Charge Policy Action
+        var action = data.activePolicyAction;
+        if (POLICY_ACTIONS.hasOwnProperty(action)) {
+            Object.keys(POLICY_ACTIONS).forEach(function (key) {
+                var active = key == action;
+                $(POLICY_ACTIONS[key][0]).toggleClass("btn-primary", active).toggleClass("btn-outline-primary", !active);
+                $(POLICY_ACTIONS[key][1]).toggle(active);
+            });
+        } else {
+            // TWCmanager (re)started and policy not yet initialized?
+            console.log('unknown policy action "' + action + '"');
+        }
+
+        var serverTime = document.getElementById("currentServerTime");
+        if (serverTime && data.currentServerTime != null) {
+            serverTime.textContent = data.currentServerTime.split("&nbsp;").join(" ");
+        }
     });
 
-    // AJAX refresh to retrieve active policy action and update UI
-    $(document).ready(function() {
-        function updateAction() {
-            $.ajax({
-                url: "/api/getActivePolicyAction",
-                dataType: "text",
-                cache: false,
-                success: function(data) {
-                    var json = $.parseJSON(data);
-                    // change the state of the Charge Policy display buttons based on Charge Policy Action
-                    if (json == 3) {
-                        $("#policy_solar").removeClass("btn-outline-primary");
-                        $("#policy_solar").addClass("btn-primary");
-                        $("#policy_fixed").removeClass("btn-primary");
-                        $("#policy_fixed").addClass("btn-outline-primary");
-                        $("#policy_dont").removeClass("btn-primary");
-                        $("#policy_dont").addClass("btn-outline-primary");
-                        $("#helpTextSolar").show();
-                        $("#helpTextFixed").hide();
-                        $("#helpTextDont").hide();
-                    } else if (json == 1) {
-                        $("#policy_solar").removeClass("btn-primary");
-                        $("#policy_solar").addClass("btn-outline-primary");
-                        $("#policy_fixed").removeClass("btn-outline-primary");
-                        $("#policy_fixed").addClass("btn-primary");
-                        $("#policy_dont").removeClass("btn-primary");
-                        $("#policy_dont").addClass("btn-outline-primary");
-                        $("#helpTextSolar").hide();
-                        $("#helpTextFixed").show();
-                        $("#helpTextDont").hide();
-                    } else if (json == 2) {
-                        $("#policy_solar").removeClass("btn-primary");
-                        $("#policy_solar").addClass("btn-outline-primary");
-                        $("#policy_fixed").removeClass("btn-primary");
-                        $("#policy_fixed").addClass("btn-outline-primary");
-                        $("#policy_dont").removeClass("btn-outline-primary");
-                        $("#policy_dont").addClass("btn-primary");
-                        $("#helpTextSolar").hide();
-                        $("#helpTextFixed").hide();
-                        $("#helpTextDont").show();
-                    } else {
-                        // TWCmanager (re)started and policy not yet initialized?
-                        console.log('unknown policy action "' + json + '"');
-                    }
-                }
-            });
-            setTimeout(updateAction, 3000);
-        }
-        updateAction();
-    });
-
-    // AJAJ refresh for getSlaveTWCs API call
-    $(document).ready(function() {
-        function requestSlaves() {
-            $.ajax({
-                url: "/api/getSlaveTWCs",
-                dataType: "text",
-                cache: false,
-                success: function(data) {
-                    var json = $.parseJSON(data);
-                    Object.keys(json).forEach(function(key) {
-                        var slvtwc = json[key];
-                        var twc = '#' + slvtwc['TWCID'].toLowerCase()
-                        Object.keys(slvtwc).forEach(function(key) {
-                          $(twc+'_'+key).html(slvtwc[key]);
-                        });
-
-                        if ($(twc+'_lastBatterySOC').html() === '') {
-                            //no SOC data
-                            $(twc+'_socState').hide();
-                        } else {
-                            $(twc+'_socState').show();
-                        }
-                    });
-                    
-		            var chargerAvailAmps = 0;
-		            var tot = json['total'];
-		            chargerAvailAmps = parseFloat(tot['lastAmpsOffered']);
-		            $('#chargerAvailAmps').html(chargerAvailAmps.toFixed(2));
-                }
-            });
-
-            setTimeout(requestSlaves, 3000);
-        }
-        requestSlaves();
+    Live.start({
+        urls: ["/api/getStatus", "/api/getChargingPoints", ["/api/getActivePolicyAction", "activePolicyAction"]],
+        interval: 3000,
+        fingerprint: {{ fingerprint("home")|tojson }}
     });
 
     $(document).ready(function() {

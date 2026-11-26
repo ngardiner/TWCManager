@@ -3,17 +3,26 @@
   <head>
     <title>TWCManager</title>
     {% include 'bootstrap.html.j2' %}
+    <style>
+      /* The gap the server-drawn rows got from a &nbsp; spacer column */
+      table.live-rows td + td, table.live-rows th + th { padding-left: 0.75em; }
+    </style>
     <script type="text/javascript" src="/static/js/compositor.js"></script>
     <script type="text/javascript" src="/static/js/vehicleImage.js"></script>
-    {% set status = bleStatus(url.path.split("/")[2]) if 'TeslaBLE' in master.modules else none %}
-    {% if status and status.scanPending %}<meta http-equiv="refresh" content="3">{% endif %}
+    {% set vin = url.path.split("/")[2] %}
+    {% set regVehicle = registry.get(vin) %}
+    {% if regVehicle %}
+    <script type="text/javascript" src="/static/js/format.js"></script>
+    <script type="text/javascript" src="/static/js/live.js"></script>
+    <script type="text/javascript">
+      Live.start({urls: [{{ ("/api/getVehicle/" ~ vin|urlencode)|tojson }}], interval: 5000, fingerprint: {{ fingerprint("vehicle", vin)|tojson }}});
+    </script>
+    {% endif %}
   </head>
   <body>
     {% include 'navbar.html.j2' %}
     <p>&nbsp;</p>
-    {% set vin = url.path.split("/")[2] %}
     <h3>Vehicle Details</h3>
-    {% set regVehicle = registry.get(vin) %}
     {% if regVehicle %}
     {% set row = regVehicle.summary() %}
     <img class="vehicleImage" hidden alt=""
@@ -25,9 +34,9 @@
         <th>Last seen</th>
       </tr>
       <tr>
-        <td>{{ row.name }}</td><td>&nbsp;</td>
-        <td>{% for line in providerLines(regVehicle) %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td><td>&nbsp;</td>
-        <td>{{ ageText(row.lastSeenAge) }} via {{ sourceName(row.lastSeenSource) }}</td>
+        <td data-field="vehicle.name"></td><td>&nbsp;</td>
+        <td data-field="vehicle.providers" data-format="providerLines" style="white-space: pre-line"></td><td>&nbsp;</td>
+        <td data-field="vehicle" data-format="lastSeen"></td>
       </tr>
     </table>
     {% if canForget(vin) %}
@@ -39,44 +48,26 @@
     {% endif %}
     <p>&nbsp;</p>
     <h3>Pending commands</h3>
-    {% set pending = pendingCommands(regVehicle) %}
-    {% if pending %}
-    <table>
-      {% for p in pending %}
-      <tr>
-        <td>{{ {"chargeLimit": "Charge limit", "charging": "Charging", "amps": "Charge rate"}[p.aspect] }}
-          &rarr; {% if p.aspect == "chargeLimit" %}{% if p.value == -1 %}car's own{% else %}{{ p.value }}%{% endif %}
-          {% elif p.aspect == "amps" %}{{ p.value }} A{% else %}{{ "start" if p.value else "stop" }}{% endif %}</td>
-        <td>&nbsp;</td><td>{{ p.why }}</td>
-      </tr>
-      {% endfor %}
+    <table class="live-rows">
+      <tbody data-list="vehicle.pending" data-row="pendingRow"></tbody>
     </table>
-    {% else %}
-    <p>Nothing pending</p>
-    {% endif %}
-    {% set spend = carSpend(regVehicle.vin) %}
-    {% if spend %}
+    <p data-show="vehicle.pending" data-show-if="isEmpty" hidden>Nothing pending</p>
+    <div data-show="vehicle.spend" hidden>
     <p>&nbsp;</p>
     <h3>Fleet spend</h3>
-    {% if spend.heading %}<p>{{ spend.heading }}</p>{% endif %}
-    {% if spend.types %}
-    <table>
-      <tr><th>Request</th><td>&nbsp;</td><th>Count</th><td>&nbsp;</td><th>Cost</th><td>&nbsp;</td><th>Last</th></tr>
-      {% for t in spend.types %}
-      <tr><td>{{ t.kind }}</td><td>&nbsp;</td><td>{{ t.count }}</td><td>&nbsp;</td><td>{{ t.cost }}</td><td>&nbsp;</td><td>{{ ageText(t.age) }}</td></tr>
-      {% endfor %}
+    <p data-field="vehicle" data-format="spendHeading" data-show="vehicle" data-show-if="spendHeading"></p>
+    <table class="live-rows" data-show="vehicle.spend.types">
+      <thead><tr><th>Request</th><th>Count</th><th>Cost</th><th>Last</th></tr></thead>
+      <tbody data-list="vehicle.spend.types" data-row="spendTypeRow"></tbody>
     </table>
-    {% endif %}
-    {% if spend.telemetry %}
-    <p>{{ spend.telemetry }}</p>
-    <table>
-      <tr><th>Field</th><td>&nbsp;</td><th>Signals</th></tr>
-      {% for f in spend.fields %}
-      <tr><td>{{ f.field }}</td><td>&nbsp;</td><td>{{ "{:,}".format(f.count) }}</td></tr>
-      {% endfor %}
+    <div data-show="vehicle" data-show-if="spendTelemetry">
+    <p data-field="vehicle" data-format="spendTelemetry"></p>
+    <table class="live-rows">
+      <thead><tr><th>Field</th><th>Signals</th></tr></thead>
+      <tbody data-list="vehicle.spend.fields" data-row="fieldRow"></tbody>
     </table>
-    {% endif %}
-    {% endif %}
+    </div>
+    </div>
     <p>&nbsp;</p>
     {% endif %}
     {% if vin != "00000000000000000" %}
@@ -146,7 +137,11 @@
         </tr>
         <tr>
           <th>Charge Sessions</th>
+          {% if regVehicle %}
+          <td data-field="vehicle.chargeSessions"></td>
+          {% else %}
           <td>{{ master.settings.get("Vehicles", {}).get(vin, {}).get("chargeSessions", 0) }}</td>
+          {% endif %}
         </tr>
     </table>
     {% else %}
@@ -158,55 +153,46 @@
     </table>
     {% endif %}
 
-    {% if status %}
+    {% if regVehicle and 'TeslaBLE' in master.modules %}
+    <div data-show="vehicle.ble" hidden>
       <p>&nbsp;</p>
       <h3>BLE Control</h3>
       <table>
         <tr>
           <th>Status</th>
           <td>
-            {{ status.label }}{% if not status.canScan and status.label == "Range unknown" %} (scanning unavailable){% endif %}
-            {% if status.get("sinceAge") is not none %}<br/><small>since {{ ageText(status.sinceAge) }}</small>{% endif %}
+            <span data-field="vehicle.ble" data-format="bleLabel"></span>
+            <span data-show="vehicle.ble.since" hidden><br/><small data-field="vehicle.ble" data-format="bleSince"></small></span>
           </td>
         </tr>
-        {% if status.get("attempt") %}
-        <tr>
+        <tr data-show="vehicle.ble.attempt" hidden>
           <th>Last pairing attempt</th>
-          <td>{{ status.attempt.message }}{% if status.attempt.get("age") is not none %} ({{ ageText(status.attempt.age) }}){% endif %}</td>
+          <td data-field="vehicle.ble" data-format="bleAttempt"></td>
         </tr>
-        {% endif %}
         <tr>
           <th>Last scan</th>
-          <td>{{ ageText(status.lastScanAge) }}</td>
+          <td data-field="vehicle.ble" data-format="bleLastScan"></td>
         </tr>
         <tr>
           <th>Action</th>
           <td>
-            {% if status.canScan %}
-            <form method=POST action=/vehicle/localMgmt>
+            <form method=POST action=/vehicle/localMgmt data-show="vehicle.ble.canScan" hidden>
               <input type=hidden name="operation" value="scan" />
               <input type=hidden name="vin" value="{{ vin }}" />
-              {% if status.scanPending %}
-              <input type=submit value="Scanning…" disabled>
-              {% else %}
-              <input type=submit value="Scan for vehicle">
-              {% endif %}
+              <span data-show="vehicle.ble.scanPending" hidden><input type=submit value="Scanning…" disabled></span>
+              <span data-show="vehicle.ble.scanPending" data-show-if="not" hidden><input type=submit value="Scan for vehicle"></span>
             </form>
-            {% elif status.get("scanBlocked") %}
-            <small>No range scan: {{ status.scanBlocked }}</small>
-            {% endif %}
+            <small data-field="vehicle.ble" data-format="bleScanBlocked" data-show="vehicle.ble" data-show-if="bleScanBlocked" hidden></small>
             <form method=POST action=/vehicle/localMgmt>
               <input type=hidden name="operation" value="pair" />
               <input type=hidden name="vin" value="{{ vin }}" />
-              {% if status.status in ("paired", "refused") %}
-              <input type=submit value="Re-pair with Vehicle">
-              {% else %}
-              <input type=submit value="Pair with Vehicle">
-              {% endif %}
+              <span data-show="vehicle.ble" data-show-if="bleRepair" hidden><input type=submit value="Re-pair with Vehicle"></span>
+              <span data-show="vehicle.ble" data-show-if="bleNotRepair" hidden><input type=submit value="Pair with Vehicle"></span>
             </form>
           </td>
         </tr>
       </table>
+    </div>
     {% endif %}
 
     <p>&nbsp;</p>

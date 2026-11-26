@@ -464,3 +464,14 @@ class TestChargeNowEdgeCases:
         data = assert_json_response(response, 200)
         assert data.get('chargeNowAmps', 0) == 0, "Should not be charging"
 
+
+
+@pytest.mark.parametrize("path", ["/getChargingPoints", "/getVehicles", "/getPolicyState"])
+def test_live_page_apis(api_get, assert_json_response, path):
+    response = api_get(path)
+    data = assert_json_response(response, 200)
+    assert response.headers["Cache-Control"] == "no-store" and len(data["fingerprint"]) == 12
+
+
+def test_get_vehicle_unknown_is_404(api_get):
+    assert api_get("/getVehicle/5YJ3E1EA1KF000009").status_code == 404

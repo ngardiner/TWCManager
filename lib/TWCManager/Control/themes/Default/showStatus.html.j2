@@ -4,27 +4,27 @@
       <table class='table table-dark'>
         <tr>
           <th>Amps to share across all TWCs:</th>
-          <td><div id='maxAmpsToDivideAmongSlaves'></div></td><td>amps</td>
+          <td><div data-field='maxAmpsToDivideAmongSlaves'></div></td><td>amps</td>
         </tr>
         <tr>
           <th>Current Generation</th>
-          <td><div id='generationWatts'></div></td><td>watts</td>
-          <td><div id="generationAmps"></div></td><td>amps</td>
+          <td><div data-field='generationWatts'></div></td><td>watts</td>
+          <td><div data-field='generationAmps'></div></td><td>amps</td>
         </tr>
         <tr>
           <th>Current Consumption</th>
-          <td><div id='consumptionWatts'></div></td><td>watts</td>
-          <td><div id='consumptionAmps'></div></td><td>amps</td>
+          <td><div data-field='consumptionWatts'></div></td><td>watts</td>
+          <td><div data-field='consumptionAmps'></div></td><td>amps</td>
         </tr>
         <tr>
           <th>Current Charger Load</th>
-          <td><div id="chargerLoadWatts"></div></td><td>watts</td>
+          <td><div data-field='chargerLoadWatts'></div></td><td>watts</td>
         </tr>
 
         <tr>
           <th>Number of Cars Charging</th>
           <td>
-            <div id="carsCharging"></div>
+            <div data-field='carsCharging'></div>
           </td>
           <td>cars</td>
         </tr>
@@ -36,24 +36,24 @@
         <tr>
           <th>Current Policy</th>
           <td>
-            <div id='currentPolicy'></div>
+            <div data-field='currentPolicy'></div>
           </td>
         </tr>
         <tr>
           <th>Scheduled Charging Amps</th>
-          <td>{{ scheduledAmpsMax }}</td>
+          <td><div data-field='ScheduledCharging.amps'></div></td>
         </tr>
         <tr>
           <th>Scheduled Charging Start Hour</th>
-          <td><div id='scheduledChargingStartHour'></div></td>
+          <td><div data-field='scheduledChargingStartHour' data-format='scheduledStart'></div></td>
         </tr>
         <tr>
           <th>Scheduled Charging End Hour</th>
-          <td><div id='scheduledChargingEndHour'></div></td>
+          <td><div data-field='scheduledChargingEndHour'></div></td>
         </tr>
         <tr>
           <th>Is a Green Policy?</th>
-          <td><div id='isGreenPolicy'></div></td>
+          <td><div data-field='isGreenPolicy'></div></td>
         </tr>
       </table>
     </td>
@@ -76,40 +76,30 @@
                   <th width='4%'>Voltage<br />per Phase<br />1 / 2 / 3</th>
                   <th width='2%'>Last Heartbeat</th>
                   <th width='6%'>Vehicle Connected<br />Current / Last</th>
-                  <th width='2%'>Commands</th>
                 </tr>
               </thead>
-    {% for twc in master.getSlaveTWCs() %}
-      {% set twcid = '%02x%02x' % (twc.TWCID[0], twc.TWCID[1]) %}
+              <tbody data-keyed-list="points" data-template="point-row"></tbody>
+              <template id="point-row">
               <tr>
-                <td>{{ twcid }}</td>
-                <td><div id='{{ twcid }}_state'></div></td>
-                <td><div id='{{ twcid }}_version'></div></td>
-                <td><div id='{{ twcid }}_maxAmps'></div></td>
-                <td><div id='{{ twcid }}_lastAmpsOffered'></div></td>
-                <td><div id='{{ twcid }}_reportedAmpsActual'></div></td>
-                <td><div id='{{ twcid }}_lifetimekWh'></div></td>
-                <td><span id='{{ twcid }}_voltsPhaseA'></span> / <span id='{{ twcid }}_voltsPhaseB'></span> / <span id='{{ twcid }}_voltsPhaseC'></span></td>
-                <td><span id='{{ twcid }}_lastHeartbeat'></span> sec</td>
-                <td>C: <span id='{{ twcid }}_currentVIN' class='VINClick' onClick="loadVIN('{{ twcid }}','current');"></span>
-                <br />L: <span id='{{ twcid }}_lastVIN' class='VINClick' onClick="loadVIN('{{ twcid }}','last');"></span></td>
-                <td>
-                  <div class="dropdown">
-                    <button class="btn btn-secondary dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Select</button>
-                    <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
-                      <a class="dropdown-item" href="#">Coming Soon</a>
-                    </div>
-                  </div>
-                </td>
+                <td><span data-field=".controllers" data-format="pointKind"></span> <span data-field=".gen2.twcid" data-format="blank"></span></td>
+                <td><div><span data-field=".gen2.state" data-format="blank"></span><span data-field=".gen3.state" data-format="blank"></span></div></td>
+                <td><div data-field=".gen2.version" data-format="blank"></div></td>
+                <td><div><span data-field=".gen2.maxAmps" data-format="blank"></span><span data-show=".gen2" data-show-if="not" data-field=".maxAmps" data-format="round2"></span></div></td>
+                <td><div data-field=".ampsOffered" data-format="round2"></div></td>
+                <td><div data-field=".ampsDrawn"></div></td>
+                <td><div data-field=".gen2.lifetimekWh" data-format="blank"></div></td>
+                <td><span data-field=".volts" data-format="volts"></span></td>
+                <td><span data-show=".gen2"><span data-field=".gen2.lastHeardAt" data-format="secondsSince"></span> sec</span></td>
+                <td>C: <span class='VINClick' data-field=".gen2.currentVIN" data-format="blank"></span><span class='VINClick' data-show=".gen2" data-show-if="not" data-field=".vin" data-format="blank"></span>
+                <span data-show=".gen2"><br />L: <span class='VINClick' data-field=".gen2.lastVIN" data-format="blank"></span></span></td>
               </tr>
-    {% endfor %}
-            </td>
+              </template>
         <tr>
           <td><b>Total</b><td>&nbsp;</td><td>&nbsp;</td>
-          <td><div id='total_maxAmps'></div></td>
-          <td><div id='total_lastAmpsOffered'></div></td>
-          <td><div id='total_reportedAmpsActual'></div></td>
-          <td><div id='total_lifetimekWh'></div></td>
+          <td><div data-field='total.maxAmps'></div></td>
+          <td><div data-field='total.ampsOffered'></div></td>
+          <td><div data-field='total.ampsDrawn'></div></td>
+          <td><div data-field='total.lifetimekWh'></div></td>
         </tr>
       </table>
     </td>
