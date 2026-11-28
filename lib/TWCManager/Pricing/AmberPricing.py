@@ -1,25 +1,18 @@
 # Amber Electric wholesale electricity pricing (Australia).
 #
 # Reports the current import (general) and export (feedIn) price for the
-# configured Amber site, and - because Amber's API returns a forward price
-# series - an optional price forecast used to identify the cheapest charging
-# window. Forecasting is only acted on when a cheapWindow is configured.
+# configured Amber site, and the forward price series Amber's API returns
+# as its forecast.
 from datetime import datetime, timezone
 import requests
 import time
 from TWCManager.Logging.LoggerFactory import LoggerFactory
-from TWCManager.Pricing.Forecast import (
-    cheapestWindow,
-    latchedWindow,
-    priceRange,
-    serialise,
-    windowActive,
-)
+from TWCManager.Pricing.Forecast import ForecastingPricing
 
 logger = LoggerFactory.get_logger("Amber", "Pricing")
 
 
-class AmberPricing:
+class AmberPricing(ForecastingPricing):
     cacheTime = 300
     capabilities = {
         "AdvancePricing": True,
@@ -27,71 +20,32 @@ class AmberPricing:
         "SpikeDetection": True,
         "Renewables": True,
     }
-    config = None
-    configConfig = None
-    configAmber = None
     currency = "$"
     exportPrice = 0
     fetchFailed = False
+    forecastCacheTime = 900
     importPrice = 0
     lastFetch = 0
-    master = None
+    lastForecastFetch = 0
     priceDescriptor = "neutral"
     renewables = 0
-    siteId = None
     spikeStatus = "none"
-    status = False
     timeout = 10
 
-    # Forecasting state
-    forecastCacheTime = 900
-    lastForecastFetch = 0
-    priceForecast = []
-    cheapWindowHours = 0
-    cheapWindowStartHour = None
-    cheapWindowEndHour = None
-    cheapWindowActive = 0
-    cheapWindowStart = None
-    forecastMinPrice = 0
-    forecastMaxPrice = 0
-
     def __init__(self, master):
-        self.master = master
-        self.config = master.config
-        self.configConfig = master.config.get("config", {})
-        self.configAmber = master.config.get("pricing", {}).get("Amber", {})
-        # Reset instance forecast state so test instances do not share it
+        super().__init__(master)
         self.priceForecast = []
-
-        self.status = self.configAmber.get("enabled", False)
-        self.siteId = self.configAmber.get("siteId", None)
-        self.cacheTime = self.configAmber.get("cacheTime", self.cacheTime)
-
-        # Optional cheapest-window configuration. Absent means the forecast is
-        # still fetched on demand (for the API/UI) but no window is computed and
-        # cheapWindowActive stays 0, so existing behaviour is unaffected.
-        cheapWindow = self.configAmber.get("cheapWindow", {})
-        self.cheapWindowHours = cheapWindow.get("hours", 0)
-        self.cheapWindowStartHour = cheapWindow.get("startHour", None)
-        self.cheapWindowEndHour = cheapWindow.get("endHour", None)
-
-        # Unload if this module is disabled
-        if not self.status:
-            self.master.releaseModule("lib.TWCManager.Pricing", "AmberPricing")
-            return None
+        self.siteId = self.configPricing.get("siteId", None)
+        self.cacheTime = self.configPricing.get("cacheTime", self.cacheTime)
 
         # A token is required to reach the Amber API
-        if not self.configAmber.get("token"):
+        if self.status and not self.configPricing.get("token"):
             logger.info("Amber API token not configured. Module will be disabled.")
             self.master.releaseModule("lib.TWCManager.Pricing", "AmberPricing")
             self.status = False
-            return None
 
     def _authHeaders(self):
-        return {"Authorization": "Bearer " + str(self.configAmber.get("token", ""))}
-
-    def getCapabilities(self, capability):
-        return self.capabilities.get(capability, False)
+        return {"Authorization": "Bearer " + str(self.configPricing.get("token", ""))}
 
     def getImportPrice(self):
         if not self.status:
@@ -202,16 +156,12 @@ class AmberPricing:
     # ------------------------------------------------------------------
     # Forecasting
     # ------------------------------------------------------------------
-    def updateForecast(self, hoursAhead=48):
-        # Public entry point, safe to call from a background task so the
-        # forecast is warm before policy evaluation reads cheapWindowActive.
-        if not self.status:
-            return
-        self._updateForecast(hoursAhead)
+    def _forecast(self):
+        return self.priceForecast, datetime.now(timezone.utc), None
 
-    def _updateForecast(self, hoursAhead=48):
-        # Fetch and cache the forward price series from the Amber API, then
-        # recompute the derived attributes (min/max price and cheap window).
+    def updateForecast(self, hoursAhead=48):
+        # Fetches, so it runs as a background task or for the HTTP API,
+        # never from the attribute reads policy makes
         if not self.status:
             return
 
@@ -271,45 +221,3 @@ class AmberPricing:
             return
 
         self.priceForecast = forecast
-        self._recomputeDerived()
-
-    def _recomputeDerived(self):
-        # Derive min/max price across the horizon and whether we are currently
-        # inside the cheapest contiguous window. All attributes are plain
-        # numbers so the policy engine can read them directly.
-        self.forecastMinPrice, self.forecastMaxPrice = priceRange(
-            self.priceForecast
-        ) or (0, 0)
-
-        now = datetime.now(timezone.utc)
-        previous, self.cheapWindowStart = self.cheapWindowStart, None
-        if self.cheapWindowHours and self.cheapWindowHours > 0:
-            self.cheapWindowStart = latchedWindow(
-                previous,
-                self.cheapWindowHours,
-                now,
-                lambda: self.getCheapestWindow(
-                    self.cheapWindowHours,
-                    self.cheapWindowStartHour,
-                    self.cheapWindowEndHour,
-                ),
-            )
-        self.cheapWindowActive = windowActive(
-            self.cheapWindowStart, self.cheapWindowHours, now
-        )
-
-    def getPriceForecast(self, hoursAhead=24):
-        # Return a JSON-serialisable copy of the forecast for the API/UI.
-        if not self.status:
-            return []
-        self._updateForecast(max(hoursAhead, self.cheapWindowHours or 0))
-        return serialise(self.priceForecast, hoursAhead)
-
-    def getCheapestWindow(self, numHours, startHour=None, endHour=None):
-        # Find the cheapest contiguous numHours window within an optional local
-        # time-of-day range. Returns a dict (startHour, startTimestamp,
-        # avgPrice, totalCost) or None.
-        if not self.status:
-            return None
-        self._updateForecast(48)
-        return cheapestWindow(self.priceForecast, numHours, startHour, endHour)

@@ -66,6 +66,17 @@ def test_hour_filter_wraps_midnight():
     assert best["startHour"] == 23
 
 
+def test_window_finishes_by_end_hour():
+    # 06:00-15:00 is cheapest, but a 22:00-07:00 window must end by 07:00, so
+    # the cheapest 5 hours that fit start at 02:00
+    prices = [5] * 96
+    prices[12:30] = [1] * 18  # 06:00-15:00
+    prices[52:62] = [3] * 10  # 02:00-07:00 the next day
+    best = cheapestWindow(_fc(prices), 5, 22, 7, tz=timezone.utc)
+    assert best["startTimestamp"] == "2026-07-16T02:00:00+00:00"
+    assert cheapestWindow(_fc(prices), 10, 22, 7, tz=timezone.utc) is None
+
+
 def test_window_active():
     start = datetime(2026, 7, 15, 1, 0, tzinfo=timezone.utc)
     assert windowActive(start.isoformat(), 2, start) == 1

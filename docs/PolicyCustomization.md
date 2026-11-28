@@ -272,13 +272,13 @@ The values in a policy definition are:
       unknown / no cars are home.
   - From a Pricing module (`StaticPricing`, `aWATTarPricing`, `AmberPricing`,
     `TeslaPricing`;
-    see `docs/modules/Pricing_*.md`), when one is configured:
+    see [Pricing Modules](modules/Pricing.md)), when one is configured:
     - `importPrice`:  The current electricity import price, in currency per kWh.
       With wholesale providers this can be negative.
     - `exportPrice`:  The current export (feed-in) price, in currency per kWh.
     - `spikeStatus` / `renewables` (Amber only):  The wholesale spike state and
       the current renewables percentage.
-    - `cheapWindowActive` (forecasting modules: Amber, Tesla):  `1` while the
+    - `cheapWindowActive` (forecasting modules: Amber, aWATTar, Tesla):  `1` while the
       current time is inside the cheapest forecast window (requires a
       `cheapWindow` to be configured on the module), otherwise `0`.
     - `forecastMinPrice` / `forecastMaxPrice` (forecasting modules):  The lowest
@@ -370,7 +370,7 @@ there is followed too:
 
 ### Price-based charging
 
-If a Pricing module is configured (see `docs/modules/Pricing_*.md`), the current
+If a Pricing module is configured (see [Pricing Modules](modules/Pricing.md)), the current
 price is available to policy as `modules.<Module>.importPrice` /
 `.exportPrice`.  Because this works through the generic `modules.*` mechanism, no
 special configuration is needed beyond enabling a pricing module and writing the
@@ -396,8 +396,8 @@ charging is unaffected.
 
 #### Charging in the cheapest forecast window
 
-A pricing module that offers the `Forecasting` capability (Amber, or Tesla for
-the rate plan set in the Tesla app) can look
+A pricing module that offers the `Forecasting` capability (Amber, aWATTar, or
+Tesla for the rate plan set in the Tesla app) can look
 ahead over the price forecast and tell policy when the current time is inside
 the cheapest contiguous block of the day.  Configure a `cheapWindow` on the
 module (the number of hours you need, with optional local-time bounds), then
@@ -424,8 +424,8 @@ reference `modules.<Module>.cheapWindowActive` in a policy:
     }
 
 With the example above, the module finds the cheapest 5-hour block between 10pm
-and 7am and sets `cheapWindowActive` to `1` while the car is in it, so charging
-only runs during the cheapest part of the overnight window.  As with the current
+and 7am and sets `cheapWindowActive` to `1` while the car is in
+it, so charging only runs during the cheapest part of the night.  As with the current
 price, if forecasting is not available the reference does not resolve and the
 rule simply does not match.
 
