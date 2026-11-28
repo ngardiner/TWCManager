@@ -79,6 +79,14 @@ Add the following to `config.json` and set `"enabled": true`:
 > **fuseAmps** follows the same 80% derating convention as
 > `wiringMaxAmpsAllTWCs`.  A 60 A breaker -> `"fuseAmps": 48`.
 
+> **phases** is the supply's phase count.  On a three-phase unit,
+> TWCManager prices the power at the phases the unit measures carrying
+> the car's current (`currentA_a`..`currentC_a` in its vitals), so a
+> single-phase car on a three-phase unit counts one phase's power per amp.
+> Before the car draws 5 A, it uses the phase count the car reports, if
+> any.  A single-phase unit is never measured: on 240 V split-phase, one
+> phase's current flows through two legs.
+
 ## How charge rate control works
 
 Each Gen3 unit gets its own target, as a Gen2 TWC does.  Every unit on

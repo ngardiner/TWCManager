@@ -323,6 +323,18 @@ class Watch:
             if ledgered or not self._fleet(v)
         )
 
+    def chargingWatts(self, ledgered: bool = True) -> float:
+        # The same cars, each at its own voltage and phases: a 120 V mobile
+        # connector draws half the watts per amp of a 240 V TWC
+        from TWCManager.EVSEInstance.VehicleEndpoint import vehicleVoltage
+
+        config = self.master.config.get("config", {})
+        return sum(
+            self.believedAmps(v) * sum(x for x in vehicleVoltage(v, config) if x > 0)
+            for v in self.master.vehicleRegistry.vehicles()
+            if ledgered or not self._fleet(v)
+        )
+
     def _fleet(self, v) -> bool:
         with self._lock:
             deaf = self._last.get((v.vin, "status"), ("",))[0] == TWICE

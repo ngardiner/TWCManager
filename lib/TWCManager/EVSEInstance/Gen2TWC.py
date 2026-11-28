@@ -3,7 +3,7 @@ A Gen2 TWC slave on RS-485 as a charging endpoint: TWCSlave's protocol
 state, read as the distributor's endpoint.
 """
 
-from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance
+from TWCManager.EVSEInstance.EVSEInstance import EVSEInstance, carVoltage
 from TWCManager.TWCSlave import TWCSlave
 from TWCManager.Vehicle.Registry.VehicleRegistry import ANON_PREFIX
 
@@ -79,14 +79,20 @@ class Gen2TWC(EVSEInstance, TWCSlave):
 
     @property
     def currentVoltage(self) -> list:
-        """Per-phase voltages [A, B, C].  Falls back to configured default when
-        the TWC has not yet reported voltage measurements."""
+        """Per-phase voltages [A, B, C] its car draws on.  Falls back to the
+        configured default when the TWC has not yet reported voltage
+        measurements."""
         phases = [self.voltsPhaseA, self.voltsPhaseB, self.voltsPhaseC]
         if not any(phases):
             default_v = self.configConfig.get("defaultVoltage", 240)
             count = self.configConfig.get("numberOfPhases", 1)
             phases = [default_v if i < count else 0 for i in range(3)]
-        return phases
+        return carVoltage(self, phases)
+
+    def getCurrentChargerLoad(self):
+        # At this TWC's own voltage, not the average of every TWC's
+        amps = self.reportedAmpsActual
+        return self.convertAmpsToWatts(amps) * self.master.getRealPowerFactor(amps)
 
     def _rangeOverride(self, key):
         # controller.Gen2TWCs.ranges.<twcid>.<key>, when a positive number

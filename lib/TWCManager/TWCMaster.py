@@ -1152,12 +1152,20 @@ class TWCMaster:
         # report, what the Gen3 units read, and the watched cars charging at
         # home on chargers no TWC reports. Leaving any out counts a car's own
         # draw as house load, and a green policy then shrinks its offer.
-        # ledgered=False leaves out the cars whose sessions the ledger carries
+        # ledgered=False leaves out the cars whose sessions the ledger carries.
+        # Each source is priced at its own voltage and phases, which differ
+        # between charging points (a 120 V mobile connector beside a 240 V
+        # TWC); the power factor still follows the total amps
         gen3 = self.getModuleByName("Gen3TWCs")
-        amps = self.getTotalAmpsInUse()
-        amps += sum(u.currentAmps for u in (gen3.allEVSEs if gen3 else []))
+        slaves = self.getSlaveTWCs()
+        units = gen3.allEVSEs if gen3 else []
+        amps = sum(s.reportedAmpsActual for s in slaves)
+        amps += sum(u.currentAmps for u in units)
         amps += self.watch.chargingAmps(ledgered) if self.watch else 0
-        return self.convertAmpsToWatts(amps) * self.getRealPowerFactor(amps)
+        watts = sum(s.convertAmpsToWatts(s.reportedAmpsActual) for s in slaves)
+        watts += sum(u.convertAmpsToWatts(u.currentAmps) for u in units)
+        watts += self.watch.chargingWatts(ledgered) if self.watch else 0
+        return watts * self.getRealPowerFactor(amps)
 
     def getConsumption(self):
         consumptionVal = 0
